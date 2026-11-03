@@ -748,6 +748,42 @@ NetworkPolicies keep it there, and both copies mount the same key's Secret
 ([On Kubernetes](#on-kubernetes)). With Compose, one copy runs
 ([architecture.md](architecture.md#the-broker-service)).
 
+### Blob storage
+
+Blob storage (`BLOB_URL`, [setup.md](setup.md#blob-storage), #604) holds what the runner and the
+broker keep and will never change again: the runs' closed log segments (`logs/`) and their
+screenshots (`shots/`). Its key pair (`BLOB_ACCESS_KEY_ID`, `BLOB_SECRET_ACCESS_KEY`, or their
+`_FILE` forms) is **the runner's and the broker's alone**: no other service's environment,
+volume or Secret holds it (`test/networks.test.mjs` reads `compose.yaml`'s, and
+`test/kubernetes-manifests.test.mjs` the manifests'), and neither service puts it in its store
+(refused in a value, redacted from a blob), its log or blob storage itself (redacted from what it
+writes there, `lib/blobs.mjs`). It is never in `BLOB_URL`, which refuses it there, and a secret
+key shorter than 16 characters, which redaction couldn't tell from ordinary text, stops the
+service.
+
+**What a leaked key reaches**: that bucket (or prefix), to read, overwrite and delete, and
+nothing else when the key is allowed that bucket alone ([setup.md](setup.md#what-a-server-needs)).
+What is there was redacted before it was written: the logs as every run log is (the operator's
+credentials, the run's tokens and its GitHub tokens, [Output](#output)), the screenshots are
+what the agents saved, which edge serves to anyone with their link anyway. Overwriting a log's
+segment changes what the dashboard shows of a finished run, and deleting one or a screenshot
+loses it: no run, token, key or credential of Deckhand's is there to take. A copy whose segment
+measures otherwise once moved leaves it in the store rather than trust it.
+
+**Why the orchestrator and edge never hold it**: the orchestrator holds no secret at all (#506),
+and edge, the only service the internet reaches, only its own three. Neither needs it: the
+dashboard reads a run's log through the runner (`GET /logs/<run>`, which answers from the store
+or with a ranged GET) and a screenshot through the broker (`GET /shots/…`, streamed through edge),
+so a hole in either reads the logs and screenshots those calls give, never the bucket. The
+runner and the broker are already where those blobs live: they write them, so their key adds no
+reach beyond the blobs they hold.
+
+With Compose, the runner and the broker reach Garage (the `garage` profile) over a network each
+(`blobs-runner`, `blobs-broker`), internal, with Garage alone on the other side; a server elsewhere
+needs a way out for both, which an override of the operator's adds ([setup.md](setup.md#a-server-outside-compose)).
+On Kubernetes, `components/blobs` lets them out to its address alone (`deckhand-blobs`,
+[On Kubernetes](#on-kubernetes)).
+
 ### Service tokens
 
 Deckhand runs as services (#499, [services.md](services.md)), each one calling
@@ -1365,6 +1401,7 @@ terms:
 | No way out but the services' own                            | internal networks, a way out for edge, the github and models services, the proxy | egress rules: 443 for edge, the github and models services, the API server's addresses alone for the runner and the broker, any public host for the proxy (not the private ranges), nothing for the policy service |
 | Hardened containers                                         | `cap_drop: ALL`, `no-new-privileges`, uid 1000, read-only roots                  | the same in each pod's security context; the sandboxes' namespace enforces Pod Security `restricted`, and every sandbox pod meets it                                                                               |
 | The broker's public key, read only                          | the `service-keys` volume, which the broker writes                               | a ConfigMap the operator makes beside the signing key's Secret: no volume shared between services                                                                                                                  |
+| Blob storage's key pair, the runner's and the broker's      | their environment alone (`BLOB_*`)                                               | `components/blobs`: the `deckhand-blobs` Secret, mounted read only by their pods alone (`BLOB_*_FILE`), `BLOB_URL` from a ConfigMap no other pod reads, a NetworkPolicy out to its address alone                   |
 
 **NetworkPolicies need a network plugin that enforces them** (Calico, Cilium, k3s's own). One
 that doesn't (Flannel alone) takes them and enforces nothing: a sandbox could then call the
@@ -1383,7 +1420,8 @@ public port alone.
 **The API server** is no pod: the runner's and the broker's way to it is an `ipBlock` of its
 addresses, which the operator sets (`deckhand-api-server`, [kubernetes.md](kubernetes.md#install)),
 and which reaches nothing until then. With `buildkit`, the runner also reaches any address on 443
-(the registries).
+(the registries). With `blobs`, the runner and the broker reach blob storage's address and port
+(`deckhand-blobs`, a placeholder that reaches nothing until set, [kubernetes.md](kubernetes.md#blob-storage)).
 
 **What isn't covered**: a service
 mesh that rewrites source addresses breaks the orchestrator's check of the proxy's calls (by its

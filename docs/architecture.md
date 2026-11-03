@@ -507,6 +507,39 @@ changes, and its output as `raw` entries with the step's number; the lines of no
 line's `tool`, `output` and starting `step` entries (`at`, ms). `dashboard/src/types.ts`
 `Entry` is the contract.
 
+### Hot and cold
+
+The runner and the broker keep blobs in two places (#604). **Hot**, their store (`STORE_URL`, file
+or Redis), holds what is still being written: only it appends at an offset in one atomic step
+(`appendBlobAt()`), which a live log and an inbox need, as two copies may write at once and a
+retry must add nothing. **Cold**, blob storage (`BLOB_URL`, `lib/blobs.mjs`: S3 through
+`lib/s3.mjs`, or a folder), holds what will never change again: written in one PUT, read with
+ranged GETs, as `readBlob(key, { offset, length })` reads the store, and deleted object by object
+by retention. S3 has no append, and an upload in parts can't be read before it completes: a blob
+is cold only once closed.
+
+| Blob                         | Service | Hot (the store)                                      | Cold (blob storage)                      |
+| ---------------------------- | ------- | ---------------------------------------------------- | ---------------------------------------- |
+| a run's log (`logs/<run>/…`) | runner  | its index, and its open segment while it is written  | each closed segment, moved as it closes  |
+| a screenshot (`shots/…`)     | broker  | the run's folder's names and sizes (`shots:<token>`) | the file, written once as it is uploaded |
+| a run's inbox, CA, digest    | broker  | all of it: appended to while the run goes on         | none: they go with the run's end         |
+
+So the store holds one open segment per live run at most, however long the runs: the size
+Redis needs no longer grows with the history kept (`LOG_RETENTION_DAYS`). Without `BLOB_URL`,
+the store's own blobs stand in for blob storage (`storeBlobs()`, the same interface), and
+nothing moves: an install that never sets it works as before.
+
+**Restarts**: a log's move is three steps, each one a single write (the copy in blob storage,
+the index pointing at it, the store's segment deleted), noted before it starts in a stream of
+the runner's store (`log-moves`), which the copy holding the runner's lease reads as it gets the
+lease: a move cut short at any step, by a restart, a handover or blob storage away, is done
+again from its start, and a read finds the segment in one place or the other at every moment
+([A run's log](#a-runs-log)). A screenshot's name goes in the store before its file goes to
+blob storage, so an upload cut short leaves a name retention deletes, never a file it would
+miss: blob storage lists nothing, and needs no listing. Each service checks its blob storage as
+it starts (an object written, read back and deleted): a wrong key or bucket stops it there, rather
+than at a run's end.
+
 ## Around the runs
 
 - **GitHub**: the operator's private App, created at `/setup`, its key in the github service
