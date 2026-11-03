@@ -1381,14 +1381,17 @@ and a name has one at a time: a second gets `409`, tried again later. The hooks 
 (an `EXIT` trap in `draft-pr.sh`, which sets `DECKHAND_SHOTS_SKIP` so its own `gh` calls
 don't), and every caller within 20 s: opening the draft pull request keeps the hook's 60 s.
 
-The dashboard's run list comes back from the runs' summaries (`logs/<run>.json`, the
-orchestrator's, written when a run ends); a run still live is listed from its saved state. A restored run takes comments once the runner says its inbox is still open,
+The dashboard's run list comes back from the runs' summaries (`summaries/<run>` in the
+orchestrator's store, written when a run ends, listed at the lease's takeover: the same after a
+handover or a crash; those an older release kept in `logs/<run>.json` moved there first); a run
+still live is listed from its saved state. A restored run takes comments once the runner says its inbox is still open,
 waited for 10 s at start, later if the runner is away. The list is held newest first with an index by id,
 and both lose the runs `history.mjs` removes, at start and daily: those older than
 `LOG_RETENTION_DAYS`, but for a running run and the latest run of a task still queued, in a
 brainstorm, waiting or waiting for input. The orchestrator's state decides which those are, so
-the orchestrator decides, and has the runner remove their logs: a run whose log the runner didn't
-remove stays listed until the next day's try.
+the orchestrator decides, and has the runner remove their logs, then deletes their summaries'
+keys: a run whose log the runner didn't remove, or whose summary's key the store didn't delete,
+stays listed until the next day's try.
 
 ### Missed deliveries
 

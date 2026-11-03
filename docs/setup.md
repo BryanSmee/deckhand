@@ -628,8 +628,9 @@ Docker's own pools, so list those first and add yours after them, for example
 (the last one: 4096 networks of 16 addresses).
 
 Each run leaves its log in `logs/<run>.log` on the data volume (the agent's whole output, often
-a few MB), a summary beside it (`logs/<run>.json`, what the dashboard lists after a restart,
-so the orchestrator doesn't read the logs to start), and the broker keeps its screenshots (in blob
+a few MB), a summary in the orchestrator's store (`summaries/<run>`, what the dashboard lists
+after a restart or a handover, so the orchestrator doesn't read the logs to start: [The
+store](#the-store)), and the broker keeps its screenshots (in blob
 storage, or its store without it: [Blob storage](#blob-storage)). At start and then daily, the
 orchestrator removes those of runs older than `LOG_RETENTION_DAYS` (90 days by default), the
 screenshots through the broker, and they leave the dashboard. It keeps a run still going, and the latest run of a
@@ -1158,7 +1159,7 @@ else set it in the service's `environment`, for example in a `compose.override.y
 | `SERVICE_NETWORKS`                                                                                                                 | none                              | none: no call taken                                                                                     | which network each calling service is on, by its subnet (on the orchestrator `runner=…,edge=…`; on the runner `orchestrator=…,models=…`): a call from elsewhere, or with another's token, is refused; `none` where the network can't tell (Kubernetes, with NetworkPolicies and the callers' service accounts: [kubernetes.md](kubernetes.md#what-the-manifests-set-up-and-why)). Compose sets them from `RUNNER_SUBNET`, `EDGE_ORCHESTRATOR_SUBNET` and `RUNNER_MODELS_SUBNET` |
 | `RUNNER_SUBNET` (compose)                                                                                                          | none                              | `10.231.250.48/28`                                                                                      | the subnet of the network the orchestrator and the runner share (`runner`) (`.env`), should it overlap one of the host's                                                                                                                                                                                                                                                                                                                                                        |
 | `EDGE_ORCHESTRATOR_SUBNET` (compose)                                                                                               | none                              | `10.231.250.192/28`                                                                                     | the subnet of the network edge and the orchestrator share (`edge-orchestrator`), should it overlap one of the host's                                                                                                                                                                                                                                                                                                                                                            |
-| `STORE_URL`                                                                                                                        | none                              | `file://<DATA_DIR>/store`                                                                               | the service's [store](#the-store): the orchestrator's queue, its lease and fencing epoch; edge's (below); the runner's logs, events and lease. `file://` for one node (several copies on it included), `redis://` for copies on several                                                                                                                                                                                                                                         |
+| `STORE_URL`                                                                                                                        | none                              | `file://<DATA_DIR>/store`                                                                               | the service's [store](#the-store): the orchestrator's queue, its lease and fencing epoch, the runs' summaries; edge's (below); the runner's logs, events and lease. `file://` for one node (several copies on it included), `redis://` for copies on several                                                                                                                                                                                                                    |
 | `LEASE_SECONDS` (orchestrator)                                                                                                     | none                              | `15`                                                                                                    | how long the acting copy's lease lasts, renewed every third of it: a crashed copy's is taken by the waiting one once it expires; a stopping one releases it at once (see [Two copies](#two-copies))                                                                                                                                                                                                                                                                             |
 | `EDGE_URL` (orchestrator)                                                                                                          | none                              | `http://edge:8083`                                                                                      | edge's internal port: where the orchestrator reads the deliveries' stream and the App's public parts; compose sets it                                                                                                                                                                                                                                                                                                                                                           |
 | `INTERNAL_PORT` (edge)                                                                                                             | none                              | `8083`                                                                                                  | the port the orchestrator calls edge on (the deliveries' stream, the App's public parts), on their network alone; never `PORT`'s, which the internet reaches                                                                                                                                                                                                                                                                                                                    |
@@ -1401,6 +1402,19 @@ is read with the queue and removed once the queue is written. Nothing to do, but
   restored runs' output is redacted of their tokens by their shape meanwhile.
 - **Going back to an earlier release** loses the runs going then: it looks for their state in
   `logs/`, finds none, and closes their sandboxes' input. Roll back with no run going.
+
+### Upgrading: the runs' summaries in the store (#618)
+
+The dashboard's run history came from the runs' summaries in the orchestrator's volume
+(`logs/<run>.json`). They are in its store now (`summaries/<run>`, [The store](#the-store)), so
+a copy taking over on another node finds them there. Nothing to do: at its first start, the
+orchestrator writes those left in `logs/` to its store, then removes them (`Run summaries: <n>
+moved from /data/logs to the store` in its log), before the dashboard lists the runs: about a
+second for 4,500 with the file store or Redis. A file that isn't a summary is logged (`Listing
+the run of <file>: not a run's summary`) and left in `logs/`, out of the history, as it was
+before; one the store didn't take stays for the next start, and so does a summary the store
+refuses at a run's end (`logs/<run>.summary.json`, moved at the next start). The run logs left
+there from before the runner service are moved as before.
 
 ### Upgrading: the paths from before the services are gone (#567)
 
@@ -1709,8 +1723,8 @@ Deckhand's services ([services.md](services.md)) keep their state in a store, wh
 the orchestrator its queue, its lease and its fencing epoch, and the state that holds data alone
 (the titles, closed states and pull requests the dashboard shows, the dismissals, the run order,
 the onboarded repositories, the lanes' names, the issues' modes, the rebase attempts, the last
-dry runs, the reviewers requested), one key per item, so that a change writes only what changed
-(the rest of its state in `/data`, for now: #613);
+dry runs, the reviewers requested) and the runs' summaries, one key per item, so that a change
+writes only what changed (the rest of its state in `/data`, for now: #613);
 edge the deliveries it took, the sessions' epochs and the deliveries' stream the orchestrator
 reads.
 
@@ -1760,6 +1774,15 @@ its lease.
 
 On Kubernetes, `deploy/kubernetes/`'s `redis` component runs it this way, one user per service
 ([kubernetes.md](kubernetes.md#several-nodes)).
+
+**What the run history takes in it**: the orchestrator keeps each run's summary in its store
+(`summaries/<run>`, what the dashboard's history is rebuilt from), until `LOG_RETENTION_DAYS`
+(90 by default) removes it with the run's log. A summary is a few KB: the run's details, its
+final answer's first lines and the text of the comments it acted on (more for a long comment).
+So they take about a summary's size times the runs of those days: 50 runs a day for 90 days are
+4,500 summaries, some 20 MB of Redis's memory at 4 KB each. With `0` (forever), they grow with
+every run. With the file store, each is a file of its own in its folder (`keys/`), out of its
+`state.json`, which every lease renewal (each 5 s) writes whole.
 
 Secrets never go in the store: the App's key, the signing key and the agents' credentials
 stay in their service's own secret or volume. A write holding one the service knows, a

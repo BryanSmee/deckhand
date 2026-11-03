@@ -4,21 +4,21 @@
 // a task that is queued, brainstorming, waiting or waiting for input (the next run reads it:
 // its agent, its summary, the dashboard's Rerun). That's the orchestrator's to tell, so it
 // decides here; the log is the runner's (#503) and the screenshots the broker's (#609), which
-// remove them when asked: a run whose log or screenshots weren't removed stays listed, for the
-// next day's try.
-import { rmSync } from "node:fs";
+// remove them when asked: a run whose log, screenshots or summary weren't removed stays listed,
+// for the next day's try.
 import { SHOT_FOLDER } from "../lib/shots.mjs";
-import { summaryPath } from "./runlog.mjs";
+import { summaryKey } from "./runlog.mjs";
 
 const DAY = 24 * 60 * 60 * 1000;
 
 // `runs`: newest first, changed in place, with `byId` its index. `needed(key)`: whether that
 // task still needs its latest run; `removeLog(id)`: the runner's; `removeShots(folder)`: the
-// broker's. Resolves to the runs removed.
+// broker's; `store`: the orchestrator's, with the summaries (runlog.mjs). Resolves to the runs
+// removed.
 export async function pruneRuns({
   runs,
   byId,
-  logDir,
+  store,
   days,
   now,
   needed,
@@ -58,9 +58,11 @@ export async function pruneRuns({
       continue;
     }
     try {
-      rmSync(summaryPath(logDir, run.id), { force: true });
+      await store.delete(summaryKey(run.id));
     } catch (error) {
       log(`${run.key}: removing the summary of ${run.id}: ${error.message}`);
+      kept.push(run);
+      continue;
     }
     byId.delete(run.id);
     removed.push(run);
@@ -155,7 +157,7 @@ export function createHistory(
       return await pruneRuns({
         runs: ctx.runs,
         byId: ctx.runsById,
-        logDir: ctx.logDir,
+        store: ctx.store,
         days: ctx.config.logRetentionDays,
         now: now(),
         needed,

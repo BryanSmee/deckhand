@@ -92,7 +92,7 @@ import { createRepoApi, createRepoList } from "../listener/repos.mjs";
 import { createRestart, LIVE_PREFIX } from "../listener/restart.mjs";
 import { createReviewers, openerOf } from "../listener/reviewers.mjs";
 import { createReviews, stepsGoing } from "../listener/reviews.mjs";
-import { loadRuns, moveLogs, saveSummary } from "../listener/runlog.mjs";
+import { loadRuns, moveLogs, moveSummaries, saveSummary, SUMMARIES } from "../listener/runlog.mjs";
 import { networkCallers } from "../lib/service-token.mjs";
 import { createRunnerClient } from "../runner/client.mjs";
 import { createServicesHttp } from "../listener/services-http.mjs";
@@ -218,11 +218,13 @@ const shotsDir = join(config.dataDir, "shots");
 // The orchestrator's state through the store's interface (lib/store.mjs), in the data volume:
 // the queue (restart.mjs), its lease, the deliveries it handled, the rest as the services take
 // it over (#499). Its two copies share it. The operator's secrets are refused in it
-// (lib/store.mjs), once `ctx` can say them.
+// (lib/store.mjs), once `ctx` can say them. The runs' summaries, thousands, are a file each with
+// the file backend: out of the state file every lease renewal writes.
 let storeSecrets = () => [];
 const store = openStore(env.STORE_URL || pathToFileURL(join(config.dataDir, "store")).href, {
   password: env.REDIS_PASSWORD,
   secrets: () => storeSecrets(),
+  apart: [SUMMARIES],
 });
 
 // Its fencing epoch, once it holds the lease (below).
@@ -586,7 +588,8 @@ function publicUrl() {
 const { github, graphql } = createGitHub(() => ctx.app);
 
 // The logs this listener kept before the runner kept them go to it, while it goes on; the runs
-// are listed from their summaries (runlog.mjs).
+// are listed from their summaries in the store, where those a release before #618 kept in
+// logs/ go first (runlog.mjs).
 // The live runs' ids first, from their states in the store (restart.mjs): their logs aren't
 // summarized as ended ones.
 const liveIds = new Set();
@@ -595,7 +598,8 @@ const moved = moveLogs(logDir, runnerClient.logs, { log, live: liveIds });
 ctx.logsMoving = moved.moving;
 // A log on its way there is read once it arrived (a digest, the dashboard's live view).
 ctx.logMoved = (id) => moved.moving.get(id) ?? Promise.resolve();
-ctx.runs = loadRuns(logDir, { log });
+await moveSummaries(logDir, store, { log, secrets: storeSecrets() });
+ctx.runs = await loadRuns(store, { log });
 for (const run of ctx.runs) ctx.runsById.set(run.id, run);
 
 // The orchestrator's maps that hold data alone (#615), in the store one key per item
@@ -1248,7 +1252,8 @@ const runEvents = createRunEvents({
         return (file ??= runnerClient.logs.open(id, { size: null }));
       },
       // Once it has one: its end writes it, with this, or not yet.
-      save: () => record.finishedAt && saveSummary(logDir, record, log),
+      save: () =>
+        record.finishedAt && saveSummary(store, record, { log, secrets: storeSecrets(), logDir }),
     };
   },
   log,

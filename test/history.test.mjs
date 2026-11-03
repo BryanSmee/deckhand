@@ -1,6 +1,4 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync } from "node:fs";
-import { join } from "node:path";
 import { test } from "node:test";
 import {
   createHistory,
@@ -10,19 +8,17 @@ import {
   UNNAMED_SHOTS,
 } from "../listener/history.mjs";
 import { openStore } from "../lib/store.mjs";
-import { saveSummary } from "../listener/runlog.mjs";
-import { tempDir } from "./helpers.mjs";
+import { saveSummary, summaryKey } from "../listener/runlog.mjs";
 
 const DAY = 24 * 60 * 60 * 1000;
 const NOW = 1000 * DAY;
 
 // A run of `key` that ended `age` days before NOW, with its log (the runner's: `logs`, which
-// removeLog() removes from, or refuses to for an id in `stuck`), summary and screenshots (the
-// broker's: `shots`, which removeShots() removes from, or refuses to for a folder in `stuck`).
-function fixture(t) {
-  const dir = tempDir(t, "deckhand-history-");
-  const logDir = join(dir, "logs");
-  mkdirSync(logDir);
+// removeLog() removes from, or refuses to for an id in `stuck`), summary (the orchestrator's
+// store) and screenshots (the broker's: `shots`, which removeShots() removes from, or refuses to
+// for a folder in `stuck`).
+function fixture() {
+  const store = openStore("memory:");
   const logs = new Set();
   const shots = new Set();
   const stuck = new Set();
@@ -50,21 +46,23 @@ function fixture(t) {
       status: "ok",
       shots: folder,
     };
-    saveSummary(logDir, record);
+    saved.push(saveSummary(store, record));
     return { ...record, ...extra };
   };
-  const files = (r) => [
-    logs.has(r.id),
-    existsSync(join(logDir, `${r.id}.json`)),
-    shots.has(r.shots),
-  ];
-  const prune = (options) =>
-    pruneRuns({ logDir, now: NOW, needed: () => false, removeLog, removeShots, ...options });
-  return { logDir, run, files, prune, removeLog, removeShots, stuck };
+  const saved = [];
+  const files = async (r) => {
+    await Promise.all(saved);
+    return [logs.has(r.id), (await store.get(summaryKey(r.id))) !== null, shots.has(r.shots)];
+  };
+  const prune = async (options) => {
+    await Promise.all(saved);
+    return pruneRuns({ store, now: NOW, needed: () => false, removeLog, removeShots, ...options });
+  };
+  return { store, run, files, prune, removeLog, removeShots, stuck };
 }
 
 test("retention: runs past the limit lose their log, summary and screenshots, and leave the list", async (t) => {
-  const { run, files, prune } = fixture(t);
+  const { run, files, prune } = fixture();
   // Newest first, as ctx.runs.
   const fresh = run("org/repo#1", 10);
   const old = run("org/repo#1", 100);
@@ -78,13 +76,13 @@ test("retention: runs past the limit lose their log, summary and screenshots, an
   );
   assert.deepEqual(runs, [fresh]);
   assert.deepEqual([...byId.keys()], [fresh.id]);
-  assert.deepEqual(files(fresh), [true, true, true]);
-  assert.deepEqual(files(old), [false, false, false]);
-  assert.deepEqual(files(lone), [false, false, false]);
+  assert.deepEqual(await files(fresh), [true, true, true]);
+  assert.deepEqual(await files(old), [false, false, false]);
+  assert.deepEqual(await files(lone), [false, false, false]);
 });
 
 test("retention: what a task still needs is kept, however old", async (t) => {
-  const { run, files, prune } = fixture(t);
+  const { run, files, prune } = fixture();
   const running = run("org/repo#1", 200, { status: "running", finishedAt: null });
   const asked = run("org/repo#2", 200, { status: "needs-input" });
   const askedBefore = run("org/repo#2", 300, { status: "needs-input" });
@@ -97,13 +95,13 @@ test("retention: what a task still needs is kept, however old", async (t) => {
   await prune({ runs, byId, days: 90, needed });
   // Only the latest run of a task: older ones go.
   assert.deepEqual(runs, [running, asked, queued]);
-  assert.deepEqual(files(queued), [true, true, true]);
-  assert.deepEqual(files(queuedBefore), [false, false, false]);
-  assert.deepEqual(files(done), [false, false, false]);
+  assert.deepEqual(await files(queued), [true, true, true]);
+  assert.deepEqual(await files(queuedBefore), [false, false, false]);
+  assert.deepEqual(await files(done), [false, false, false]);
 });
 
 test("retention: a log the runner doesn't remove keeps its run listed, for the next try", async (t) => {
-  const { run, files, prune, stuck } = fixture(t);
+  const { run, files, prune, stuck } = fixture();
   const newer = run("org/repo#1", 95);
   const older = run("org/repo#2", 100);
   const runs = [newer, older];
@@ -115,34 +113,55 @@ test("retention: a log the runner doesn't remove keeps its run listed, for the n
     [older.id],
   );
   assert.deepEqual(runs, [newer]);
-  assert.deepEqual(files(newer), [true, true, true]);
+  assert.deepEqual(await files(newer), [true, true, true]);
   stuck.clear();
   await prune({ runs, byId, days: 90 });
-  assert.deepEqual([runs, files(newer)], [[], [false, false, false]]);
+  assert.deepEqual([runs, await files(newer)], [[], [false, false, false]]);
 });
 
 test("retention: screenshots the broker doesn't remove keep their run listed, for the next try", async (t) => {
-  const { run, files, prune, stuck } = fixture(t);
+  const { run, files, prune, stuck } = fixture();
   const old = run("org/repo#1", 100);
   const runs = [old];
   const byId = new Map([[old.id, old]]);
   stuck.add(old.shots);
   assert.deepEqual(await prune({ runs, byId, days: 90 }), []);
   // Its log went (removing it again is nothing), its summary and screenshots stay.
-  assert.deepEqual(files(old), [false, true, true]);
+  assert.deepEqual(await files(old), [false, true, true]);
   assert.deepEqual(runs, [old]);
   stuck.clear();
   await prune({ runs, byId, days: 90 });
-  assert.deepEqual([runs, files(old)], [[], [false, false, false]]);
+  assert.deepEqual([runs, await files(old)], [[], [false, false, false]]);
+});
+
+test("retention: a summary the store doesn't delete keeps its run listed, for the next try", async () => {
+  const { store, run, files, prune } = fixture();
+  const old = run("org/repo#1", 100);
+  const runs = [old];
+  const byId = new Map([[old.id, old]]);
+  const failing = {
+    ...store,
+    delete: async () => {
+      throw new Error("the store is away");
+    },
+  };
+  const logs = [];
+  const log = (line) => logs.push(line);
+  assert.deepEqual(await prune({ runs, byId, days: 90, store: failing, log }), []);
+  assert.deepEqual(await files(old), [false, true, false]);
+  assert.deepEqual([runs, [...byId.keys()]], [[old], [old.id]]);
+  assert.match(logs.join("\n"), /removing the summary of .*: the store is away/);
+  await prune({ runs, byId, days: 90 });
+  assert.deepEqual([runs, await files(old)], [[], [false, false, false]]);
 });
 
 test("retention: 0 keeps everything", async (t) => {
-  const { run, files, prune } = fixture(t);
+  const { run, files, prune } = fixture();
   const old = run("org/repo#1", 400);
   const runs = [old];
   const byId = new Map([[old.id, old]]);
   assert.deepEqual(await prune({ runs, byId, days: 0 }), []);
-  assert.deepEqual(files(old), [true, true, true]);
+  assert.deepEqual(await files(old), [true, true, true]);
 });
 
 test("the screenshots an older release kept: a folder no run names, past the days, isn't moved", () => {
@@ -162,7 +181,7 @@ test("the screenshots an older release kept: a folder no run names, past the day
 });
 
 test("retention: at start, then daily, with what the listener's state still needs", async (t) => {
-  const { logDir, run, removeLog, removeShots } = fixture(t);
+  const { store, run, removeLog, removeShots } = fixture();
   const brainstorm = run("org/repo#1", 200);
   const waiting = run("org/repo#2", 200);
   const labelled = run("org/repo#3", 200);
@@ -173,7 +192,7 @@ test("retention: at start, then daily, with what the listener's state still need
   const ctx = {
     config: { logRetentionDays: 90 },
     log: () => {},
-    logDir,
+    store,
     runLogs: { remove: removeLog },
     removeShots,
     runs,

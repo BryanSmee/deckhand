@@ -50,6 +50,31 @@ test("a sandbox's end: its exit code kept and saved, a failed one said in its lo
   reader.stop();
 });
 
+// #618: the summary is in the store, a write away, before its event is acknowledged: a crash
+// between the two loses no exit code.
+test("an event is acknowledged once its run's summary is saved", async () => {
+  const acked = [];
+  const events = {
+    read: async () => [{ id: "1", event: { type: "ended", run: "r1", exitCode: 137 } }],
+    ack: async (ids) => acked.push(...ids),
+  };
+  let saved;
+  const record = { key: "org/repo#1", finishedAt: 5000 };
+  const run = {
+    record,
+    logFile: { write: () => {}, close: () => {} },
+    save: () => new Promise((resolve) => (saved = resolve)),
+  };
+  const reader = createRunEvents({ events, runOf: () => run, ...noTimer });
+  const polled = reader.poll();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(typeof saved, "function");
+  assert.deepEqual(acked, []);
+  saved();
+  await polled;
+  assert.deepEqual(acked, ["1"]);
+});
+
 test("a runner that doesn't answer: tried again at the next poll, nothing lost", async () => {
   let failing = true;
   const acked = [];

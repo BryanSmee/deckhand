@@ -9,7 +9,7 @@ import { createPulls } from "../listener/pulls.mjs";
 import { createRestart, LIVE_PREFIX, QUEUE_KEY, savedCapabilities } from "../listener/restart.mjs";
 import { createTasks, newTask } from "../listener/tasks.mjs";
 import { ambiguous, respellMap, respelled, spellings } from "../listener/spelling.mjs";
-import { loadRuns, openLog } from "../listener/runlog.mjs";
+import { openLog } from "../listener/runlog.mjs";
 import { createRuns } from "../listener/runs.mjs";
 import { fileStore } from "../lib/store-file.mjs";
 import { openStore, values } from "../lib/store.mjs";
@@ -176,10 +176,11 @@ test("a restored run keeps the network its tokens are bound to, and saves it aga
 // running one's, `newest` the last finished run's.
 function twoSpellings(t, { live, newest }) {
   const dir = tempDir(t);
+  // The runs' list, as loadRuns() makes it from their summaries: newest first.
+  const runs = [];
   const summary = (id, repo, n, startedAt) => {
     writeFileSync(join(dir, `${id}.log`), "");
-    const run = { id, key: `${repo}#${n}`, repo, status: "ok", startedAt, finishedAt: startedAt };
-    writeFileSync(join(dir, `${id}.json`), JSON.stringify(run));
+    runs.push({ id, key: `${repo}#${n}`, repo, status: "ok", startedAt, finishedAt: startedAt });
   };
   summary("a-1", "Storywake/storywake", 1, 1000);
   summary("b-2", newest, 2, 3000);
@@ -216,7 +217,7 @@ function twoSpellings(t, { live, newest }) {
     log: () => {},
     tasks: new Map(),
     logDir: dir,
-    runs: loadRuns(dir, { log: () => {} }),
+    runs: runs.sort((a, b) => b.startedAt - a.startedAt),
     runsById: new Map(),
     runner: { closed: async () => false },
     runLogs: fileLogs(dir),

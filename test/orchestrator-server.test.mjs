@@ -407,6 +407,34 @@ async function fakeGitHub(files = {}) {
   };
 }
 
+// The runs' summaries, in the orchestrator's store (runlog.mjs: its file backend keeps them a
+// file each, keys/): the first one's, or null.
+function summary(dir) {
+  try {
+    const folder = join(dir, "store", "keys");
+    const file = readdirSync(folder).find((f) => f.startsWith("summaries%2F"));
+    return file ? JSON.parse(readFileSync(join(folder, file), "utf8")).value : null;
+  } catch {
+    return null;
+  }
+}
+
+// The dashboard's API at edge's `port`, as alice (in ALLOWED_USERS), signed in: path → its JSON.
+async function dashboardApi(port) {
+  const base = `http://127.0.0.1:${port}`;
+  const get = (path, cookie) =>
+    fetch(base + path, { redirect: "manual", headers: cookie ? { cookie } : {} });
+  const login = await get("/auth/login");
+  const to = new URL(login.headers.get("location"));
+  const state = login.headers.getSetCookie()[0].split(";")[0];
+  const back = await get(`/auth/callback?code=c&state=${to.searchParams.get("state")}`, state);
+  const session = back.headers
+    .getSetCookie()
+    .find((c) => c.startsWith("deckhand_session="))
+    .split(";")[0];
+  return async (path) => (await get(path, session)).json();
+}
+
 // The runs' logs, as the runner keeps them (its store's blobs, runner/logs.mjs): their texts, by
 // run id, their segments (`logs/<run>/<n>`) in order. Asked again until `ready(texts)` holds,
 // for one still on its way to the runner.
@@ -1575,11 +1603,7 @@ describe("listener", options, () => {
       /^Claude stopped with an error\.\n\n> The tests still fail\./,
     );
     // On its summary, and said in its log, after its end.
-    const summary = () => {
-      const file = readdirSync(join(dir, "logs")).find((f) => /-\d+\.json$/.test(f));
-      return file && JSON.parse(readFileSync(join(dir, "logs", file), "utf8"));
-    };
-    await until(() => summary()?.exitCode === 3, "the exit code");
+    await until(() => summary(dir)?.exitCode === 3, "the exit code");
     await until(
       () => [...runLogs(dir).values()][0]?.includes("Its sandbox exited with code 3"),
       "its note",
@@ -2843,7 +2867,12 @@ mounts:
   // issue 13 queued behind it (one run at a time), the next copy waiting for the lease.
   async function handingOver(t) {
     // A lease far longer than a handover: taking it at once shows it was released.
-    const ctx = await holding(t, "Deckhand", () => ({ MAX_PARALLEL: "1", LEASE_SECONDS: "8" }));
+    // GITHUB_URL: the dashboard's sign-in, through the fake GitHub.
+    const ctx = await holding(t, "Deckhand", (dir, github) => ({
+      MAX_PARALLEL: "1",
+      LEASE_SECONDS: "8",
+      GITHUB_URL: github.url,
+    }));
     const queued = comment("alice");
     queued.issue = { number: 13 };
     queued.comment = { ...queued.comment, id: 130 };
@@ -2919,6 +2948,18 @@ mounts:
       assert.equal(runs.length, 1, ctx.listener.output());
       // The copy that stopped could no longer act, had it gone on.
       await staleEverywhere(ctx, epoch);
+      // The dashboard's history, from the store alone (#618): the same after another handover.
+      const api = await dashboardApi(ctx.port);
+      const history = async () =>
+        (await api("/api/state")).tasks.flatMap((task) => task.runs.map((r) => [r.id, r.status]));
+      const before = await history();
+      assert.equal(before.length, 2);
+      await ctx.handOver({ signal });
+      assert.deepEqual(await history(), before);
+      assert.deepEqual(
+        readdirSync(join(dir, "logs")).filter((f) => f.endsWith(".json")),
+        [],
+      );
     });
   }
 
@@ -4725,7 +4766,7 @@ mounts:
 
   test("the dashboard shows a repo's tasks and logs to its own users, once they are known", async (t) => {
     const files = { ".deckhand.yaml": "users: [bob]\n" };
-    const { port, send, listener } = await listen(t, files, (dir, github) => {
+    const { dir, port, send, listener } = await listen(t, files, (dir, github) => {
       mkdirSync(join(dir, "logs"));
       const meta = { type: "listener", key: "org/repo#pr-3", repo: "org/repo", startedAt: 1000 };
       writeFileSync(join(dir, "logs", "org-repo-pr-3-1000.log"), `${JSON.stringify(meta)}\n`);
@@ -4747,6 +4788,12 @@ mounts:
       (await (await get("/api/state", session)).json()).tasks.map((task) => task.key);
     // The repo's users aren't known yet: ALLOWED_USERS decides.
     assert.deepEqual(await keys(), ["org/repo#pr-3"]);
+    // Its summary, made from its log, in the store (#618): none left in logs/.
+    assert.equal(summary(dir)?.id, "org-repo-pr-3-1000");
+    assert.deepEqual(
+      readdirSync(join(dir, "logs")).filter((f) => f.endsWith(".json")),
+      [],
+    );
     const open = await get("/api/runs/org-repo-pr-3-1000/stream", session);
     assert.equal(open.status, 200);
     await open.body.cancel();
@@ -6527,11 +6574,7 @@ mounts:
     writeFileSync(join(dir, "go"), "");
     await ctx.listener.until("done (ok)");
     // Kept in its summary once it ended: the dashboard's after it.
-    const summary = await until(
-      () => readdirSync(join(dir, "logs")).find((f) => /-\d+\.json$/.test(f)),
-      "its summary",
-    );
-    const done = JSON.parse(readFileSync(join(dir, "logs", summary), "utf8"));
+    const done = await until(() => summary(dir), "its summary");
     assert.equal(done.branch, "issue-12-after");
   });
 
