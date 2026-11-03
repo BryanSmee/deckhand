@@ -33,7 +33,7 @@ import { createEvents } from "./events.mjs";
 import { ownImage, plainPath, runOf, specProblems } from "./spec-check.mjs";
 import { buildPlan, buildProblem, validRepo } from "./builds.mjs";
 import { cacheProblem } from "../listener/repo-config.mjs";
-import { LogConflict, validLogId } from "./logs.mjs";
+import { LogConflict, validLogId, waitingWarning } from "./logs.mjs";
 import { withRequest } from "../lib/log.mjs";
 
 // Who may call what. A route that isn't here is refused to everyone.
@@ -556,7 +556,11 @@ export function createRunnerService({
   async function handle(req, res) {
     const url = new URL(req.url, "http://runner");
     if (url.pathname === "/health") {
-      return sendJson(res, healthAnswer(health, { active: lease.active() }));
+      // Closed log segments waiting for blob storage, while they can't move: Redis filling up.
+      // From memory: a probe never waits on the store.
+      const waiting = waitingWarning(logs.moves?.waiting());
+      const warnings = [...(health.warnings ?? []), ...(waiting ? [waiting] : [])];
+      return sendJson(res, healthAnswer({ ...health, warnings }, { active: lease.active() }));
     }
     // The readiness probe's: only the copy that acts takes calls (Kubernetes' Service).
     if (url.pathname === "/ready") {
@@ -601,10 +605,12 @@ export function createRunnerService({
   return {
     server,
     events,
-    // Once this copy acts: what sandboxes did meanwhile goes to the events, and the Kubernetes
-    // runner probes the cluster's isolation again (kube-probe.mjs).
+    // Once this copy acts: what sandboxes did meanwhile goes to the events, the Kubernetes
+    // runner probes the cluster's isolation again (kube-probe.mjs), and the closed log segments
+    // a copy before it left in the store move to blob storage (logs.mjs).
     activate() {
       runner.leased?.();
+      logs.moves?.start();
       clearInterval(watching);
       watching = setInterval(
         () => events.watch().catch((error) => log(`Run events: ${error.message}`)),
@@ -614,6 +620,7 @@ export function createRunnerService({
       return events.watch().catch((error) => log(`Run events: ${error.message}`));
     },
     deactivate() {
+      logs.moves?.stop();
       clearInterval(watching);
       watching = null;
     },
@@ -622,6 +629,7 @@ export function createRunnerService({
     async stop({ graceMs = DRAIN_MS } = {}) {
       stopping = true;
       clearInterval(watching);
+      logs.moves?.stop();
       for (const res of streams) res.destroy();
       const calls = await drain(server, { graceMs });
       await lease.stop();

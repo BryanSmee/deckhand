@@ -9,7 +9,9 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { test } from "node:test";
+import { pathToFileURL } from "node:url";
 import { activePassive } from "../lib/active.mjs";
+import { openBlobs } from "../lib/blobs.mjs";
 import { createLogger, withLogContext } from "../lib/log.mjs";
 import { EPOCH_HEADER } from "../lib/service-client.mjs";
 import { networkCallers, signServiceToken } from "../lib/service-token.mjs";
@@ -108,7 +110,18 @@ const granted = grantedOf(["dockerfile"], "org/repo");
 
 async function copy(
   t,
-  { store, backend, ttlMs = 10_000, bound, brokerTokens, imageFor, blobOf, log, refresh } = {},
+  {
+    store,
+    backend,
+    ttlMs = 10_000,
+    bound,
+    brokerTokens,
+    imageFor,
+    blobOf,
+    log,
+    refresh,
+    logs = createLogs({ store }),
+  } = {},
 ) {
   let service;
   const lease = activePassive({
@@ -133,7 +146,7 @@ async function copy(
       installAgent: async () => {},
       caches: async () => [],
     },
-    logs: createLogs({ store }),
+    logs,
     store,
     broker: {
       runTokens: async (run, sandbox) => {
@@ -193,6 +206,53 @@ test("GET /health: without a token, its start, version and whether this copy act
   const health = await fetch(`${url}/health`);
   assert.equal(health.status, 200);
   assertHealth(await health.json(), { active: lease.active() });
+});
+
+// The closed log segments a copy left (blob storage away): the copy taking the lease moves them,
+// and its /health counts them while blob storage fails (logs.mjs, #608).
+test("GET /health: the log segments waiting for blob storage; the copy acting moves them", async (t) => {
+  const store = fileStore();
+  const files = openBlobs(pathToFileURL(join(tempDir(t), "blobs")).href);
+  let down = true;
+  const blobs = {
+    ...files,
+    put: async (...args) => (down ? Promise.reject(new Error("away")) : files.put(...args)),
+  };
+  const before = createLogs({ store, blobs, segmentMax: 4 });
+  let at = await before.append("dh-o-a-1-1", 0, Buffer.from("hello"));
+  at = await before.append("dh-o-a-1-1", at, Buffer.from("world"), { step: true, close: true });
+  const logs = createLogs({ store, blobs, log: () => {} });
+  const { url } = await copy(t, { store, backend: host(), logs });
+  const warnings = async () => (await (await fetch(`${url}/health`)).json()).warnings;
+  await until(async () => (await warnings())?.length);
+  assert.deepEqual(await warnings(), [
+    "2 closed log segments (0.0 MB) wait in the store: they can't be moved to blob storage now, tried again with a growing delay (the runner's log says why)",
+  ]);
+  down = false;
+  await logs.moves.pass();
+  assert.equal(await warnings(), undefined);
+  assert.equal(await store.blobSize("logs/dh-o-a-1-1/0"), null);
+  assert.equal((await files.read("logs/dh-o-a-1-1/1")).toString(), "world");
+  assert.equal((await logs.read("dh-o-a-1-1")).data.toString(), "hello");
+});
+
+// A probe's second: /health never waits on the store, Redis stalling or not.
+test("GET /health answers while the store's reads hang", async (t) => {
+  const shared = fileStore();
+  const files = openBlobs(pathToFileURL(join(tempDir(t), "blobs")).href);
+  const hanging = {
+    ...shared,
+    get: async (key) => (key.startsWith("log-moves/") ? new Promise(() => {}) : shared.get(key)),
+  };
+  const logs = createLogs({ store: hanging, blobs: files, log: () => {} });
+  logs.moves.stop(); // as a copy that isn't acting: it reads the store for /health
+  const { url } = await copy(t, { store: shared, backend: host(), logs });
+  logs.moves.stop();
+  for (let i = 0; i < 3; i++) {
+    const res = await fetch(`${url}/health`, { signal: AbortSignal.timeout(1000) });
+    assert.equal(res.status, 200);
+    assert.equal((await res.json()).warnings, undefined);
+  }
 });
 
 test("each caller gets its own endpoints only, from its own network, with a valid token", async (t) => {

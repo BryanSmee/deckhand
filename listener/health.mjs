@@ -3,7 +3,8 @@
 // which is up, starting (a restart or an update within STARTING_MS) or down, and why. Answers
 // are kept CACHE_MS, so that many dashboards open don't each probe every service. What it
 // says never holds a service's URL or what it answered beyond its start, version and warnings
-// (what it said of its setup at start: its blobs taking Redis's memory, ../lib/blobs.mjs).
+// (what it said of its setup at start: its blobs taking Redis's memory, ../lib/blobs.mjs; the
+// runner's log segments waiting for blob storage, ../runner/logs.mjs).
 import { SERVICES } from "../lib/services.mjs";
 
 export const TIMEOUT_MS = 2000;

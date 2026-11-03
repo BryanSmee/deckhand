@@ -1736,9 +1736,18 @@ Only the runner and the broker get these settings: the orchestrator, edge, the g
 models services never do. The secret key is one of their secrets: their store refuses it in a
 value and redacts it from a blob, and their logs and blob storage itself redact it too.
 
-For now the runner and the broker only check it: the runs' logs and files move there in the
-next releases ([#604](https://github.com/BryanSmee/deckhand/issues/604)), and until then they
-stay in the store, whatever `BLOB_URL` says.
+The runner moves each closed segment of a run's log there (a log closes one at each step of
+its run, at `LOG_SEGMENT_MB` and at its end), while the run goes on: the store keeps only the
+segment still being written and each log's index. Logs written before `BLOB_URL` was set stay in
+the store until retention removes them, and so do logs from before segments. Retention
+(`LOG_RETENTION_DAYS`) deletes the segments in blob storage too. Don't unset `BLOB_URL` once
+segments are there: their logs no longer read. The broker's files and screenshots move there in
+the next releases ([#604](https://github.com/BryanSmee/deckhand/issues/604)).
+
+When blob storage fails (down, or refusing the key), or the store does, closed segments wait in the store and are
+tried again after 30 s, then a delay that doubles each time, up to 30 minutes; the runner's log
+says why, and the dashboard's status page counts them and their size, so that you see Redis
+fill up before it is full. They move once it answers again.
 
 Each service checks its blob storage as it starts: it writes an object under
 `.deckhand-check/`, reads it back and deletes it. When that fails (a wrong key, a bucket that
