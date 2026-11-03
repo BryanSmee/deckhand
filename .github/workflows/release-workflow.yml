@@ -1,8 +1,16 @@
 name: Release
 
+# A commit on main gets its `edge` images once Checks passed on it, never before: a red main
+# (two pull requests green apart and broken together) would otherwise reach the deployments that
+# follow `edge`. Checks cancels its run on main when a newer push comes, so only the newest
+# commit that passed is published. A release tag (v*) is published as it is pushed: it names a
+# commit of main, cut by hand.
 on:
-  push:
+  workflow_run:
+    workflows: [Checks]
+    types: [completed]
     branches: [main]
+  push:
     tags: ["v*"]
 
 concurrency:
@@ -15,6 +23,13 @@ permissions:
 
 jobs:
   images:
+    # Checks passed on a push to this repository's main: `branches` alone also matches a fork's
+    # pull request from a branch named main, whose code must never be built with this token.
+    if: >-
+      github.event_name == 'push' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.event == 'push' &&
+       github.event.workflow_run.head_repository.full_name == github.repository)
     runs-on: [self-hosted, Linux]
     strategy:
       fail-fast: false
@@ -42,8 +57,14 @@ jobs:
             dockerfile: engine/Dockerfile
           - image: deckhand-engine-podman
             dockerfile: engine/podman/Dockerfile
+    # The commit Checks passed on: a workflow_run's own github.sha is main's newest, which may be
+    # another.
+    env:
+      COMMIT: ${{ github.event.workflow_run.head_sha || github.sha }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.COMMIT }}
       - run: echo "DOCKER_CONFIG=$RUNNER_TEMP/docker-config" >> "$GITHUB_ENV"
       - if: github.ref_type == 'tag' || runner.arch != 'X64'
         uses: docker/setup-qemu-action@v3
@@ -57,11 +78,14 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: ghcr.io/${{ github.repository_owner }}/${{ matrix.image }}
-          # The semver tags produce nothing on a branch push, edge nothing on a tag.
+          # The semver tags produce nothing but on a tag, edge nothing but after Checks on main.
           tags: |
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
-            type=edge,branch=main
+            type=raw,value=edge,enable=${{ github.event_name == 'workflow_run' }}
+          # The commit built, which the action would take from github.sha otherwise.
+          labels: |
+            org.opencontainers.image.revision=${{ env.COMMIT }}
       # The version the dashboard shows: the release's, or edge-<short sha> to tell commits apart.
       - id: version
         env:
@@ -70,7 +94,7 @@ jobs:
           if [ "$GITHUB_REF_TYPE" = tag ]; then
             echo "version=$RELEASE" >> "$GITHUB_OUTPUT"
           else
-            echo "version=edge-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+            echo "version=edge-${COMMIT::7}" >> "$GITHUB_OUTPUT"
           fi
       - uses: docker/build-push-action@v6
         with:

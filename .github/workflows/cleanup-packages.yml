@@ -1,6 +1,7 @@
 name: Clean up packages
 
-# Every push to main publishes an edge image per package, and the registry's storage fills up.
+# Every commit on main that passes Checks publishes an edge image per package (release-workflow.yml),
+# and the registry's storage fills up.
 # Run by hand to delete all but the newest versions of each image.
 on:
   workflow_dispatch:
