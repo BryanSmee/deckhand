@@ -773,7 +773,9 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
   const url = process.env.POLICY_URL || "http://orchestrator:8082/egress";
   const port = Number(process.env.PORT ?? 3128);
   const log = createLogger({ service: "egress" });
-  // Its metrics (../lib/metrics.mjs), on their own port when METRICS_PORT is set.
+  // Its metrics (../lib/metrics.mjs), on their own port when METRICS_PORT is set: from its
+  // environment alone (compose.yaml's EGRESS_METRICS_PORT), never config.yaml's, as every sandbox
+  // reaches the proxy, and so that port (docs/security.md).
   try {
     startMetrics({ service: "egress", port: metricsPort(process.env.METRICS_PORT), log });
   } catch (error) {

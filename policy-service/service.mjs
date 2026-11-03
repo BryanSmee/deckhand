@@ -18,7 +18,7 @@ import { readSettings, readSettingsFile, settingSource } from "../lib/settings.m
 import { isMap, parseYaml } from "../lib/yaml.mjs";
 import { createEngine } from "./engine.mjs";
 import { createLogger, withRequest } from "../lib/log.mjs";
-import { metricsPort, startMetrics } from "../lib/metrics.mjs";
+import { metricsPortOf, startMetrics } from "../lib/metrics.mjs";
 
 // The services that decide (lib/services.mjs CALLS): the orchestrator (merges, reviews, fixes,
 // linked branches, reviewers, the config check, `/mode policy` and the Policies tab), the github
@@ -127,7 +127,7 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
   const port = Number(env.PORT || 8181);
   // Its metrics (../lib/metrics.mjs), on their own port when METRICS_PORT is set.
   try {
-    startMetrics({ service: "policy", port: metricsPort(env.METRICS_PORT), log });
+    startMetrics({ service: "policy", port: metricsPortOf(env), log });
   } catch (error) {
     log.error(`Policy service: ${error.message}`);
     process.exit(1);

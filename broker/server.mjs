@@ -19,14 +19,15 @@
 //                     poll (25 s), under compose's stop_grace_period
 //   SERVICE_KEYS_DIR  where it publishes its public key (<kid>.pem) for the services that check
 //                     service tokens offline (the policy service's, #501): none by default
-//   METRICS_PORT      GET /metrics alone (../lib/metrics.mjs): none by default
+//   METRICS_PORT      GET /metrics alone (../lib/metrics.mjs), or metrics_port in config.yaml:
+//                     none by default
 import { mkdirSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { blobCredentials, blobSecrets, startBlobs } from "../lib/blobs.mjs";
 import { drainOnSigterm } from "../lib/drain.mjs";
 import { healthInfo } from "../lib/health.mjs";
 import { createLogger } from "../lib/log.mjs";
-import { metricsPort, startMetrics } from "../lib/metrics.mjs";
+import { metricsPortOf, startMetrics } from "../lib/metrics.mjs";
 import { openStore } from "../lib/store.mjs";
 import { publishKey, signingKey } from "../lib/tokens.mjs";
 import { createCallers, inClusterReview } from "./callers.mjs";
@@ -126,7 +127,7 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
       log,
     });
     const graceMs = drainMs(env.DRAIN_SECONDS);
-    startMetrics({ service: "broker", port: metricsPort(env.METRICS_PORT), log });
+    startMetrics({ service: "broker", port: metricsPortOf(env), log });
     const keysDir = env.SERVICE_KEYS_DIR || null;
     const health = { ...healthInfo(), warnings };
     started = {

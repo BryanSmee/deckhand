@@ -444,6 +444,11 @@ export function loadConfig(env, file = NO_FILE, { service = "orchestrator" } = {
     PORT: port,
     POLICY_PORT: policyPort,
     SERVICES_PORT: servicesPort,
+  });
+  // METRICS_PORT beside the ports this service listens on: the orchestrator's services and
+  // egress policy, the others' PORT (and edge's INTERNAL_PORT, ../edge/server.mjs).
+  distinctPorts({
+    ...(orchestrator ? { POLICY_PORT: policyPort, SERVICES_PORT: servicesPort } : { PORT: port }),
     METRICS_PORT: s.METRICS_PORT,
   });
   return {

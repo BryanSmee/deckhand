@@ -85,6 +85,10 @@ spec:
               readOnly: true
             - name: store
               mountPath: /data
+            # config.yaml, for metrics_port alone.
+            - name: server
+              mountPath: /etc/deckhand
+              readOnly: true
       volumes:
         # run-token.key: read only, so never made again in its place.
         - name: key
@@ -95,6 +99,14 @@ spec:
         - name: store
           persistentVolumeClaim:
             claimName: broker-store
+        - name: server
+          projected:
+            sources:
+              - configMap:
+                  name: deckhand-server
+                  items:
+                    - key: config.yaml
+                      path: config.yaml
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim

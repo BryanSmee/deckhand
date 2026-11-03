@@ -197,7 +197,23 @@ test("METRICS_PORT: off by default, from the environment or config.yaml, its own
       /config\.yaml: metrics_port: expected a port/.test(error.message),
   );
   assert.throws(() => loadConfig({ ...base, METRICS_PORT: "65536" }), ConfigError);
-  assert.throws(() => loadConfig({ ...base, METRICS_PORT: "8080" }), /PORT and METRICS_PORT/);
+  // Beside the ports the service listens on alone: the orchestrator's services and egress
+  // policy, the others' PORT.
+  assert.throws(
+    () => loadConfig({ ...base, METRICS_PORT: "8083" }),
+    /SERVICES_PORT and METRICS_PORT/,
+  );
+  assert.equal(loadConfig({ ...base, METRICS_PORT: "8080" }).metricsPort, 8080);
+  for (const service of ["edge", "runner", "github", "models"]) {
+    assert.throws(
+      () => loadConfig({ ...base, METRICS_PORT: "8080" }, undefined, { service }),
+      /PORT and METRICS_PORT/,
+    );
+    assert.equal(
+      loadConfig({ ...base, METRICS_PORT: "8082" }, undefined, { service }).metricsPort,
+      8082,
+    );
+  }
 });
 
 test("SANDBOX_SUBNETS: an IPv4 range cut into /28 blocks by default, checked, off when empty", () => {

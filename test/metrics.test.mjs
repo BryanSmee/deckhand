@@ -5,6 +5,7 @@ import {
   createRegistry,
   leaseMetric,
   metricsPort,
+  metricsPortOf,
   metricsServer,
   processMetrics,
   startMetrics,
@@ -127,6 +128,39 @@ test("names, label names and buckets are checked as they are declared", () => {
   assert.throws(() => registry.histogram("deckhand_h2", "x", { buckets: [] }), /buckets/);
   registry.gauge("deckhand_once", "x");
   assert.throws(() => registry.gauge("deckhand_once", "x"), /twice/);
+  // A histogram's samples are named after it: no other metric may take those names.
+  registry.histogram("deckhand_took_seconds", "x");
+  assert.throws(() => registry.gauge("deckhand_took_seconds_count", "x"), /another metric's/);
+  assert.throws(() => registry.gauge("deckhand_took_seconds_bucket", "x"), /another metric's/);
+  registry.gauge("deckhand_wait_sum", "x");
+  assert.throws(() => registry.histogram("deckhand_wait", "x"), /deckhand_wait_sum/);
+});
+
+test("a value that isn't a number is ignored, logged once", async () => {
+  const { registry, lines } = recorded();
+  const gauge = registry.gauge("deckhand_g", "G.");
+  const counter = registry.counter("deckhand_c_total", "C.");
+  const took = registry.histogram("deckhand_h_seconds", "H.", { buckets: [1] });
+  registry.gauge("deckhand_collected", "Collected.", {
+    labels: ["k"],
+    collect: () => [
+      [{ k: "a" }, "3"],
+      [{ k: "b" }, 4],
+    ],
+  });
+  gauge.set(2);
+  gauge.set("5");
+  gauge.inc(undefined);
+  gauge.inc(null);
+  counter.inc("1");
+  took.observe("0.5");
+  const text = await registry.render();
+  assert.deepEqual(
+    samples(text).filter((l) => !l.startsWith("deckhand_h_")),
+    ["deckhand_g 4", "deckhand_c_total 0", 'deckhand_collected{k="b"} 4'],
+  );
+  assert.match(text, /^deckhand_h_seconds_count 0$/m);
+  assert.equal(lines.filter((l) => /a sample is a number/.test(l)).length, 4);
 });
 
 test("a value outside its label's declared set is counted as other, logged once", async () => {
@@ -204,6 +238,31 @@ test("a collected gauge is asked at each scrape, guarded, and left out when it f
   assert.deepEqual(samples(await registry.render()), ["deckhand_after 9"]);
   await registry.render();
   assert.equal(lines.filter((line) => /store away/.test(line)).length, 1);
+});
+
+test("a collect() that never answers is left out of the scrape, the rest sent at once", async () => {
+  const { registry, lines } = recorded({ collectMs: 50 });
+  registry.gauge("deckhand_build", "Build.").set(1);
+  registry.gauge("deckhand_queue", "Never answers.", { collect: () => new Promise(() => {}) });
+  let asked = 0;
+  registry.gauge("deckhand_slow", "Answers in a while.", {
+    collect: () => new Promise((resolve) => setTimeout(() => resolve(++asked), 30)),
+  });
+  registry.gauge("deckhand_lease", "Answers at once.", { collect: () => 1 });
+  const started = Date.now();
+  const [first, second] = await Promise.all([registry.render(), registry.render()]);
+  // Asked together: one wait for both the slow one and the one that never answers.
+  assert.ok(Date.now() - started < 1000);
+  for (const text of [first, second]) {
+    assert.deepEqual(
+      samples(text).sort(),
+      ["deckhand_build 1", "deckhand_lease 1", `deckhand_slow ${text === first ? 1 : 2}`].sort(),
+    );
+    assert.match(text, /# TYPE deckhand_queue gauge\n# HELP deckhand_slow/);
+  }
+  assert.deepEqual(lines, [
+    "Metrics: deckhand_queue: collecting it failed, left out: no answer within 0.05 s",
+  ]);
 });
 
 test("the process's metrics and the lease's, from what they are given", async () => {
@@ -316,14 +375,41 @@ test("startMetrics serves the build info and the process's metrics on its port",
   assert.ok(lines.some((line) => /^Metrics on :\d+\/metrics$/.test(line)));
 });
 
-test("startMetrics without a port keeps its registry and listens nowhere", async (t) => {
-  const metrics = startMetrics({ service: "edge", port: null, env: {} });
+test("startMetrics without a port keeps its registry, listens nowhere and samples nothing", async (t) => {
+  let enabled = false;
+  const monitor = { count: 0, enable: () => (enabled = true), disable() {}, reset() {} };
+  const metrics = startMetrics({ service: "edge", port: null, env: {}, monitor });
   t.after(() => metrics.stop());
   assert.equal(metrics.server, null);
-  assert.match(
-    await metrics.registry.render(),
-    /deckhand_build_info\{service="edge",version="dev"\} 1/,
+  assert.equal(enabled, false);
+  const text = await metrics.registry.render();
+  assert.match(text, /deckhand_build_info\{service="edge",version="dev"\} 1/);
+  assert.doesNotMatch(text, /deckhand_process_/);
+});
+
+test("metricsPortOf: the environment, else config.yaml's metrics_port, else none", () => {
+  const files = { "/etc/deckhand/config.yaml": "allowed_users: [a]\nmetrics_port: 9464\n" };
+  const read = (path) => {
+    if (path in files) return files[path];
+    throw Object.assign(new Error(`ENOENT: ${path}`), { code: "ENOENT" });
+  };
+  assert.equal(metricsPortOf({}, read), 9464);
+  assert.equal(metricsPortOf({ METRICS_PORT: "" }, read), 9464);
+  assert.equal(metricsPortOf({ METRICS_PORT: "9500" }, read), 9500);
+  // No file: none, unless CONFIG_FILE names one.
+  assert.equal(
+    metricsPortOf({ CONFIG_FILE: "" }, () => read("/nowhere")),
+    null,
   );
+  assert.throws(() => metricsPortOf({ CONFIG_FILE: "/srv/c.yaml" }, read), ConfigError);
+  files["/srv/c.yaml"] = "metrics_port: web\n";
+  assert.throws(() => metricsPortOf({ CONFIG_FILE: "/srv/c.yaml" }, read), {
+    message: /^\/srv\/c\.yaml: metrics_port: expected a port/,
+  });
+  files["/srv/c.yaml"] = "grants_dir: /g\n";
+  assert.equal(metricsPortOf({ CONFIG_FILE: "/srv/c.yaml" }, read), null);
+  files["/srv/c.yaml"] = "a: [\n";
+  assert.throws(() => metricsPortOf({ CONFIG_FILE: "/srv/c.yaml" }, read), ConfigError);
 });
 
 test("a metrics port it can't listen on stops the service", async (t) => {

@@ -1306,15 +1306,22 @@ Every service (edge, the orchestrator, the runner, the broker, the github, model
 services, the egress proxy) serves Prometheus metrics, in its text format, for Prometheus or
 VictoriaMetrics to scrape. Off by default: set the port and each service listens on it.
 
-| Setting        | `config.yaml` key | Default    | What                                                                    |
-| -------------- | ----------------- | ---------- | ----------------------------------------------------------------------- |
-| `METRICS_PORT` | `metrics_port`    | none (off) | the port each service serves `GET /metrics` on, `9464` say; empty: none |
+| Setting                        | `config.yaml` key | Default    | What                                                                                                  |
+| ------------------------------ | ----------------- | ---------- | ----------------------------------------------------------------------------------------------------- |
+| `METRICS_PORT`                 | `metrics_port`    | none (off) | the port each service but the egress proxy serves `GET /metrics` on, `9464` say; empty: none          |
+| `EGRESS_METRICS_PORT` (`.env`) | none              | none (off) | the egress proxy's: `compose.yaml` passes it as the proxy's `METRICS_PORT`, which sandboxes reach too |
 
 - **A port of its own**, apart from the service ports: `GET /metrics` alone (any other path is
   404), with no token, so nothing secret goes in it. `compose.yaml` passes `.env`'s
-  `METRICS_PORT` to every service and publishes none: publish the ones you scrape, or join
-  your Prometheus to their networks, in a `compose.override.yaml`. The broker, the policy service and the egress proxy read it from the
-  environment alone; the others from `config.yaml` too.
+  `METRICS_PORT` to every service but the egress proxy, and publishes none: publish the ones you
+  scrape, or join your Prometheus to their networks, in a `compose.override.yaml`. Every
+  service but the egress proxy reads `metrics_port` in `config.yaml` too (the broker mounts the
+  server folder for it alone).
+- **The egress proxy's is a setting of its own**, `EGRESS_METRICS_PORT`, as every sandbox
+  reaches the proxy, and so its metrics port: they would read its memory, CPU and event loop
+  lag, which other runs' traffic moves ([security.md](security.md#not-covered)). It reads
+  its environment alone, never `config.yaml`. On Kubernetes, give it `METRICS_PORT` and let
+  only your monitoring namespace reach that port.
 - **What every service says from the start**: `deckhand_build_info{service, version}` (always
   1), and its process's `deckhand_process_resident_memory_bytes`,
   `deckhand_process_cpu_seconds_total`, `deckhand_process_start_time_seconds`,

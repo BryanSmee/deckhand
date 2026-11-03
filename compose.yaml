@@ -354,6 +354,8 @@ services:
       # Its public key (<kid>.pem), for the policy service and the runner to check service tokens with: nothing
       # secret, and a volume apart from its signing key's.
       - service-keys:/service-keys
+      # Your configuration, read only: config.yaml's metrics_port, nothing else of it.
+      - ${DECKHAND_SERVER_DIR:-./server}:/etc/deckhand:ro
     # Ready once its keys are made and published: the others wait for it.
     healthcheck:
       test: node -e "fetch('http://127.0.0.1:8081/ready').then(r=>process.exit(+!r.ok),()=>process.exit(1))"
@@ -725,8 +727,9 @@ services:
       # (docs/setup.md, Logs); debug, info, warn or error and above (LOG_LEVEL, info).
       LOG_FORMAT: ${LOG_FORMAT:-text}
       LOG_LEVEL: ${LOG_LEVEL:-}
-      # Prometheus metrics on a port of their own, not published (docs/setup.md#metrics).
-      METRICS_PORT: ${METRICS_PORT:-}
+      # Its Prometheus metrics: a setting of its own, off unless set, as every sandbox reaches
+      # the proxy, and so its metrics port (docs/setup.md#metrics, docs/security.md).
+      METRICS_PORT: ${EGRESS_METRICS_PORT:-}
       # The orchestrator's egress policy, on its own port (docs/architecture.md#restarts).
       POLICY_URL: http://orchestrator:8082/egress
       # Where the sandboxes' calls about their own run go: their token's renewal, their inbox
