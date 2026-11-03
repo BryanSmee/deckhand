@@ -101,8 +101,13 @@
 .bar.meter > .zone {
   box-sizing: border-box;
   border: 1px dashed var(--auto-solid);
-  border-radius: inherit;
+  /* Square where it meets the standard fill, round at the bar's end. */
+  border-radius: 0 3px 3px 0;
   background: none;
+}
+
+.bar.large > .zone {
+  border-radius: 0 4px 4px 0;
 }
 
 .bar.meter > .autoFill {
@@ -124,4 +129,8 @@
 .bar.rail.zoned > .autoFill {
   top: 0;
   bottom: auto;
+}
+
+.bar.rail > .zone {
+  border-radius: 3px 3px 0 0;
 }
