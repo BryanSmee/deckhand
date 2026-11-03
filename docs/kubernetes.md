@@ -288,8 +288,11 @@ the next copy before the old one stops (`maxUnavailable: 0`, `maxSurge: 1`), whi
 its grace period. The orchestrator's and the runner's copies hand their lease over: the old one
 releases it on SIGTERM and the new one takes it at once. Running sandboxes go on.
 
-Every service has a liveness probe on `/health` (the egress proxy's on `/ready`, the only one it
-answers): a process that stops answering is restarted after a minute. The orchestrator's and the
+Every service has a liveness probe on `/health`: a process that stops answering is restarted
+after a minute. The github and models services and the egress proxy answer `/ready` only once
+the broker has answered them (its keys, their service tokens): a new pod may not get out for a
+few seconds after it starts (k3s's kube-router applies its NetworkPolicies then), and the calls
+it took meanwhile would fail. The orchestrator's and the
 runner's readiness is `/health` too, not `/ready`, as Compose's health checks
 ([setup.md](setup.md#health-checks)): `/ready` answers on the acting copy alone, and the
 next copy only acts once the old one has stopped, so a rolling update waiting for it never ends.
@@ -300,6 +303,44 @@ The egress proxy runs one copy, and a second during an update: its old copy drai
 long as an agent's call lasts, after a 10 s pause that lets the Service stop sending it new
 connections (agents, git and `gh` don't try a refused one again). Two at all times would each
 make their own CA in its volume, which the sandboxes trust one of.
+
+## Checking a cluster end to end
+
+`deploy/kubernetes-e2e/run.sh` deploys the base on a cluster with this checkout's images, GitHub
+and Anthropic replaced by fakes in a namespace of their own (`fakes.mjs`: GitHub's API and a
+repository over git's smart HTTP, a scripted model, both over HTTPS from a CA the script makes),
+then checks one run from start to end:
+
+1. `check-isolation.sh` passes: a sandbox's pod reaches the egress proxy alone;
+2. a signed comment on an issue, sent to edge, starts a sandbox pod, whose agent (Claude Code, at
+   its pinned version) talks to the fake model through the models service;
+3. a second comment is sent while the agent works, and every service is updated
+   (`kubectl rollout restart`); the fake model keeps the agent working until the last rollout
+   is done, each turn a command that calls GitHub through the egress proxy for 20 s
+   (`git ls-remote`, and `gh api` through the GitHub gateway, every 2 s);
+4. the reply is posted once and names the second comment, so it reached the agent;
+5. none of the run's calls failed: no turn's command failed, the fake model got no call twice
+   (Claude Code tries a failed API call again by itself), and the run's log has no retry or
+   connection error;
+6. no sandbox pod is left.
+
+```sh
+K3S=k3s deploy/kubernetes-e2e/run.sh   # in a k3s container on Docker, started if missing
+deploy/kubernetes-e2e/run.sh           # on the cluster kubectl points at (images loaded on its nodes)
+```
+
+**Use it on a cluster you can throw away**, never on one with Deckhand installed. It installs
+Deckhand, with settings and Secrets of its own, in the namespaces `deckhand`,
+`deckhand-sandboxes` and `deckhand-e2e`, and deletes them when it ends, whatever the outcome.
+It labels them `deckhand.e2e=true`, and refuses to start when one of them exists without that
+label: a real install's would be overwritten, then deleted. `KEEP=1` leaves them for a look,
+and the next run deletes them before it starts.
+
+It takes about five minutes on k3s, mostly building the images. It needs `docker`, `node` and
+`openssl` where it runs, and `kubectl` without `K3S`. With `K3S` (or `PREINSTALL_AGENT=1`) it
+puts Claude Code in the agent's claim beforehand ([Agents on Kubernetes](#agents-on-kubernetes)),
+so the cluster's pods need no way to npm's registry; otherwise the run installs it through the
+egress proxy. No CI job runs it: k3s needs a privileged container.
 
 ## Several nodes
 
