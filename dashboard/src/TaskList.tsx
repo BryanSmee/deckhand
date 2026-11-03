@@ -26,6 +26,7 @@ import { useShortcuts, useShortcutsOn, withKey } from "./keys";
 import { CiStatus } from "./CiStatus";
 import { ReviewMarks } from "./ReviewLoop";
 import type { Task } from "./types";
+import { AutoMark } from "./ui/AutoMark";
 import { Field } from "./ui/Field";
 import { FilterChip } from "./ui/FilterChip";
 import { Search } from "./ui/icons";
@@ -196,7 +197,6 @@ function Row({
       </span>
     ),
     loopLine(t) && <span key="loop">{loopLine(t)}</span>,
-    t.autoPickup && <span key="auto">Auto-pickup</span>,
   ].filter(Boolean);
   return (
     <button type="button" class={styles.row} aria-current={current} onClick={() => onSelect(t.key)}>
@@ -211,6 +211,8 @@ function Row({
         <span class={styles.number}>{numberOf(t)}</span>
         {/* A pull request's own task: its CI beside its number. */}
         {t.pr && isPrTask(t) && <CiStatus pr={t.pr} class={styles.ci} />}
+        {/* Picked by auto-pickup: its mark beside the number, where an ellipsis can't hide it. */}
+        {t.autoPickup && <AutoMark class={styles.auto} />}
         {parts.map((p, i) => (
           <Fragment key={i}>
             {(i > 0 || numberOf(t)) && " · "}

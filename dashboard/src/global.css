@@ -20,6 +20,9 @@
   --run: #1d4ed8;
   --run-bg: #e7eefd;
   --run-solid: #3b6ff0;
+  --auto: #0b6e6a;
+  --auto-bg: #dff4f2;
+  --auto-solid: #0b8a84;
   --input: #9a4a06;
   --input-bg: #fdf0dc;
   --input-solid: #e8890c;
@@ -62,6 +65,9 @@
   --run: #8fb1ff;
   --run-bg: #16213d;
   --run-solid: #5b86f5;
+  --auto: #4fd8cc;
+  --auto-bg: #0c2a29;
+  --auto-solid: #17a89f;
   --input: #f4b35e;
   --input-bg: #33240e;
   --input-solid: #e8930f;

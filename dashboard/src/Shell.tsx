@@ -214,7 +214,13 @@ function RunSlots({
   const summary = runningText(state);
   const rest = [`${queued} queued`, reservedText(state) ?? ""].filter(Boolean);
   const meter = (
-    <Meter running={running} max={max} rail={rail} title={[summary, ...rest].join(" · ")} />
+    <Meter
+      running={running}
+      max={max}
+      auto={state.autoPickup}
+      rail={rail}
+      title={[summary, ...rest].join(" · ")}
+    />
   );
   const syncButton = (
     <IconButton

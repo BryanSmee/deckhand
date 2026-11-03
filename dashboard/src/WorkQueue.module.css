@@ -155,6 +155,11 @@ a.name:hover {
   line-height: 16px;
 }
 
+/* An auto-picked card's mark, before its meta line. */
+.auto {
+  margin-right: 5px;
+}
+
 .buttons {
   grid-column: 2;
   display: flex;

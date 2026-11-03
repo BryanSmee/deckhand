@@ -686,8 +686,8 @@ auto-picked issue is cancelled.
   neither. The policies still see those runs as started by the listener or by the comment.
   A pick that asked keeps its slot until its questions are answered or set aside (the
   needs-input label taken off, the issue closed), picks from before an update included: the
-  dashboard's run count shows such slots as held between runs ("1 slot for auto-pickup (1 held
-  between runs)"), and no issue is picked for them meanwhile.
+  dashboard's line under the run slots shows such slots as held between runs ("1 auto-pickup
+  slot (1 held between runs)"), and no issue is picked for them meanwhile.
 - **What is skipped.** An issue with something live on the dashboard (running, queued,
   waiting, asking), the needs-input label (`NEEDS_INPUT_LABEL`), an open issue it is "blocked
   by", or an open pull request of Deckhand's for it; the next one is picked instead.
@@ -702,8 +702,10 @@ auto-picked issue is cancelled.
   queued. A failed or stopped run isn't picked again: add the label back to retry. An issue
   held by who added the label, or by an edit since, keeps it, and the App says why once.
 
-The dashboard marks auto-picked tasks ("Auto-pickup"), and its run count says how many hold
-the reserved slots ("2 + 1 auto of 3 running").
+The dashboard marks auto-picked tasks with a bolt (named "Auto-pickup" for screen readers and
+on hover). Its run slots' meter keeps the reserved slots last: dashed while free, teal while an
+auto-picked run holds one, blue and still dashed while a standard run borrows it. The line under
+it says how they are used ("1 auto-pickup slot (1 in use)", "… (free)").
 
 ### Fast mode
 

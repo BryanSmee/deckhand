@@ -6,7 +6,7 @@
 // and Sync now.
 import { Fragment } from "preact";
 import { usePolled } from "./api";
-import { ago, AUTH_NAMES, dayTime, plural, uptime, versionUrl } from "./format";
+import { ago, AUTH_NAMES, dayTime, plural, reservedText, uptime, versionUrl } from "./format";
 import { Services } from "./Health";
 import { useSync, syncMessage } from "./Sync";
 import type { AppLinks, Auth, Health, ServerSetup, State, SyncResult } from "./types";
@@ -153,10 +153,20 @@ function Runs({
         <div class={styles.fact}>
           <span class={styles.label}>Slots</span>
           {state && (
-            <Meter running={state.running} max={state.maxParallel} large class={styles.meter} />
+            <Meter
+              running={state.running}
+              max={state.maxParallel}
+              auto={state.autoPickup}
+              large
+              class={styles.meter}
+            />
           )}
           <span class={styles.value}>
-            {state ? `${state.running} running · ${state.queued} queued` : "…"}
+            {state
+              ? [`${state.running} running`, `${state.queued} queued`, reservedText(state)]
+                  .filter(Boolean)
+                  .join(" · ")
+              : "…"}
           </span>
         </div>
         {state?.plans?.some((p) => p.windows.length) && (
