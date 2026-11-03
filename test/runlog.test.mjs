@@ -97,6 +97,7 @@ test("outcome: ok, needs-input or error", () => {
     "Done. A run asks with `<!-- needs-input -->` first.",
     "Done.\n```\n<!-- needs-input -->\n```",
     "Done.\n1. Fixed it.\n<!-- needs-input -->",
+    "Done.\n\n<!-- needs-input --> is what a run starts with to ask.",
   ]) {
     assert.equal(outcome({ ok: true, text }), "ok", text);
   }

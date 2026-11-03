@@ -24,9 +24,15 @@ const FENCE = /^ {0,3}(```|~~~)/;
 // German, Portuguese and Italian.
 const OPEN_QUESTIONS =
   /^(?:open questions|questions ouvertes|questions en suspens|preguntas abiertas|preguntas pendientes|offene fragen|perguntas abertas|perguntas em aberto|quest[õo]es em aberto|domande aperte)\s*:?$/iu;
-// "None" first in the section: it asks nothing.
-const NONE =
-  /^(?:none|n\/a|no (?:open )?questions|aucune?|néant|pas de questions?|ningun[oa]|sin preguntas|keine|nenhuma?|sem perguntas|nessun[oa])(?![\p{L}\p{N}])/u;
+// "None" first in the section: it asks nothing. The word alone, or before punctuation or the
+// word for questions ("Aucune question", "Keine offenen Fragen"): many sentences start with it
+// ("Keine der beiden Varianten passt: welche?"), which ask.
+const NONE = new RegExp(
+  "^(?:(?:none|n/a|aucune?|néant|ningun[oa]|ningún|keine|nenhuma?|nessun[oa])" +
+    "(?:\\s*(?:$|[.:;,!?()—–-])|\\s+(?:open |offenen? )?(?:questions?|fragen|preguntas?|perguntas?|quest(?:ão|ões|ao|oes)|domand[ae])(?![\\p{L}\\p{N}]))" +
+    "|(?:no (?:open )?questions|pas de questions?|sin preguntas|sem perguntas)(?![\\p{L}\\p{N}]))",
+  "u",
+);
 // The pick of an option.
 const PICK = "recommended|recommandée?|recomendad[oa]|empfohlen|raccomandat[oa]|consigliat[oa]";
 
@@ -172,32 +178,40 @@ function question(line) {
   return { title: titled?.[2].trim() ? title : null, text, options: [] };
 }
 
-// Whether a run's reply stopped to ask: NEEDS_INPUT starts it, or a line of its own before
+// Whether a run's reply stopped to ask: NEEDS_INPUT starts it, or is a line of its own before
 // its first question (a run that put a translated heading or a sentence first, issue #705).
-// Not in a code block, nor quoted in a sentence: a reply that explains the marker asks nothing.
+// Not in a code block, nor in a sentence: a reply that explains the marker asks nothing.
 export function asksInput(text) {
-  const reply = (text ?? "").trimStart();
-  if (reply.startsWith(NEEDS_INPUT)) return true;
-  let fenced = false;
-  for (const line of reply.split(/\r?\n/)) {
-    if (FENCE.test(line)) fenced = !fenced;
-    if (fenced) continue;
-    if (line.trim().startsWith(NEEDS_INPUT)) return true;
-    if (ITEM.test(line)) return false;
-  }
-  return false;
+  return markerEnd(text) >= 0;
 }
 
-// The questions of a run's reply that has NEEDS_INPUT: its "Open questions" section when it
+// Where the text after asksInput()'s marker starts, -1 without one.
+function markerEnd(text) {
+  const reply = text ?? "";
+  const start = reply.length - reply.trimStart().length;
+  if (reply.startsWith(NEEDS_INPUT, start)) return start + NEEDS_INPUT.length;
+  let fenced = false;
+  let at = 0;
+  for (const line of reply.split("\n")) {
+    const end = at + line.length + 1;
+    if (FENCE.test(line)) fenced = !fenced;
+    else if (!fenced && line.trim() === NEEDS_INPUT) return end - 1;
+    else if (!fenced && ITEM.test(line)) return -1;
+    at = end;
+  }
+  return -1;
+}
+
+// The questions of a run's reply that asks (asksInput()): its "Open questions" section when it
 // has one (under "Needs your input", as the prompt's wording invites), else what follows its
 // "Needs your input" heading, up to the next heading. When that is no list of questions (an
 // intro under translated headings), the first part between headings whose questions have
 // options. Null when it asks nothing.
 export function replyQuestions(text) {
   const reply = text ?? "";
-  const at = reply.indexOf(NEEDS_INPUT);
+  const at = markerEnd(reply);
   if (at < 0) return null;
-  const after = reply.slice(at + NEEDS_INPUT.length);
+  const after = reply.slice(at);
   const titled = questionsSection(after);
   if (titled !== null) return parseQuestions(titled);
   const parts = [];

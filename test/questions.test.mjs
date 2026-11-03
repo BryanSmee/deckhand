@@ -347,6 +347,15 @@ test("a run's questions in another language: translated headings, title and pick
     .replace("### Questions ouvertes", "Il me faut votre avis.\n\n### Questions")
     .replace("Les migrations.", "1. Les migrations.");
   assert.deepEqual(replyQuestions(other).items, items);
+  // An intro starting with a translated "None" word is no "None".
+  const intro = reply.replace(
+    "### Questions ouvertes",
+    "Aucune des deux options ne convient sans votre choix.\n\n### Questions",
+  );
+  assert.deepEqual(replyQuestions(intro).items, items);
+  // Only the marker on a line of its own: one quoted in a sentence before it isn't the start.
+  const quoted = `Je réponds avec \`<!-- needs-input -->\` en tête.\n${reply}`;
+  assert.deepEqual(replyQuestions(quoted), replyQuestions(reply));
   // Questions without options right under the first heading are still the questions.
   assert.deepEqual(
     replyQuestions("<!-- needs-input -->\n## Avis\n1. A ?\n## Vérifié\n2. B ?").items,
@@ -365,6 +374,25 @@ test("a run's questions in another language: translated headings, title and pick
   });
 });
 
+test("a pick in other languages: each form of recommended", () => {
+  for (const pick of [
+    "recommended",
+    "recommandé",
+    "recommandée",
+    "recomendado",
+    "recomendada",
+    "empfohlen",
+    "raccomandato",
+    "raccomandata",
+    "consigliato",
+    "consigliata",
+  ]) {
+    const [a, b] = parseQuestions(`1. Which?\n   - [ ] A (${pick}: why)\n   - [ ] B`).items[0]
+      .options;
+    assert.deepEqual([a.label, a.recommended, b.recommended], ["A (why)", true, false], pick);
+  }
+});
+
 test("issue bodies: open questions and None in English and a few other languages", () => {
   const asked = (heading) => `## Problem\n\nX.\n\n## ${heading}\n\n1. **Titre** : lequel ?\n`;
   for (const heading of [
@@ -375,6 +403,10 @@ test("issue bodies: open questions and None in English and a few other languages
     "Perguntas em aberto",
     "Domande aperte",
     "Questions ouvertes :",
+    "Questions en suspens",
+    "Preguntas pendientes",
+    "Perguntas abertas",
+    "Questões em aberto",
   ]) {
     assert.equal(hasOpenQuestions(asked(heading)), true, heading);
     assert.equal(parseQuestions(questionsSection(asked(heading))).items[0].title, "Titre");
@@ -392,6 +424,24 @@ test("issue bodies: open questions and None in English and a few other languages
     ["Questions ouvertes", "Néant."],
   ]) {
     assert.equal(hasOpenQuestions(none(heading, text)), false, `${heading}: ${text}`);
+  }
+  // The word for "None" starting a sentence asks; before the word for questions it doesn't.
+  for (const text of [
+    "Keine der beiden Varianten passt: welche?",
+    "Aucune des deux options ne convient : laquelle ?",
+    "Nessuna delle due va bene: quale?",
+    "None of the options fits: which one?",
+  ]) {
+    assert.equal(hasOpenQuestions(none("Open questions", text)), true, text);
+  }
+  for (const text of [
+    "Aucune question.",
+    "Keine offenen Fragen",
+    "Nessuna domanda",
+    "Ninguna pregunta.",
+    "Nenhuma questão",
+  ]) {
+    assert.equal(hasOpenQuestions(none("Open questions", text)), false, text);
   }
   // A word that only starts like one asks.
   assert.equal(hasOpenQuestions(none("Open questions", "Nonexistent users: refuse them?")), true);
