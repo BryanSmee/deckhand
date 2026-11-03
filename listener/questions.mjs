@@ -24,15 +24,11 @@ const FENCE = /^ {0,3}(```|~~~)/;
 // German, Portuguese and Italian.
 const OPEN_QUESTIONS =
   /^(?:open questions|questions ouvertes|questions en suspens|preguntas abiertas|preguntas pendientes|offene fragen|perguntas abertas|perguntas em aberto|quest[õo]es em aberto|domande aperte)\s*:?$/iu;
-// "None" first in the section: it asks nothing. The word alone, or before punctuation or the
-// word for questions ("Aucune question", "Keine offenen Fragen"): many sentences start with it
-// ("Keine der beiden Varianten passt: welche?"), which ask.
-const NONE = new RegExp(
-  "^(?:(?:none|n/a|aucune?|néant|ningun[oa]|ningún|keine|nenhuma?|nessun[oa])" +
-    "(?:\\s*(?:$|[.:;,!?()—–-])|\\s+(?:open |offenen? )?(?:questions?|fragen|preguntas?|perguntas?|quest(?:ão|ões|ao|oes)|domand[ae])(?![\\p{L}\\p{N}]))" +
-    "|(?:no (?:open )?questions|pas de questions?|sin preguntas|sem perguntas)(?![\\p{L}\\p{N}]))",
-  "u",
-);
+// "None" first in the section, and no numbered question after it: it asks nothing. Many
+// sentences start with the word too ("Keine der beiden Varianten passt: welche?"), which the
+// questions follow.
+const NONE =
+  /^(?:none|n\/a|no (?:open )?questions|aucune?|néant|pas de questions?|ningun[oa]|ningún|sin preguntas|keine|nenhuma?|sem perguntas|nessun[oa])(?![\p{L}\p{N}])/u;
 // The pick of an option.
 const PICK = "recommended|recommandée?|recomendad[oa]|empfohlen|raccomandat[oa]|consigliat[oa]";
 
@@ -71,7 +67,7 @@ function asks(text) {
     .replace(/[*_`>]/g, "")
     .trim()
     .toLowerCase();
-  return !NONE.test(first);
+  return !NONE.test(first) || section.split(/\r?\n/).some((line) => ITEM.test(line));
 }
 
 // At most one space before it: deeper, it is nested under a question.
@@ -192,10 +188,12 @@ function markerEnd(text) {
   if (reply.startsWith(NEEDS_INPUT, start)) return start + NEEDS_INPUT.length;
   let fenced = false;
   let at = 0;
-  for (const line of reply.split("\n")) {
-    const end = at + line.length + 1;
+  for (const raw of reply.split("\n")) {
+    const end = at + raw.length + 1;
+    const line = raw.replace(/\r$/, "");
     if (FENCE.test(line)) fenced = !fenced;
-    else if (!fenced && line.trim() === NEEDS_INPUT) return end - 1;
+    // Indented by four spaces or more, it is a code block.
+    else if (!fenced && line.trimEnd().replace(/^ {0,3}/, "") === NEEDS_INPUT) return end - 1;
     else if (!fenced && ITEM.test(line)) return -1;
     at = end;
   }
@@ -226,9 +224,12 @@ export function replyQuestions(text) {
       part.push(line);
     }
   }
-  const [first, ...rest] = parts.map((p) => parseQuestions(p.join("\n")));
-  if (!first || first.items) return first ?? null;
-  return rest.find((q) => q?.items?.some((i) => i.options.length)) ?? first;
+  const texts = parts.map((p) => p.join("\n"));
+  // Whether it asks is the reply's: an intro that starts like "None" may come before questions.
+  if (!asks(texts.join("\n\n"))) return null;
+  const [first, ...rest] = texts.map(parseQuestions);
+  if (first?.items) return first;
+  return rest.find((q) => q?.items?.some((i) => i.options.length)) ?? first ?? null;
 }
 
 // An `issues`, `issue_comment` or `pull_request` delivery → what it changes for the label, or

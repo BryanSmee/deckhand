@@ -361,11 +361,15 @@ test("a run's questions in another language: translated headings, title and pick
     replyQuestions("<!-- needs-input -->\n## Avis\n1. A ?\n## Vérifié\n2. B ?").items,
     [free("A ?")],
   );
-  // "None" translated: nothing asked, whatever follows.
+  // "None" translated: nothing asked, unless questions follow it.
   assert.equal(
-    replyQuestions("<!-- needs-input -->\n## Avis\n\nAucune.\n\n## Suite\n1. A ?\n   - [ ] Oui"),
+    replyQuestions("<!-- needs-input -->\n## Avis\n\nAucune.\n\n## Vérifié\n\nRien."),
     null,
   );
+  const sorry = "<!-- needs-input -->\n## Avis\n\nAucune question simple ici, désolé.";
+  assert.deepEqual(replyQuestions(`${sorry}\n\n## Suite\n1. A ?\n   - [ ] Oui`).items, [
+    { title: null, text: "A ?", options: [{ label: "Oui", recommended: false, checked: false }] },
+  ]);
   // An English pick with a space before the title's colon, and inside the bold.
   assert.deepEqual(parseQuestions("1. **Name :** which one?\n   - [ ] A (Recommended)").items[0], {
     title: "Name",
@@ -425,16 +429,12 @@ test("issue bodies: open questions and None in English and a few other languages
   ]) {
     assert.equal(hasOpenQuestions(none(heading, text)), false, `${heading}: ${text}`);
   }
-  // The word for "None" starting a sentence asks; before the word for questions it doesn't.
+  // "None" then more on its line, or the inbox link right under it: nothing asked, as before.
   for (const text of [
-    "Keine der beiden Varianten passt: welche?",
-    "Aucune des deux options ne convient : laquelle ?",
-    "Nessuna delle due va bene: quale?",
-    "None of the options fits: which one?",
-  ]) {
-    assert.equal(hasOpenQuestions(none("Open questions", text)), true, text);
-  }
-  for (const text of [
+    "None\nFrom the inbox: https://github.com/org/repo/issues/1#issuecomment-2",
+    "None for now.",
+    "None yet",
+    "None at this time.",
     "Aucune question.",
     "Keine offenen Fragen",
     "Nessuna domanda",
@@ -442,6 +442,17 @@ test("issue bodies: open questions and None in English and a few other languages
     "Nenhuma questão",
   ]) {
     assert.equal(hasOpenQuestions(none("Open questions", text)), false, text);
+  }
+  // A sentence that starts with the word, then the questions: they ask.
+  for (const text of [
+    "Keine der beiden Varianten passt: welche?",
+    "Aucune des deux options ne convient : laquelle ?",
+    "Aucune question n'est tranchée : laquelle ?",
+    "Nessuna delle due va bene: quale?",
+    "None of the options fits: which one?",
+  ]) {
+    const section = none("Open questions", `${text}\n\n1. A?\n   - [ ] Oui`);
+    assert.equal(hasOpenQuestions(section), true, text);
   }
   // A word that only starts like one asks.
   assert.equal(hasOpenQuestions(none("Open questions", "Nonexistent users: refuse them?")), true);

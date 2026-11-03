@@ -89,6 +89,7 @@ test("outcome: ok, needs-input or error", () => {
   for (const text of [
     "## Besoin de votre avis\n\n<!-- needs-input -->\n\n1. Lequel ?",
     "Il me faut votre avis.\n<!-- needs-input -->\n1. Lequel ?",
+    "Il me faut votre avis.\r\n<!-- needs-input -->\r\n1. Lequel ?",
   ]) {
     assert.equal(outcome({ ok: true, text }), "needs-input", text);
   }
@@ -98,6 +99,8 @@ test("outcome: ok, needs-input or error", () => {
     "Done.\n```\n<!-- needs-input -->\n```",
     "Done.\n1. Fixed it.\n<!-- needs-input -->",
     "Done.\n\n<!-- needs-input --> is what a run starts with to ask.",
+    "Done.\r\n1. Fixed\r\n<!-- needs-input -->",
+    "Done. The format:\n\n    <!-- needs-input -->\n    ## Needs your input",
   ]) {
     assert.equal(outcome({ ok: true, text }), "ok", text);
   }

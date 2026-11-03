@@ -184,8 +184,8 @@ blocks the merge (a write Deckhand refused, a file it may not edit, a secret to 
 its pull request stays ready, and each blocker is a question (`Done, carry on` / `Drop it`). A
 fix run (`review.fix`) asks the same of a finding whose fix the issue needs but it may not
 make, which ends the loop as waiting for input rather than leaving the finding for the next
-review (a change only a finding asks for is left, never asked). Its questions stop waiting earlier when
-nobody will answer them. `dismissals.mjs` `setAside()` then keeps them aside in
+review (a change only a finding asks for is left, never asked). Its questions stop waiting
+earlier when nobody will answer them. `dismissals.mjs` `setAside()` then keeps them aside in
 the store's `dismissed` while that run is the task's last:
 
 - someone other than the App's bot takes the label off the task's issue or pull request: an
