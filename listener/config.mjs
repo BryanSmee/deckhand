@@ -20,6 +20,7 @@ import {
 } from "./agents/credentials.mjs";
 import { MODEL_NAME } from "./events.mjs";
 import { ENGINES } from "./runner/engine.mjs";
+import { metricsPort } from "../lib/metrics.mjs";
 import { urlProblem } from "../lib/service-client.mjs";
 import { networkCallers } from "../lib/service-token.mjs";
 import { PRIVATE_RANGES, parseCidr, privateRange } from "../lib/subnets.mjs";
@@ -248,6 +249,8 @@ export const SETTINGS = {
   CONFLICT_MERGE_DELAY_MS: { default: 30000, parse: whole("a whole number of milliseconds") },
   GITHUB_URL: { default: "https://github.com", parse: noSlash },
   GITHUB_API: { default: "https://api.github.com", parse: noSlash },
+  // Each service's Prometheus metrics, on a port of its own (../lib/metrics.mjs). Empty: none.
+  METRICS_PORT: { default: null, parse: (text, { label }) => metricsPort(text, label) },
 };
 
 // What config.yaml may set, and the YAML it takes: each setting's environment variable, in
@@ -441,9 +444,12 @@ export function loadConfig(env, file = NO_FILE, { service = "orchestrator" } = {
     PORT: port,
     POLICY_PORT: policyPort,
     SERVICES_PORT: servicesPort,
+    METRICS_PORT: s.METRICS_PORT,
   });
   return {
     port,
+    // GET /metrics alone (../lib/metrics.mjs), or null: none.
+    metricsPort: s.METRICS_PORT,
     // The other services' calls to those the listener still is (the broker's, the github
     // service's: services-http.mjs), on the networks it shares with them only.
     servicesPort,

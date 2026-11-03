@@ -173,6 +173,33 @@ test("MAX_FIX_ROUNDS: 5 by default, a whole number above 0", () => {
 
 const file = (text) => parseConfigFile(text, "/etc/deckhand/config.yaml");
 
+test("METRICS_PORT: off by default, from the environment or config.yaml, its own port", () => {
+  const base = { ALLOWED_USERS: "a" };
+  assert.equal(loadConfig(base).metricsPort, null);
+  assert.equal(loadConfig({ ...base, METRICS_PORT: "" }).metricsPort, null);
+  assert.equal(loadConfig({ ...base, METRICS_PORT: "9464" }).metricsPort, 9464);
+  assert.equal(loadConfig(base, file("metrics_port: 9464")).metricsPort, 9464);
+  assert.equal(
+    loadConfig({ ...base, METRICS_PORT: "9500" }, file("metrics_port: 9464")).metricsPort,
+    9500,
+  );
+  // Each service that reads config.yaml takes it, not only the orchestrator.
+  for (const service of ["edge", "runner", "github", "models"]) {
+    assert.equal(
+      loadConfig({ ...base, METRICS_PORT: "9464" }, undefined, { service }).metricsPort,
+      9464,
+    );
+  }
+  assert.throws(
+    () => loadConfig(base, file("metrics_port: web")),
+    (error) =>
+      error instanceof ConfigError &&
+      /config\.yaml: metrics_port: expected a port/.test(error.message),
+  );
+  assert.throws(() => loadConfig({ ...base, METRICS_PORT: "0" }), ConfigError);
+  assert.throws(() => loadConfig({ ...base, METRICS_PORT: "8080" }), /PORT and METRICS_PORT/);
+});
+
 test("SANDBOX_SUBNETS: an IPv4 range cut into /28 blocks by default, checked, off when empty", () => {
   const base = { ALLOWED_USERS: "a" };
   assert.equal(loadConfig(base).subnets, null);

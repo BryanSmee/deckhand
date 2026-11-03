@@ -10,6 +10,7 @@ import { BlobError, blobCredentials, blobSecrets, startBlobs } from "../lib/blob
 import { DRAIN_MS } from "../lib/drain.mjs";
 import { healthInfo } from "../lib/health.mjs";
 import { createLogger } from "../lib/log.mjs";
+import { leaseMetric, startMetrics } from "../lib/metrics.mjs";
 import { createBrokerCaller } from "../lib/broker-client.mjs";
 import { serviceClient } from "../lib/service-client.mjs";
 import { networkCallers } from "../lib/service-token.mjs";
@@ -67,6 +68,9 @@ try {
   log.error(error.message);
   process.exit(1);
 }
+
+// Its metrics (../lib/metrics.mjs), on their own port when METRICS_PORT is set.
+const metrics = startMetrics({ service: "runner", port: config.metricsPort, log });
 
 // Blob storage's secret key never goes in it: refused in a value, redacted from a blob.
 const storeUrl = env.STORE_URL || `file://${join(config.dataDir, "store")}`;
@@ -144,6 +148,7 @@ const lease = activePassive({
   onPassive: () => service.deactivate(),
   log,
 });
+leaseMetric(metrics.registry, { runner: () => lease.active() });
 
 // What the operator's policies grant each repository (a container engine, its Dockerfile…),
 // asked of the policy service as the listener asks it: the runner checks every spec and build
