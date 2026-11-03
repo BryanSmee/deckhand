@@ -52,6 +52,7 @@ import { openStore, values } from "../lib/store.mjs";
 import { storeMaps } from "../lib/store-map.mjs";
 import { readJson } from "../lib/files.mjs";
 import { createLogger, deliveryContext, withLogContext } from "../lib/log.mjs";
+import { leaseMetric, startMetrics } from "../lib/metrics.mjs";
 import { createEdgeClient } from "../edge/client.mjs";
 import { checkAppSettings, loadCredentials, saveCredentials } from "../listener/github-app.mjs";
 import { hasLabel, pullEntry, taskKey } from "../listener/events.mjs";
@@ -267,6 +268,10 @@ let acting = false;
 // The version the images were built from, its repository and when this orchestrator started:
 // api/state's, and its own /health (../lib/health.mjs).
 const server = serverInfo(env);
+// Its metrics (../lib/metrics.mjs), on their own port when METRICS_PORT is set: the waiting copy
+// answers too, its lease not held.
+const metrics = startMetrics({ service: "orchestrator", port: config.metricsPort, log });
+leaseMetric(metrics.registry, { orchestrator: () => acting });
 const services = createServicesHttp({
   health: server,
   // The broker service's keys.
