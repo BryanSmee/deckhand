@@ -531,16 +531,12 @@ export function createHttp(ctx) {
   // container. One request's unexpected throw answers 500 and is logged: it never takes the
   // orchestrator down.
   function handle(req, res, { user = null, local = false } = {}) {
-    const failed = (error) => {
+    // Async: a throw in it is a rejection too.
+    route(req, res, user, local).catch((error) => {
       (log.error ?? log)(`${req.method} ${req.url}: ${error.stack ?? error}`);
       if (!res.headersSent) res.writeHead(500);
       res.end();
-    };
-    try {
-      route(req, res, user, local).catch(failed);
-    } catch (error) {
-      failed(error);
-    }
+    });
   }
 
   async function route(req, res, user, local) {

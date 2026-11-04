@@ -375,7 +375,9 @@ export function createAutoPickup({
     const found = labeller(events, label);
     if (!found) return "who added the label isn't in its events yet";
     const by = vouchedLabeller(found, config, followUpPick, repo, n);
-    let why = labellerRefusal(by, config, settings.users, await starters(repo, [by.login]));
+    // A bot's labelling is refused as it is: no decision to ask.
+    const may = by.bot ? null : await starters(repo, [by.login]);
+    let why = labellerRefusal(by, config, settings.users, may);
     if (!why) {
       const history = await lastEdits(github, repo, n);
       const editors = [

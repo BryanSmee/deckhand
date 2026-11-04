@@ -120,6 +120,16 @@ export function createTasks(ctx) {
   }
 
   async function admitNow(first, event, payload) {
+    // An author with no action on the repo: hidden from them, so nothing said, not even its
+    // config's errors (permissions.mjs).
+    if (
+      ctx.permissions &&
+      first.author &&
+      !(await ctx.permissions.visible(first.author, first.repo))
+    ) {
+      log(`${taskKey(first.repo, first.id)}: ${first.author} has no action here`);
+      return;
+    }
     const { settings, errors } = await ctx.repoSettings(first.repo, first.base);
     if (errors.length) {
       log(`${first.repo}: ${CONFIG_FILE} has errors: ${errors.join("; ")}`);
@@ -160,7 +170,15 @@ export function createTasks(ctx) {
     }
     // Only the comment's own issue, as the delivery has it: a pull request's labels are its own.
     const issue = event === "issue_comment" && !payload.issue?.pull_request ? payload.issue : null;
-    if (!hasAnswer(item) && unanswered(item, issue)) return holdBack(item);
+    if (!hasAnswer(item) && unanswered(item, issue)) {
+      // Its reply is for an author who may start what the comment asks for (permissions.mjs).
+      const action = startAction(item.modeLine ?? "work");
+      if (ctx.permissions && !(await ctx.permissions.can(item.author, item.repo, action))) {
+        log(`${taskKey(item.repo, item.id)}: held back, and ${item.author} has no ${action} here`);
+        return;
+      }
+      return holdBack(item);
+    }
     // A trigger or "/mode" comment replaces the issue's wait, once it runs: refused by the
     // policies, it changes nothing. The wait is held meanwhile (waits.mjs reserve()): a blocker
     // done during the decision doesn't start it beside the new comment.

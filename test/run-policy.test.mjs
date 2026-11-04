@@ -886,3 +886,62 @@ test("access: a start whose decision fails is refused, saying it couldn't be dec
   assert.match(item.refused, /who may start it can't be decided now/);
   assert.match(logs.join("\n"), /alice's runs:start:work can't be decided \(the policies/);
 });
+
+test("access: no reply about a run for an author who may not start it, nor any for one with no action", async () => {
+  const replies = [];
+  const settled = [];
+  let errors = [];
+  const config = testConfig({ ALLOWED_USERS: "alice,bob,carol" });
+  const ctx = {
+    config,
+    log: () => {},
+    skip: () => null,
+    tasks: new Map(),
+    runs: [],
+    issueModes: new Map(),
+    brainstorms: { get: () => null, end: () => {} },
+    // alice a member, bob a viewer, carol nothing.
+    permissions: permissionsOf({ alice: { "org/repo": MEMBER }, bob: { "org/repo": VIEWER } }),
+    repoSettings: async () => ({ ...parseRepoConfig("", config), errors }),
+    waits: { request: async () => true, reserve: () => null, release: async () => {} },
+    reply: async (repo, number, text) => (replies.push(text), null),
+    settle: async (item, status) => settled.push([item.author, status]),
+  };
+  const { admit } = createTasks(ctx);
+  const say = (login, body, issue = {}) => {
+    const payload = {
+      action: "created",
+      installation: { id: 7 },
+      repository: { full_name: "org/repo", default_branch: "main" },
+      issue: { number: 12, ...issue },
+      comment: { id: 99, body, user: { login, type: "User" } },
+      sender: { login },
+    };
+    return admit(
+      { repo: "org/repo", id: "12", base: "main", author: login, trigger: "work", replyTo: 12 },
+      "issue_comment",
+      payload,
+    );
+  };
+  // An issue whose open questions hold work back.
+  const asking = {
+    body: "Do it.\n\n## Open questions\n\n1. Which one?",
+    labels: [{ name: "needs-input" }],
+  };
+  await say("bob", "Deckhand", asking);
+  // An unknown mode.
+  await say("bob", "Deckhand\n/mode nope");
+  // The config's errors, to someone with no action at all.
+  errors = ["`modes` is broken"];
+  await say("carol", "Deckhand");
+  assert.deepEqual([replies, settled], [[], []]);
+  // A member gets each of them.
+  await say("alice", "Deckhand");
+  errors = [];
+  await say("alice", "Deckhand\n/mode nope");
+  await say("alice", "Deckhand", asking);
+  assert.equal(replies.length, 3);
+  assert.match(replies[0], /has errors/);
+  assert.match(replies[1], /Unknown mode `nope`/);
+  assert.match(replies[2], /#12 has open questions: nothing starts/);
+});

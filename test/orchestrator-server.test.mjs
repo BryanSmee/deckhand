@@ -5101,9 +5101,9 @@ mounts:
       },
       { opa },
     );
-    // alice is in ALLOWED_USERS, but may start nothing: no run, and nothing said.
+    // alice is in ALLOWED_USERS, but has no action here: no run, and nothing said.
     await send(comment("alice"));
-    await listener.until("org/repo#12: work run refused: alice has no runs:start:work here");
+    await listener.until("org/repo#12: alice has no action here");
     assert.equal(exists(join(dir, "run-env")), null);
     // bob's comment runs.
     await send(comment("bob"));

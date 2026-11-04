@@ -176,7 +176,7 @@ export function createRunPolicy(ctx, now = Date.now) {
     const action = startAction(mode);
     const said = ctx.permissions && (await ctx.permissions.decide(item.author, item.repo, action));
     if (said && !said.ok) {
-      // A decision that failed says so: post the comment again once the policies answer.
+      // A decision that failed says so, in the log and the dashboard's answer.
       ctx.log(
         said.error
           ? `${key}: ${mode} run refused: ${item.author}'s ${action} can't be decided (${said.error})`
