@@ -80,7 +80,8 @@ started before you finish.
 lib/          what every service shares, copied into each image: yaml, settings, redact, log
               (its lines, a request's ID), http, health (every service's /health), files, drain,
               tokens, service tokens, the store (store.mjs, store-file.mjs, store-redis.mjs and
-              its client resp.mjs; store-map.mjs: a Map kept there one key per item), the S3 client (s3.mjs, #605) and blob storage over it (blobs.mjs:
+              its client resp.mjs, the arguments both backends check in store-checks.mjs;
+              store-map.mjs: a Map kept there one key per item), the S3 client (s3.mjs, #605) and blob storage over it (blobs.mjs:
               BLOB_URL's backends, #606)
 edge/         edge (#506), the only service the internet reaches: server.mjs (wiring), http.mjs
               (webhooks, /setup, sign-in, the dashboard's files), forward.mjs (the dashboard's API
