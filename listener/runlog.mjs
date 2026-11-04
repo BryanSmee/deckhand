@@ -281,7 +281,8 @@ export function moveLogs(
           }
           renameSync(clean, path);
         }
-        await logs.upload(id, path);
+        // An ended run's is written on no more: its last segment closed (#664).
+        await logs.upload(id, path, { close: !isLive });
         rmSync(path, { force: true });
         count++;
         return true;

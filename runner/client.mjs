@@ -451,12 +451,13 @@ export function createRunnerClient({
   // longer than the file is no try's to fix: LOG_LONGER. Each part ends where the file was
   // redacted by (partEnd(), ../listener/runlog.mjs moveLogs()): the runner's store finds no
   // token in one that the file's redaction didn't, but for a run of token bytes over 4 MB, cut
-  // anywhere (runlog.mjs REDACT_PART_MAX says why that is accepted).
+  // anywhere (runlog.mjs REDACT_PART_MAX says why that is accepted). `close`: a log of a run
+  // that is over, its last segment closed once all of it is sent (../runner/logs.mjs, #664).
   const longer = (id, file) =>
     Object.assign(new Error(`the runner's log of ${id} is longer than ${file}`), {
       code: "LOG_LONGER",
     });
-  async function upload(id, file) {
+  async function upload(id, file, { close = false } = {}) {
     const total = statSync(file).size;
     let at = (await readLog(id, { offset: 0, length: 1, caller: orchestrator })).size;
     if (at > total) throw longer(id, file);
@@ -474,6 +475,7 @@ export function createRunnerClient({
     } finally {
       closeSync(fd);
     }
+    if (close) await append(id, at, Buffer.alloc(0), { close: true });
   }
 
   const removeLog = async (id) => (await orchestrator.json("DELETE", `/logs/${path(id)}`)).removed;
