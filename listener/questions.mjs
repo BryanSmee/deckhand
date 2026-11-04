@@ -74,8 +74,22 @@ export function hasOpenQuestions(body) {
   return asks(questionsSection(body));
 }
 
+// The text without its HTML comments; an unclosed one stays. By index, not a lazy regex: one
+// that looks for `-->` from every unclosed `<!--` reads the rest of the body each time.
+function withoutComments(text) {
+  let out = "";
+  let at = 0;
+  for (;;) {
+    const open = text.indexOf("<!--", at);
+    const close = open < 0 ? -1 : text.indexOf("-->", open + 4);
+    if (close < 0) return out + text.slice(at);
+    out += text.slice(at, open);
+    at = close + 3;
+  }
+}
+
 function asks(text) {
-  const section = text?.replace(/<!--[\s\S]*?-->/g, "").trim();
+  const section = text == null ? text : withoutComments(text).trim();
   if (!section) return false;
   const first = section
     .split(/\n\s*\n/)[0]
@@ -138,7 +152,7 @@ function parseList(raw) {
   // The question has a bullet explanation line: agents write one as the options' list
   // starts right below. It is one only if options follow it, else the bullets are a list.
   let loose = false;
-  for (const line of raw.replace(/<!--[\s\S]*?-->/g, "").split(/\r?\n/)) {
+  for (const line of withoutComments(raw).split(/\r?\n/)) {
     if (!line.trim()) {
       blank = true;
       continue;
@@ -423,6 +437,10 @@ function openedInput({ issue, change, labelled, who, questions }) {
 function editedInput({ p, issue, change, labelled, who, questions }) {
   const by = who(p.sender);
   if (!p.changes?.body) return null;
+  // An issue or a sender it doesn't act for: only a labelled issue's ticks matter (below), so
+  // anyone else's edit of anything else is read no further.
+  const outside = who(issue.user) === undefined || by === undefined;
+  if (outside && !labelled) return null;
   if (questionsSection(p.changes.body.from) === questionsSection(issue.body)) return null;
   const ticked = allTicked(parseQuestions(questionsSection(issue.body)));
   const listed = issue.state !== "closed";
@@ -430,7 +448,7 @@ function editedInput({ p, issue, change, labelled, who, questions }) {
   // anyone's on an issue or by a sender it doesn't act for. The label stays as it is, and a
   // labelled issue's entry keeps `ignoredTicks` (inputs.mjs), so wait_for_answers doesn't take
   // them for answers either (tasks.mjs unanswered()); an allowed user's edit clears it.
-  if (who(issue.user) === undefined || by === undefined || (by === null && ticked)) {
+  if (outside || (by === null && ticked)) {
     if (!labelled || !ticked) return null;
     return { ...change, track: listed, questions: questions(), ignoredTicks: true };
   }
