@@ -1758,7 +1758,7 @@
       },
       "fieldConfig": {
         "defaults": {
-          "unit": "short",
+          "unit": "s",
           "custom": {
             "drawStyle": "line",
             "lineWidth": 1,
@@ -1771,7 +1771,24 @@
             }
           }
         },
-        "overrides": []
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "^failed"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "short"
+              },
+              {
+                "id": "custom.axisPlacement",
+                "value": "right"
+              }
+            ]
+          }
+        ]
       },
       "options": {
         "legend": {
@@ -1791,7 +1808,7 @@
             "uid": "${datasource}"
           },
           "expr": "histogram_quantile(0.9, sum by (le) (rate(deckhand_egress_policy_duration_seconds_bucket[$__rate_interval])))",
-          "legendFormat": "policy p90 (s)",
+          "legendFormat": "policy p90",
           "refId": "A",
           "range": true
         },
@@ -2083,7 +2100,7 @@
       },
       "gridPos": {
         "h": 8,
-        "w": 8,
+        "w": 12,
         "x": 0,
         "y": 81
       },
@@ -2139,8 +2156,8 @@
       },
       "gridPos": {
         "h": 8,
-        "w": 8,
-        "x": 8,
+        "w": 12,
+        "x": 12,
         "y": 81
       },
       "fieldConfig": {
@@ -2195,9 +2212,9 @@
       },
       "gridPos": {
         "h": 8,
-        "w": 8,
-        "x": 16,
-        "y": 81
+        "w": 12,
+        "x": 0,
+        "y": 89
       },
       "fieldConfig": {
         "defaults": {
@@ -2251,8 +2268,8 @@
       },
       "gridPos": {
         "h": 8,
-        "w": 8,
-        "x": 0,
+        "w": 12,
+        "x": 12,
         "y": 89
       },
       "fieldConfig": {
@@ -2618,7 +2635,7 @@
       },
       "fieldConfig": {
         "defaults": {
-          "unit": "short",
+          "unit": "s",
           "custom": {
             "drawStyle": "line",
             "lineWidth": 1,
@@ -2631,7 +2648,24 @@
             }
           }
         },
-        "overrides": []
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "^failed"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "short"
+              },
+              {
+                "id": "custom.axisPlacement",
+                "value": "right"
+              }
+            ]
+          }
+        ]
       },
       "options": {
         "legend": {
@@ -2650,8 +2684,8 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "sum by (callee) (rate(deckhand_service_calls_total{status=~\"5.*|error\"}[$__rate_interval])) * 60",
-          "legendFormat": "failed: {{callee}}",
+          "expr": "histogram_quantile(0.9, sum by (le, callee) (rate(deckhand_service_call_duration_seconds_bucket[$__rate_interval])))",
+          "legendFormat": "p90: {{callee}}",
           "refId": "A",
           "range": true
         },
@@ -2660,8 +2694,8 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "histogram_quantile(0.9, sum by (le, callee) (rate(deckhand_service_call_duration_seconds_bucket[$__rate_interval])))",
-          "legendFormat": "p90 (s): {{callee}}",
+          "expr": "sum by (callee) (rate(deckhand_service_calls_total{status=~\"5.*|error\"}[$__rate_interval])) * 60",
+          "legendFormat": "failed: {{callee}}",
           "refId": "B",
           "range": true
         }
