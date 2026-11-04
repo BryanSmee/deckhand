@@ -65,18 +65,23 @@ test("queuedReasons: a slot, the repo's own cap, the pause, the waits", () => {
     task("org/other", { pending: [] }),
     // A repo's cap at MAX_PARALLEL holds nothing back of its own: it waits for a slot.
     task("org/capped", { settings: { maxParallel: 3 } }),
+    // Auto-picked: waits for one of AUTO_PICKUP_SLOTS, whatever other slot is free.
+    task("org/other", { pending: [{ autoPickup: true }] }),
   ];
   const waits = [{ blockers: [12] }, { blockers: [], answers: true }, { blockers: [3, 4] }];
   assert.deepEqual(
-    Object.fromEntries(queuedReasons(tasks, waits, 3).map(([l, n]) => [l.reason, n])),
+    Object.fromEntries(queuedReasons(tasks, waits, 3, 1).map(([l, n]) => [l.reason, n])),
     {
       slot: 2,
       repo: 1,
+      pickup: 1,
       pause: 1,
       after: 2,
       answers: 1,
     },
   );
+  // Without reserved slots an auto-picked task is one like the others (startable()).
+  assert.equal(queuedReasons(tasks, [], 3, 0).find(([l]) => l.reason === "slot")[1], 3);
 });
 
 test("pickupSlots: used by picked tasks, lent to the others past their share, the rest free", () => {

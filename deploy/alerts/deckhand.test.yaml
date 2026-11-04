@@ -19,22 +19,19 @@ tests:
               summary: "Sandboxes aren't network-isolated: every run is refused"
               description: "The network probe found a sandbox reaching something other than the egress proxy. Check the sandboxes' NetworkPolicies and that the cluster's network plugin enforces them (docs/kubernetes.md, The network probe; deploy/kubernetes/check-isolation.sh)."
 
-  # edge:9464 stops answering; orchestrator-a is replaced by orchestrator-b (a rollout), which
-  # takes it out of the targets: no alert for it.
+  # edge:9464 stops answering, and stays down past the hour; orchestrator-a is replaced by
+  # orchestrator-b (a rollout), which takes it out of the targets: no alert for it. Another
+  # job's target down isn't Deckhand's.
   - interval: 1m
     input_series:
-      - series: deckhand_build_info{job="deckhand", instance="edge:9464", service="edge", version="1.2.3"}
-        values: 1 1 1
       - series: up{job="deckhand", instance="edge:9464"}
-        values: 1 1 1 0x10
-      - series: deckhand_build_info{job="deckhand", instance="orchestrator-a:9464", service="orchestrator", version="1.2.3"}
-        values: 1 1 1
+        values: 1 1 1 0x180
       - series: up{job="deckhand", instance="orchestrator-a:9464"}
         values: 1 1 1
-      - series: deckhand_build_info{job="deckhand", instance="orchestrator-b:9464", service="orchestrator", version="1.2.4"}
-        values: _ _ 1x10
       - series: up{job="deckhand", instance="orchestrator-b:9464"}
-        values: _ _ 1x10
+        values: _ _ 1x180
+      - series: up{job="node", instance="node:9100"}
+        values: 0x180
     alert_rule_test:
       - eval_time: 6m
         alertname: DeckhandServiceDown
@@ -42,11 +39,19 @@ tests:
       - eval_time: 9m
         alertname: DeckhandServiceDown
         exp_alerts:
-          - exp_labels: { severity: critical, job: deckhand, instance: "edge:9464", service: edge }
+          - exp_labels: { severity: critical, job: deckhand, instance: "edge:9464" }
             exp_annotations:
-              summary: "Deckhand's edge doesn't answer on edge:9464"
-              description: "edge:9464 (edge) stopped answering its metrics port 5 minutes ago. Its logs (docker compose logs, kubectl logs --previous) say why."
+              summary: "Deckhand's edge:9464 doesn't answer"
+              description: "edge:9464 hasn't answered its metrics port for 5 minutes. Its logs (docker compose logs, kubectl logs --previous) say why."
+      - eval_time: 150m
+        alertname: DeckhandServiceDown
+        exp_alerts:
+          - exp_labels: { severity: critical, job: deckhand, instance: "edge:9464" }
+            exp_annotations:
+              summary: "Deckhand's edge:9464 doesn't answer"
+              description: "edge:9464 hasn't answered its metrics port for 5 minutes. Its logs (docker compose logs, kubectl logs --previous) say why."
 
+  # The orchestrator's copies both wait; the runner's and edge's are held.
   - interval: 1m
     input_series:
       - series: deckhand_lease_held{instance="a", lease="orchestrator"}
@@ -56,6 +61,8 @@ tests:
       - series: deckhand_lease_held{instance="a", lease="runner"}
         values: 0x7
       - series: deckhand_lease_held{instance="b", lease="runner"}
+        values: 1x7
+      - series: deckhand_lease_held{instance="edge", lease="edge/redeliveries"}
         values: 1x7
     alert_rule_test:
       - eval_time: 3m
@@ -67,7 +74,28 @@ tests:
           - exp_labels: { severity: critical, lease: orchestrator }
             exp_annotations:
               summary: "No copy holds Deckhand's orchestrator lease"
-              description: "Every copy answering waits for the orchestrator lease and none takes it. The store holds the lease: check it is reachable (Redis, or the shared volume) and the copies' logs."
+              description: "No copy acts for the orchestrator lease: every copy answering waits for it, or none answers at all. The store holds the lease: check it is reachable (Redis, or the shared volume), that the copies run, and their logs."
+
+  # Every copy of the runner gone (no series left), the others held.
+  - interval: 1m
+    input_series:
+      - series: deckhand_lease_held{instance="o", lease="orchestrator"}
+        values: 1x10
+      - series: deckhand_lease_held{instance="r", lease="runner"}
+        values: 1 1
+      - series: deckhand_lease_held{instance="edge", lease="edge/redeliveries"}
+        values: 1x10
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: DeckhandNoLeaseHolder
+        exp_alerts: []
+      - eval_time: 10m
+        alertname: DeckhandNoLeaseHolder
+        exp_alerts:
+          - exp_labels: { severity: critical, lease: runner }
+            exp_annotations:
+              summary: "No copy holds Deckhand's runner lease"
+              description: "No copy acts for the runner lease: every copy answering waits for it, or none answers at all. The store holds the lease: check it is reachable (Redis, or the shared volume), that the copies run, and their logs."
 
   # 4 errors of 10 runs an hour fires; 2 of 4 doesn't (too few).
   - interval: 1m
@@ -98,24 +126,29 @@ tests:
   - interval: 1m
     input_series:
       - series: deckhand_github_rate_limit_remaining{resource="core"}
-        values: 900 400
+        values: 900 400x10
       - series: deckhand_github_rate_limit_limit{resource="core"}
-        values: 5000 5000
+        values: 5000x10
       - series: deckhand_github_rate_limit_remaining{resource="graphql"}
-        values: 4000 4000
+        values: 4000x10
       - series: deckhand_github_rate_limit_limit{resource="graphql"}
-        values: 5000 5000
+        values: 5000x10
+      # A minute's searches spent: not an alert.
+      - series: deckhand_github_rate_limit_remaining{resource="search"}
+        values: 1x10
+      - series: deckhand_github_rate_limit_limit{resource="search"}
+        values: 30x10
     alert_rule_test:
-      - eval_time: 0m
+      - eval_time: 3m
         alertname: DeckhandGitHubRateLimitLow
         exp_alerts: []
-      - eval_time: 1m
+      - eval_time: 7m
         alertname: DeckhandGitHubRateLimitLow
         exp_alerts:
           - exp_labels: { severity: warning, resource: core }
             exp_annotations:
               summary: "GitHub's core rate limit is 8% left"
-              description: "Under 10 % of a GitHub rate limit is left: runs stall once it is spent, until it resets (deckhand_github_rate_limit_reset_seconds). deckhand_github_api_calls_total by caller says who spends it."
+              description: "Under 10 % of a GitHub rate limit has been left for 5 minutes: runs stall once it is spent, until it resets (deckhand_github_rate_limit_reset_seconds). deckhand_github_api_calls_total by caller says who spends it."
 
   # Anthropic answers 529 to a third of the calls; OpenAI's 429s stay under 10 %.
   - interval: 1m
@@ -160,6 +193,23 @@ tests:
         alertname: DeckhandQueueStuck
         exp_alerts: []
 
+  # AUTO_PICKUP_SLOTS=1, used: an auto-picked task waits for it (`pickup`), the other slots
+  # free and not its.
+  - interval: 1m
+    input_series:
+      - series: deckhand_runs_queued{reason="slot"}
+        values: 0x40
+      - series: deckhand_runs_queued{reason="pickup"}
+        values: 1x40
+      - series: deckhand_runs_running
+        values: 1x40
+      - series: deckhand_max_parallel
+        values: 3x40
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: DeckhandQueueStuck
+        exp_alerts: []
+
   - interval: 1m
     input_series:
       - series: deckhand_sandboxes_failed_to_start_total{reason="unschedulable"}
@@ -185,13 +235,16 @@ tests:
       - series: deckhand_sandbox_start_seconds_bucket{le="+Inf"}
         values: 0+1x90
     alert_rule_test:
-      - eval_time: 70m
+      - eval_time: 10m
+        alertname: DeckhandSandboxStartsSlow
+        exp_alerts: []
+      - eval_time: 80m
         alertname: DeckhandSandboxStartsSlow
         exp_alerts:
           - exp_labels: { severity: info }
             exp_annotations:
               summary: "Deckhand's sandboxes take 9m 30s to start (p90)"
-              description: "One sandbox start in ten took over 5 minutes in the last 30. A large image pulled on every node, a slow registry, or a cluster scaling up its nodes for each."
+              description: "One sandbox start in ten took over 5 minutes in the last hour. A large image pulled on every node, a slow registry, or a cluster scaling up its nodes for each."
 
   # Full for over an hour; a cache turned off (its max 0) never is.
   - interval: 5m

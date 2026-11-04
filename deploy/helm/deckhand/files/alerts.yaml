@@ -1,7 +1,9 @@
 # Deckhand's alerts, as Prometheus rules (a rule file for Prometheus or vmalert; the Helm chart
 # ships the same groups as a PrometheusRule or a VMRule, metrics.rules). What each one means and
 # what to do about it: docs/setup.md, Alerts. The thresholds are starting points: an overlay or a
-# copy of this file tunes them to your runs.
+# copy of this file tunes them to your runs. Deckhand's targets are scraped as job `deckhand`
+# (docs/setup.md's scrape config; the chart's ServiceMonitor names it so): another job name, and
+# DeckhandServiceDown's selector changes with it.
 groups:
   - name: deckhand
     rules:
@@ -18,32 +20,39 @@ groups:
             Check the sandboxes' NetworkPolicies and that the cluster's network plugin enforces
             them (docs/kubernetes.md, The network probe; deploy/kubernetes/check-isolation.sh).
 
-      # A copy that was answering in the last hour no longer does: crashed, or its metrics port
-      # unreachable. A copy replaced by a rollout leaves the targets, and doesn't fire it.
+      # A target that doesn't answer: crashed, or its metrics port unreachable, for as long as it
+      # stays down. A copy replaced by a rollout leaves the targets, and doesn't fire it; nor
+      # does one no target is left for (the orchestrator's copies found by DNS, all stopped):
+      # DeckhandNoLeaseHolder catches those.
       - alert: DeckhandServiceDown
-        expr: max by (job, instance, service) (max_over_time(deckhand_build_info[1h])) and on(job, instance) (up == 0)
+        expr: up{job="deckhand"} == 0
         for: 5m
         labels:
           severity: critical
         annotations:
-          summary: "Deckhand's {{ $labels.service }} doesn't answer on {{ $labels.instance }}"
+          summary: "Deckhand's {{ $labels.instance }} doesn't answer"
           description: >-
-            {{ $labels.instance }} ({{ $labels.service }}) stopped answering its metrics port
-            5 minutes ago. Its logs (docker compose logs, kubectl logs --previous) say why.
+            {{ $labels.instance }} hasn't answered its metrics port for 5 minutes. Its logs
+            (docker compose logs, kubectl logs --previous) say why.
 
       # No copy acts: no run starts (orchestrator), no sandbox starts (runner), no failed
-      # delivery is asked again (edge/redeliveries).
+      # delivery is asked again (edge/redeliveries). Either every copy answering waits, or no
+      # copy answers at all (absent: each lease by its name).
       - alert: DeckhandNoLeaseHolder
-        expr: max by (lease) (deckhand_lease_held) == 0
+        expr: |
+          max by (lease) (deckhand_lease_held) == 0
+          or absent(deckhand_lease_held{lease="orchestrator"})
+          or absent(deckhand_lease_held{lease="runner"})
+          or absent(deckhand_lease_held{lease="edge/redeliveries"})
         for: 2m
         labels:
           severity: critical
         annotations:
           summary: "No copy holds Deckhand's {{ $labels.lease }} lease"
           description: >-
-            Every copy answering waits for the {{ $labels.lease }} lease and none takes it. The
-            store holds the lease: check it is reachable (Redis, or the shared volume) and the
-            copies' logs.
+            No copy acts for the {{ $labels.lease }} lease: every copy answering waits for it, or
+            none answers at all. The store holds the lease: check it is reachable (Redis, or the
+            shared volume), that the copies run, and their logs.
 
       - alert: DeckhandRunsFailing
         expr: |
@@ -61,16 +70,21 @@ groups:
             dashboard say why: an agent's credential, an image build, a sandbox start.
 
       # Calls left in the lowest installation's (or the App's) rate limit, of its window.
+      # `search` left out: its window is a minute of 30 calls, which a few of the runs' searches
+      # spend, and gives back a minute later.
       - alert: DeckhandGitHubRateLimitLow
         expr: |
-          min by (resource) (deckhand_github_rate_limit_remaining / deckhand_github_rate_limit_limit)
-            < 0.1
+          min by (resource) (
+            deckhand_github_rate_limit_remaining{resource!="search"}
+              / deckhand_github_rate_limit_limit{resource!="search"}
+          ) < 0.1
+        for: 5m
         labels:
           severity: warning
         annotations:
           summary: "GitHub's {{ $labels.resource }} rate limit is {{ $value | humanizePercentage }} left"
           description: >-
-            Under 10 % of a GitHub rate limit is left: runs stall once it is spent, until it
+            Under 10 % of a GitHub rate limit has been left for 5 minutes: runs stall once it is spent, until it
             resets (deckhand_github_rate_limit_reset_seconds). deckhand_github_api_calls_total
             by caller says who spends it.
 
@@ -122,15 +136,15 @@ groups:
       # Most starts take minutes: an image pull, an agent's install.
       - alert: DeckhandSandboxStartsSlow
         expr: |
-          histogram_quantile(0.9, sum by (le) (rate(deckhand_sandbox_start_seconds_bucket[30m])))
+          histogram_quantile(0.9, sum by (le) (rate(deckhand_sandbox_start_seconds_bucket[1h])))
             > 300
-        for: 30m
+        for: 15m
         labels:
           severity: info
         annotations:
           summary: "Deckhand's sandboxes take {{ $value | humanizeDuration }} to start (p90)"
           description: >-
-            One sandbox start in ten took over 5 minutes in the last 30. A large image pulled
+            One sandbox start in ten took over 5 minutes in the last hour. A large image pulled
             on every node, a slow registry, or a cluster scaling up its nodes for each.
 
       # LRU: a full cache evicts, which is fine until what the runs fetch no longer fits.

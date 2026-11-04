@@ -19,9 +19,10 @@ export const OUTCOMES = ["ok", "needs-input", "error", "cancelled"];
 export const KINDS = ["work", "light", "review", "fix", "ci-fix", "conflict", "auto-pickup"];
 
 // Why a comment waits rather than runs (queuedReasons()): a free slot, its repo's own
-// max_parallel, the pause that makes a burst one run, other issues ("/after"), the answers to
-// its issue's open questions once they are done.
-export const QUEUED = ["slot", "repo", "pause", "after", "answers"];
+// max_parallel, one of AUTO_PICKUP_SLOTS (an auto-picked task, which takes no other slot), the
+// pause that makes a burst one run, other issues ("/after"), the answers to its issue's open
+// questions once they are done.
+export const QUEUED = ["slot", "repo", "pickup", "pause", "after", "answers"];
 
 // What became of a delivery (deliveryResult()).
 export const DELIVERY_RESULTS = ["taken", "ignored", "refused"];
@@ -145,8 +146,8 @@ export function deliveryResult({ event, refused = false, item = false, ci = fals
 }
 
 // Why each task with comments queued waits, and the waits for other issues: [[{ reason }, n]].
-// `tasks`: ctx.tasks' values; `waits`: waits.mjs list()'s.
-export function queuedReasons(tasks, waits, maxParallel) {
+// `tasks`: ctx.tasks' values; `waits`: waits.mjs list()'s; `reserved`: AUTO_PICKUP_SLOTS.
+export function queuedReasons(tasks, waits, maxParallel, reserved = 0) {
   const counts = new Map(QUEUED.map((reason) => [reason, 0]));
   const add = (reason) => counts.set(reason, counts.get(reason) + 1);
   const runningIn = new Map();
@@ -157,7 +158,9 @@ export function queuedReasons(tasks, waits, maxParallel) {
     else {
       // Held back by a cap of its own repo's below MAX_PARALLEL (repo-config.mjs startable()).
       const cap = t.settings?.maxParallel ?? maxParallel;
-      add(cap < maxParallel && (runningIn.get(t.repo) ?? 0) >= cap ? "repo" : "slot");
+      if (cap < maxParallel && (runningIn.get(t.repo) ?? 0) >= cap) add("repo");
+      // Its reserved slots alone (repo-config.mjs startable()): free ones elsewhere aren't its.
+      else add(reserved > 0 && pickedTask(t) ? "pickup" : "slot");
     }
   }
   for (const w of waits) add(w.answers ? "answers" : "after");
@@ -236,7 +239,12 @@ export function orchestratorMetrics(registry, { ctx }) {
     collect: () => {
       const c = acting();
       if (!c) return [];
-      return queuedReasons([...c.tasks.values()], c.waits?.list() ?? [], c.config.maxParallel);
+      return queuedReasons(
+        [...c.tasks.values()],
+        c.waits?.list() ?? [],
+        c.config.maxParallel,
+        c.config.autoPickupSlots ?? 0,
+      );
     },
   });
   registry.gauge("deckhand_max_parallel", "MAX_PARALLEL: the most runs going at once.", {

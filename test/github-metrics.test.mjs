@@ -58,7 +58,9 @@ test("the rate limit: the lowest of the tokens' still in their window, and when 
   seen("token a", limit("core", 4000, reset));
   seen("token a", limit("core", 3990, reset));
   seen("token b", limit("core", 4500, reset - 300));
-  seen("token b", limit("graphql", 4999, reset));
+  // Without x-ratelimit-limit: its remaining all the same, no limit to share it of.
+  const { "x-ratelimit-limit": _, ...unsized } = limit("graphql", 4999, reset);
+  seen("token b", unsized);
   // The App's JWT, a new one each minute: one key (its window Enterprise Cloud's, larger).
   seen("Bearer eyJ1", limit("core", 100, reset + 60));
   seen("Bearer eyJ2", limit("core", 4900, reset + 60, 15000));
@@ -74,6 +76,7 @@ test("the rate limit: the lowest of the tokens' still in their window, and when 
   assert.equal(sample(text, 'deckhand_github_rate_limit_reset_seconds{resource="core"}'), 600);
   assert.equal(sample(text, 'deckhand_github_rate_limit_limit{resource="core"}'), 5000);
   assert.equal(sample(text, 'deckhand_github_rate_limit_remaining{resource="graphql"}'), 4999);
+  assert.equal(sample(text, 'deckhand_github_rate_limit_limit{resource="graphql"}'), undefined);
   assert.equal(sample(text, 'deckhand_github_rate_limit_remaining{resource="search"}'), undefined);
   assert.doesNotMatch(text, /code_search|resource="other"/);
   // Once a's window is over, b's is gone too: the App's is the one left.

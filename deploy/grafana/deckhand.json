@@ -279,7 +279,7 @@
       "type": "stat",
       "id": 6,
       "title": "Errors (24 h)",
-      "description": "Share of the runs ended in the last 24 hours that ended in an error.",
+      "description": "Share of the runs ended in the last 24 hours that ended in an error; no data without any.",
       "datasource": {
         "type": "prometheus",
         "uid": "${datasource}"
@@ -331,7 +331,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "sum(increase(deckhand_runs_finished_total{outcome=\"error\"}[24h])) / sum(increase(deckhand_runs_finished_total[24h]))",
+          "expr": "sum(increase(deckhand_runs_finished_total{outcome=\"error\"}[24h])) / (sum(increase(deckhand_runs_finished_total[24h])) > 0)",
           "legendFormat": "",
           "refId": "A",
           "range": false,
@@ -400,7 +400,7 @@
       "type": "timeseries",
       "id": 8,
       "title": "Runs going and queued, against MAX_PARALLEL",
-      "description": "Running runs, the tasks waiting by why (slot, repo, pause, after, answers), and MAX_PARALLEL.",
+      "description": "Running runs, the tasks waiting by why (slot, repo, pickup, pause, after, answers), and MAX_PARALLEL.",
       "datasource": {
         "type": "prometheus",
         "uid": "${datasource}"

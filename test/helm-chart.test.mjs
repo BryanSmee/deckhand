@@ -479,6 +479,7 @@ test(
       assert.equal(monitor.metadata.namespace, "deckhand");
       assert.equal(monitor.metadata.labels.release, "kps");
       assert.deepEqual(monitor.spec, {
+        jobLabel: "app.kubernetes.io/part-of",
         selector: { matchLabels: { "app.kubernetes.io/part-of": "deckhand" } },
         namespaceSelector: { matchNames: ["deckhand"] },
         endpoints: [{ port: "metrics", path: "/metrics", honorLabels: true, interval: "30s" }],

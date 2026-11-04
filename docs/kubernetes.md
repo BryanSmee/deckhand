@@ -485,7 +485,8 @@ Operator's) or, with `metrics.serviceMonitor.kind: VMServiceScrape`, VictoriaMet
 in the services' namespace: each Service's `metrics` port, with `metrics.serviceMonitor.labels`
 for your operator's selector (`release: kube-prometheus-stack`, say) and `.interval`. Its CRD has
 to be in the cluster first: off by default. It keeps Deckhand's own `service` label
-(`honorLabels`), which is the Service's name already.
+(`honorLabels`), which is the Service's name already. Its targets' job is `deckhand` (`jobLabel`, the Services'
+`app.kubernetes.io/part-of`), which the [alerts](setup.md#alerts) select.
 
 The [dashboard](setup.md#the-dashboard) and the [alerts](setup.md#alerts) come with the chart
 too, both off by default. `metrics.dashboard.enabled` adds a ConfigMap, `deckhand-grafana-dashboard`,
