@@ -44,7 +44,7 @@ import { createSetup } from "../listener/setup.mjs";
 import { serverInfo } from "../listener/status.mjs";
 import { createEdgeApp } from "./app.mjs";
 import { createForwarder } from "./forward.mjs";
-import { createEdgeHttp, takenDelivery } from "./http.mjs";
+import { createEdgeHttp, DRAIN_MS, takenDelivery } from "./http.mjs";
 import { createShots } from "./shots.mjs";
 import { createEdgeInternal } from "./internal.mjs";
 import { edgeMetrics } from "./metrics.mjs";
@@ -75,7 +75,7 @@ try {
 }
 // Its metrics (../lib/metrics.mjs), on their own port when METRICS_PORT is set.
 const metrics = startMetrics({ service: "edge", port: config.metricsPort, log });
-const graceMs = Number(env.DRAIN_SECONDS) > 0 ? Number(env.DRAIN_SECONDS) * 1000 : 25_000;
+const graceMs = Number(env.DRAIN_SECONDS) > 0 ? Number(env.DRAIN_SECONDS) * 1000 : DRAIN_MS;
 const dataDir = config.dataDir;
 
 // Its service tokens, for the orchestrator, the github service and the broker (the screenshots),

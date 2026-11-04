@@ -66,10 +66,6 @@ spec:
             # GET /metrics alone, from the monitoring namespace alone (network-policies.yaml).
             - name: METRICS_PORT
               value: "9464"
-            # Its default, written here so test/kubernetes-manifests.test.mjs holds it to the
-            # grace period above.
-            - name: DRAIN_SECONDS
-              value: "25"
             # The orchestrator's service token tells it apart, and this Deployment's
             # NetworkPolicy lets only its pods reach 8083.
             - name: SERVICE_NETWORKS
