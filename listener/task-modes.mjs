@@ -8,7 +8,7 @@ import { taskKey } from "./events.mjs";
 import { customMode, INBOX } from "./modes.mjs";
 import { sessionNames } from "./sandbox-spec.mjs";
 import { CONFIG_FILE, modeNames } from "./repo-config.mjs";
-import { startAction } from "./permissions.mjs";
+import { itemMay, startAction } from "./permissions.mjs";
 import { createRunPolicy, personStarted } from "./run-policy.mjs";
 
 // `ctx` (server.mjs): the listener's state and services, read at call time.
@@ -22,12 +22,12 @@ export function createTaskModes(ctx) {
   // about that mode (unknown, not granted, not here): refused, nothing is said, as allowed()
   // says nothing to a start it refuses. The listener's own items aren't anyone's.
   async function mayStart(item, mode) {
-    if (!ctx.permissions || !personStarted(item)) return true;
-    const action = startAction(mode);
-    if (await ctx.permissions.can(item.author, item.repo, action)) return true;
-    log(`${taskKey(item.repo, item.id)}: ${mode}: ${item.author} has no ${action} here`);
-    return false;
+    if (!personStarted(item)) return true;
+    return may(item, startAction(mode), `${mode}: `);
   }
+
+  // Whether `item`'s author may do `action` there (permissions.mjs).
+  const may = (item, action, what) => itemMay(ctx.permissions, log, item, action, what);
 
   // What a comment asks for: "work", "brainstorm", "stop" (wrap a brainstorm up) or one of the
   // repo's own modes (its config's `modes:`); null when it doesn't reach Claude. A "/mode"
@@ -189,10 +189,7 @@ export function createTaskModes(ctx) {
     const where = taskKey(item.repo, item.id);
     // Its reply says what the policies refuse: for an author who sees the repo's tasks only,
     // refused without a word otherwise, as a start is (permissions.mjs).
-    if (ctx.permissions && !(await ctx.permissions.can(item.author, item.repo, "tasks:read"))) {
-      log(`${where}: policy dry run refused: ${item.author} has no tasks:read here`);
-      return null;
-    }
+    if (!(await may(item, "tasks:read", "policy dry run refused: "))) return null;
     let text;
     let denials = null;
     if (!onPull(item)) {

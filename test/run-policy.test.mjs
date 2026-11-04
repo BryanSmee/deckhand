@@ -902,7 +902,8 @@ test("access: no reply about a run for an author who may not start it, nor any f
     brainstorms: { get: () => null, end: () => {} },
     // alice a member, bob a viewer, carol nothing.
     permissions: permissionsOf({ alice: { "org/repo": MEMBER }, bob: { "org/repo": VIEWER } }),
-    repoSettings: async () => ({ ...parseRepoConfig("", config), errors }),
+    // `review: true`: a review a comment may ask for.
+    repoSettings: async () => ({ ...parseRepoConfig("review: true\n", config), errors }),
     waits: { request: async () => true, reserve: () => null, release: async () => {} },
     reply: async (repo, number, text) => (replies.push(text), null),
     settle: async (item, status) => settled.push([item.author, status]),
@@ -934,14 +935,78 @@ test("access: no reply about a run for an author who may not start it, nor any f
   // The config's errors, to someone with no action at all.
   errors = ["`modes` is broken"];
   await say("carol", "Deckhand");
+  errors = [];
+  // Research without its grant, a review asked on an issue, a mode gone from the config.
+  const gone = () => ctx.issueModes.set("org/repo#12", "gone");
+  await say("bob", "Deckhand\n/mode research");
+  await say("bob", "Deckhand\n/mode review");
+  gone();
+  await say("bob", "Go on.");
+  ctx.issueModes.clear();
   assert.deepEqual([replies, settled], [[], []]);
   // A member gets each of them.
+  errors = ["`modes` is broken"];
   await say("alice", "Deckhand");
   errors = [];
   await say("alice", "Deckhand\n/mode nope");
   await say("alice", "Deckhand", asking);
-  assert.equal(replies.length, 3);
+  await say("alice", "Deckhand\n/mode research");
+  await say("alice", "Deckhand\n/mode review");
+  gone();
+  await say("alice", "Go on.");
+  assert.equal(replies.length, 6);
   assert.match(replies[0], /has errors/);
   assert.match(replies[1], /Unknown mode `nope`/);
   assert.match(replies[2], /#12 has open questions: nothing starts/);
+  assert.match(replies[3], /^Research can't run here/);
+  assert.match(replies[4], /^A review is of a pull request/);
+  assert.match(replies[5], /The mode `gone` is no longer in/);
+});
+
+test("access: a decision that fails starts nothing and says nothing, the log saying it couldn't be decided", async () => {
+  const logs = [];
+  const replies = [];
+  const cancelled = [];
+  const config = testConfig({ ALLOWED_USERS: "alice" });
+  const ctx = {
+    config,
+    log: (line) => logs.push(line),
+    skip: () => null,
+    tasks: new Map(),
+    runs: [],
+    issueModes: new Map(),
+    brainstorms: { get: () => null, end: () => {} },
+    permissions: permissionsOf({ alice: { "org/repo": MEMBER } }, { failing: ["alice"] }),
+    // Errors a reply would name, were alice known to see the repo.
+    repoSettings: async () => ({ ...parseRepoConfig("", config), errors: ["`modes` is broken"] }),
+    waits: { request: async () => true, reserve: () => null, release: async () => {} },
+    cancel: (key, user) => (cancelled.push([key, user]), "running"),
+    reply: async (repo, number, text) => (replies.push(text), null),
+    settle: async () => {},
+  };
+  const { admit } = createTasks(ctx);
+  const say = (body) => {
+    const payload = {
+      action: "created",
+      installation: { id: 7 },
+      repository: { full_name: "org/repo", default_branch: "main" },
+      issue: { number: 12 },
+      comment: { id: 99, body, user: { login: "alice", type: "User" } },
+      sender: { login: "alice" },
+    };
+    return admit(
+      { repo: "org/repo", id: "12", base: "main", author: "alice", trigger: "work", replyTo: 12 },
+      "issue_comment",
+      payload,
+    );
+  };
+  await say("Deckhand");
+  await say("/cancel");
+  assert.deepEqual([replies, cancelled, ctx.tasks.size], [[], [], 0]);
+  // Told apart from a refusal: not "has no action here".
+  assert.match(
+    logs.join("\n"),
+    /org\/repo#12: alice's access can't be decided \(the policies can't be read\)/,
+  );
+  assert.doesNotMatch(logs.join("\n"), /alice has no/);
 });

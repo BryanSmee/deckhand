@@ -2823,3 +2823,41 @@ test("access: boxes ticked in a run's reply by a viewer post nothing and start n
   await assert.rejects(ticked, { status: 403, message: /`runs:start:work`/ });
   assert.deepEqual([w.comments, w.posted, w.accepted], [[], [], []]);
 });
+
+test("access: a rerun, Stop and a plan need their start, refused before anything is posted", async () => {
+  // bob may manage runs, but start none.
+  const permissions = permissionsOf({
+    alice: { "org/app": MEMBER },
+    bob: { "org/app": ["tasks:read", "runs:manage"] },
+  });
+  const nothing = (w) => assert.deepEqual([w.comments, w.posted, w.accepted], [[], [], []]);
+  const refused = (res, action) => {
+    assert.equal(res.status, 403, JSON.stringify(res.body));
+    assert.match(res.body.error, new RegExp(`\`${action}\``));
+  };
+  // Rerun: runs:manage is the route's, the failed run's mode the start it needs.
+  const again = setup({
+    issues: { 5: open("Five") },
+    ...failed("org/app#5", { status: "error" }),
+    permissions,
+  });
+  refused(await rerun(again, { runId: "run-5" }, { user: "bob" }), "runs:start:work");
+  nothing(again);
+  assert.equal((await rerun(again, { runId: "run-5" })).status, 200);
+  // Stop: wrapping a brainstorm up.
+  const stopping = setup({
+    issues: { 5: open("Five") },
+    tasks: { "org/app#5": { state: "brainstorm" } },
+    permissions,
+  });
+  refused(await post(stopping, { action: "stop", number: 5 }, { user: "bob" }), "runs:start:stop");
+  nothing(stopping);
+  assert.equal((await post(stopping, { action: "stop", number: 5 })).status, 200);
+  // A plan: every issue of its tree, before any is laid out.
+  const planned = setup({ issues: epic(), permissions });
+  const res = await post(planned, { action: "plan", number: 10 }, { user: "bob" });
+  refused(res, "runs:start:work");
+  nothing(planned);
+  assert.equal(blockersOf(planned, 10), undefined);
+  assert.equal((await post(planned, { action: "plan", number: 10 })).status, 200);
+});

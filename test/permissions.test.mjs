@@ -3,9 +3,9 @@
 // ALLOWED_REPOS, a missing action 403.
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { anyAction, createPermissions } from "../listener/permissions.mjs";
-import { apiRoute } from "../listener/web.mjs";
-import { sendJson } from "../lib/http.mjs";
+import { anyAction, createPermissions, refusal } from "../listener/permissions.mjs";
+import { apiRoute, mustDo } from "../listener/web.mjs";
+import { Refused, sendJson } from "../lib/http.mjs";
 import { MEMBER, VIEWER, permissionsOf, serve } from "./helpers.mjs";
 
 const answer = (actions, denied = []) => ({ actions, denied, files: {}, error: null });
@@ -55,6 +55,19 @@ test("permissions: the decision, narrowed by the repo's users; a failure gives n
     [...(await permissions.which("bob", ["org/app", "Org/App", "org/other", null]))],
     ["org/app"],
   );
+  // decide() tells the failure from a refusal, the action null asking for any action.
+  assert.deepEqual(await permissions.decide("bob", "org/app", null), { ok: true, error: null });
+  assert.deepEqual(await permissions.decide("bob", "org/other", null), { ok: false, error: null });
+  const failed = await permissions.decide("carol", "org/else", null);
+  assert.deepEqual(failed, { ok: false, error: "the policies can't be read" });
+  assert.equal(
+    refusal(failed, "carol", null),
+    "carol's access can't be decided (the policies can't be read)",
+  );
+  assert.equal(
+    refusal(await permissions.decide("bob", "org/app", "runs:manage"), "bob", "runs:manage"),
+    "bob has no runs:manage here",
+  );
   // A decision that throws gives nothing either.
   const throwing = createPermissions({ policies: { access: async () => Promise.reject("down") } });
   assert.equal(await throwing.visible("alice", "org/app"), false);
@@ -103,7 +116,7 @@ test("apiRoute: a hidden repo answers as one outside ALLOWED_REPOS, a missing ac
     403,
     { error: "You can't do this on org/app: it needs the `runs:start:work` action." },
   ]);
-  assert.match(logs.join("\n"), /Test: org\/app: refused for bob: no runs:start:work/);
+  assert.match(logs.join("\n"), /Test: org\/app: refused: bob has no runs:start:work here/);
   // Nothing on org/other: the same answer as org/secret, outside ALLOWED_REPOS.
   const hidden = await ask("/api/r/org/other/read", "bob");
   const outside = await ask("/api/r/org/secret/read", "bob");
@@ -123,4 +136,64 @@ test("apiRoute: a hidden repo answers as one outside ALLOWED_REPOS, a missing ac
   // A route without a repo: server-wide.
   assert.deepEqual(await ask("/api/server-thing", "alice"), [200, { server: "alice" }]);
   assert.equal((await ask("/api/server-thing", "bob"))[0], 403);
+});
+
+test("apiRoute and mustDo: a decision that fails hides the repo, or answers 503, the log saying so", async (t) => {
+  const logs = [];
+  const failing = ["carol"];
+  const permissions = permissionsOf(
+    { carol: { "org/app": MEMBER, "": ["server:read"] } },
+    { failing },
+  );
+  const handle = apiRoute({
+    name: "Test",
+    route: (pathname) => {
+      if (pathname === "/api/server-thing") return { what: "server" };
+      const one = /^\/api\/r\/([\w.-]+)\/([\w.-]+)\/(\w+)$/.exec(pathname);
+      return one && { repo: `${one[1]}/${one[2]}`, what: one[3] };
+    },
+    gets: {
+      read: (req, res, user, repo) => sendJson(res, { read: repo }),
+      server: (req, res, user) => sendJson(res, { server: user }),
+    },
+    allowed: (repo) => repo !== "org/secret",
+    permissions,
+    action: ({ what }) => ({ read: "tasks:read", server: "server:read" })[what],
+    log: (line) => logs.push(line),
+  });
+  const { url } = await serve(t, (req, res) => {
+    if (!handle(req, res, req.headers["x-user"])) sendJson(res, { error: "not ours" }, 404);
+  });
+  const ask = async (path) => {
+    const res = await fetch(url + path, { headers: { "x-user": "carol" } });
+    return [res.status, await res.json()];
+  };
+  // Whether carol sees org/app isn't known: hidden, as api/state hides it, answered as a repo
+  // outside ALLOWED_REPOS; only the log tells the failure from a refusal.
+  const hidden = await ask("/api/r/org/app/read");
+  const outside = await ask("/api/r/org/secret/read");
+  assert.equal(hidden[0], 404);
+  assert.equal(
+    hidden[1].error.replace("org/app", "X"),
+    outside[1].error.replace("org/secret", "X"),
+  );
+  assert.match(
+    logs.join("\n"),
+    /Test: org\/app: hidden: carol's access can't be decided \(the policies can't be read\)/,
+  );
+  // A route without a repo hides nothing: a 503 that says so.
+  const server = await ask("/api/server-thing");
+  assert.equal(server[0], 503);
+  assert.match(server[1].error, /\(`server:read`\) can't be decided now; try again later/);
+  assert.match(logs.join("\n"), /Test: \/api\/server-thing: refused: carol's server:read can't/);
+  // A handler's own check: the same 503, a refusal's 403.
+  const refusedWith = (promise) =>
+    promise.then(
+      () => null,
+      (error) => (assert.ok(error instanceof Refused), error.status),
+    );
+  assert.equal(await refusedWith(mustDo(permissions, "carol", "org/app", "runs:manage")), 503);
+  failing.length = 0;
+  assert.equal(await refusedWith(mustDo(permissions, "carol", "org/app", "runs:manage")), null);
+  assert.equal(await refusedWith(mustDo(permissions, "dave", "org/app", "runs:manage")), 403);
 });

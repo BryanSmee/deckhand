@@ -5,6 +5,7 @@
 // is hidden from it everywhere, its routes answering 404 as one outside ALLOWED_REPOS. A policy
 // error, or a policy service away, gives no action (fail closed), never what was said before:
 // policies.mjs keeps no failure.
+import { taskKey } from "./events.mjs";
 import { actionMatches, allows } from "./policies.mjs";
 
 // The actions on a repository, one each, that anyAction() probes; `runs:start:*` stands for
@@ -21,6 +22,25 @@ export function anyAction(answer) {
   return [...PROBES, ...named].some(
     (probe) => answer.actions.some((p) => actionMatches(p, probe)) && free(probe),
   );
+}
+
+// decide()'s refusal as a log line says it: no `action` (null: no action at all) for `login`, or
+// a decision that failed, which refuses as much (fail closed) but is no one's refusal.
+export function refusal(said, login, action) {
+  if (said.error) return `${login}'s ${action ?? "access"} can't be decided (${said.error})`;
+  return `${login} has no ${action ?? "action"} here`;
+}
+
+// Whether a comment's (`item`'s) author may do `action` (null: anything) on its repo, `log`
+// saying why not after `what`: refused, or not decided, which refuses as much. Either way
+// nothing is said on GitHub. No `permissions`: every action, as without policies.
+export async function itemMay(permissions, log, item, action, what = "") {
+  if (!permissions) return true;
+  const said = await permissions.decide(item.author, item.repo, action);
+  if (!said.ok) {
+    log(`${taskKey(item.repo, item.id)}: ${what}${refusal(said, item.author, action)}`);
+  }
+  return said.ok;
 }
 
 // The action a run in `mode` needs from whoever starts it.
@@ -52,14 +72,16 @@ export function createPermissions({ policies = null, usersOf = () => null }) {
 
   // can()'s answer, telling a refusal from a decision that failed: { ok, error }, `error` why
   // nothing could be decided (a policy error, a policy service away), for a caller that keeps a
-  // refusal (auto-pickup.mjs) and must not keep a failure.
+  // refusal (auto-pickup.mjs) and must not keep a failure, or says which it was (refusal()).
+  // `action` null: visible()'s question, some action on `repo`.
   async function decide(login, repo, action) {
     if (typeof login !== "string" || !login) return { ok: false, error: null };
     if (repo != null && outside(login, repo)) return { ok: false, error: null };
     if (!policies) return { ok: true, error: null };
     const answer = await policies.access(login, repo).catch((e) => ({ error: e?.message ?? e }));
     if (!answer || answer.error) return { ok: false, error: String(answer?.error ?? "no answer") };
-    return { ok: allows(answer, action, repo != null), error: null };
+    const ok = action == null ? anyAction(answer) : allows(answer, action, repo != null);
+    return { ok, error: null };
   }
 
   // Whether `login` sees `repo` at all: some action there.

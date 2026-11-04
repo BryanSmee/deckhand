@@ -32,7 +32,7 @@ import { LOOPING, loopState } from "./reviews.mjs";
 import { writeEvent } from "./runlog.mjs";
 import { sameTask, taskId } from "./spelling.mjs";
 import { createTaskModes } from "./task-modes.mjs";
-import { startAction } from "./permissions.mjs";
+import { itemMay, startAction } from "./permissions.mjs";
 
 // Why a queued comment may no longer run, or null: its repo left ALLOWED_REPOS, or its author
 // left ALLOWED_USERS or (`settings`, when known) the repo's `users`. Checked again when it was
@@ -107,6 +107,9 @@ export function createTasks(ctx) {
     return taskSandboxName(config, repo, id, ctx.runs, (name) => ctx.runner.hasSession(name));
   }
 
+  // Whether `item`'s author may do `action` (null: anything) there (permissions.mjs).
+  const may = (item, action, what) => itemMay(ctx.permissions, log, item, action, what);
+
   // Task key, as the delivery names it → its latest admit(), settled: the next waits for it.
   const admitting = new Map();
 
@@ -121,15 +124,9 @@ export function createTasks(ctx) {
 
   async function admitNow(first, event, payload) {
     // An author with no action on the repo: hidden from them, so nothing said, not even its
-    // config's errors (permissions.mjs).
-    if (
-      ctx.permissions &&
-      first.author &&
-      !(await ctx.permissions.visible(first.author, first.repo))
-    ) {
-      log(`${taskKey(first.repo, first.id)}: ${first.author} has no action here`);
-      return;
-    }
+    // config's errors (permissions.mjs). Nor while that can't be decided: whether they see it is
+    // what isn't known.
+    if (first.author && !(await may(first, null))) return;
     const { settings, errors } = await ctx.repoSettings(first.repo, first.base);
     if (errors.length) {
       log(`${first.repo}: ${CONFIG_FILE} has errors: ${errors.join("; ")}`);
@@ -158,10 +155,7 @@ export function createTasks(ctx) {
         : item.modeLine === "policy"
           ? "tasks:read"
           : startAction(item.modeLine ?? "work");
-      if (ctx.permissions && !(await ctx.permissions.can(item.author, item.repo, needed))) {
-        log(`${taskKey(item.repo, item.id)}: /after refused: ${item.author} has no ${needed} here`);
-        return;
-      }
+      if (!(await may(item, needed, "/after refused: "))) return;
       // A mode it can't run is said now, not once what it waits for is done.
       if (item.modeLine && !modeNames(settings).includes(item.modeLine)) {
         return unknownMode(item, `Unknown mode \`${item.modeLine}\`.`);
@@ -172,11 +166,7 @@ export function createTasks(ctx) {
     const issue = event === "issue_comment" && !payload.issue?.pull_request ? payload.issue : null;
     if (!hasAnswer(item) && unanswered(item, issue)) {
       // Its reply is for an author who may start what the comment asks for (permissions.mjs).
-      const action = startAction(item.modeLine ?? "work");
-      if (ctx.permissions && !(await ctx.permissions.can(item.author, item.repo, action))) {
-        log(`${taskKey(item.repo, item.id)}: held back, and ${item.author} has no ${action} here`);
-        return;
-      }
+      if (!(await may(item, startAction(item.modeLine ?? "work"), "held back, and "))) return;
       return holdBack(item);
     }
     // A trigger or "/mode" comment replaces the issue's wait, once it runs: refused by the
@@ -200,10 +190,7 @@ export function createTasks(ctx) {
   async function cancelRun(item) {
     const key = taskKey(item.repo, item.id);
     // As a refused start: nothing said (permissions.mjs).
-    if (ctx.permissions && !(await ctx.permissions.can(item.author, item.repo, "runs:manage"))) {
-      log(`${key}: /cancel refused: ${item.author} has no runs:manage here`);
-      return;
-    }
+    if (!(await may(item, "runs:manage", "/cancel refused: "))) return;
     if (!ctx.cancel(key, item.author)) {
       log(`${key}: /cancel with nothing running`);
       const text = `Nothing is running on #${item.replyTo}.`;
