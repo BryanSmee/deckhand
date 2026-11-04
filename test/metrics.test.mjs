@@ -126,6 +126,16 @@ test("names, label names and buckets are checked as they are declared", () => {
   assert.throws(() => registry.gauge("deckhand_x", "x", { labels: ["Bad"] }), /label/);
   assert.throws(() => registry.histogram("deckhand_h", "x", { labels: ["le"] }), /label/);
   assert.throws(() => registry.histogram("deckhand_h2", "x", { buckets: [] }), /buckets/);
+  // Never a label per run, issue, request, delivery, repository… (#651): a series each.
+  for (const label of ["run", "issue", "request", "delivery", "repo", "host", "run_id", "id"]) {
+    assert.throws(
+      () => registry.counter(`deckhand_by_${label}_total`, "x", { labels: [label] }),
+      /unbounded/,
+      label,
+    );
+  }
+  // A word ending with one is a label all the same.
+  registry.counter("deckhand_by_reason_total", "x", { labels: ["reason", "valid"] });
   registry.gauge("deckhand_once", "x");
   assert.throws(() => registry.gauge("deckhand_once", "x"), /twice/);
   // A histogram's samples are named after it: no other metric may take those names.

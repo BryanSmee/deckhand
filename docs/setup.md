@@ -1367,7 +1367,8 @@ VictoriaMetrics to scrape. Off by default: set the port and each service listens
   | `deckhand_egress_gateway_calls_total{target, status}`            | the runs' calls passed on to the `broker`, `github` and `models` services, by the answer's status, or `unreachable`                                                                                                                                                                                                                                                                                                                                                                                                |
 
 - **Bounded labels**: never a run, issue, request or delivery ID, which stay fields of the
-  [log lines](#logs). A label value outside those its metric declares, or a series past 200 of
+  [log lines](#logs): a metric declaring such a label (`run`, `issue`, `repo`, `host`, `…_id`:
+  `lib/metrics.mjs` `UNBOUNDED_LABELS`) doesn't start its service. A label value outside those its metric declares, or a series past 200 of
   one metric, is counted as `other`, and the service logs it once.
 
 ### With Compose

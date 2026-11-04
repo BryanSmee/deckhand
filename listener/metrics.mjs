@@ -3,7 +3,7 @@
 // other services. What only the acting copy knows (the queue, the running runs) is collected at
 // each scrape, from it alone: the waiting copy has no samples of those.
 import { performance } from "node:perf_hooks";
-import { AGENTS } from "./agents/index.mjs";
+import { AGENTS, ENTRIES } from "./agents/index.mjs";
 import { repoAllowed } from "./config.mjs";
 import { APP_EVENTS } from "./github-app.mjs";
 import { BUILT_IN } from "./modes.mjs";
@@ -305,3 +305,12 @@ export function orchestratorMetrics(registry, { ctx }) {
     waitChecked: () => waits.inc(),
   };
 }
+
+// The runs whose provider failed, put back for the next entry of FALLBACKS (runs.mjs
+// fallBack()): the models service's calls say why, the orchestrator decides them.
+export const fallbacksMetric = (registry) =>
+  registry.counter(
+    "deckhand_model_fallbacks_total",
+    "Runs whose provider failed, put back for the next entry of FALLBACKS (from, to: agent@provider[:credential]).",
+    { labels: ["from", "to"], values: { from: ENTRIES, to: ENTRIES } },
+  );
