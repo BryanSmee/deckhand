@@ -48,7 +48,7 @@ import {
 import { activePassive } from "../lib/active.mjs";
 import { drain } from "../lib/drain.mjs";
 import { pathToFileURL } from "node:url";
-import { openStore, values } from "../lib/store.mjs";
+import { openStore } from "../lib/store.mjs";
 import { storeMaps } from "../lib/store-map.mjs";
 import { readJson } from "../lib/files.mjs";
 import { createLogger, deliveryContext, withLogContext } from "../lib/log.mjs";
@@ -90,7 +90,7 @@ import { createRepoCheck } from "../listener/repo-check.mjs";
 import { readRepoFile } from "../listener/repo-config.mjs";
 import { createRepoSettings } from "../listener/repo-settings.mjs";
 import { createRepoApi, createRepoList } from "../listener/repos.mjs";
-import { createRestart, LIVE_PREFIX } from "../listener/restart.mjs";
+import { createRestart, liveRunIds } from "../listener/restart.mjs";
 import { createReviewers, openerOf } from "../listener/reviewers.mjs";
 import { createReviews, stepsGoing } from "../listener/reviews.mjs";
 import { loadRuns, moveLogs, moveSummaries, saveSummary, SUMMARIES } from "../listener/runlog.mjs";
@@ -659,8 +659,7 @@ const { github, graphql } = createGitHub(() => ctx.app);
 // logs/ go first (runlog.mjs).
 // The live runs' ids first, from their states in the store (restart.mjs): their logs aren't
 // summarized as ended ones.
-const liveIds = new Set();
-for await (const [key] of values(store, LIVE_PREFIX)) liveIds.add(key.slice(LIVE_PREFIX.length));
+const liveIds = await liveRunIds(store);
 const moved = moveLogs(logDir, runnerClient.logs, { log, live: liveIds });
 ctx.logsMoving = moved.moving;
 // A log on its way there is read once it arrived (a digest, the dashboard's live view).
