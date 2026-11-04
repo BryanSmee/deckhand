@@ -28,6 +28,11 @@ export const SECURITY_HEADERS = {
   "x-content-type-options": "nosniff",
 };
 
+// How long a stopping copy lets its requests finish (DRAIN_SECONDS, server.mjs): a live log
+// streams until the browser reconnects to the other copy. Here, not in server.mjs, which starts
+// edge as it is imported: test/kubernetes-manifests.test.mjs reads it.
+export const DRAIN_MS = 25_000;
+
 // GitHub's own cap is 25 MB, far above the events Deckhand takes: comments, pull requests,
 // workflow runs. Only a push with many commits could be larger, and a push refused only delays
 // a config's refresh (repos.mjs reads it again within 30 minutes).

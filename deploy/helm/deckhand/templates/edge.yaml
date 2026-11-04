@@ -40,8 +40,6 @@ spec:
             {{- include "deckhand.metricsContainerPort" . | nindent 12 }}
           env:
             {{- include "deckhand.metricsEnv" . | nindent 12 }}
-            - name: DRAIN_SECONDS
-              value: "25"
             - name: SERVICE_NETWORKS
               value: none
             - name: SERVICE_ACCOUNT_TOKEN_FILE

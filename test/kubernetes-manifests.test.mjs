@@ -10,6 +10,7 @@ import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { DRAIN_MS as BROKER_DRAIN_MS } from "../broker/server.mjs";
+import { DRAIN_MS as EDGE_DRAIN_MS } from "../edge/http.mjs";
 import { appSecrets, keys } from "../deploy/kubernetes/secrets.mjs";
 import { convertManifest, KEPT } from "../github/app.mjs";
 import { DRAIN_MS as GITHUB_DRAIN_MS } from "../lib/drain.mjs";
@@ -545,9 +546,10 @@ const GRACE = {
   policy: 40,
   proxy: 630,
 };
-// The defaults of the services whose drain the manifests leave to the code (ms); edge and the
-// proxy set DRAIN_SECONDS (edge's server starts as it is imported).
+// The defaults of the services whose drain the manifests leave to the code (ms); the proxy sets
+// DRAIN_SECONDS (an agent call's length, where a second copy takes the new connections).
 const DRAIN_DEFAULTS = {
+  edge: EDGE_DRAIN_MS,
   github: GITHUB_DRAIN_MS,
   broker: BROKER_DRAIN_MS,
   models: MODELS_DRAIN_MS,
