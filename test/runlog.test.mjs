@@ -675,9 +675,11 @@ test("runs: live runs' logs move first, on their own; a failed try is tried agai
   let failures = 2;
   let release;
   const held = new Promise((resolve) => (release = resolve));
+  const closed = new Map();
   const runner = {
-    upload: async (id) => {
+    upload: async (id, _, { close }) => {
       order.push(id);
+      closed.set(id, close);
       if (id === live && failures-- > 0) throw new Error("the runner service didn't answer");
       // The history's first log is slow: the live one doesn't wait for it.
       if (id === ids[0]) await held;
@@ -695,6 +697,8 @@ test("runs: live runs' logs move first, on their own; a failed try is tried agai
   assert.ok(!order.includes(ids[1]), "the live log waited for no other");
   release();
   assert.equal(await moved.done, 3);
+  // An ended run's log has its last segment closed at the runner; a live one's is written on.
+  assert.deepEqual(Object.fromEntries(closed), { [ids[0]]: true, [ids[1]]: true, [live]: false });
 });
 
 test("runs: a live run's log the runner holds more of is given up, not tried forever", async (t) => {

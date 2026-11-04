@@ -420,6 +420,9 @@ export function createRunnerService({
       // Its end said only for a sandbox of ours: never one the runner didn't start.
       if (run && found) await events.ending(run, name);
       await runner.remove(name, run ?? undefined);
+      // The run is over: its log's last segment closed, should the orchestrator's own close
+      // never come (#664). One that does later finds it closed already.
+      if (run) await logs.close(run).catch((error) => log(`The log of ${run}: ${error.message}`));
       return {};
     },
     "GET /sandboxes/:name/installing": async ({ params }) => ({
