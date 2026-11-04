@@ -1,0 +1,44 @@
+{{- /*
+The Grafana dashboard and the alert rules, from files/: copies of deploy/grafana/deckhand.json and
+deploy/alerts/deckhand.yaml, which a chart can't read outside its folder (test/helm-chart.test.mjs
+holds them the same).
+*/}}
+{{- $m := .Values.metrics }}
+{{- if $m.dashboard.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: deckhand-grafana-dashboard
+  namespace: {{ $m.dashboard.namespace | default (include "deckhand.ns" .) }}
+  labels:
+    {{- include "deckhand.labels" . | nindent 4 }}
+    {{- with $m.dashboard.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  {{- with $m.dashboard.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+data:
+  deckhand.json: |-
+    {{- .Files.Get "files/grafana-dashboard.json" | trim | nindent 4 }}
+{{- end }}
+{{- if $m.rules.enabled }}
+---
+{{- if eq $m.rules.kind "PrometheusRule" }}
+apiVersion: monitoring.coreos.com/v1
+{{- else }}
+apiVersion: operator.victoriametrics.com/v1beta1
+{{- end }}
+kind: {{ $m.rules.kind }}
+metadata:
+  name: deckhand
+  namespace: {{ include "deckhand.ns" . }}
+  labels:
+    {{- include "deckhand.labels" . | nindent 4 }}
+    {{- with $m.rules.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  {{- .Files.Get "files/alerts.yaml" | trim | nindent 2 }}
+{{- end }}

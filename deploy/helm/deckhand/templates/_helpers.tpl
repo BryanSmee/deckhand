@@ -295,6 +295,9 @@ spec:
 {{- if not (has .Values.metrics.serviceMonitor.kind (list "ServiceMonitor" "VMServiceScrape")) }}
 {{- fail (printf "metrics.serviceMonitor.kind: %q, where ServiceMonitor or VMServiceScrape is expected" .Values.metrics.serviceMonitor.kind) }}
 {{- end }}
+{{- if not (has .Values.metrics.rules.kind (list "PrometheusRule" "VMRule")) }}
+{{- fail (printf "metrics.rules.kind: %q, where PrometheusRule or VMRule is expected" .Values.metrics.rules.kind) }}
+{{- end }}
 {{- if not .Values.apiServer.cidrs }}
 {{- fail "apiServer.cidrs: the API server's addresses, one at least" }}
 {{- end }}

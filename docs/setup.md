@@ -1548,6 +1548,7 @@ copy counts its own calls: add the copies' counters up, and take the lowest of t
 | `deckhand_github_api_calls_total`           | `caller`, `status` | calls to GitHub's API. `caller`: the service the call was made for (`orchestrator`, `edge`, `runner`, `proxy` for the runs' gateway), with the installation lookups and tokens it needed; `github`, its own. `status`: GitHub's, `error` for none (a call the sandbox gave up on first too)                                                                                                                                                                                                                                                                                                                                                                                                            |
 | `deckhand_github_api_call_duration_seconds` | `caller`           | how long GitHub took to answer, to its headers                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
 | `deckhand_github_rate_limit_remaining`      | `resource`         | calls left in the rate limit (`core`, `graphql`, `search`), the lowest of the installations' (and the App's own) as GitHub's latest answers said, a call without a token left out: the earliest warning that runs are about to stall. None until an answer said, nor past its reset                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| `deckhand_github_rate_limit_limit`          | `resource`         | the calls that lowest limit allows in its window (5000 an hour, more on GitHub Enterprise Cloud), as GitHub's `x-ratelimit-limit` said: `remaining / limit` is the share left                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
 | `deckhand_github_rate_limit_reset_seconds`  | `resource`         | seconds until that lowest limit starts again                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
 | `deckhand_git_operations_total`             | `op`, `result`     | `op`: `clone` (a mirror's first fetch; an empty repository's mirror stays empty, so each of its pushes counts one), `mirror_update`, `fetch` (a sandbox's fetch or clone, relayed, once whatever its requests: `ok` when its whole pack came, `refused` when Deckhand refused one of its requests (a fork's objects, too many calls at once), `failed` when GitHub answered one with an error (a 404 for a misspelt repository, an `ERR` for an object it doesn't have), or its answer was cut short; an `ls-remote` or a fetch with nothing new brings no pack, and isn't counted), `push`. `result`: `ok`, `refused` (by Deckhand), `rejected` (by GitHub: a branch protection, a ruleset), `failed` |
 | `deckhand_pushes_refused_total`             | `reason`           | `default_branch`, `branch` (not the run's, or not a branch), `run` (one that can't push, or not there), `policies` (`deny_push`), `workflows` (a workflow file that writes or names a secret), `fork` (a fork's objects), `error` (not checked)                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
@@ -1556,6 +1557,103 @@ copy counts its own calls: add the copies' counters up, and take the lowest of t
 A protected branch is Deckhand's own refusal of the default branch (`default_branch`); GitHub's
 branch protections and rulesets refusing a push it let through are `git_operations_total`'s
 `rejected`.
+
+### The dashboard
+
+`deploy/grafana/deckhand.json` is a Grafana dashboard of these metrics, its data source a
+variable of its own (`Data source`, any Prometheus or VictoriaMetrics one): import it (Dashboards,
+New, Import), or provision it. Its rows:
+
+- **Runs**: those going and queued (by why) against `MAX_PARALLEL`, started by mode, kind and
+  agent, ended by outcome, their duration, the share of errors over a day.
+- **Webhooks and GitHub**: the deliveries edge received and the orchestrator took, GitHub's rate
+  limit left (its share of the window, by resource), the API calls by status and their time, the
+  git operations and the pushes refused.
+- **Models**: the agents' calls by provider and status, the fallbacks, the plans' usage, the
+  tokens, the calls' length, the streams cut short and the logins refreshed.
+- **Egress**: the connections denied by why and allowed by source, the traffic, the cache's
+  requests and size against `EGRESS_CACHE_MAX`, the egress policy's time and the gateway's failed
+  calls.
+- **Sandboxes and images**: the network probe's verdict, the sandboxes running by engine and
+  their start time, the starts failed by why, the probes, the image builds and their time.
+- **Services**: each copy's memory, CPU and event loop lag (by the `service` its
+  `deckhand_build_info` says), the leases and their takeovers, the orchestrator's failed calls
+  to the other services, and the version each copy runs.
+
+With the chart, `metrics.dashboard.enabled` ships it as a ConfigMap for Grafana's sidecar
+([kubernetes.md](kubernetes.md#metrics)). With Compose, Grafana provisions it from a folder:
+
+```yaml
+# compose.override.yaml, beside the Prometheus above.
+services:
+  grafana:
+    image: grafana/grafana:12.3.0
+    restart: unless-stopped
+    ports: ["127.0.0.1:3000:3000"]
+    networks: [prometheus]
+    configs:
+      - source: grafana-datasource
+        target: /etc/grafana/provisioning/datasources/prometheus.yaml
+      - source: grafana-dashboards
+        target: /etc/grafana/provisioning/dashboards/deckhand.yaml
+    volumes:
+      - ./deploy/grafana:/var/lib/grafana/dashboards/deckhand:ro
+      - grafana:/var/lib/grafana
+
+volumes:
+  grafana:
+
+configs:
+  grafana-datasource:
+    content: |
+      apiVersion: 1
+      datasources:
+        - { name: Prometheus, type: prometheus, url: "http://prometheus:9090", isDefault: true }
+  grafana-dashboards:
+    content: |
+      apiVersion: 1
+      providers:
+        - { name: deckhand, options: { path: /var/lib/grafana/dashboards/deckhand } }
+```
+
+(`./deploy/grafana` from a clone of this repository, at your release's tag; or a copy of the
+file in a folder of yours.)
+
+### Alerts
+
+`deploy/alerts/deckhand.yaml` holds Prometheus alerting rules, for Prometheus (`rule_files`) or
+vmalert (`-rule`); with the chart, `metrics.rules.enabled` ships them as a `PrometheusRule` (or,
+with `metrics.rules.kind: VMRule`, VictoriaMetrics') ([kubernetes.md](kubernetes.md#metrics)).
+Each has a `severity` label, `critical`, `warning` or `info`, for your Alertmanager's routes. Their
+thresholds are starting points: copy the file to tune them, and keep its tests
+(`deckhand.test.yaml`, `promtool test rules`) beside it. With the Prometheus above, the file in
+its configs too:
+
+```yaml
+configs:
+  prometheus:
+    content: |
+      rule_files: [/etc/prometheus/deckhand-alerts.yaml]
+      scrape_configs: …
+  prometheus-alerts:
+    file: ./deploy/alerts/deckhand.yaml
+```
+
+and `- { source: prometheus-alerts, target: /etc/prometheus/deckhand-alerts.yaml }` in its
+service's `configs`.
+
+| Alert                            | Severity | When                                                                                                               | What to do                                                                                                                                                                                                                                                                                             |
+| -------------------------------- | -------- | ------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `DeckhandNetworkNotIsolated`     | critical | Kubernetes: the network probe found a sandbox reaching more than the egress proxy (`deckhand_network_isolated` 0)  | every run is refused until it is fixed: the sandboxes' NetworkPolicies are missing, or the cluster's network plugin doesn't enforce them. Run `deploy/kubernetes/check-isolation.sh` ([kubernetes.md](kubernetes.md#the-network-probe)); the next run's start probes again                             |
+| `DeckhandServiceDown`            | critical | a copy that answered in the last hour hasn't answered its metrics port for 5 minutes                               | its logs say why (`docker compose logs <service>`, `kubectl logs --previous`): a setting it refuses at start, the store or the broker away, its memory limit. A copy a rollout replaced leaves the scrape targets and doesn't fire it; one that never answered isn't caught here (its health check is) |
+| `DeckhandNoLeaseHolder`          | critical | no copy holds the `orchestrator`, `runner` or `edge/redeliveries` lease for 2 minutes                              | no run starts (orchestrator), no sandbox starts (runner), or no failed delivery is asked again (edge). The lease is in [the store](#the-store): check it is reachable, then the copies' logs                                                                                                           |
+| `DeckhandRunsFailing`            | warning  | over a quarter of the runs that ended in the last hour, 3 at least, ended in an error, for 15 minutes              | the orchestrator's `done (error …)` lines and the runs' logs on the dashboard say why: an agent's credential, an image build, a sandbox's start, the policies refusing what the runs need                                                                                                              |
+| `DeckhandGitHubRateLimitLow`     | warning  | under 10 % of a GitHub rate limit (`core`, `graphql`, `search`) left, the lowest installation's or the App's       | runs stall once it is spent, until `deckhand_github_rate_limit_reset_seconds`. `deckhand_github_api_calls_total` by `caller` says who spends it: lower `MAX_PARALLEL`, or `conflicts.check_minutes` for many open pull requests                                                                        |
+| `DeckhandModelsLimited`          | warning  | over 10 % of the calls to a provider answered 429 (a rate or plan limit) or 529 (Anthropic overloaded), 15 minutes | a plan used up shows on the dashboard's bars (`deckhand_plan_usage_ratio`): lower `MAX_PARALLEL`, or set `FALLBACKS` to another provider. 529s pass on their own                                                                                                                                       |
+| `DeckhandQueueStuck`             | warning  | tasks waited for a free slot for 15 minutes with fewer runs going than `MAX_PARALLEL`                              | the orchestrator's log says why its runs don't start: the runner, the policy service or the broker away (`deckhand_service_calls_total`), or its store                                                                                                                                                 |
+| `DeckhandSandboxesStuckStarting` | warning  | Kubernetes: a sandbox given up on after staying Pending past `KUBERNETES_PENDING_MINUTES`, in the last 30 minutes  | its `reason` says why: `unschedulable` (no node with the room: the nodes, or `KUBERNETES_*` requests), `image_pull` (the registry, its pull Secret), `agent_install`, `network_gate` (the network plugin), `pending`. `kubectl describe pod` in the sandboxes' namespace says more                     |
+| `DeckhandSandboxStartsSlow`      | info     | one start in ten took over 5 minutes, for 30 minutes                                                               | a large image pulled on each node, a slow registry, a cluster adding a node for each sandbox: pre-pull the image, or keep a node warm                                                                                                                                                                  |
+| `DeckhandEgressCacheFull`        | info     | the egress cache has held 95 % of `EGRESS_CACHE_MAX` for an hour                                                   | it evicts the least recently used answers, which is fine until what the runs fetch no longer fits: if its misses grow (`deckhand_egress_cache_requests_total`), raise `EGRESS_CACHE_MAX` and the volume under it                                                                                       |
 
 ## Health checks
 

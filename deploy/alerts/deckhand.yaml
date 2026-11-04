@@ -1,0 +1,149 @@
+# Deckhand's alerts, as Prometheus rules (a rule file for Prometheus or vmalert; the Helm chart
+# ships the same groups as a PrometheusRule or a VMRule, metrics.rules). What each one means and
+# what to do about it: docs/setup.md, Alerts. The thresholds are starting points: an overlay or a
+# copy of this file tunes them to your runs.
+groups:
+  - name: deckhand
+    rules:
+      # The runner's network probe found a sandbox reaching more than the egress proxy: every
+      # run is refused until it finds them isolated again (Kubernetes only).
+      - alert: DeckhandNetworkNotIsolated
+        expr: min(deckhand_network_isolated) == 0
+        labels:
+          severity: critical
+        annotations:
+          summary: "Sandboxes aren't network-isolated: every run is refused"
+          description: >-
+            The network probe found a sandbox reaching something other than the egress proxy.
+            Check the sandboxes' NetworkPolicies and that the cluster's network plugin enforces
+            them (docs/kubernetes.md, The network probe; deploy/kubernetes/check-isolation.sh).
+
+      # A copy that was answering in the last hour no longer does: crashed, or its metrics port
+      # unreachable. A copy replaced by a rollout leaves the targets, and doesn't fire it.
+      - alert: DeckhandServiceDown
+        expr: max by (job, instance, service) (max_over_time(deckhand_build_info[1h])) and on(job, instance) (up == 0)
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Deckhand's {{ $labels.service }} doesn't answer on {{ $labels.instance }}"
+          description: >-
+            {{ $labels.instance }} ({{ $labels.service }}) stopped answering its metrics port
+            5 minutes ago. Its logs (docker compose logs, kubectl logs --previous) say why.
+
+      # No copy acts: no run starts (orchestrator), no sandbox starts (runner), no failed
+      # delivery is asked again (edge/redeliveries).
+      - alert: DeckhandNoLeaseHolder
+        expr: max by (lease) (deckhand_lease_held) == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "No copy holds Deckhand's {{ $labels.lease }} lease"
+          description: >-
+            Every copy answering waits for the {{ $labels.lease }} lease and none takes it. The
+            store holds the lease: check it is reachable (Redis, or the shared volume) and the
+            copies' logs.
+
+      - alert: DeckhandRunsFailing
+        expr: |
+          sum(increase(deckhand_runs_finished_total{outcome="error"}[1h]))
+            / sum(increase(deckhand_runs_finished_total[1h])) > 0.25
+          and sum(increase(deckhand_runs_finished_total{outcome="error"}[1h])) >= 3
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $value | humanizePercentage }} of Deckhand's runs ended in an error in the last hour"
+          description: >-
+            More than a quarter of the runs that ended in the last hour, at least 3, ended in an
+            error. The orchestrator's `done (error …)` log lines and the runs' logs on the
+            dashboard say why: an agent's credential, an image build, a sandbox start.
+
+      # Calls left in the lowest installation's (or the App's) rate limit, of its window.
+      - alert: DeckhandGitHubRateLimitLow
+        expr: |
+          min by (resource) (deckhand_github_rate_limit_remaining / deckhand_github_rate_limit_limit)
+            < 0.1
+        labels:
+          severity: warning
+        annotations:
+          summary: "GitHub's {{ $labels.resource }} rate limit is {{ $value | humanizePercentage }} left"
+          description: >-
+            Under 10 % of a GitHub rate limit is left: runs stall once it is spent, until it
+            resets (deckhand_github_rate_limit_reset_seconds). deckhand_github_api_calls_total
+            by caller says who spends it.
+
+      # A rate or plan limit (429), or Anthropic overloaded (529), on a share of the calls.
+      - alert: DeckhandModelsLimited
+        expr: |
+          sum by (provider) (rate(deckhand_model_calls_total{status=~"429|529"}[10m]))
+            / sum by (provider) (rate(deckhand_model_calls_total[10m])) > 0.1
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $value | humanizePercentage }} of the calls to {{ $labels.provider }} answer 429 or 529"
+          description: >-
+            For 15 minutes, over 10 % of the agents' calls to {{ $labels.provider }} were refused
+            for a limit (429) or overload (529). A plan used up shows on the dashboard's bars
+            (deckhand_plan_usage_ratio); FALLBACKS moves runs to another provider.
+
+      # Tasks wait for a slot while slots are free: the queue doesn't drain.
+      - alert: DeckhandQueueStuck
+        expr: |
+          sum(deckhand_runs_queued{reason="slot"}) > 0
+          and on() sum(deckhand_runs_running) < max(deckhand_max_parallel)
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $value }} Deckhand task(s) wait for a slot while slots are free"
+          description: >-
+            Tasks have waited for a free slot for 15 minutes with fewer runs going than
+            MAX_PARALLEL. The orchestrator's log says why its runs don't start: the runner, the
+            policy service or the broker away (deckhand_service_calls_total), or its store.
+
+      # Sandboxes left Pending past KUBERNETES_PENDING_MINUTES, then given up on.
+      - alert: DeckhandSandboxesStuckStarting
+        expr: |
+          sum by (reason) (increase(deckhand_sandboxes_failed_to_start_total{reason=~"unschedulable|image_pull|agent_install|network_gate|pending"}[30m]))
+            > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: "Deckhand's sandboxes stay Pending ({{ $labels.reason }})"
+          description: >-
+            Sandboxes were given up on after staying Pending: `unschedulable` (no node with the
+            room), `image_pull`, `agent_install` (its init container), `network_gate` (its
+            NetworkPolicies never applied) or `pending`. kubectl describe pod in the sandboxes'
+            namespace, and the runner's log, say more.
+
+      # Most starts take minutes: an image pull, an agent's install.
+      - alert: DeckhandSandboxStartsSlow
+        expr: |
+          histogram_quantile(0.9, sum by (le) (rate(deckhand_sandbox_start_seconds_bucket[30m])))
+            > 300
+        for: 30m
+        labels:
+          severity: info
+        annotations:
+          summary: "Deckhand's sandboxes take {{ $value | humanizeDuration }} to start (p90)"
+          description: >-
+            One sandbox start in ten took over 5 minutes in the last 30. A large image pulled
+            on every node, a slow registry, or a cluster scaling up its nodes for each.
+
+      # LRU: a full cache evicts, which is fine until what the runs fetch no longer fits.
+      - alert: DeckhandEgressCacheFull
+        expr: |
+          max(deckhand_egress_cache_bytes) >= 0.95 * max(deckhand_egress_cache_max_bytes)
+          and max(deckhand_egress_cache_max_bytes) > 0
+        for: 1h
+        labels:
+          severity: info
+        annotations:
+          summary: "The egress cache is full"
+          description: >-
+            The egress cache has held 95 % of EGRESS_CACHE_MAX for an hour, evicting the least
+            recently used answers. If its misses grow (deckhand_egress_cache_requests_total),
+            raise EGRESS_CACHE_MAX and the volume under it.

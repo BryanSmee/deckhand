@@ -5,7 +5,7 @@
 // (pinned) and where a skip fails the job; elsewhere these tests skip.
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { readdirSync, writeFileSync } from "node:fs";
+import { readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, relative } from "node:path";
 import { test } from "node:test";
 import { parseYaml } from "../lib/yaml.mjs";
@@ -498,6 +498,60 @@ test(
     assert.match(
       helmFails(t, { metrics: { serviceMonitor: { enabled: true, kind: "PodMonitor" } } }),
       /metrics\.serviceMonitor\.kind/,
+    );
+  },
+);
+
+test(
+  "helm: the Grafana dashboard and the alert rules, deploy/'s files, off by default",
+  { skip },
+  (t) => {
+    const dashboard = readFileSync(join(repo, "deploy", "grafana", "deckhand.json"), "utf8");
+    const rules = parseYaml(readFileSync(join(repo, "deploy", "alerts", "deckhand.yaml"), "utf8"));
+    // Off by default: no CRD needed, no ConfigMap for a Grafana that isn't there.
+    const none = helm(t);
+    assert.ok(!named(none, "ConfigMap", "deckhand-grafana-dashboard"));
+    assert.ok(!none.some((o) => /Rule$/.test(o.kind)));
+
+    const labels = { grafana_dashboard: "1" };
+    const shipped = helm(t, { metrics: { dashboard: { enabled: true } } });
+    const map = named(shipped, "ConfigMap", "deckhand-grafana-dashboard");
+    assert.equal(map.metadata.namespace, "deckhand");
+    assert.deepEqual(map.metadata.labels, { "app.kubernetes.io/part-of": "deckhand", ...labels });
+    assert.deepEqual(JSON.parse(map.data["deckhand.json"]), JSON.parse(dashboard));
+    // The sidecar's namespace, label and folder, as given.
+    const elsewhere = named(
+      helm(t, {
+        metrics: {
+          dashboard: {
+            enabled: true,
+            namespace: "monitoring",
+            labels: { grafana_dashboard: "deckhand" },
+            annotations: { grafana_folder: "Deckhand" },
+          },
+        },
+      }),
+      "ConfigMap",
+      "deckhand-grafana-dashboard",
+    );
+    assert.equal(elsewhere.metadata.namespace, "monitoring");
+    assert.equal(elsewhere.metadata.labels.grafana_dashboard, "deckhand");
+    assert.deepEqual(elsewhere.metadata.annotations, { grafana_folder: "Deckhand" });
+
+    for (const [kind, apiVersion] of [
+      ["PrometheusRule", "monitoring.coreos.com/v1"],
+      ["VMRule", "operator.victoriametrics.com/v1beta1"],
+    ]) {
+      const values = { metrics: { rules: { enabled: true, kind, labels: { release: "kps" } } } };
+      const rule = named(helm(t, values), kind, "deckhand");
+      assert.equal(rule.apiVersion, apiVersion);
+      assert.equal(rule.metadata.namespace, "deckhand");
+      assert.equal(rule.metadata.labels.release, "kps");
+      assert.deepEqual(rule.spec, rules);
+    }
+    assert.match(
+      helmFails(t, { metrics: { rules: { enabled: true, kind: "AlertingRule" } } }),
+      /metrics\.rules\.kind/,
     );
   },
 );

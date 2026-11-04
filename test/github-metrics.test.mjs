@@ -21,8 +21,9 @@ function setup({ now = () => 1_800_000_000_000, fetch, mirrorDir } = {}) {
   return { registry, metrics, warned, render: () => registry.render() };
 }
 
-const limit = (resource, remaining, reset) => ({
+const limit = (resource, remaining, reset, size = 5000) => ({
   "x-ratelimit-resource": resource,
+  "x-ratelimit-limit": String(size),
   "x-ratelimit-remaining": String(remaining),
   "x-ratelimit-reset": String(reset),
 });
@@ -58,9 +59,9 @@ test("the rate limit: the lowest of the tokens' still in their window, and when 
   seen("token a", limit("core", 3990, reset));
   seen("token b", limit("core", 4500, reset - 300));
   seen("token b", limit("graphql", 4999, reset));
-  // The App's JWT, a new one each minute: one key.
+  // The App's JWT, a new one each minute: one key (its window Enterprise Cloud's, larger).
   seen("Bearer eyJ1", limit("core", 100, reset + 60));
-  seen("Bearer eyJ2", limit("core", 4900, reset + 60));
+  seen("Bearer eyJ2", limit("core", 4900, reset + 60, 15000));
   // No headers, a resource Deckhand doesn't watch, values that aren't numbers: nothing.
   seen("token c", null);
   seen("token c", limit("code_search", 1, reset));
@@ -71,6 +72,7 @@ test("the rate limit: the lowest of the tokens' still in their window, and when 
   let text = await render();
   assert.equal(sample(text, 'deckhand_github_rate_limit_remaining{resource="core"}'), 3990);
   assert.equal(sample(text, 'deckhand_github_rate_limit_reset_seconds{resource="core"}'), 600);
+  assert.equal(sample(text, 'deckhand_github_rate_limit_limit{resource="core"}'), 5000);
   assert.equal(sample(text, 'deckhand_github_rate_limit_remaining{resource="graphql"}'), 4999);
   assert.equal(sample(text, 'deckhand_github_rate_limit_remaining{resource="search"}'), undefined);
   assert.doesNotMatch(text, /code_search|resource="other"/);
@@ -79,6 +81,7 @@ test("the rate limit: the lowest of the tokens' still in their window, and when 
   text = await render();
   assert.equal(sample(text, 'deckhand_github_rate_limit_remaining{resource="core"}'), 4900);
   assert.equal(sample(text, 'deckhand_github_rate_limit_reset_seconds{resource="core"}'), 59);
+  assert.equal(sample(text, 'deckhand_github_rate_limit_limit{resource="core"}'), 15000);
   assert.equal(sample(text, 'deckhand_github_rate_limit_remaining{resource="graphql"}'), undefined);
 });
 
