@@ -12,17 +12,9 @@ import { createHash } from "node:crypto";
 import { lstat, readdir } from "node:fs/promises";
 import { join } from "node:path";
 import { performance } from "node:perf_hooks";
-import { OTHER } from "../lib/metrics.mjs";
+import { STATUS_LABELS, statusLabel } from "../lib/metrics.mjs";
 
 export const CALLERS = ["orchestrator", "edge", "runner", "proxy", "github"];
-// The statuses GitHub answers with, as labels; any other is `other`. `error`: no answer (GitHub
-// unreachable, the connection lost).
-export const STATUSES = [
-  ...[200, 201, 202, 204, 301, 302, 304, 307, 400, 401, 403, 404, 409, 410, 422, 429].map(String),
-  ...[500, 502, 503, 504].map(String),
-  "error",
-  OTHER,
-];
 // The rate limits watched: GitHub has a few more (code_search, actions_runner_registration…)
 // which Deckhand doesn't spend.
 export const RESOURCES = ["core", "graphql", "search"];
@@ -111,8 +103,12 @@ export function githubMetrics(
   const calls = registry.counter(
     "deckhand_github_api_calls_total",
     "Calls to GitHub's API, by the caller they were made for and GitHub's status " +
-      "(error: no answer).",
-    { labels: ["caller", "status"], values: { caller: CALLERS, status: STATUSES } },
+      "(unreachable: no answer).",
+    {
+      labels: ["caller", "status"],
+      values: { caller: CALLERS, status: STATUS_LABELS },
+      maxSeries: (CALLERS.length + 1) * (STATUS_LABELS.length + 1),
+    },
   );
   const durations = registry.histogram(
     "deckhand_github_api_call_duration_seconds",
@@ -223,9 +219,7 @@ export function githubMetrics(
   // A call to GitHub's API answered (`status` null: no answer) after `seconds`, with `headers`
   // (a Response's or node's), sent with `authorization`.
   function api({ status, seconds, headers = null, authorization = null, caller = callerNow() }) {
-    const code = status == null ? "error" : String(status);
-    // Folded here, not by the registry's guard: a status GitHub rarely sends isn't a bug to log.
-    calls.inc({ caller, status: STATUSES.includes(code) ? code : OTHER });
+    calls.inc({ caller, status: statusLabel(status) });
     durations.observe({ caller }, seconds);
     if (headers) remember(headers, authorization);
   }

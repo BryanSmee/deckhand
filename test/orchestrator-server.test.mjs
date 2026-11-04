@@ -1724,11 +1724,11 @@ describe("listener", options, () => {
     const calls = await modelsMetrics();
     assert.match(
       calls,
-      /^deckhand_model_calls_total\{provider="anthropic",agent="claude",status="2xx"\} 1$/m,
+      /^deckhand_model_calls_total\{provider="anthropic",agent="claude",status="200"\} 1$/m,
     );
     assert.match(
       calls,
-      /^deckhand_model_calls_total\{provider="openrouter",agent="claude",status="2xx"\} 1$/m,
+      /^deckhand_model_calls_total\{provider="openrouter",agent="claude",status="200"\} 1$/m,
     );
   });
 

@@ -1,21 +1,23 @@
 // The models service's metrics (#657, ../lib/metrics.mjs): the agents' API calls that go through
 // it with the operator's credentials, the tokens their answers say they used, the plans' usage
-// and the refreshes of their logins. Labels are bounded: the provider, the agent, the status's
-// class; never a run or a credential's name, nor a model's but as the name of an Antigravity
-// plan's window (usage.mjs antigravityPolled(): a quota is named after its first model, which may
-// change from one reading to the next, a few series at most).
+// and the refreshes of their logins. Labels are bounded: the provider, the agent, the status
+// (statusLabel()); never a run or a credential's name, nor a model's but as the name of an
+// Antigravity plan's window (usage.mjs antigravityPolled(): a quota is named after its first
+// model, which may change from one reading to the next, a few series at most).
 import { StringDecoder } from "node:string_decoder";
 import zlib from "node:zlib";
-import { OTHER } from "../lib/metrics.mjs";
+import { STATUS_LABELS, statusLabel } from "../lib/metrics.mjs";
 
 // The providers a call goes to (the runs' `provider`), the agents whose calls they are (each
 // endpoint's: anthropic.mjs, openai.mjs, google.mjs).
 export const PROVIDERS = ["anthropic", "openrouter", "openai", "google"];
 export const AGENTS = ["claude", "codex", "antigravity"];
-// A call's status: the HTTP status's class, 429 (a rate or plan limit) and 529 (Anthropic
-// overloaded) apart; `unreachable`, no answer from the provider; `credential`, not sent, the
-// operator's credential unusable (a login that can't be refreshed).
-export const STATUSES = ["2xx", "3xx", "4xx", "429", "5xx", "529", "unreachable", "credential"];
+// A call's status, as every service labels one (lib/metrics.mjs statusLabel(): 429 a rate or plan
+// limit, 529 Anthropic overloaded; `unreachable`, no answer from the provider), and `credential`:
+// not sent, the operator's credential unusable (a login that can't be refreshed).
+export const STATUSES = [...STATUS_LABELS, "credential"];
+// Those at 0 from the start, for the alerts' rates (deploy/alerts: DeckhandModelsLimited).
+const AT_ZERO = ["200", "429", "529"];
 export const DIRECTIONS = ["input", "output", "cache_read", "cache_write"];
 // Each plan's provider (usage.mjs PLANS), as the calls' label names it.
 export const PLAN_PROVIDERS = { claude: "anthropic", codex: "openai", antigravity: "google" };
@@ -27,12 +29,7 @@ export const CALL_BUCKETS = [0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60, 120, 300, 60
 // counted, and nothing is held of it. An OpenAI stream's last event holds the whole response.
 export const MAX_READ = 4 * 1024 * 1024;
 
-export function statusOf(status, { lost = false } = {}) {
-  if (lost) return "unreachable";
-  if (status === 429 || status === 529) return String(status);
-  const kind = `${Math.floor(status / 100)}xx`;
-  return STATUSES.includes(kind) ? kind : OTHER;
-}
+export const statusOf = (status, { lost = false } = {}) => statusLabel(lost ? null : status);
 
 const count = (n) => (Number.isFinite(n) && n >= 0 ? n : 0);
 
@@ -186,17 +183,18 @@ export function modelMetrics(registry, { readUsage = async () => [], now = Date.
   }
   const calls = registry.counter(
     "deckhand_model_calls_total",
-    "The agents' API calls through the models service, by provider, agent and status (its class, 429 and 529 apart; unreachable; credential: not sent, the login unusable).",
+    "The agents' API calls through the models service, by provider, agent and status (unreachable: no answer; credential: not sent, the login unusable).",
     {
       labels: ["provider", "agent", "status"],
       values: { provider: PROVIDERS, agent: AGENTS, status: STATUSES },
+      maxSeries: (PROVIDERS.length + 1) * (AGENTS.length + 1) * (STATUSES.length + 1),
     },
   );
   // At 0 from the start: a rate needs its first sample, or the first 429 of a provider never
   // counts in an increase().
   for (const provider of PROVIDERS) {
     for (const agent of AGENTS)
-      for (const status of STATUSES) calls.inc({ provider, agent, status }, 0);
+      for (const status of AT_ZERO) calls.inc({ provider, agent, status }, 0);
   }
   const durations = registry.histogram(
     "deckhand_model_call_duration_seconds",

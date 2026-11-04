@@ -176,11 +176,11 @@ tests:
   # Anthropic answers 529 to a third of the calls; OpenAI's 429s stay under 10 %.
   - interval: 1m
     input_series:
-      - series: deckhand_model_calls_total{provider="anthropic", agent="claude", status="2xx"}
+      - series: deckhand_model_calls_total{provider="anthropic", agent="claude", status="200"}
         values: 0+20x40
       - series: deckhand_model_calls_total{provider="anthropic", agent="claude", status="529"}
         values: 0+10x40
-      - series: deckhand_model_calls_total{provider="openai", agent="codex", status="2xx"}
+      - series: deckhand_model_calls_total{provider="openai", agent="codex", status="200"}
         values: 0+20x40
       - series: deckhand_model_calls_total{provider="openai", agent="codex", status="429"}
         values: 0+1x40

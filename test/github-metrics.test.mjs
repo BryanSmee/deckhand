@@ -28,7 +28,7 @@ const limit = (resource, remaining, reset, size = 5000) => ({
   "x-ratelimit-reset": String(reset),
 });
 
-test("API calls by caller and status; an unknown status or caller is `other`, no answer `error`", async () => {
+test("API calls by caller and status; a rare status by class, an unknown caller `other`, no answer `unreachable`", async () => {
   const { metrics, render, warned } = setup();
   metrics.api({ caller: "edge", status: 200, seconds: 0.02 });
   metrics.api({ caller: "edge", status: 200, seconds: 0.2 });
@@ -37,8 +37,11 @@ test("API calls by caller and status; an unknown status or caller is `other`, no
   metrics.api({ caller: "someone", status: 404, seconds: 0 });
   const text = await render();
   assert.equal(sample(text, 'deckhand_github_api_calls_total{caller="edge",status="200"}'), 2);
-  assert.equal(sample(text, 'deckhand_github_api_calls_total{caller="proxy",status="other"}'), 1);
-  assert.equal(sample(text, 'deckhand_github_api_calls_total{caller="proxy",status="error"}'), 1);
+  assert.equal(sample(text, 'deckhand_github_api_calls_total{caller="proxy",status="4xx"}'), 1);
+  assert.equal(
+    sample(text, 'deckhand_github_api_calls_total{caller="proxy",status="unreachable"}'),
+    1,
+  );
   assert.equal(sample(text, 'deckhand_github_api_calls_total{caller="other",status="404"}'), 1);
   assert.equal(sample(text, 'deckhand_github_api_call_duration_seconds_count{caller="edge"}'), 2);
   assert.equal(
@@ -114,7 +117,7 @@ test("the App's fetch: each call the caller's in flight (`github` outside one), 
   assert.equal(sample(text, 'deckhand_github_api_calls_total{caller="runner",status="404"}'), 1);
   assert.equal(sample(text, 'deckhand_github_api_calls_total{caller="github",status="200"}'), 1);
   assert.equal(
-    sample(text, 'deckhand_github_api_calls_total{caller="orchestrator",status="error"}'),
+    sample(text, 'deckhand_github_api_calls_total{caller="orchestrator",status="unreachable"}'),
     1,
   );
   assert.equal(sample(text, 'deckhand_github_rate_limit_remaining{resource="core"}'), 42);

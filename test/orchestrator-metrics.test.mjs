@@ -15,7 +15,6 @@ import {
   queuedReasons,
   runKind,
   serviceCallMetrics,
-  statusLabel,
 } from "../listener/metrics.mjs";
 import { BUILT_IN } from "../listener/modes.mjs";
 import { testConfig } from "./helpers.mjs";
@@ -37,14 +36,6 @@ test("runKind: what started a run, from its record", () => {
   // A repo's own mode is "custom": its name is the repo's.
   assert.equal(modeLabel("brainstorm"), "brainstorm");
   assert.equal(modeLabel("triage"), "custom");
-});
-
-test("statusLabel: the usual statuses as they are, the others by class, none as error", () => {
-  assert.equal(statusLabel(200), "200");
-  assert.equal(statusLabel(503), "503");
-  assert.equal(statusLabel(418), "4xx");
-  assert.equal(statusLabel(504), "5xx");
-  assert.equal(statusLabel(null), "error");
 });
 
 test("deliveryResult: refused whatever else it touched, taken past the checks, else ignored", () => {
@@ -251,9 +242,9 @@ test("serviceCallMetrics: each try counted by status, timed but for long polls",
   for (const [labels, n] of [
     ['callee="runner",status="200"', 1],
     ['callee="runner",status="503"', 1],
-    ['callee="runner",status="error"', 1],
+    ['callee="runner",status="unreachable"', 1],
     ['callee="broker",status="200"', 1],
-    ['callee="broker",status="error"', 1],
+    ['callee="broker",status="unreachable"', 1],
   ]) {
     assert.equal(
       sample(text, `deckhand_service_calls_total{${labels}}`),
