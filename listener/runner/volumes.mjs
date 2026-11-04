@@ -133,6 +133,8 @@ export function createEngines({ config, docker }) {
     if (code !== 0) return null;
     const [owner, engine, runtime = "", mounts = ""] = out.trim().split("|");
     if (owner !== config.prefix || engine !== run) return null;
+    // start() runs Sysbox's sidecar under SYSBOX_RUNTIME (engine.mjs engineArgs()) and Podman's
+    // under Docker's default: any other runtime is Podman's.
     const kind = runtime === SYSBOX_RUNTIME ? "sysbox" : "podman";
     const shared = cache ? `${cache}-${kind}` : null;
     const cached = !!shared && mounts.split(" ").includes(shared);

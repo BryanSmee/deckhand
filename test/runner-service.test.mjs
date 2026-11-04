@@ -484,7 +484,9 @@ test("a start recovered after a crash keeps its sandbox's container engine", asy
   const backend = host();
   const settings = { ...config, engine: "sysbox" };
   const grantedTo = grantedOf(["docker"], "o/a");
-  const a = await copy(t, { store, backend, settings, grantedTo });
+  const said = [];
+  const log = (line) => said.push(line);
+  const a = await copy(t, { store, backend, settings, grantedTo, log });
   const runner = client(a.url).runner;
   const spec = { ...SPEC, engine: { limits: SPEC.limits, cache: null } };
   // A copy that crashed once Docker ran the sandbox and its Sysbox engine, before its record.
@@ -509,11 +511,31 @@ test("a start recovered after a crash keeps its sandbox's container engine", asy
   assert.deepEqual(await runner.start(spec), { engine: sysbox });
   // Counted under its engine, not as one without.
   assert.deepEqual(await a.service.sandboxes(), [{ engine: "sysbox" }]);
-  // One whose engine is gone (or another run's): none, as before.
+  // One whose engine is another run's: none, as before.
   const other = { ...spec, run: "dh-o-a-1-2" };
   await store.set(`starts/${other.run}`, { state: "starting" });
   backend.containers.get(spec.name).run = other.run;
   assert.deepEqual(await runner.start(other), { engine: null });
+  // One whose engine is gone (`docker inspect` fails): none too.
+  const gone = { ...spec, run: "dh-o-a-1-3" };
+  await store.set(`starts/${gone.run}`, { state: "starting" });
+  backend.containers.get(spec.name).run = gone.run;
+  backend.containers.delete(`${spec.name}-engine`);
+  assert.deepEqual(await runner.start(gone), { engine: null });
+  // One the backend can't say (its error): none, logged, and the start stands rather than fail.
+  const unknown = { ...spec, run: "dh-o-a-1-4" };
+  await store.set(`starts/${unknown.run}`, { state: "starting" });
+  backend.containers.get(spec.name).run = unknown.run;
+  backend.runner.engine = async () => {
+    throw new Error("docker inspect: the daemon is away");
+  };
+  assert.deepEqual(await runner.start(unknown), { engine: null });
+  assert.deepEqual(await store.get(`starts/${unknown.run}`), {
+    state: "started",
+    result: { engine: null },
+  });
+  assert.ok(said.some((line) => /its container engine unknown: .*daemon is away/.test(line)));
+  assert.equal(backend.runs(), 0);
 });
 
 test("a start a copy left halfway is done again; a sandbox that started stands", async (t) => {
