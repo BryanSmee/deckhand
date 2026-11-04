@@ -37,7 +37,8 @@ import { sameRepo } from "./events.mjs";
 import { effectiveView } from "./repo-view.mjs";
 import { paginate } from "./github.mjs";
 import { send } from "../lib/http.mjs";
-import { apiRoute } from "./web.mjs";
+import { apiRoute, mustDo } from "./web.mjs";
+import { startAction } from "./permissions.mjs";
 
 export const LIST_MS = 5 * 60000;
 export const CONFIG_MS = 30 * 60000;
@@ -387,6 +388,8 @@ export function createRepoApi({
   start,
   grants = () => loadGrants(config),
   granted = null,
+  // Who may do what where (permissions.mjs): the list keeps the repos `user` has an action on.
+  permissions = null,
   fs,
   now = Date.now,
   log = () => {},
@@ -398,7 +401,14 @@ export function createRepoApi({
   // or null before its first read. Only when asked: keeping the counts fresh reads each repo
   // from GitHub, which the pages that poll the list without showing them shouldn't cost.
   async function listed(user, backlog = false) {
-    const rows = await list.list();
+    const all = await list.list();
+    const seen =
+      permissions &&
+      (await permissions.which(
+        user,
+        all.map((r) => r.repo),
+      ));
+    const rows = seen ? all.filter((r) => seen.has(r.repo.toLowerCase())) : all;
     const configured = rows.filter((r) => r.status === "configured").map((r) => r.repo);
     const counts = backlog ? backlogs(configured, user) : {};
     const repos = rows.map((r) =>
@@ -407,10 +417,18 @@ export function createRepoApi({
         : r,
     );
     const current = app();
+    // Every installation with `server:read` (one may have no repo listed yet); else only those of
+    // the accounts owning a repo `user` sees: the others' names, links and missing permissions
+    // aren't theirs.
+    const owners = new Set(rows.map((r) => r.repo.split("/")[0].toLowerCase()));
+    const everyOne = !permissions || (await permissions.can(user, null, "server:read"));
+    const installations = everyOne
+      ? list.installations()
+      : list.installations().filter((i) => owners.has(String(i.account).toLowerCase()));
     return {
       repos,
       listedAt: list.listedAt(),
-      app: current && appLinks(config.githubUrl, current, list.installations()),
+      app: current && appLinks(config.githubUrl, current, installations),
     };
   }
 
@@ -433,6 +451,7 @@ export function createRepoApi({
   }
 
   async function onboard(req, res, user, repo) {
+    await mustDo(permissions, user, repo, startAction("onboarding"));
     const row = await known(res, repo);
     if (!row) return;
     // Already set up or being onboarded: nothing to do, the row says why.
@@ -602,6 +621,11 @@ export function createRepoApi({
     },
     posts: { onboard, refresh },
     allowed: (repo) => repoAllowed(config, repo),
+    permissions,
+    // Onboarding reads the config too, and starts its run. Refreshing the whole list lists every
+    // installation from GitHub again: server-wide, as Sync.
+    action: ({ what, repo }) =>
+      repo ? "repo:config:read" : what === "refresh" ? "server:sync" : null,
     publicUrl,
     log,
   });

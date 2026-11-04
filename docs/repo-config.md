@@ -1639,6 +1639,26 @@ first (again after a push to its default branch).
 | `server:read`       | Server-wide (`repo: null`): the server's setup and grants.    |
 | `server:sync`       | Server-wide: Sync.                                            |
 
+**Where they are asked**: each dashboard route needs its action (the backlog and a
+discussion's thread `tasks:read`; starting, queueing or laying out work, the inbox, Analyze, a
+discussion and onboarding `runs:start:<mode>` for the mode they start, wrapping a brainstorm up `runs:start:stop`; cancelling, rerunning,
+answering, Review and Fix, dismissing, lanes and the run order `runs:manage`, and what starts a
+run among them (a rerun, Review, Fix, answers a session goes on with) its mode's start too, before
+anything is posted; a repository's config and its refresh `repo:config:read`; Settings › Server,
+the services' health and the plans' usage `server:read`; Sync, and refreshing the whole
+repositories list, `server:sync`). Without `server:read`, the repositories list names only the
+installations of the accounts owning a repository the login sees. A comment, an inbox entry or a discussion starts a run
+only when its author has `runs:start:<mode>` for the mode it resolves to (else nothing starts,
+and nothing is said, as for an author outside the repository's `users`), `/cancel` and an
+`/after none` alone need `runs:manage`, an `/after` with a start the start's action, and `/mode policy`
+`tasks:read` (each refused without a word); queued work is checked again before it runs (a decision that fails then drops nothing). An auto-pickup label starts work only
+when whoever added it, and whoever edited the issue since, have `runs:start:work`. A reviewer
+`review.request` names is requested only with `tasks:read`. A repository where a login has no
+action at all is hidden from it everywhere: the repositories list, the tasks, inboxes, lanes and
+blockers of `api/state`, `/status` and the live logs (`logs:read`); its routes answer as one
+outside `ALLOWED_REPOS`. Totals (running, queued, slots) stay. The repository's `users` still
+narrow it: a login outside them has no action there.
+
 A rule may give, or deny, a prefix ending in `*`: `runs:start:*` (every mode), `runs:*`,
 `server:*`, `*` (everything). The server's actions count only server-wide, the others only on
 a repository. A pattern asked (`can(login, repo, "runs:start:*")`) means all of it: a deny of

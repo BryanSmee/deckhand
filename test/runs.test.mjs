@@ -252,6 +252,8 @@ test("unqueue: a queued task's latest comment leaves the queue for a wait, the o
     item("second", { modeLine: "review" }),
   ]);
   assert.equal(runs.queuedTask("org/repo#13").item.text, "second");
+  // Both alice's: none that unqueue() would drop.
+  assert.equal(runs.queuedTask("org/repo#13").others, false);
   const latest = runs.unqueue("org/repo#13", "alice");
   // Every queued comment's text, as the run would have read them.
   assert.deepEqual(latest, {
@@ -281,8 +283,8 @@ test("unqueue: a queued task's latest comment leaves the queue for a wait, the o
     // Waiting for a slot with replies only: queued, but nothing to wait.
     const replies = {
       14: null,
-      15: { item: null, replies: true },
-      16: { item: null, replies: false },
+      15: { item: null, replies: true, others: false },
+      16: { item: null, replies: false, others: false },
     };
     assert.deepEqual(runs.queuedTask(`org/repo#${id}`), replies[id]);
     assert.equal(runs.unqueue(`org/repo#${id}`, "alice"), null);
@@ -292,7 +294,11 @@ test("unqueue: a queued task's latest comment leaves the queue for a wait, the o
   queued("19", [item("an idea", { trigger: "idea" })]);
   queued("20", [item("", { trigger: "stop", mode: "stop" })]);
   for (const id of ["19", "20"]) {
-    assert.deepEqual(runs.queuedTask(`org/repo#${id}`), { item: null, replies: false });
+    assert.deepEqual(runs.queuedTask(`org/repo#${id}`), {
+      item: null,
+      replies: false,
+      others: false,
+    });
   }
   // A trigger, then a plain comment while it waited: the trigger waits, with both texts; the
   // follow-up's 👀 goes.
@@ -314,6 +320,8 @@ test("unqueue: a queued task's latest comment leaves the queue for a wait, the o
     item("from bob", { trigger: null, author: "bob", comment: { id: 4 } }),
     item("alice again", { trigger: null, author: "Alice", comment: { id: 5 } }),
   ]);
+  // What queuedTask() says of it, for the dashboard's check (work.mjs requeue()).
+  assert.equal(runs.queuedTask("org/repo#18").others, true);
   const mixed = runs.unqueue("org/repo#18", "alice");
   assert.equal(mixed.dropped, 1);
   assert.equal(mixed.item.author, "alice");

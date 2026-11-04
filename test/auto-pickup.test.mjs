@@ -14,7 +14,7 @@ import { parseRepoConfig, startable } from "../listener/repo-config.mjs";
 import { runTrigger } from "../listener/run-policy.mjs";
 import { createPicks, endPicks } from "../listener/picks.mjs";
 import { createTasks, newTask, pickedTask } from "../listener/tasks.mjs";
-import { mapStore, testConfig } from "./helpers.mjs";
+import { MEMBER, VIEWER, mapStore, permissionsOf, testConfig } from "./helpers.mjs";
 
 const BOT = "deckhand[bot]";
 
@@ -65,6 +65,7 @@ function setup({
   load,
   release,
   followUpPick,
+  permissions = null,
 } = {}) {
   const config = testConfig({
     ALLOWED_USERS: "alice,bob,carol",
@@ -161,6 +162,7 @@ function setup({
     release,
     load,
     followUpPick,
+    permissions,
     log: (line) => p.logs.push(line),
     every: () => null,
     later,
@@ -1205,4 +1207,66 @@ test("a follow-up the App filed, edited by an allowed user: the original GitHub 
       "Auto-pickup: org/a#3: skipped, its description was edited by deckhand after the label was added",
     ],
   );
+});
+
+test("access: the labeller and whoever edited the issue since need runs:start:work", async () => {
+  // alice and carol are members of org/a, bob a viewer.
+  const permissions = permissionsOf({
+    alice: { "org/a": MEMBER },
+    bob: { "org/a": VIEWER },
+    carol: { "org/a": MEMBER },
+  });
+  const { pickup, p } = setup({
+    repos: { "org/a": { issues: [1, 2, 3, 4].map((n) => issue(n, n)) } },
+    events: {
+      "org/a#1": [labelled("bob")],
+      "org/a#2": [labelled("alice")],
+      "org/a#3": [labelled("alice")],
+    },
+    edits: {
+      // Since the label: by a viewer, then by a member.
+      "org/a#2": [["2026-03-01T00:00:00Z", "bob"]],
+      "org/a#3": [["2026-03-01T00:00:00Z", "carol"]],
+    },
+    env: { MAX_PARALLEL: "5", AUTO_PICKUP_SLOTS: "4" },
+    permissions,
+  });
+  assert.deepEqual(await pickup.sweep(), ["org/a#3", "org/a#4"]);
+  assert.deepEqual(
+    p.logs.filter((l) => l.includes("skipped")),
+    [
+      "Auto-pickup: org/a#1: skipped, the label was added by bob, who may not start work runs here",
+      "Auto-pickup: org/a#2: skipped, its description was edited by bob after the label was added",
+    ],
+  );
+  assert.deepEqual(
+    p.accepted.map((i) => i.author),
+    ["alice", "alice"],
+  );
+});
+
+test("access: a decision that fails holds nothing and says nothing: the next sweep asks again", async () => {
+  const failing = ["alice"];
+  const permissions = permissionsOf({ alice: { "org/a": MEMBER } }, { failing });
+  const { pickup, p } = setup({ repos: { "org/a": { issues: [issue(1, 1)] } }, permissions });
+  assert.deepEqual(await pickup.sweep(), []);
+  assert.deepEqual([p.comments, p.removed, p.accepted], [[], [], []]);
+  assert.match(p.logs.join("\n"), /org\/a#1: who may start it can't be decided/);
+  failing.length = 0;
+  assert.deepEqual(await pickup.sweep(), ["org/a#1"]);
+  assert.equal(p.accepted[0].author, "alice");
+});
+
+test("access: only the editors since the label are asked about, so an earlier one's failed decision holds nothing", async () => {
+  const permissions = permissionsOf({ alice: { "org/a": MEMBER } }, { failing: ["dave"] });
+  const { pickup, p } = setup({
+    repos: { "org/a": { issues: [issue(1, 1)] } },
+    events: { "org/a#1": [labelled("alice")] },
+    // dave edited it before the label.
+    edits: { "org/a#1": [["2020-01-01T00:00:00Z", "dave"]] },
+    env: { ALLOWED_USERS: "alice,dave" },
+    permissions,
+  });
+  assert.deepEqual(await pickup.sweep(), ["org/a#1"]);
+  assert.ok(!permissions.asked.some(([login]) => login === "dave"));
 });

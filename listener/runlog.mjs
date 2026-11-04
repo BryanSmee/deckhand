@@ -907,7 +907,8 @@ export function buildOutput(file, now = Date.now) {
 }
 
 // Server-sent events: the log so far, then new lines as they are written, until the run ends,
-// or until `allowed()` turns false (a sign-out, a repo's `users` narrowed): checked each second
+// or until `allowed()` (or its promise) turns false (a sign-out, a repo's `users` or the access
+// decision narrowed): checked each second
 // (`every`, in ms: shorter in the tests). The log is the runner's: `read(offset)` → { data }, its
 // bytes from `offset` (../runner/client.mjs readLog(), as edge). A run that hasn't written a line
 // yet reads as empty. Any error ends this stream only, through `onError`, never the listener.
@@ -922,6 +923,8 @@ export function stream(
     "cache-control": "no-cache",
     "x-accel-buffering": "no",
   });
+  // At once, not with the first line: a run that has written none yet is still open.
+  res.flushHeaders?.();
   const reading = reader(agentFor(run.agent));
   const decoder = new StringDecoder("utf8");
   let offset = 0;
@@ -942,7 +945,7 @@ export function stream(
     }
   };
   const next = async () => {
-    if (!allowed()) return stop();
+    if (!(await allowed())) return stop();
     // Asked before it is read: a run that ended is read to its end, then ends the stream.
     const ended = run.status !== "running";
     for (;;) {
