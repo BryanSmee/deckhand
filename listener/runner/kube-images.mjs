@@ -21,7 +21,7 @@
 // The installs run as INSTALL_USER, neither root nor the sandbox's user: Pod Security
 // `restricted` allows no root, and a sandbox mustn't own what the next one runs.
 import { setTimeout as delay } from "node:timers/promises";
-import { egressPolicy, proxyEnv } from "../egress.mjs";
+import { egressPolicy, proxyEnv, refused } from "../egress.mjs";
 import { buildArgs, buildctl as buildctlCli, withDockerConfig } from "./buildkit.mjs";
 import { sealing, unseal, WRAPPER } from "./kube-seal.mjs";
 import {
@@ -869,10 +869,7 @@ export function createKubernetesImages({
       return { ...egressPolicy(host, install, [], [], [], { decrypt: false }), source: "install" };
     }
     if (!(await builderAddresses()).includes(ip)) return null;
-    if (!running.count) {
-      const none = { allowed: false, private: false, cache: false, decrypt: false, relay: false };
-      return { ...none, reason: "no_build", source: "build" };
-    }
+    if (!running.count) return { ...refused("no_build"), source: "build" };
     const answer = egressPolicy(host, running.hosts, running.trusted, [], [], { decrypt: false });
     return { ...answer, source: "build" };
   }

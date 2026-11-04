@@ -93,16 +93,7 @@ export function egressPolicy(
   uncached = [],
   { decrypt = true, relayed = [], blocked = [] } = {},
 ) {
-  if (matchHost(host, blocked) !== null) {
-    return {
-      allowed: false,
-      private: false,
-      cache: false,
-      decrypt: false,
-      relay: false,
-      reason: "blocked",
-    };
-  }
+  if (matchHost(host, blocked) !== null) return refused("blocked");
   const allowed = matchHost(host, hosts) !== null;
   const named = matchHost(host, trusted ?? []);
   const relay = allowed && decrypt && matchHost(host, relayed) === "exact";
@@ -119,6 +110,13 @@ export function egressPolicy(
     relay,
     ...(!allowed && { reason: "not_granted" }),
   };
+}
+
+// The proxy's answer refusing a host, `reason` saying why (the proxy's metrics count them by
+// it): the one shape of a refusal, wherever it's decided, so a field added to the answer is
+// added to every refusal.
+export function refused(reason) {
+  return { allowed: false, private: false, cache: false, decrypt: false, relay: false, reason };
 }
 
 // The proxy settings a sandbox gets. Both cases, as tools disagree (curl only reads the
