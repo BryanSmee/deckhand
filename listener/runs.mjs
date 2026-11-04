@@ -31,6 +31,8 @@ import {
 import { logSent } from "./restart.mjs";
 import { sandboxSpec, sessionName, sessionOf } from "./sandbox-spec.mjs";
 import { noLongerAllowed, pickedTask } from "./tasks.mjs";
+import { startAction } from "./permissions.mjs";
+import { startedBy } from "./run-policy.mjs";
 import { operatorSecrets, redact } from "./secrets.mjs";
 import { newLogContext, newRequestId, withLogContext } from "../lib/log.mjs";
 
@@ -116,8 +118,9 @@ export function createRuns(ctx) {
   }
 
   // Comments whose author may no longer run the agent here, checked against the repo's settings
-  // as they are now: its `users` may have narrowed while they waited (the pause, a restart, a
-  // busy repo). Dropped, their 👀 off. Settings that can't be read are begin()'s to report.
+  // and the access decision as they are now: its `users` or its author's actions may have
+  // narrowed while they waited (the pause, a restart, a busy repo). Dropped, their 👀 off.
+  // Settings that can't be read are begin()'s to report.
   async function dropRefused(task) {
     let settings = null;
     try {
@@ -126,15 +129,34 @@ export function createRuns(ctx) {
     } catch {
       // begin() reads them again, and fails the run with the error.
     }
-    const before = task.pending.length;
+    // Their authors' access as it is now (permissions.mjs): `runs:start:<mode>`, the mode each
+    // was queued in. By item: a comment queued while it is decided was checked as it came. A
+    // decision that fails drops nothing: the comment was accepted, and only a refusal undoes it
+    // (the run's own policy decisions fail it where people see it).
+    const snapshot = [...task.pending];
+    const verdicts = await Promise.all(
+      snapshot.map(async (item) => {
+        if (!ctx.permissions || !startedBy(item)) return true;
+        const action = startAction(item.mode);
+        const said = await ctx.permissions.decide(startedBy(item), task.repo, action);
+        if (said.error) log(`${taskKey(task.repo, task.id)}: ${action} not decided: ${said.error}`);
+        return said.ok || !!said.error;
+      }),
+    );
+    const may = new Map(snapshot.map((item, i) => [item, verdicts[i]]));
+    let dropped = 0;
     task.pending = task.pending.filter((item) => {
-      const refused = noLongerAllowed(config, item, settings);
+      const refused =
+        noLongerAllowed(config, item, settings) ||
+        (may.get(item) === false &&
+          `${item.author} may no longer start ${startAction(item.mode)} here`);
       if (!refused) return true;
       log(`${taskKey(task.repo, task.id)}: a queued comment dropped: ${refused}`);
       ctx.track(ctx.settle(item, "refused"));
+      dropped++;
       return false;
     });
-    if (task.pending.length < before) ctx.saveQueue?.();
+    if (dropped) ctx.saveQueue?.();
   }
 
   // Where comments that arrive during the run go (deliver()), and what a listener that
@@ -669,10 +691,11 @@ export function createRuns(ctx) {
   }
 
   // A task waiting for a slot, no run going or ending (a follow-up waits for that one):
-  // { item, replies }. `item`: its newest comment that starts a run (an issue's trigger or
-  // `/mode` comment), which can wait for another issue instead (the dashboard's Queue after…,
-  // work.mjs); null when none does. `replies`: none does, and every comment queued is a plain
-  // reply to its last run (not an inbox entry, a wrap-up, a pull request's…). Null otherwise.
+  // { item, replies, others }. `item`: its newest comment that starts a run (an issue's trigger
+  // or `/mode` comment), which can wait for another issue instead (the dashboard's Queue
+  // after…, work.mjs); null when none does. `replies`: none does, and every comment queued is a
+  // plain reply to its last run (not an inbox entry, a wrap-up, a pull request's…). `others`:
+  // some comment queued isn't `item`'s author's, which unqueue() would drop. Null otherwise.
   function queuedTask(key) {
     const task = ctx.tasks.get(key);
     if (!task || task.running || task.live || !task.pending.length) return null;
@@ -681,7 +704,8 @@ export function createRuns(ctx) {
     );
     const replies =
       !item && task.pending.every((i) => i.kind === "issue" && !i.trigger && !i.modeLine);
-    return { item: item ?? null, replies };
+    const others = !!item && task.pending.some((i) => i !== item && !sameAuthor(i, item));
+    return { item: item ?? null, replies, others };
   }
 
   // queuedTask()'s task out of the queue: { item, dropped }. `item` is returned for its wait

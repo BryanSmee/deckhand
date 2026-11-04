@@ -78,6 +78,7 @@ import { createHistory, forgottenShots, noteUnnamedShots } from "../listener/his
 import { createInputs } from "../listener/inputs.mjs";
 import { createOnboarding, createOnboardingStore } from "../listener/onboarding.mjs";
 import { createLinkedBranches } from "../listener/linked-branch.mjs";
+import { createPermissions } from "../listener/permissions.mjs";
 import { createPolicies } from "../listener/policies.mjs";
 import { operatorPolicies } from "../lib/policy-files.mjs";
 import { policyClient } from "../listener/policy-client.mjs";
@@ -820,6 +821,10 @@ policies.checkOperator().then(({ errors, warnings }) => {
     log.warn(`Policies (Deckhand's and GRANTS_DIR/policy): ${warning}`);
 });
 
+// Who may do what where (#731): the access decision, which every dashboard route, comment,
+// auto-pickup and requested reviewer asks, the repos' `users` as last read narrowing it.
+const permissions = createPermissions({ policies, usersOf: repoReads.usersOf });
+
 // The names of the board's lanes: one a maintainer typed, or a parent's title (lanes.mjs).
 const lanes = createLanes({
   lanes: maps.maps.lanes,
@@ -835,6 +840,7 @@ Object.assign(ctx, {
   publicUrl,
   repoSettings,
   policies,
+  permissions,
   ...repoReads,
   repoFile,
   titles,
@@ -975,6 +981,7 @@ ctx.reviewers = createReviewers({
   // The run whose pull request it is: the one that opened it.
   runOf: (key, pr) => openerOf(ctx.runs, key, pr),
   policies,
+  permissions,
   decided: (repo, pr, entry) => ctx.decisions.record(pullEntry(repo, pr).key, entry),
   log,
 });
@@ -1015,6 +1022,7 @@ ctx.repoApi = createRepoApi({
   publicUrl,
   start: (repo, login) => ctx.onboarding.start(repo, login, true),
   policies,
+  permissions,
   granted: grantsBy(policies),
   // The Overview's repository cards: no GitHub read per repo when they show.
   backlogs: (repos, user) => ctx.workApi.counts(repos, user),
@@ -1060,6 +1068,7 @@ ctx.workApi = createWorkApi({
   queueOrder: () => ctx.queueOrder(),
   reviews: ctx.reviews,
   granted: grantsBy(policies),
+  permissions,
   publicUrl,
   fromTags,
   log,
@@ -1083,6 +1092,7 @@ ctx.autoPickup = createAutoPickup({
   load: (repo) => ctx.repoLoad(repo),
   // The follow-ups the reviews filed with the label, for whoever merged their pull request.
   followUpPick: (repo, number, at) => ctx.reviews.followUpPick(repo, number, at),
+  permissions,
   log,
 });
 
@@ -1096,6 +1106,7 @@ ctx.discussionApi = createDiscussionApi({
   accept: (item) => ctx.accept(item),
   publicUrl,
   tags: fromTags,
+  permissions,
   log,
 });
 

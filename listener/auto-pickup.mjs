@@ -22,6 +22,7 @@
 // by the App is a run's write, which may come from anyone's comment: refused as a bot's.
 import { hasLabel, headInRepo, issueItem, linkedIssue, MARKER, taskKey } from "./events.mjs";
 import { graphql, paginate } from "./github.mjs";
+import { startAction } from "./permissions.mjs";
 import { CONFIG_FILE } from "./repo-config.mjs";
 import { newLogContext, newRequestId } from "../lib/log.mjs";
 
@@ -54,12 +55,17 @@ const isApp = (actor, config) =>
   [lower(actor.login), `${lower(actor.login)}[bot]`].includes(lower(config.bot));
 
 // Whether `login` (with `actor`'s type, when known) is an allowed user here: in ALLOWED_USERS
-// and the repo's `users`, not a bot.
-export const allowed = (actor, config, users) =>
+// and the repo's `users`, not a bot, and, with `may` (the logins in lower case that may start
+// the run: starters()), among them.
+export const allowed = (actor, config, users, may = null) =>
   !!actor?.login &&
   !isBot(actor) &&
   config.users.includes(lower(actor.login)) &&
-  users.includes(lower(actor.login));
+  users.includes(lower(actor.login)) &&
+  (!may || may.has(lower(actor.login)));
+
+// The mode an auto-picked issue runs in: what its starter, and whoever edited it since, need.
+export const PICKED_ACTION = startAction("work");
 
 // Why the issue's text isn't the one the label vouched for, or null: its title renamed (its
 // events) or its description edited (`history`: its edits, as lastEdits() reads them) at or
@@ -71,20 +77,21 @@ export const allowed = (actor, config, users) =>
 // `created`: the issue's creation time, for a follow-up the App filed with the label (#677):
 // GitHub lists an edited description's original as an edit by its author at its creation, the
 // label's second too. That one edit by the App is no edit since; any later one of its is.
-export function editedSince(events, history, since, config, users, created = null) {
+// `may`: allowed()'s.
+export function editedSince(events, history, since, config, users, created = null, may = null) {
   const after = (at) => Date.parse(at ?? "") >= since;
   const second = (at) => Math.floor(Date.parse(at ?? "") / 1000);
   const original =
     created &&
     history.edits.find((e) => second(e.at) === second(created) && isApp(e.editor, config));
   const renamed = events.find(
-    (e) => e.event === "renamed" && after(e.created_at) && !allowed(e.actor, config, users),
+    (e) => e.event === "renamed" && after(e.created_at) && !allowed(e.actor, config, users, may),
   );
   if (renamed) {
     return `its title was changed by ${renamed.actor?.login ?? "someone"} after the label was added`;
   }
   const edited = history.edits.find(
-    (e) => e !== original && after(e.at) && !allowed(e.editor, config, users),
+    (e) => e !== original && after(e.at) && !allowed(e.editor, config, users, may),
   );
   if (edited) {
     return `its description was edited by ${edited.editor?.login ?? "someone"} after the label was added`;
@@ -93,7 +100,7 @@ export function editedSince(events, history, since, config, users, created = nul
   const last = history.last;
   const lastIsOriginal =
     original && second(last?.at) === second(original.at) && isApp(last.editor, config);
-  if (last && !lastIsOriginal && after(last.at) && !allowed(last.editor, config, users)) {
+  if (last && !lastIsOriginal && after(last.at) && !allowed(last.editor, config, users, may)) {
     return `its description was edited by ${last.editor?.login ?? "someone"} after the label was added`;
   }
   // Not all of it read: GitHub doesn't say in which order it lists them, so the edits not read
@@ -134,15 +141,15 @@ async function lastEdits(github, repo, number) {
 }
 
 // Why the person who added the label may not start the run, or null. `users`: the repo's
-// (already within ALLOWED_USERS).
+// (already within ALLOWED_USERS); `may`: allowed()'s.
 // `by.pr`: a follow-up of that pull request, labelled by Deckhand for its merger, `by.login`.
-export function labellerRefusal(by, config, users) {
+export function labellerRefusal(by, config, users, may = null) {
   if (by.bot) return `the label was added by a bot (${by.login})`;
-  if (!allowed({ login: by.login }, config, users)) {
-    return by.pr
-      ? `the label was added by Deckhand for a follow-up of #${by.pr}, merged by ${by.login}, who isn't an allowed user`
-      : `the label was added by ${by.login}, who isn't an allowed user`;
-  }
+  const who = by.pr
+    ? `the label was added by Deckhand for a follow-up of #${by.pr}, merged by ${by.login}`
+    : `the label was added by ${by.login}`;
+  if (!allowed({ login: by.login }, config, users)) return `${who}, who isn't an allowed user`;
+  if (may && !may.has(lower(by.login))) return `${who}, who may not start work runs here`;
   return null;
 }
 
@@ -196,6 +203,8 @@ export function createAutoPickup({
   release = () => {},
   load = () => 0,
   followUpPick = () => null,
+  // Who may do what where (permissions.mjs): the labeller's and the editors' `runs:start:work`.
+  permissions = null,
   log = () => {},
   every = (fn, ms) => setInterval(fn, ms),
   later = (fn, ms) => setTimeout(fn, ms),
@@ -366,15 +375,29 @@ export function createAutoPickup({
     const found = labeller(events, label);
     if (!found) return "who added the label isn't in its events yet";
     const by = vouchedLabeller(found, config, followUpPick, repo, n);
-    let why = labellerRefusal(by, config, settings.users);
+    // A bot's labelling is refused as it is: no decision to ask.
+    const may = by.bot ? null : await starters(repo, [by.login]);
+    let why = labellerRefusal(by, config, settings.users, may);
     if (!why) {
+      const history = await lastEdits(github, repo, n);
+      // Only those editedSince() asks about: since the label, and allowed but for the decision
+      // (a bot, the App or an outsider holds it whatever is decided). Fewer decisions to fail.
+      const since = (at) => Date.parse(at ?? "") >= by.at;
+      const editors = [
+        ...events.filter((e) => e.event === "renamed" && since(e.created_at)).map((e) => e.actor),
+        ...history.edits.filter((e) => since(e.at)).map((e) => e.editor),
+        ...(history.last && since(history.last.at) ? [history.last.editor] : []),
+      ]
+        .filter((actor) => allowed(actor, config, settings.users))
+        .map((actor) => actor.login);
       const edited = editedSince(
         events,
-        await lastEdits(github, repo, n),
+        history,
         by.at,
         config,
         settings.users,
         by.pr ? issue.created_at : null,
+        await starters(repo, editors),
       );
       if (edited) why = edited;
     }
@@ -391,6 +414,18 @@ export function createAutoPickup({
     candidate.at = by.at;
     candidate.settings = settings;
     return null;
+  }
+
+  // Those of `logins` who may start an auto-picked run on `repo` (PICKED_ACTION), in lower case;
+  // null without permissions (nothing more is checked). A decision that fails throws: the issue
+  // is asked about again at the next sweep, not held (nor told) for a refusal it isn't.
+  async function starters(repo, logins) {
+    if (!permissions) return null;
+    const names = [...new Set(logins.filter(Boolean).map(lower))];
+    const said = await Promise.all(names.map((l) => permissions.decide(l, repo, PICKED_ACTION)));
+    const failed = said.find((d) => d.error);
+    if (failed) throw new Error(`who may start it can't be decided (${failed.error})`);
+    return new Set(names.filter((_, i) => said[i].ok));
   }
 
   // The App's comment, once per labelling, on an issue its labelling holds: the label stays on

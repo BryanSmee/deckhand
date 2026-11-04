@@ -8,7 +8,8 @@ import { taskKey } from "./events.mjs";
 import { customMode, INBOX } from "./modes.mjs";
 import { sessionNames } from "./sandbox-spec.mjs";
 import { CONFIG_FILE, modeNames } from "./repo-config.mjs";
-import { createRunPolicy } from "./run-policy.mjs";
+import { itemMay, startAction } from "./permissions.mjs";
+import { createRunPolicy, personStarted } from "./run-policy.mjs";
 
 // `ctx` (server.mjs): the listener's state and services, read at call time.
 export function createTaskModes(ctx) {
@@ -16,6 +17,17 @@ export function createTaskModes(ctx) {
   // The policies' `allow_run` and `deny_run` (run-policy.mjs): asked once the mode is known,
   // after the built-in gates and before the mode changes the issue's state.
   const allowed = createRunPolicy(ctx);
+
+  // Whether `item`'s author may start a run in `mode` (permissions.mjs), asked before a reply
+  // about that mode (unknown, not granted, not here): refused, nothing is said, as allowed()
+  // says nothing to a start it refuses. The listener's own items aren't anyone's.
+  async function mayStart(item, mode) {
+    if (!personStarted(item)) return true;
+    return may(item, startAction(mode), `${mode}: `);
+  }
+
+  // Whether `item`'s author may do `action` there (permissions.mjs).
+  const may = (item, action, what) => itemMay(ctx.permissions, log, item, action, what);
 
   // What a comment asks for: "work", "brainstorm", "stop" (wrap a brainstorm up) or one of the
   // repo's own modes (its config's `modes:`); null when it doesn't reach Claude. A "/mode"
@@ -98,7 +110,9 @@ export function createTaskModes(ctx) {
   // far carries over, so there must be one. Onboarding and research start their own.
   async function switchable(item, key, name) {
     if (!modeNames(item.settings).includes(item.modeLine)) {
-      await unknownMode(item, `Unknown mode \`${item.modeLine}\`.`);
+      if (await mayStart(item, item.modeLine)) {
+        await unknownMode(item, `Unknown mode \`${item.modeLine}\`.`);
+      }
       return false;
     }
     if (item.trigger || ["onboarding", "research", "review", "policy"].includes(item.modeLine)) {
@@ -117,6 +131,7 @@ export function createTaskModes(ctx) {
       return (await allowed(item, current, key)) ? current : null;
     }
     // Gone from the config: don't guess what to run instead (work could push).
+    if (!(await mayStart(item, current))) return null;
     await unknownMode(item, `The mode \`${current}\` is no longer in \`${CONFIG_FILE}\`.`);
     return null;
   }
@@ -136,6 +151,7 @@ export function createTaskModes(ctx) {
   // Research (modes.mjs RESEARCH), only with the operator's grant: without it, a reply that names
   // it and no run. Kept in the issue modes like the repo's modes: comments go on in it.
   async function startResearch(item, key) {
+    if (!(await mayStart(item, "research"))) return null;
     const refused = await researchRefusal(ctx.config, item.repo, {
       granted: grantsBy(ctx.policies),
     });
@@ -157,6 +173,7 @@ export function createTaskModes(ctx) {
   // on a session of its own (fresh): the issue stays in the mode it was in.
   async function startReview(item, key) {
     if (onPull(item)) return (await allowed(item, "review", key)) ? "review" : null;
+    if (!(await mayStart(item, "review"))) return null;
     const where = taskKey(item.repo, item.id);
     log(`${where}: review refused: not a pull request`);
     const text =
@@ -170,6 +187,9 @@ export function createTaskModes(ctx) {
   // nothing reviewed, fixed or merged; on an issue, a reply says where.
   async function policyDryRun(item) {
     const where = taskKey(item.repo, item.id);
+    // Its reply says what the policies refuse: for an author who sees the repo's tasks only,
+    // refused without a word otherwise, as a start is (permissions.mjs).
+    if (!(await may(item, "tasks:read", "policy dry run refused: "))) return null;
     let text;
     let denials = null;
     if (!onPull(item)) {

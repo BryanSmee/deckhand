@@ -85,7 +85,7 @@ test("same origin: the public URL, or the host the browser asked for", () => {
   assert.equal(sameOrigin(req("null"), "https://deckhand.example.com"), false);
 });
 
-test("apiRoute: methods, sign-in, ALLOWED_REPOS and Origin, in that order, then the handler", async (t) => {
+test("apiRoute: methods, sign-in, Origin and ALLOWED_REPOS, in that order, then the handler", async (t) => {
   const logs = [];
   const seen = [];
   const handle = apiRoute({
@@ -135,7 +135,7 @@ test("apiRoute: methods, sign-in, ALLOWED_REPOS and Origin, in that order, then 
   ]);
   assert.deepEqual(await ask("GET", "/api/r/org/secret/read"), [
     404,
-    { error: "org/secret is not in ALLOWED_REPOS." },
+    { error: "org/secret isn't one of this dashboard's repositories." },
   ]);
   assert.deepEqual(await ask("GET", "/api/r/org/app/read", { origin: null }), [
     200,

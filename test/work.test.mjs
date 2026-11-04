@@ -13,7 +13,7 @@ import { createAnalysis } from "../listener/analysis.mjs";
 import { MAX_TEXT } from "../listener/answers.mjs";
 import { board as boardOf } from "../listener/board.mjs";
 import { MARKER, parseKey, workItem } from "../listener/events.mjs";
-import { tempDir, testConfig, fileMap } from "./helpers.mjs";
+import { MEMBER, VIEWER, permissionsOf, tempDir, testConfig, fileMap } from "./helpers.mjs";
 import { openStore } from "../lib/store.mjs";
 import { storeMap } from "../lib/store-map.mjs";
 
@@ -46,6 +46,8 @@ function setup({
   reviews = {},
   // The Map the waits are kept in, else one in a file.
   waits = null,
+  // Who may do what where (permissions.mjs); none: every action.
+  permissions = null,
 } = {}) {
   const config = testConfig({
     ALLOWED_USERS: "alice,bob",
@@ -213,9 +215,10 @@ function setup({
     queuedTask: (key) => {
       if (w.started || !(key in w.queued)) return null;
       const item = w.queued[key];
+      // `w.others`: other authors' comments queued with it.
       return item === "other"
-        ? { item: null, replies: false }
-        : { item: item ?? null, replies: item === null };
+        ? { item: null, replies: false, others: false }
+        : { item: item ?? null, replies: item === null, others: !!item && !!w.others };
     },
     // `until`: what the queue keeps them for (restart.mjs park()), in `w.until`; `w.queueIds`:
     // the queueIds it took out.
@@ -275,6 +278,7 @@ function setup({
         return { item };
       },
     },
+    permissions,
     publicUrl: () => ORIGIN,
     now: () => w.clock,
     log: (line) => w.logs.push(line),
@@ -2719,4 +2723,218 @@ test("review fix refused on a draft, which a review isn't", async () => {
   assert.equal(res.body.error, "#8 is a draft: mark it ready for review first.");
   assert.deepEqual([draft.comments, draft.asked], [[], []]);
   assert.equal((await review(draft, { number: 8, action: "review" })).status, 200);
+});
+
+test("access: a viewer reads the backlog but starts nothing, a member starts, a hidden repo is a 404", async () => {
+  const permissions = permissionsOf({
+    alice: { "org/app": MEMBER },
+    bob: { "org/app": VIEWER },
+    carol: { "org/app": ["tasks:read", "runs:start:brainstorm"] },
+  });
+  const w = setup({
+    env: { ALLOWED_USERS: "alice,bob,carol,dave" },
+    issues: { 3: open("Fix it") },
+    settings: { modes: { brainstorm: {} } },
+    permissions,
+  });
+  const get = (user) => call(w.api, "GET", "/api/repos/org/app/issues", { user });
+  assert.equal((await get("bob")).status, 200);
+  // Nothing on the repo: hidden, as a repo outside ALLOWED_REPOS.
+  const hidden = await get("dave");
+  assert.equal(hidden.status, 404);
+  assert.equal(hidden.body.error, "org/app isn't one of this dashboard's repositories.");
+  const start = (user, extra = {}) => post(w, { action: "start", number: 3, ...extra }, { user });
+  // A viewer's start: refused before anything is posted or queued.
+  const refused = await start("bob");
+  assert.equal(refused.status, 403);
+  assert.match(refused.body.error, /`runs:start:work`/);
+  assert.deepEqual([w.posted, w.comments, w.accepted], [[], [], []]);
+  assert.equal((await post(w, { action: "cancel", number: 3 }, { user: "bob" })).status, 403);
+  assert.deepEqual(w.cancelled, []);
+  // A brainstorm, but no work.
+  assert.equal((await start("carol")).status, 403);
+  assert.equal((await start("carol", { mode: "brainstorm" })).status, 200);
+  assert.equal(w.accepted.length, 1);
+  // The rerun, the lanes and the rest need runs:manage.
+  const lane = { keys: ["org/app#3"], name: "Later" };
+  const named = (user) => call(w.api, "POST", "/api/repos/org/app/lane", { body: lane, user });
+  assert.equal((await named("carol")).status, 403);
+  assert.equal((await named("alice")).status, 200);
+  // A member starts work.
+  assert.equal((await start("alice")).status, 200);
+  assert.equal(w.accepted.at(-1).author, "alice");
+});
+
+test("access: the inbox and Analyze need their mode's start", async () => {
+  const permissions = permissionsOf({
+    alice: { "org/app": ["tasks:read", "runs:start:idea"] },
+  });
+  const issues = { 7: open("Ideas"), 8: open("Bugs") };
+  const w = setup({ settings: { inbox: { ideas: 7, bugs: 8 } }, issues, permissions });
+  const send = (kind) =>
+    call(w.api, "POST", "/api/repos/org/app/inbox", { body: { kind, text: "An idea" } });
+  assert.equal((await send("bug")).status, 403);
+  // Only the repo's spelling read: nothing posted.
+  assert.deepEqual(w.calls, ["GET /repos/org/app"]);
+  assert.equal((await send("idea")).status, 200);
+  assert.equal(w.accepted.at(-1).trigger, "idea");
+  const analyze = await call(w.api, "GET", "/api/repos/org/app/analyze?kinds=work");
+  assert.equal(analyze.status, 403);
+  assert.match(analyze.body.error, /`runs:start:analyze`/);
+});
+
+test("access: Review, Fix and answers that go on in a session need their start, before any comment", async () => {
+  // bob may manage runs, but start none.
+  const permissions = permissionsOf({
+    alice: { "org/app": MEMBER },
+    bob: { "org/app": ["tasks:read", "runs:manage"] },
+  });
+  const w = reviewSetup({ permissions });
+  for (const action of ["review", "fix"]) {
+    const res = await review(w, { number: 8, action }, { user: "bob" });
+    assert.equal(res.status, 403, action);
+    assert.match(res.body.error, action === "fix" ? /`runs:start:work`/ : /`runs:start:review`/);
+  }
+  assert.deepEqual([w.comments, w.asked, w.accepted], [[], [], []]);
+  // A run's questions: answering goes on in its session, a start of its mode.
+  const asked = setup({
+    issues: { 5: open("Five") },
+    tasks: { "org/app#5": asking(5, "run") },
+    permissions,
+  });
+  const refused = await answer(asked, { number: 5, text: "Go" }, { user: "bob" });
+  assert.equal(refused.status, 403);
+  assert.deepEqual([asked.comments, asked.accepted], [[], []]);
+  assert.equal((await answer(asked, { number: 5, text: "Go" })).status, 200);
+});
+
+test("access: boxes ticked in a run's reply by a viewer post nothing and start nothing", async () => {
+  const items = [QUESTIONS[0]];
+  const edited = items.map((q) => ({
+    ...q,
+    options: q.options.map((o, j) => ({ ...o, checked: !!o.checked || j === 0 })),
+  }));
+  const w = setup({
+    issues: { 5: open("Five") },
+    tasks: { "org/app#5": asking(5, "run", items) },
+    board: ["org/app#5"],
+    permissions: permissionsOf({ bob: { "org/app": VIEWER } }),
+  });
+  const ticked = w.api.ticked("org/app", "bob", { number: 5, pr: false, items: edited });
+  await assert.rejects(ticked, { status: 403, message: /`runs:start:work`/ });
+  assert.deepEqual([w.comments, w.posted, w.accepted], [[], [], []]);
+});
+
+test("access: a rerun, Stop and a plan need their start, refused before anything is posted", async () => {
+  // bob may manage runs, but start none.
+  const permissions = permissionsOf({
+    alice: { "org/app": MEMBER },
+    bob: { "org/app": ["tasks:read", "runs:manage"] },
+  });
+  const nothing = (w) => assert.deepEqual([w.comments, w.posted, w.accepted], [[], [], []]);
+  const refused = (res, action) => {
+    assert.equal(res.status, 403, JSON.stringify(res.body));
+    assert.match(res.body.error, new RegExp(`\`${action}\``));
+  };
+  // Rerun: runs:manage is the route's, the failed run's mode the start it needs.
+  const again = setup({
+    issues: { 5: open("Five") },
+    ...failed("org/app#5", { status: "error" }),
+    permissions,
+  });
+  refused(await rerun(again, { runId: "run-5" }, { user: "bob" }), "runs:start:work");
+  nothing(again);
+  assert.equal((await rerun(again, { runId: "run-5" })).status, 200);
+  // Stop: wrapping a brainstorm up.
+  const stopping = setup({
+    issues: { 5: open("Five") },
+    tasks: { "org/app#5": { state: "brainstorm" } },
+    permissions,
+  });
+  refused(await post(stopping, { action: "stop", number: 5 }, { user: "bob" }), "runs:start:stop");
+  nothing(stopping);
+  assert.equal((await post(stopping, { action: "stop", number: 5 })).status, 200);
+  // A plan: every issue of its tree, before any is laid out.
+  const planned = setup({ issues: epic(), permissions });
+  const res = await post(planned, { action: "plan", number: 10 }, { user: "bob" });
+  refused(res, "runs:start:work");
+  nothing(planned);
+  assert.equal(blockersOf(planned, 10), undefined);
+  assert.equal((await post(planned, { action: "plan", number: 10 })).status, 200);
+});
+
+test("access: moving a queued task or a wait needs its start, and runs:manage for someone else's comment", async () => {
+  // QUEUED's comment is bob's, in brainstorm mode.
+  const permissions = permissionsOf({
+    alice: { "org/app": MEMBER },
+    bob: { "org/app": ["tasks:read", "runs:start:brainstorm"] },
+    carol: { "org/app": VIEWER },
+    dave: { "org/app": ["tasks:read", "runs:start:brainstorm"] },
+  });
+  const issues = { 5: open("Five"), 7: open("Seven"), 8: open("Eight") };
+  const env = { ALLOWED_USERS: "alice,bob,carol,dave" };
+  const w = setup({ env, issues, queued: QUEUED, permissions });
+  const move = (user, after = 7) => post(w, { action: "queue", number: 5, after }, { user });
+  const untouched = () => {
+    assert.deepEqual([w.unqueued, w.comments, w.accepted], [[], [], []]);
+    assert.equal(w.waits.get("org/app#5"), undefined);
+  };
+  let res = await move("carol");
+  assert.equal(res.status, 403);
+  assert.match(res.body.error, /`runs:start:brainstorm`/);
+  untouched();
+  // The start, but not bob's comment to move: as dequeueing, runs:manage.
+  res = await move("dave");
+  assert.equal(res.status, 403);
+  assert.match(res.body.error, /`runs:manage`/);
+  untouched();
+  // Its author, with another author's comment queued too, which the move would drop.
+  w.others = true;
+  res = await move("bob");
+  assert.equal(res.status, 403);
+  assert.match(res.body.error, /`runs:manage`/);
+  untouched();
+  w.others = false;
+  // Its author moves it.
+  assert.equal((await move("bob")).status, 200);
+  assert.deepEqual(w.waits.get("org/app#5").blockers, [7]);
+  // A wait moved: its mode's start, before any comment.
+  const comments = w.comments.length;
+  res = await move("carol", 8);
+  assert.equal(res.status, 403);
+  assert.deepEqual(w.waits.get("org/app#5").blockers, [7]);
+  assert.equal(w.comments.length, comments);
+  assert.equal((await move("alice", 8)).status, 200);
+  assert.deepEqual(w.waits.get("org/app#5").blockers, [8]);
+});
+
+test("access: a comment queued while moving a task is decided is decided in turn, before it moves", async () => {
+  // bob may move a brainstorm, not work.
+  const inner = permissionsOf({
+    bob: { "org/app": ["tasks:read", "runs:start:brainstorm", "runs:manage"] },
+  });
+  let brainstorms = 0;
+  const permissions = {
+    ...inner,
+    decide: async (login, repo, action) => {
+      const said = await inner.decide(login, repo, action);
+      // The second decision of bob's comment (after GitHub said #7 is open): carol's work
+      // comment is queued meanwhile, the newest.
+      if (action === "runs:start:brainstorm" && ++brainstorms === 2) {
+        w.queued["org/app#5"] = {
+          ...QUEUED["org/app#5"],
+          modeLine: null,
+          author: "carol",
+          comment: { id: 43 },
+        };
+      }
+      return said;
+    },
+  };
+  const w = setup({ issues: { 5: open("Five"), 7: open("Seven") }, queued: QUEUED, permissions });
+  const res = await post(w, { action: "queue", number: 5, after: 7 }, { user: "bob" });
+  assert.equal(res.status, 403);
+  assert.match(res.body.error, /`runs:start:work`/);
+  assert.deepEqual([w.unqueued, w.comments], [[], []]);
+  assert.equal(w.waits.get("org/app#5"), undefined);
 });

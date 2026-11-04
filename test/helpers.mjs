@@ -20,6 +20,7 @@ import { hostname, tmpdir } from "node:os";
 import { dirname, join, sep } from "node:path";
 import { gitBlob } from "../listener/images.mjs";
 import { loadConfig } from "../listener/config.mjs";
+import { createPermissions } from "../listener/permissions.mjs";
 import { createPolicies } from "../listener/policies.mjs";
 import { createRuns, runFields } from "../broker/runs.mjs";
 import { createBroker } from "../listener/broker.mjs";
@@ -453,6 +454,9 @@ export function fakeOpa({
   checked = () => ({ code: 0, stdout: "" }),
   capabilities = { builtins: [{ name: "count" }] },
   capabilitiesFor = defaultCapabilities,
+  // The access rules' (#730), likewise: the actions the operator's layer gives `doc` (a login's,
+  // on a repository or server-wide); a repo's allow rules aren't asked.
+  accessFor = () => ["*"],
 } = {}) {
   const calls = [];
   // Each staged layer's files (policy/operator/, policy/repo/), name → text as written (the
@@ -500,12 +504,14 @@ export function fakeOpa({
     const exited = new Promise((resolve) => (done = resolve));
     return {
       query: async (query, input) => {
-        if (query.includes("allow_capabilities")) {
+        const family = ["capabilities", "access"].find((f) => query.includes(`allow_${f}`));
+        if (family) {
           calls.push({ args: ["eval"], query, input: JSON.stringify(input), cwd: dir, written });
           const asked = [...query.matchAll(/"(operator|repo)": \{"all"/g)].map((m) => m[1]);
-          const repo = Object.values(all.repo ?? {}).flatMap((text) =>
+          const repo = Object.values(family === "access" ? {} : (all.repo ?? {})).flatMap((text) =>
             [...text.matchAll(/^allow_capabilities__\d+ contains "([^"]*)"$/gm)].map((m) => m[1]),
           );
+          const named = family === "access" ? accessFor : capabilitiesFor;
           const rules = (names) => ({ allow: [names], deny: [[]] });
           // The first file's, and none of the others' (as many as the query may name).
           const files = (names) => ({
@@ -517,7 +523,7 @@ export function fakeOpa({
               key,
               Object.fromEntries(
                 asked.map((layer) => {
-                  const names = layer === "repo" ? repo : [...capabilitiesFor(doc)];
+                  const names = layer === "repo" ? repo : [...named(doc)];
                   return [layer, { all: rules(names), files: files(names) }];
                 }),
               ),
@@ -624,6 +630,30 @@ export function policyEngineOf(
 // call it): for the tests of what the built-in checks refuse before any policy is asked. What
 // Deckhand's own allow is the real opa's (defaultPolicies()).
 export const allowingPolicies = { deny: async () => [] };
+
+// Deckhand's roles (policy/access-roles.rego), as the actions they give on a repository.
+export const VIEWER = ["tasks:read"];
+export const MEMBER = [...VIEWER, "logs:read", "runs:start:*", "runs:manage"];
+
+// Who may do what where (permissions.mjs) as `rules` say: login → repository (lower case; "" for
+// server-wide) → the actions access() gives there, nobody anything else; `failing`: the logins
+// whose decision fails (a policy error). `usersOf`: the repos' `users`, as createPermissions()
+// takes it. `asked`: the [login, repo] decisions asked.
+export function permissionsOf(rules, { usersOf, failing = [] } = {}) {
+  const asked = [];
+  const policies = {
+    access: async (login, repo) => {
+      asked.push([login, repo]);
+      const who = login.toLowerCase();
+      if (failing.includes(who)) {
+        return { actions: [], denied: [], files: {}, error: "the policies can't be read" };
+      }
+      const actions = rules[who]?.[repo?.toLowerCase() ?? ""] ?? [];
+      return { actions, denied: [], files: {}, error: null };
+    },
+  };
+  return Object.assign(createPermissions({ policies, usersOf }), { asked });
+}
 
 // Deckhand's default policies (policy/*.rego, or `builtIn`: name → text) as the operator's layer,
 // evaluated by the real `opa` (hasOpa()), and a repo's own (`repo`, name → text) as GitHub lists

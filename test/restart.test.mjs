@@ -20,7 +20,17 @@ import { createRuns } from "../listener/runs.mjs";
 import { fileStore } from "../lib/store-file.mjs";
 import { openStore, values } from "../lib/store.mjs";
 import { logContext, withLogContext } from "../lib/log.mjs";
-import { assertMode, fileLogs, localBroker, mapStore, tempDir, until } from "./helpers.mjs";
+import {
+  MEMBER,
+  VIEWER,
+  assertMode,
+  fileLogs,
+  localBroker,
+  mapStore,
+  permissionsOf,
+  tempDir,
+  until,
+} from "./helpers.mjs";
 
 // A run's saved state, as saveLive() writes it, in `store`. → its id, the broker's handle once
 // restored.
@@ -1577,4 +1587,106 @@ test("queueWritten(): once the queue is written with what this turn queued, trie
     saved["org/repo#7"].pending.map((i) => i.queueId),
     ["q-1"],
   );
+});
+
+test("access (#731): queued work is checked again before its run, its author's runs:start as it is now", async (t) => {
+  const dir = tempDir(t);
+  const said = [];
+  const ctx = queueContext(t, dir, fileStore(), { log: (line) => said.push(line) });
+  ctx.config.users = ["alice", "bob", "carol"];
+  // Queued while bob could start work; his start taken away since, as carol never had one.
+  const rules = { alice: { "org/repo": MEMBER }, bob: { "org/repo": MEMBER }, carol: {} };
+  ctx.permissions = permissionsOf(rules);
+  Object.assign(ctx, {
+    shotsDir: dir,
+    titles: { get: () => null },
+    broker: { register: () => {}, revoke: () => {}, runOf: () => null, secretsOf: () => [] },
+    runner: { state: async () => null, remove: async () => {} },
+    repoSettings: async () => ({ settings: null, errors: [], warnings: [] }),
+    answer: async () => {},
+    schedule: () => {},
+  });
+  Object.assign(ctx, createRuns(ctx), { config: { ...ctx.config, agent: "nobody" } });
+  const task = newTask({ ...queued("1"), name: "deckhand-org-repo-1" });
+  task.pending.push(queued("1", { queueId: "q-0", author: "bob" }));
+  // The dashboard's Fix carol asked for: hers to start, though the listener's run.
+  const fix = { queueId: "q-1", author: "carol", reason: "review-fix", dashboard: true };
+  task.pending.push(queued("1", fix));
+  // An automatic review of bob's pull request: the listener's own, not checked.
+  task.pending.push(queued("1", { queueId: "q-2", author: "bob", reason: "review" }));
+  task.pending.push(queued("1", { queueId: "q-3" }));
+  ctx.tasks.set("org/repo#1", task);
+  rules.bob = { "org/repo": VIEWER };
+  await ctx.run(task).catch(() => {});
+  const dropped = said.filter((l) => /a queued comment dropped/.test(l));
+  assert.deepEqual(dropped, [
+    "org/repo#1: a queued comment dropped: bob may no longer start runs:start:work here",
+    "org/repo#1: a queued comment dropped: carol may no longer start runs:start:work here",
+  ]);
+});
+
+test("access (#731): a comment queued while the queued ones are decided again isn't dropped", async (t) => {
+  const dir = tempDir(t);
+  const said = [];
+  const settled = [];
+  const ctx = queueContext(t, dir, fileStore(), { log: (line) => said.push(line) });
+  ctx.settle = async (item, status) => settled.push([item.queueId, status]);
+  const inner = permissionsOf({ alice: { "org/repo": MEMBER } });
+  let release;
+  const gate = new Promise((resolve) => (release = resolve));
+  let asked = 0;
+  ctx.permissions = { decide: async (...args) => (asked++, await gate, inner.decide(...args)) };
+  Object.assign(ctx, {
+    shotsDir: dir,
+    titles: { get: () => null },
+    broker: { register: () => {}, revoke: () => {}, runOf: () => null, secretsOf: () => [] },
+    runner: { state: async () => null, remove: async () => {} },
+    repoSettings: async () => ({ settings: null, errors: [], warnings: [] }),
+    answer: async () => {},
+    schedule: () => {},
+  });
+  Object.assign(ctx, createRuns(ctx), { config: { ...ctx.config, agent: "nobody" } });
+  const task = newTask({ ...queued("1"), name: "deckhand-org-repo-1" });
+  task.pending.push(queued("1", { queueId: "q-0" }));
+  ctx.tasks.set("org/repo#1", task);
+  const running = ctx.run(task).catch(() => {});
+  await until(() => asked === 1, "the decision");
+  // alice's comment, checked as it came, queued meanwhile.
+  task.pending.push(queued("1", { queueId: "q-1" }));
+  release();
+  await running;
+  assert.deepEqual(
+    said.filter((l) => /dropped/.test(l)),
+    [],
+  );
+  assert.ok(!settled.some(([, status]) => status === "refused"));
+});
+
+test("access (#731): a decision that fails drops no queued comment", async (t) => {
+  const dir = tempDir(t);
+  const said = [];
+  const settled = [];
+  const ctx = queueContext(t, dir, fileStore(), { log: (line) => said.push(line) });
+  ctx.settle = async (item, status) => settled.push([item.queueId, status]);
+  ctx.permissions = permissionsOf({ alice: { "org/repo": MEMBER } }, { failing: ["alice"] });
+  Object.assign(ctx, {
+    shotsDir: dir,
+    titles: { get: () => null },
+    broker: { register: () => {}, revoke: () => {}, runOf: () => null, secretsOf: () => [] },
+    runner: { state: async () => null, remove: async () => {} },
+    repoSettings: async () => ({ settings: null, errors: [], warnings: [] }),
+    answer: async () => {},
+    schedule: () => {},
+  });
+  Object.assign(ctx, createRuns(ctx), { config: { ...ctx.config, agent: "nobody" } });
+  const task = newTask({ ...queued("1"), name: "deckhand-org-repo-1" });
+  task.pending.push(queued("1", { queueId: "q-0" }));
+  ctx.tasks.set("org/repo#1", task);
+  await ctx.run(task).catch(() => {});
+  assert.deepEqual(
+    said.filter((l) => /dropped/.test(l)),
+    [],
+  );
+  assert.ok(said.some((l) => /runs:start:work not decided: the policies can't be read/.test(l)));
+  assert.ok(!settled.some(([, status]) => status === "refused"));
 });

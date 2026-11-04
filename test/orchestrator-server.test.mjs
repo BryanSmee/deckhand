@@ -1897,13 +1897,14 @@ describe("listener", options, () => {
       JSON.parse(readFileSync(join(dir, "broker-answer"), "utf8")).default_branch,
       "trunk",
     );
-    // (The listener read it too, as the installation: its visibility, for the run's capabilities.)
+    // (The listener read it too, as the installation: for its author's access, and its
+    // visibility for the run's capabilities.)
     const relayed = github.requests.filter(
       (r) => r.method === "GET" && r.path === "/repos/org/repo",
     );
     assert.deepEqual(
       relayed.map((r) => r.auth),
-      ["Bearer app-token", "token repo-token"],
+      ["Bearer app-token", "Bearer app-token", "token repo-token"],
     );
     // Its assignees: an allowed user goes on to GitHub, anyone else is refused at the gateway.
     assert.equal(readFileSync(join(dir, "assign-alice"), "utf8"), "200");
@@ -4527,9 +4528,10 @@ allow_capabilities contains "read:pulls"
     // Nothing from GitHub: the gateway refused the sandbox's call, and no token was minted.
     assert.equal(readFileSync(join(dir, "broker-answer"), "utf8"), "");
     assert.equal(github.requests.filter((r) => r.body.includes("repositories")).length, 0);
-    // The listener reads the repository's visibility once, for its capabilities' input; the
-    // sandbox's call adds none.
-    assert.equal(github.requests.filter((r) => r.path === "/repos/org/repo").length, 1);
+    // The listener reads the repository's visibility once for its capabilities' input, and once
+    // for its author's access (policies.mjs access(), kept ACCESS_MS); the sandbox's call adds
+    // none.
+    assert.equal(github.requests.filter((r) => r.path === "/repos/org/repo").length, 2);
     // No CA either: GitHub's hosts aren't relayed for it (below).
     assert.doesNotMatch(args, /DECKHAND_CA/);
     // Any public host, the operator's named ones no longer private.
@@ -5080,6 +5082,65 @@ mounts:
     assert.doesNotMatch(listener.own(), /Run summaries: \d+ moved/);
     assert.equal(summary(dir)?.summary, "Kept.");
     assert.deepEqual(readdirSync(join(dir, "logs")), []);
+  });
+
+  test("access (#731): a login with no action sees nothing, starts nothing, its routes 404 and 403", async (t) => {
+    // The operator's access.rego replaces Deckhand's: decided by the policy service, whose opa
+    // gives bob everything and alice nothing (not even server-wide).
+    const opa = fakeOpa({ accessFor: (doc) => (doc.user.login === "bob" ? ["*"] : []) });
+    const { dir, port, send, listener } = await listen(
+      t,
+      undefined,
+      (dir, github) => {
+        mkdirSync(join(dir, "grants", "policy"), { recursive: true });
+        writeFileSync(
+          join(dir, "grants", "policy", "access.rego"),
+          'package deckhand\n\nbindings := [{"users": ["bob"], "repos": ["*/*"], "role": "operator"}]\n',
+        );
+        return { GITHUB_URL: github.url };
+      },
+      { opa },
+    );
+    // alice is in ALLOWED_USERS, but has no action here: no run, and nothing said.
+    await send(comment("alice"));
+    await listener.until("org/repo#12: alice has no action here");
+    assert.equal(exists(join(dir, "run-env")), null);
+    // bob's comment runs.
+    await send(comment("bob"));
+    await listener.until("done (ok)");
+    const base = `http://127.0.0.1:${port}`;
+    const get = (path, cookie, init = {}) =>
+      fetch(base + path, { redirect: "manual", ...init, headers: { cookie, ...init.headers } });
+    // alice (the fake GitHub's browser) signs in.
+    const login = await get("/auth/login");
+    const to = new URL(login.headers.get("location"));
+    const state = login.headers.getSetCookie()[0].split(";")[0];
+    const back = await get(`/auth/callback?code=c&state=${to.searchParams.get("state")}`, state);
+    const session = back.headers
+      .getSetCookie()
+      .find((c) => c.startsWith("deckhand_session="))
+      .split(";")[0];
+    const seen = await (await get("/api/state", session)).json();
+    assert.deepEqual(seen.tasks, []);
+    assert.deepEqual(seen.inboxes, {});
+    // Totals stay: numbers without names.
+    assert.equal(typeof seen.maxParallel, "number");
+    const run = summary(dir)?.id;
+    assert.match(run, /-org-repo-12-/);
+    assert.equal((await get(`/api/runs/${run}/stream`, session)).status, 404);
+    assert.equal((await get("/api/repos/org/repo/issues", session)).status, 404);
+    const listed = await (await get("/api/repos", session)).json();
+    assert.deepEqual(listed.repos, []);
+    for (const path of ["/api/server", "/api/health"]) {
+      assert.equal((await get(path, session)).status, 403, path);
+    }
+    const sync = await get("/api/sync", session, {
+      method: "POST",
+      headers: { origin: "https://hooks.example.com" },
+    });
+    assert.equal(sync.status, 403);
+    const status = await get("/status", session, { headers: { "x-forwarded-for": "203.0.113.9" } });
+    assert.doesNotMatch((await status.json()).reasons.join("\n"), /org\/repo/);
   });
 
   test("/status lists a signed-in user only the runs of the repos they may see", async (t) => {

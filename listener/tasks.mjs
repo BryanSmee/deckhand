@@ -32,6 +32,7 @@ import { LOOPING, loopState } from "./reviews.mjs";
 import { writeEvent } from "./runlog.mjs";
 import { sameTask, taskId } from "./spelling.mjs";
 import { createTaskModes } from "./task-modes.mjs";
+import { itemMay, startAction } from "./permissions.mjs";
 
 // Why a queued comment may no longer run, or null: its repo left ALLOWED_REPOS, or its author
 // left ALLOWED_USERS or (`settings`, when known) the repo's `users`. Checked again when it was
@@ -106,6 +107,9 @@ export function createTasks(ctx) {
     return taskSandboxName(config, repo, id, ctx.runs, (name) => ctx.runner.hasSession(name));
   }
 
+  // Whether `item`'s author may do `action` (null: anything) there (permissions.mjs).
+  const may = (item, action, what) => itemMay(ctx.permissions, log, item, action, what);
+
   // Task key, as the delivery names it → its latest admit(), settled: the next waits for it.
   const admitting = new Map();
 
@@ -119,6 +123,10 @@ export function createTasks(ctx) {
   }
 
   async function admitNow(first, event, payload) {
+    // An author with no action on the repo: hidden from them, so nothing said, not even its
+    // config's errors (permissions.mjs). Nor while that can't be decided: whether they see it is
+    // what isn't known.
+    if (first.author && !(await may(first, null))) return;
     const { settings, errors } = await ctx.repoSettings(first.repo, first.base);
     if (errors.length) {
       log(`${first.repo}: ${CONFIG_FILE} has errors: ${errors.join("; ")}`);
@@ -137,6 +145,17 @@ export function createTasks(ctx) {
     // Never queued nor sent to the agent: a stuck run would never read it.
     if (item.trigger === "cancel") return cancelRun(item);
     if (item.after) {
+      // Waiting holds the task back, `/after none` drops its wait, either with a reply: the
+      // start it holds back is its author's (`runs:start:<mode>`), a wait dropped alone a
+      // manager's (`runs:manage`). Refused, nothing is said, as for a start (run-policy.mjs).
+      const starts = item.trigger === "work" || !!item.modeLine;
+      // `/mode policy` starts no run: what its dry run needs alone (task-modes.mjs).
+      const needed = !starts
+        ? "runs:manage"
+        : item.modeLine === "policy"
+          ? "tasks:read"
+          : startAction(item.modeLine ?? "work");
+      if (!(await may(item, needed, "/after refused: "))) return;
       // A mode it can't run is said now, not once what it waits for is done.
       if (item.modeLine && !modeNames(settings).includes(item.modeLine)) {
         return unknownMode(item, `Unknown mode \`${item.modeLine}\`.`);
@@ -145,7 +164,11 @@ export function createTasks(ctx) {
     }
     // Only the comment's own issue, as the delivery has it: a pull request's labels are its own.
     const issue = event === "issue_comment" && !payload.issue?.pull_request ? payload.issue : null;
-    if (!hasAnswer(item) && unanswered(item, issue)) return holdBack(item);
+    if (!hasAnswer(item) && unanswered(item, issue)) {
+      // Its reply is for an author who may start what the comment asks for (permissions.mjs).
+      if (!(await may(item, startAction(item.modeLine ?? "work"), "held back, and "))) return;
+      return holdBack(item);
+    }
     // A trigger or "/mode" comment replaces the issue's wait, once it runs: refused by the
     // policies, it changes nothing. The wait is held meanwhile (waits.mjs reserve()): a blocker
     // done during the decision doesn't start it beside the new comment.
@@ -163,9 +186,11 @@ export function createTasks(ctx) {
 
   // A `/cancel` comment: the task's run stops (runs.mjs cancel()), or its queued comments are
   // dropped, and the comment gets a 👍; the run's reply says who stopped it. With nothing to
-  // stop, a reply says so.
+  // stop, a reply says so. Its author needs `runs:manage`.
   async function cancelRun(item) {
     const key = taskKey(item.repo, item.id);
+    // As a refused start: nothing said (permissions.mjs).
+    if (!(await may(item, "runs:manage", "/cancel refused: "))) return;
     if (!ctx.cancel(key, item.author)) {
       log(`${key}: /cancel with nothing running`);
       const text = `Nothing is running on #${item.replyTo}.`;
