@@ -158,7 +158,7 @@ export function checkAction(body) {
 // also fills (seedInputs()).
 // `runOf(id)`: a run's record (runs.mjs, with the comments it ran on), or null.
 // `cancel(key, user)`: stops the task's run or drops its queued comments (runs.mjs cancel()):
-// "running", "queued", "following" or null. `queuedTask(key)`, `unqueue(key, user, until)`: a task
+// "running", "queued", "following" or null. `queuedTask(key)` (its `others` included), `unqueue(key, user, until)`: a task
 // waiting for a slot whose newest comment that starts a run can wait for another issue
 // instead, with its author's queued comments, and taking it out of the queue for that
 // (runs.mjs). `analysis`: run digests (analysis.mjs createAnalysis()).
@@ -700,22 +700,23 @@ export function createWorkApi({
   // author's queued comments, its author and its mode unless another is picked; the others'
   // comments are dropped, which the App's comment says. `after` done already: it stays
   // queued, as it would start now anyway. `user` needs the start of the mode it waits in, and
-  // `runs:manage` to move someone else's comment, as dequeueing needs (mayMove()).
+  // `runs:manage` to move someone else's comment or drop another author's, as dequeueing needs
+  // (mayMove()).
   async function requeue(repo, user, { number, after, mode, settings, answers }) {
     const key = taskKey(repo, number);
     const modeOf = (item) => mode ?? item.modeLine ?? "work";
     const known = (wanted) => {
       if (!modeNames(settings).includes(wanted)) refuse(422, `${repo} has no mode \`${wanted}\`.`);
     };
-    const mayMove = async (item) => {
+    const mayMove = async ({ item, others }) => {
       known(modeOf(item));
       await startable(repo, user, modeOf(item));
-      if (item.author?.toLowerCase() !== user.toLowerCase()) {
+      if (others || item.author?.toLowerCase() !== user.toLowerCase()) {
         await mustDo(permissions, user, repo, MANAGE);
       }
     };
     // Refused before GitHub is read; asked again of the comment held below.
-    await mayMove(queuedTask(key).item);
+    await mayMove(queuedTask(key));
     if ((await waitable(repo, number, after)) !== "open") {
       return `#${after} is done already: #${number} stays queued.`;
     }
@@ -725,11 +726,14 @@ export function createWorkApi({
     // started meanwhile (a slot freed).
     let held = null;
     for (;;) {
-      held = queuedTask(key)?.item;
+      const task = queuedTask(key);
+      held = task?.item;
       if (!held) refuse(409, `#${number} is running or queued: it can't be moved now.`);
       await held.eyes?.catch?.(() => null);
-      await mayMove(held);
-      if (queuedTask(key)?.item === held) break;
+      await mayMove(task);
+      // The same comment, and no other author's queued meanwhile.
+      const now = queuedTask(key);
+      if (now?.item === held && (task.others || !now.others)) break;
     }
     const wanted = modeOf(held);
     // No await from queuedTask() above: unqueue() holds that same comment. One pair: the wait in

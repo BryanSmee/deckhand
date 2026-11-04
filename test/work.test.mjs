@@ -215,9 +215,10 @@ function setup({
     queuedTask: (key) => {
       if (w.started || !(key in w.queued)) return null;
       const item = w.queued[key];
+      // `w.others`: other authors' comments queued with it.
       return item === "other"
-        ? { item: null, replies: false }
-        : { item: item ?? null, replies: item === null };
+        ? { item: null, replies: false, others: false }
+        : { item: item ?? null, replies: item === null, others: !!item && !!w.others };
     },
     // `until`: what the queue keeps them for (restart.mjs park()), in `w.until`; `w.queueIds`:
     // the queueIds it took out.
@@ -2887,6 +2888,13 @@ test("access: moving a queued task or a wait needs its start, and runs:manage fo
   assert.equal(res.status, 403);
   assert.match(res.body.error, /`runs:manage`/);
   untouched();
+  // Its author, with another author's comment queued too, which the move would drop.
+  w.others = true;
+  res = await move("bob");
+  assert.equal(res.status, 403);
+  assert.match(res.body.error, /`runs:manage`/);
+  untouched();
+  w.others = false;
   // Its author moves it.
   assert.equal((await move("bob")).status, 200);
   assert.deepEqual(w.waits.get("org/app#5").blockers, [7]);

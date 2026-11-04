@@ -380,11 +380,16 @@ export function createAutoPickup({
     let why = labellerRefusal(by, config, settings.users, may);
     if (!why) {
       const history = await lastEdits(github, repo, n);
+      // Only those editedSince() asks about: since the label, and allowed but for the decision
+      // (a bot, the App or an outsider holds it whatever is decided). Fewer decisions to fail.
+      const since = (at) => Date.parse(at ?? "") >= by.at;
       const editors = [
-        ...events.filter((e) => e.event === "renamed").map((e) => e.actor?.login),
-        ...history.edits.map((e) => e.editor?.login),
-        history.last?.editor?.login,
-      ];
+        ...events.filter((e) => e.event === "renamed" && since(e.created_at)).map((e) => e.actor),
+        ...history.edits.filter((e) => since(e.at)).map((e) => e.editor),
+        ...(history.last && since(history.last.at) ? [history.last.editor] : []),
+      ]
+        .filter((actor) => allowed(actor, config, settings.users))
+        .map((actor) => actor.login);
       const edited = editedSince(
         events,
         history,

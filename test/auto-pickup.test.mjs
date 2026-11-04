@@ -1256,3 +1256,17 @@ test("access: a decision that fails holds nothing and says nothing: the next swe
   assert.deepEqual(await pickup.sweep(), ["org/a#1"]);
   assert.equal(p.accepted[0].author, "alice");
 });
+
+test("access: only the editors since the label are asked about, so an earlier one's failed decision holds nothing", async () => {
+  const permissions = permissionsOf({ alice: { "org/a": MEMBER } }, { failing: ["dave"] });
+  const { pickup, p } = setup({
+    repos: { "org/a": { issues: [issue(1, 1)] } },
+    events: { "org/a#1": [labelled("alice")] },
+    // dave edited it before the label.
+    edits: { "org/a#1": [["2020-01-01T00:00:00Z", "dave"]] },
+    env: { ALLOWED_USERS: "alice,dave" },
+    permissions,
+  });
+  assert.deepEqual(await pickup.sweep(), ["org/a#1"]);
+  assert.ok(!permissions.asked.some(([login]) => login === "dave"));
+});
