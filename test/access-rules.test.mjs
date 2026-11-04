@@ -100,6 +100,12 @@ test("actionMatches and allows: a `*` prefix, a deny wins, each action in its sc
   assert.ok(allows(answer, "tasks:read"));
   assert.ok(!allows(answer, "runs:start:work"));
   assert.ok(allows(answer, "runs:manage"));
+  // A pattern asked is all of it: a narrower deny refuses it, a narrower allow doesn't give it.
+  const work = { ...answer, denied: [{ ...answer.denied[0], action: "runs:start:work" }] };
+  assert.ok(!allows(work, "runs:start:*"));
+  assert.ok(allows(work, "runs:start:brainstorm"));
+  assert.ok(!allows({ ...answer, actions: ["runs:start:work"], denied: [] }, "runs:start:*"));
+  assert.ok(allows({ ...answer, actions: ["runs:*"], denied: [] }, "runs:start:*"));
   // The server's actions only server-wide, the others only on a repository.
   assert.ok(!allows(answer, "server:read"));
   assert.ok(allows(answer, "server:read", false));
@@ -151,6 +157,9 @@ test(
           { users: ["carol"], repos: ["*/*"], role: "admin" },
           { users: ["carol"], role: "operator" },
           { users: ["dan"], repos: ["acme/web"], actions: ["logs:read", "server:read"] },
+          { users: ["erin"], actions: ["*"] },
+          { users: ["frank"], repos: ["acme/api"], role: "viewer", actions: ["logs:read"] },
+          { users: ["gus"], repos: ["acme/api"], role: "viwer" },
         ]),
       },
     });
@@ -178,6 +187,12 @@ test(
     assert.deepEqual(await actions("dan", null), ["server:read"]);
     assert.deepEqual(await actions("dan", repo("acme/web")), ["logs:read"]);
     assert.deepEqual(await actions("bob", null), []);
+    // A binding's `*` gives every server action; its role and its own actions both count; an
+    // unknown role, nothing.
+    assert.deepEqual(await actions("erin", null), ["*"]);
+    assert.ok(await policies.can("erin", null, "server:sync"));
+    assert.deepEqual(await actions("frank", repo("acme/api")), ["logs:read", "tasks:read"]);
+    assert.deepEqual(await actions("gus", repo("acme/api")), []);
     // Nobody bound: nothing, anywhere.
     assert.deepEqual(await actions("eve", repo("acme/api")), []);
     assert.deepEqual(await actions("eve", null), []);

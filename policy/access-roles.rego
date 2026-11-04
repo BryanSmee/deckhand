@@ -70,18 +70,22 @@ access_repo(pattern, name) if {
   startswith(name, trim_suffix(pattern, "*"))
 }
 
-# Server-wide, the server's actions; on a repository, the others.
+# Server-wide, the server's actions (and `*`, every one of them); on a repository, the others.
 access_scoped(action) if {
   input.repo == null
   startswith(action, "server:")
 }
+
+access_scoped("*") if input.repo == null
 
 access_scoped(action) if {
   input.repo != null
   not startswith(action, "server:")
 }
 
-# A role's actions, and a binding's own.
-access_actions(binding) := access_roles[binding.role]
+# A binding's role's actions and its own, both when it names both (an unknown role gives none).
+access_actions(binding) := access_role(binding) | {a | some a in object.get(binding, "actions", [])}
 
-access_actions(binding) := {a | some a in binding.actions} if not binding.role
+default access_role(_) := set()
+
+access_role(binding) := access_roles[binding.role]

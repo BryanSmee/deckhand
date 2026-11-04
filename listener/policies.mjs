@@ -112,13 +112,15 @@ export function actionMatches(pattern, action) {
 }
 
 // Whether access()'s `answer` gives `action` (on a repository when `repo`, else server-wide): an
-// allowed pattern covers it, and no deny does. A deny always wins; an error gives nothing.
+// allowed pattern covers it, and no deny does. A deny always wins; an error gives nothing. A
+// pattern asked (`runs:start:*`) is all of what it covers: a deny of any of it (`runs:start:work`)
+// refuses it.
 export function allows(answer, action, repo = true) {
   if (!answer || answer.error || typeof action !== "string") return false;
   if (action.startsWith(SERVER) === !!repo) return false;
   return (
     answer.actions.some((p) => actionMatches(p, action)) &&
-    !answer.denied.some((d) => actionMatches(d.action, action))
+    !answer.denied.some((d) => actionMatches(d.action, action) || actionMatches(action, d.action))
   );
 }
 
@@ -495,15 +497,27 @@ export function createPolicies({
   // isn't asked (no decision kept, without a repo's files). Deckhand's files are known: rulesOf()
   // reads them right.
   async function onlyBuiltInAllowing(decision, files) {
+    const always = new RegExp(`^allow_${decision}\\s*:=\\s*true\\s*$`, "m");
+    return !!(await builtInGiving(decision, files, always));
+  }
+
+  // The files of the operator's layer `files` whose rule `always` (a RegExp) allows `decision`
+  // whatever the input, when that layer is Deckhand's own policies only, unchanged (DEFAULTS_MS),
+  // none of them defining `deny_<decision>`: their names, else null.
+  async function builtInGiving(decision, files, always) {
     if (!fresh()) await served().catch(() => null);
     const own = fresh() ? knownOwn : null;
-    if (!own) return false;
-    const always = new RegExp(`^allow_${decision}\\s*:=\\s*true\\s*$`, "m");
-    return (
-      [...files].every(
-        ([name, text]) => own.get(name) === text && !rulesOf(text).includes(`deny_${decision}`),
-      ) && [...files.values()].some((text) => always.test(text))
-    );
+    if (!own) return null;
+    const all = [...files];
+    if (
+      all.some(
+        ([name, text]) => own.get(name) !== text || rulesOf(text).includes(`deny_${decision}`),
+      )
+    ) {
+      return null;
+    }
+    const giving = all.filter(([, text]) => always.test(text)).map(([name]) => name);
+    return giving.length ? giving : null;
   }
 
   // The layers of `asking` ({ operator, repo }: name → text, either absent: not asked) on
@@ -829,20 +843,12 @@ export function createPolicies({
     return { name, private: info.private !== false, ref: info.default_branch };
   }
 
-  // Deckhand's own policies alone, unchanged (DEFAULTS_MS), none denying access and one giving
-  // every action to every login (its access.rego), and no repo file: every action, without a
-  // call. `layers`: policiesFor()'s → the files giving it, or null.
+  // Deckhand's own policies alone (builtInGiving()), one giving every action to every login (its
+  // access.rego), and no repo file: every action, without a call. `layers`: policiesFor()'s →
+  // the files giving it, or null.
   async function everyAction(layers) {
     if (layers.repo.size) return null;
-    if (!fresh()) await served().catch(() => null);
-    const own = fresh() ? knownOwn : null;
-    if (!own) return null;
-    const files = [...layers.operator];
-    if (files.some(([name, text]) => own.get(name) !== text || /^deny_access\b/m.test(text))) {
-      return null;
-    }
-    const giving = files.filter(([, text]) => EVERY_ACTION.test(text)).map(([name]) => name);
-    return giving.length ? giving : null;
+    return builtInGiving("access", layers.operator, EVERY_ACTION);
   }
 
   // Who may do what (#730): the actions `login` has on `repo` (its name, or GitHub's info about

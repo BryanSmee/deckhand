@@ -1641,7 +1641,8 @@ first (again after a push to its default branch).
 
 A rule may give, or deny, a prefix ending in `*`: `runs:start:*` (every mode), `runs:*`,
 `server:*`, `*` (everything). The server's actions count only server-wide, the others only on
-a repository.
+a repository. A pattern asked (`can(login, repo, "runs:start:*")`) means all of it: a deny of
+any action it covers (`runs:start:work`) refuses it.
 
 **Roles and bindings**: Deckhand's `access-roles.rego` defines four roles as action sets, and
 gives each login the actions of the `bindings` that match it:
@@ -1673,8 +1674,9 @@ bindings := [
 ```
 
 A binding names logins (`users`), repositories (`repos`: `owner/repo`, `owner/*` or `*/*`),
-both whatever their case, and a `role`, or `actions` of its own. Server-wide, a binding of the
-login's matches whatever its `repos`, for its server actions. Other rules of the operator's can
+both whatever their case, and a `role`, `actions` of its own, or both (it gives their union).
+Server-wide, a binding of the login's matches whatever its `repos`, for its server actions (`*`
+included). Other rules of the operator's can
 give actions too (`allow_access contains "tasks:read" if not input.repo.private`), and deny
 them, on the operator's side for every repository:
 
