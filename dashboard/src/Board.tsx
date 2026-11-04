@@ -15,6 +15,7 @@
 // issues, + − 0 zoom and fit, Space and a drag pan.
 import type { ComponentChildren } from "preact";
 import { useEffect, useRef, useState } from "preact/hooks";
+import { useCan } from "./access";
 import { useRunOrder, useWorkArea } from "./api";
 import {
   BRAINSTORM_TYPE,
@@ -41,6 +42,7 @@ import {
   movable,
   moveOnto,
   onEdge,
+  reorderable,
   stillInLine,
   waitable,
   workLists,
@@ -50,7 +52,7 @@ import { useHeldKey, useShortcuts, withKey } from "./keys";
 import { formatRoute } from "./route";
 import { Lanes } from "./Lanes";
 import { QuestionsDialog } from "./QuestionsDialog";
-import type { State, WorkAction } from "./types";
+import type { State, Task, WorkAction } from "./types";
 import { Button, IconButton } from "./ui/Button";
 import { Segmented, Switch } from "./ui/Choice";
 import { Field } from "./ui/Field";
@@ -192,11 +194,25 @@ export function Board({
   const byKey = new Map(nodes.map((n) => [n.key, n]));
   const github = state?.githubUrl ?? "https://github.com";
   const now = state?.now ?? Date.now();
-  const modes = work.backlog?.modes ?? [];
-  const picked = mode === "work" || !modes.includes(mode) ? {} : { mode };
+  // What the user may do here (access.ts): Start in offers the modes they may start, and a
+  // drag moves only what they may move.
+  const can = useCan();
+  const starts = (mode: string | null | undefined) => can.start(repo, mode || "work");
+  const manages = can.repo(repo, "runs:manage");
+  const modes = (work.backlog?.modes ?? []).filter((m) => starts(m));
+  // Work first when allowed, else the first mode they may start (none: Start in is left out).
+  const first =
+    !work.backlog?.modes?.length || modes.includes("work") ? "work" : (modes[0] ?? "work");
+  const chosen = modes.includes(mode) ? mode : first;
+  const picked = chosen === "work" ? {} : { mode: chosen };
+  const startsAny = modes.length > 0 || (!work.backlog?.modes?.length && starts("work"));
   const blocked = !!work.backlog?.errors;
   const listed = new Set(work.backlog?.issues.map((i) => i.number));
-  const moves = (n: GraphNode) => movable(n, repo, blocked, listed);
+  // A queued node moves in the run order (runs:manage); the others start or wait in their mode.
+  const moves = (n: GraphNode) =>
+    movable(n, repo, blocked, listed) &&
+    (n.task && reorderable(n.task) ? manages : starts(n.task?.mode));
+  const ask = manages ? (task: Task) => questions.ask(task, null) : null;
   const targets = targetsOf(nodes);
   const { waiting, answering } = workLists(tasks, work.pending);
 
@@ -235,6 +251,8 @@ export function Board({
     if (node?.number === number && sameRepo(node.repo, repo)) return;
     const mode = what === "new" ? picked : {};
     const parent = what === "new" && isParent(work.backlog, number);
+    // Not the user's to do (access.ts): nothing happens, as nothing offered it.
+    if (what === "waits" && !node && !manages) return;
     if (node?.number != null) {
       const after = node.number;
       return request({ action: parent ? "plan" : "queue", number, after, ...mode });
@@ -324,7 +342,12 @@ export function Board({
   const zone = useDropZone(
     (e) =>
       !blocked &&
-      typesOf(e).some((t) => [ISSUE_TYPE, BRAINSTORM_TYPE, QUEUED_TYPE, ...LINK_TYPES].includes(t)),
+      typesOf(e).some(
+        (t) =>
+          ([ISSUE_TYPE, ...LINK_TYPES].includes(t) && starts(picked.mode)) ||
+          (t === BRAINSTORM_TYPE && starts("work")) ||
+          (t === QUEUED_TYPE && manages),
+      ),
     (e) => {
       dragEnded();
       // A Queued card from the work queue: as a queued node's drag.
@@ -487,7 +510,7 @@ export function Board({
       label="Start in"
       hideLabel={!narrow}
       size={narrow ? "touch" : "small"}
-      value={modes.includes(mode) ? mode : "work"}
+      value={chosen}
       disabled={blocked}
       onChange={(e) => setMode(e.currentTarget.value)}
     >
@@ -544,7 +567,7 @@ export function Board({
           }
           movable={moves}
           drag={drag}
-          onAsk={(task) => questions.ask(task, null)}
+          onAsk={ask}
         />
       </div>
       {!!nodes.length && <GraphLegend />}
@@ -569,7 +592,7 @@ export function Board({
           labels={state.lanes}
           github={github}
           narrow={narrow}
-          onAsk={(task) => questions.ask(task, null)}
+          onAsk={ask}
           refresh={refresh}
         />
       )}
@@ -578,7 +601,8 @@ export function Board({
 
   return (
     <div class={`${styles.board} ${narrow ? styles.phone : ""}`} ref={root}>
-      {!narrow && header?.(<span class={styles.startInBox}>Start in {startIn}</span>)}
+      {!narrow &&
+        header?.(startsAny ? <span class={styles.startInBox}>Start in {startIn}</span> : null)}
       {asking?.task.questions && (
         <QuestionsDialog
           asking={{ ...asking, task: { ...asking.task, questions: asking.task.questions } }}
@@ -714,7 +738,7 @@ export function Board({
       </div>
       {options && (
         <Sheet title="Board options" onClose={() => setOptions(false)}>
-          {startIn}
+          {startsAny && startIn}
           {closed}
         </Sheet>
       )}

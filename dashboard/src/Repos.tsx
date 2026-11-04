@@ -7,6 +7,7 @@
 // A repository's config opens in its place (ConfigPanel).
 import type { ComponentChildren } from "preact";
 import { useState } from "preact/hooks";
+import { useCan } from "./access";
 import type { RepoList } from "./api";
 import { ConfigPanel } from "./ConfigPanel";
 import { ago, isLive, plural, uptime, versionUrl } from "./format";
@@ -117,6 +118,23 @@ export function Repos({
   const [show, setShow] = useState<Show>("all");
   // Where onboarding was started: its failure shows there, by the button that was clicked.
   const [from, setFrom] = useState<"card" | "row">("row");
+  // What the user may do (access.ts): read a repo's config, onboard it (its config read and its
+  // run started), list every installation again (server-wide, as Sync).
+  const can = useCan();
+  const onboards = (repo: string) =>
+    can.repo(repo, "repo:config:read") && can.start(repo, "onboarding");
+  if (open && !can.repo(open, "repo:config:read")) {
+    return (
+      <section aria-label={`${open} configuration`}>
+        <p class={styles.empty}>
+          {open}'s config isn't yours to read: you don't have <code>repo:config:read</code> there.{" "}
+          <Button size="small" variant="ghost" onClick={() => onOpen(null)}>
+            Back to the repositories
+          </Button>
+        </p>
+      </section>
+    );
+  }
   if (open) {
     return (
       <section aria-label={`${open} configuration`}>
@@ -138,7 +156,7 @@ export function Repos({
     r.repo.toLowerCase().includes(filter.trim().toLowerCase()),
   );
   const waiting = all.filter((r) => r.status === "not-onboarded");
-  const first = waiting.find((r) => r.issues);
+  const first = waiting.find((r) => r.issues && onboards(r.repo));
   return (
     <div class={styles.page}>
       {waiting.length > 0 && (
@@ -239,15 +257,17 @@ export function Repos({
           />
           <span class={styles.tools}>
             {listedAt !== null && <span class={styles.read}>Listed {ago(listedAt, now)}</span>}
-            <Button
-              size="small"
-              icon={<Sync size={14} />}
-              pending={list.refreshing}
-              onClick={list.refresh}
-              title="List the installations' repositories and read every config again"
-            >
-              Refresh
-            </Button>
+            {can.server("server:sync") && (
+              <Button
+                size="small"
+                icon={<Sync size={14} />}
+                pending={list.refreshing}
+                onClick={list.refresh}
+                title="List the installations' repositories and read every config again"
+              >
+                Refresh
+              </Button>
+            )}
             {app && (
               <a
                 class={buttonClass("secondary", "small")}
@@ -318,6 +338,16 @@ interface RowProps {
 
 function Row({ r, list, task, now, onStart, failure }: RowProps) {
   const { starting, failed, onboard } = list;
+  // Its config, and its onboarding (access.ts): none of their links without them.
+  const can = useCan();
+  const reads = can.repo(r.repo, "repo:config:read");
+  const onboards = reads && can.start(r.repo, "onboarding");
+  const config = (label: string, variant?: "primary") =>
+    reads ? (
+      <a class={small(variant)} href={configOf(r.repo)}>
+        {label}
+      </a>
+    ) : null;
   const small = (variant: "primary" | "secondary" | "ghost" = "secondary") =>
     buttonClass(variant, "small");
   const [detail, action] = ((): [string, ComponentChildren] => {
@@ -325,9 +355,7 @@ function Row({ r, list, task, now, onStart, failure }: RowProps) {
       case "invalid":
         return [
           "Its .deckhand.yaml has errors: no run starts until they are fixed",
-          <a class={small("primary")} href={configOf(r.repo)}>
-            Open config
-          </a>,
+          config("Open config", "primary"),
         ];
       case "onboarding": {
         const n = task?.questions?.items?.length;
@@ -371,19 +399,21 @@ function Row({ r, list, task, now, onStart, failure }: RowProps) {
         return r.issues
           ? [
               "No .deckhand.yaml on its default branch",
-              <Button
-                variant="primary"
-                size="small"
-                pending={starting === r.repo}
-                pendingLabel="Starting…"
-                disabled={starting !== null && starting !== r.repo}
-                onClick={() => {
-                  onStart();
-                  void onboard(r.repo);
-                }}
-              >
-                Start onboarding
-              </Button>,
+              onboards && (
+                <Button
+                  variant="primary"
+                  size="small"
+                  pending={starting === r.repo}
+                  pendingLabel="Starting…"
+                  disabled={starting !== null && starting !== r.repo}
+                  onClick={() => {
+                    onStart();
+                    void onboard(r.repo);
+                  }}
+                >
+                  Start onboarding
+                </Button>
+              ),
             ]
           : [
               "Its issues are disabled on GitHub, so it can't be onboarded",
@@ -399,27 +429,21 @@ function Row({ r, list, task, now, onStart, failure }: RowProps) {
               </a>,
             ];
       case "unknown":
-        return [
-          "GitHub didn't answer: see the orchestrator's logs",
-          <a class={small()} href={configOf(r.repo)}>
-            Config
-          </a>,
-        ];
+        return ["GitHub didn't answer: see the orchestrator's logs", config("Config")];
       default:
-        return [
-          r.readAt === null ? "Configured" : `Read ${ago(r.readAt, now)}`,
-          <a class={small()} href={configOf(r.repo)}>
-            Config
-          </a>,
-        ];
+        return [r.readAt === null ? "Configured" : `Read ${ago(r.readAt, now)}`, config("Config")];
     }
   })();
   return (
     <li class={styles.row}>
       <span class={styles.name}>
-        <a href={configOf(r.repo)} title={`${r.repo}: its config`}>
-          {r.repo}
-        </a>
+        {reads ? (
+          <a href={configOf(r.repo)} title={`${r.repo}: its config`}>
+            {r.repo}
+          </a>
+        ) : (
+          r.repo
+        )}
         {r.private && <span class={styles.flag}>private</span>}
         {r.autoMerge && (
           <span

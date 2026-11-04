@@ -12,6 +12,7 @@
 // goes back to the backlog.
 import type { ComponentChildren } from "preact";
 import { useEffect, useState } from "preact/hooks";
+import { useCan } from "./access";
 import type { WorkAreaState } from "./api";
 import { Chooser, type Target } from "./Chooser";
 import {
@@ -178,6 +179,11 @@ export function WorkQueue({
 
   const { backlog, busy } = work;
   const blocked = !!backlog?.errors;
+  // What the user may do here (access.ts): the actions they may not aren't offered.
+  const can = useCan();
+  const starts = (mode: string | null | undefined) => can.start(repo, mode || "work");
+  const manages = can.repo(repo, "runs:manage");
+  const only = (ok: boolean, ...actions: RowAction[]) => (ok ? actions : []);
   const off = busy || blocked;
   const act = (action: WorkAction) => {
     setChoosing(null);
@@ -195,7 +201,11 @@ export function WorkQueue({
 
   // A brainstorm's card let go on Backlog: it stops. A Queued card: it leaves the queue.
   const stopZone = useDropZone(
-    (e) => !blocked && typesOf(e).some((t) => t === BRAINSTORM_TYPE || t === QUEUED_TYPE),
+    (e) =>
+      !blocked &&
+      typesOf(e).some(
+        (t) => (t === BRAINSTORM_TYPE && starts("stop")) || (t === QUEUED_TYPE && manages),
+      ),
     (e) => {
       const key = e.dataTransfer?.getData(QUEUED_TYPE);
       if (key) {
@@ -214,6 +224,7 @@ export function WorkQueue({
       const types = typesOf(e);
       return (
         !blocked &&
+        starts("brainstorm") &&
         !types.includes(BRAINSTORM_TYPE) &&
         types.some((t) => [ISSUE_TYPE, ...LINK_TYPES].includes(t))
       );
@@ -250,7 +261,7 @@ export function WorkQueue({
     const next = t.key === nextKey;
     // Those that start first (a mode apart from work's) don't move in line, but may leave it.
     const moves: RowAction[] =
-      i < 0
+      i < 0 || !manages
         ? []
         : [
             {
@@ -283,7 +294,7 @@ export function WorkQueue({
     return [
       ...moves,
       // An issue's: it leaves the queue, to wait for another issue or for nothing.
-      ...(waitable(t)
+      ...(waitable(t) && starts(t.mode)
         ? [
             {
               label: "After…",
@@ -293,7 +304,7 @@ export function WorkQueue({
             },
           ]
         : []),
-      ...(unqueueable(t)
+      ...(unqueueable(t) && manages
         ? [
             {
               label: "Back to backlog",
@@ -321,7 +332,7 @@ export function WorkQueue({
   const queuedRows: Row[] = line.map((t) => {
     const mode = t.mode && t.mode !== "work" ? t.mode : null;
     const first = t.startsFirst ? "starts first" : null;
-    const can = !blocked && !moving && (reorderable(t) || unqueueable(t));
+    const drags = !blocked && !moving && manages && (reorderable(t) || unqueueable(t));
     return {
       key: t.key,
       number: t.number!,
@@ -330,7 +341,7 @@ export function WorkQueue({
       meta: [`${ordinal(t.position!)} in line`, mode, first].filter(Boolean).join(" · "),
       auto: t.autoPickup,
       queued: true,
-      drag: can ? queuedDrag(t.key, t.number!) : undefined,
+      drag: drags ? queuedDrag(t.key, t.number!) : undefined,
       actions: queuedActions(t),
     };
   });
@@ -346,24 +357,30 @@ export function WorkQueue({
         title: i.title,
         href: i.url,
         meta: i.subIssues ? `${plural(i.subIssues, "sub-issue")} · start lays them out` : "",
-        drag: dragOf(ISSUE_TYPE, i.number, i.url, { status: "Backlog", title: i.title ?? "" }),
+        drag:
+          starts(picked.mode) || (brainstorms && starts("brainstorm"))
+            ? dragOf(ISSUE_TYPE, i.number, i.url, { status: "Backlog", title: i.title ?? "" })
+            : undefined,
         actions: [
-          {
-            label: "Start",
-            shortcut: "start",
-            aria: `Start #${i.number}`,
-            icon: <Icon.Play size={11} />,
-            run: () => act({ action: parent ? "plan" : "start", number: i.number, ...picked }),
-            disabled: off,
-          },
-          {
-            label: "After…",
-            aria: `Queue #${i.number} after…`,
-            after: (after: number) =>
-              act({ action: parent ? "plan" : "queue", number: i.number, after, ...picked }),
-            disabled: off,
-          },
-          ...(brainstorms
+          ...only(
+            starts(picked.mode),
+            {
+              label: "Start",
+              shortcut: "start",
+              aria: `Start #${i.number}`,
+              icon: <Icon.Play size={11} />,
+              run: () => act({ action: parent ? "plan" : "start", number: i.number, ...picked }),
+              disabled: off,
+            },
+            {
+              label: "After…",
+              aria: `Queue #${i.number} after…`,
+              after: (after: number) =>
+                act({ action: parent ? "plan" : "queue", number: i.number, after, ...picked }),
+              disabled: off,
+            },
+          ),
+          ...(brainstorms && starts("brainstorm")
             ? [
                 {
                   label: "Brainstorm",
@@ -388,33 +405,36 @@ export function WorkQueue({
         href: issueUrl(c.number),
         meta: [status, time].filter(Boolean).join(" · "),
         drag:
-          !blocked && movable(c)
+          !blocked && movable(c) && (starts("work") || starts("stop"))
             ? dragOf(BRAINSTORM_TYPE, c.number, issueUrl(c.number), {
                 status: status || "Brainstorm",
                 title: c.title ?? "",
               })
             : undefined,
         actions: [
-          {
-            label: "Start work",
-            shortcut: "start",
-            aria: `Start work on #${c.number}`,
-            icon: <Icon.Play size={11} />,
-            run: () => act({ action: "start", number: c.number }),
-            disabled: !can,
-          },
-          {
-            label: "After…",
-            aria: `Queue #${c.number} after…`,
-            after: (after: number) => act({ action: "queue", number: c.number, after }),
-            disabled: !can,
-          },
-          {
+          ...only(
+            starts("work"),
+            {
+              label: "Start work",
+              shortcut: "start",
+              aria: `Start work on #${c.number}`,
+              icon: <Icon.Play size={11} />,
+              run: () => act({ action: "start", number: c.number }),
+              disabled: !can,
+            },
+            {
+              label: "After…",
+              aria: `Queue #${c.number} after…`,
+              after: (after: number) => act({ action: "queue", number: c.number, after }),
+              disabled: !can,
+            },
+          ),
+          ...only(starts("stop"), {
             label: "Stop",
             aria: `Stop #${c.number}'s brainstorm`,
             run: () => act({ action: "stop", number: c.number }),
             disabled: !can,
-          },
+          }),
         ],
       };
     }),
@@ -425,27 +445,30 @@ export function WorkQueue({
       href: issueUrl(t.number!),
       meta: `after ${issueList(t.waitingFor ?? [])}`,
       actions: [
-        {
-          label: "Start now",
-          shortcut: "start",
-          aria: `Start #${t.number} now`,
-          icon: <Icon.Play size={11} />,
-          // Its wait's mode, as moving it keeps.
-          run: () => act({ action: "start", number: t.number! }),
-          disabled: off,
-        },
-        {
-          label: "After…",
-          aria: `Queue #${t.number} after…`,
-          after: (after: number) => act({ action: "queue", number: t.number!, after }),
-          disabled: off,
-        },
-        {
+        // Its wait's mode, as moving it keeps.
+        ...only(
+          starts(t.mode),
+          {
+            label: "Start now",
+            shortcut: "start",
+            aria: `Start #${t.number} now`,
+            icon: <Icon.Play size={11} />,
+            run: () => act({ action: "start", number: t.number! }),
+            disabled: off,
+          },
+          {
+            label: "After…",
+            aria: `Queue #${t.number} after…`,
+            after: (after: number) => act({ action: "queue", number: t.number!, after }),
+            disabled: off,
+          },
+        ),
+        ...only(manages, {
           label: "Remove wait",
           aria: `Remove #${t.number}'s wait`,
           run: () => act({ action: "dequeue", number: t.number! }),
           disabled: off,
-        },
+        }),
       ],
     })),
     answers: answering.map((t) => {
@@ -456,13 +479,15 @@ export function WorkQueue({
         title: t.title,
         href: issueUrl(t.number!),
         meta: count ? `${plural(count, "open question")}` : "Open questions",
-        drag: blocked
-          ? undefined
-          : dragOf(ISSUE_TYPE, t.number!, issueUrl(t.number!), {
-              status: "Answer",
-              title: t.title ?? "",
-            }),
-        actions: [
+        drag:
+          blocked || !starts(picked.mode)
+            ? undefined
+            : dragOf(ISSUE_TYPE, t.number!, issueUrl(t.number!), {
+                status: "Answer",
+                title: t.title ?? "",
+              }),
+        actions: only(
+          starts(picked.mode),
           {
             label: "Answer",
             shortcut: "start",
@@ -476,7 +501,7 @@ export function WorkQueue({
             after: (after: number) => act({ action: "queue", number: t.number!, after, ...picked }),
             disabled: off,
           },
-        ],
+        ),
       };
     }),
   };

@@ -5,6 +5,7 @@
 // Open board, or Onboard for one that isn't onboarded.
 import type { ComponentChildren } from "preact";
 import { useState } from "preact/hooks";
+import { useCan } from "./access";
 import { type RepoList, sendDismiss, sendRerun } from "./api";
 import {
   type ChipId,
@@ -215,6 +216,12 @@ function WaitingOnYou({
   const [rerunning, setRerunning] = useState<string | null>(null);
   const [dismissing, setDismissing] = useState<string | null>(null);
   const [said, setSaid] = useState<{ text: string; error?: boolean } | null>(null);
+  // What the user may do on each task's repo (access.ts): answers, Rerun and Dismiss are
+  // runs:manage, an answer and a rerun the start of the task's mode too.
+  const can = useCan();
+  const manages = (t: Task) => can.repo(t.repo, "runs:manage");
+  const goesOn = (t: Task, mode: string | null | undefined) =>
+    manages(t) && can.start(t.repo, mode || "work");
   const rerun = async (t: Task) => {
     setRerunning(t.key);
     setSaid(null);
@@ -243,7 +250,7 @@ function WaitingOnYou({
   // A failed run's row: its action, then Dismiss, which stops it asking.
   const actions = (row: Waiting): ComponentChildren => {
     const t = row.task;
-    if (row.need !== "error" || !t.runs[0]) return action(row, styles.action);
+    if (row.need !== "error" || !t.runs[0] || !manages(t)) return action(row, styles.action);
     return (
       <span class={styles.actions}>
         {action(row)}
@@ -278,7 +285,7 @@ function WaitingOnYou({
     const page = taskHref(t);
     const issue = githubUrl(t, github);
     if (need === "input") {
-      if (t.questions)
+      if (t.questions && goesOn(t, t.mode))
         return (
           <Button size="small" class={place} onClick={() => setAnswering(t)}>
             {label}
@@ -289,7 +296,7 @@ function WaitingOnYou({
     if (need === "turn")
       return t.kind === "discussion" || !issue ? link(page, label, false) : link(issue, label);
     if (need === "ready" && t.pr) return link(t.pr.url, label);
-    if (need === "error" && t.rerunnable && t.runs[0])
+    if (need === "error" && t.rerunnable && t.runs[0] && goesOn(t, t.runs[0].taskMode))
       return (
         <Button
           size="small"
@@ -436,6 +443,9 @@ function RepoCard({
   const config = formatRoute({ repo: null, task: null, run: null, page: "settings", config: name });
   const board = formatRoute({ repo: name, task: null, run: null, page: "board" });
   const failed = repos?.failed?.repo === name ? repos.failed.error : null;
+  // Onboarding reads its config and starts its run; See config reads the config.
+  const can = useCan();
+  const reads = can.repo(name, "repo:config:read");
 
   let text: ComponentChildren = summary || "Nothing going on.";
   let foot: string | null = backlogLine(
@@ -447,7 +457,7 @@ function RepoCard({
       Open board
     </a>
   );
-  if (status === "not-onboarded") {
+  if (status === "not-onboarded" && reads && can.start(name, "onboarding")) {
     text = row?.issues
       ? "Onboarding opens a run that proposes its .deckhand.yaml in a pull request."
       : "Its issues are turned off on GitHub: turn them on to onboard it.";
@@ -477,7 +487,7 @@ function RepoCard({
         Open issue
       </a>
     );
-  } else if (status === "invalid") {
+  } else if (status === "invalid" && reads) {
     text = summary || "Its .deckhand.yaml has errors: no run starts until they are fixed.";
     main = (
       <a class={buttonClass("secondary", "small")} href={config}>

@@ -4,6 +4,7 @@
 // (taken mid-run when one is going). Read again now and then: comments written on GitHub show
 // up too.
 import { useState } from "preact/hooks";
+import { useCan } from "./access";
 import { sendDiscussionComment, useThread } from "./api";
 import { ago, plural } from "./format";
 import { useSubmit } from "./hooks";
@@ -20,6 +21,8 @@ interface Props {
 export function Thread({ task, now, refresh }: Props) {
   const number = task.number ?? 0;
   const { thread, error, reload } = useThread(task.repo, number);
+  // A comment or a reply starts a run in its discussion mode: without it, the thread alone.
+  const writes = useCan().start(task.repo, "discussion");
   // The thread whose reply box is open.
   const [replying, setReplying] = useState<string | null>(null);
   const sent = async (c: DiscussionComment) => {
@@ -83,14 +86,14 @@ export function Thread({ task, now, refresh }: Props) {
               )}
             </div>
           )}
-          {replying !== c.id && (
+          {writes && replying !== c.id && (
             <button type="button" class={styles.reply} onClick={() => setReplying(c.id)}>
               Reply
             </button>
           )}
         </div>
       ))}
-      <Compose label="Comment" onSend={(text) => sent({ text })} />
+      {writes && <Compose label="Comment" onSend={(text) => sent({ text })} />}
     </section>
   );
 }

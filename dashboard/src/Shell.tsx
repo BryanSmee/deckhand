@@ -6,6 +6,7 @@
 // opens the other's, and All's from a board opens the Overview (the board is one repo's).
 import type { ComponentChildren } from "preact";
 import { useEffect, useRef, useState } from "preact/hooks";
+import { type Can, useCan } from "./access";
 import type { RepoList } from "./api";
 import {
   plural,
@@ -19,6 +20,7 @@ import {
 import { HealthAlert } from "./Health";
 import { withKey } from "./keys";
 import type { Permission } from "./notify";
+import { requestKinds } from "./NewRequest";
 import { needingYou } from "./Repos";
 import { SettingsTabs } from "./Settings";
 import { formatRoute, isOverview, type Route } from "./route";
@@ -44,6 +46,12 @@ const REQUESTS: { id: Request; label: string; icon: ComponentChildren }[] = [
   { id: "bug", label: "Bug report", icon: <Icon.Bug /> },
   { id: "analyze", label: "Analyze runs", icon: <Icon.Chart /> },
 ];
+
+// The menu's kinds the user may send somewhere (access.ts): none, no New request.
+const menuRequests = (can: Can) => {
+  const kinds = requestKinds(can);
+  return REQUESTS.filter((r) => kinds.includes(r.id));
+};
 
 const tasksOf = (repo: string | null) => formatRoute({ repo, task: null, run: null });
 const boardOf = (repo: string | null) =>
@@ -77,6 +85,7 @@ interface SidebarProps extends Common {
 
 export function Sidebar(props: SidebarProps) {
   const { state, route, repos, rail, onRail, onRequest, notify, health = null } = props;
+  const requests = menuRequests(useCan());
   const counts = repoCounts(state?.tasks ?? [], route.repo);
   const waiting = needingYou(repos?.repos ?? null, state?.tasks ?? []);
   const toggle = (
@@ -104,7 +113,9 @@ export function Sidebar(props: SidebarProps) {
         <HealthAlert health={health} class={rail ? styles.railAlert : undefined} />
         {!rail && toggle}
       </div>
-      {state && <NewRequest onPick={onRequest} form={rail ? "icon" : "full"} />}
+      {state && requests.length > 0 && (
+        <NewRequest onPick={onRequest} form={rail ? "icon" : "full"} />
+      )}
       {rail && <span class={styles.rule} />}
       <RepoLinks counts={counts} route={route} rail={rail} />
       <div class={styles.bottom}>
@@ -197,6 +208,8 @@ function RunSlots({
   rail,
 }: Pick<SidebarProps, "state" | "error" | "syncer"> & { rail?: boolean }) {
   const { syncing, said, sync } = syncer;
+  // Sync is server:sync's (access.ts).
+  const syncs = useCan().server("server:sync");
   if (error) {
     const text = `Can't reach the listener (${error})`;
     return rail ? (
@@ -222,7 +235,7 @@ function RunSlots({
       title={[summary, ...rest].join(" · ")}
     />
   );
-  const syncButton = (
+  const syncButton = syncs && (
     <IconButton
       variant="ghost"
       size={rail ? "default" : "small"}
@@ -293,6 +306,7 @@ function NewRequest({
   onPick: (r: Request) => void;
   form: "full" | "icon" | "bar";
 }) {
+  const requests = menuRequests(useCan());
   const [open, setOpen] = useState(false);
   const [at, setAt] = useState({ top: 0, left: 0 });
   const box = useRef<HTMLDivElement>(null);
@@ -348,7 +362,7 @@ function NewRequest({
           ref={menu}
           style={form === "icon" ? { top: `${at.top}px`, left: `${at.left}px` } : undefined}
         >
-          {REQUESTS.map((r) => (
+          {requests.map((r) => (
             <button
               key={r.id}
               type="button"
@@ -468,6 +482,7 @@ interface TopBarProps extends Common {
 // listener's error, if any: the sidebar's run slots say it on a wide screen.
 export function TopBar(props: TopBarProps) {
   const { state, route, error, onRequest, onSearch, health = null } = props;
+  const requests = menuRequests(useCan());
   const [sheet, setSheet] = useState(false);
   const counts = repoCounts(state?.tasks ?? [], route.repo);
   const settings = route.page === "settings";
@@ -499,7 +514,7 @@ export function TopBar(props: TopBarProps) {
             onClick={onSearch}
           />
         )}
-        {state && <NewRequest onPick={onRequest} form="bar" />}
+        {state && requests.length > 0 && <NewRequest onPick={onRequest} form="bar" />}
         {sheet && (
           <Sheet title="Repositories" onClose={() => setSheet(false)}>
             <RepoLinks counts={counts} route={route} touch />

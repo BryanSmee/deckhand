@@ -13,9 +13,11 @@ import {
   titleOf,
   uniqueRepos,
 } from "./format";
+import { useCan } from "./access";
 import { graphOf } from "./graphModel";
 import { isMac, keyHint, type ShortcutId } from "./keys";
 import { laneName, lanesOf } from "./lanes";
+import { requestKinds } from "./NewRequest";
 import type { Request } from "./Shell";
 import type { State, Task } from "./types";
 import * as Icon from "./ui/icons";
@@ -91,6 +93,9 @@ export function Palette({ state, repos = [], showClosed = false, jumps, onClose 
   // Before the paint: what is typed right after Ctrl K lands in the box.
   useLayoutEffect(() => input.current?.focus(), []);
   const github = state.githubUrl ?? "https://github.com";
+  // The actions the user may take (access.ts): New request's kinds they may send, and Sync.
+  const can = useCan();
+  const kinds = requestKinds(can);
 
   // The boards' lanes, named as the Lanes view names them.
   const lanes = useMemo(
@@ -170,7 +175,7 @@ export function Palette({ state, repos = [], showClosed = false, jumps, onClose 
     }
   }
   const typed = query.trim();
-  const actions: Omit<Item, "group">[] = [
+  const offered: Omit<Item, "group">[] = [
     {
       id: "idea",
       text: typed ? `New idea: “${typed}”` : "New idea",
@@ -211,6 +216,13 @@ export function Palette({ state, repos = [], showClosed = false, jumps, onClose 
       open: () => jumps.theme(theme),
     })),
   ];
+  const actions = offered.filter((a) =>
+    a.id === "sync"
+      ? can.server("server:sync")
+      : ["idea", "bug", "analyze"].includes(a.id)
+        ? kinds.includes(a.id as Request)
+        : true,
+  );
   // New idea and New bug report take any text, as their title: after what the text matches.
   const titled = (a: Omit<Item, "group">) => !!typed && (a.id === "idea" || a.id === "bug");
   for (const a of actions.filter((a) => !titled(a) && has(a.text, words)))
