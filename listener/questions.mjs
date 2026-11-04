@@ -86,7 +86,9 @@ function asks(text) {
   // and outside code: a list of what was settled, or notes under a heading, ask nothing.
   const after = [];
   let fenced = false;
-  for (const line of section.split(/\r?\n/).slice(1)) {
+  // The whole section: its first line may be the question itself (`1. **Keine Migration**: …`),
+  // and parseList() skips the paragraph that comes before a list.
+  for (const line of section.split(/\r?\n/)) {
     if (FENCE.test(line)) fenced = !fenced;
     else if (!fenced && headingOf(line)) break;
     else if (!fenced) after.push(line);

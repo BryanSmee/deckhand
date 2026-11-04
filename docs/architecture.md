@@ -272,8 +272,9 @@ as an indented task list with one `(recommended)` or `(recommended: reason)`. Wh
 a run writes in, the prompt keeps the parts the listener reads in English (the marker, the
 `Open questions` heading, `None`, `(recommended)`); the parser also reads a few translations
 of them (French, Spanish, German, Portuguese, Italian: hand-written issues, or a run that
-translated them anyway, issue #705), and a reply's questions under headings it doesn't know
-are the first list with options after the marker.
+translated them anyway, issue #705). A reply's questions under headings it doesn't know are
+the first part after the marker when it parses as questions, else the first part whose
+questions have options, else the first with free-text questions.
 `parseQuestions()` (`questions.mjs`) reads them, all or nothing: a section in another shape
 comes as its markdown only (`items: null`). A task waiting for input carries
 them in `api/state` (`questions`): from the reply of its last run when that run stopped to ask

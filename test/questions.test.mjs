@@ -517,6 +517,25 @@ test("issue bodies: open questions and None in English and a few other languages
   assert.equal(hasOpenQuestions(none("Open questions", "Nonexistent users: refuse them?")), true);
 });
 
+test("a first question that starts with a None word asks, in an issue and in a reply", () => {
+  // The question is the section's first line: what follows "None" is read from it on.
+  const questions = [
+    "1. **Keine Migration**: soll ich eine schreiben?\n   - [ ] Ja\n   - [ ] Nein",
+    "1. **Aucun test** : faut-il en ajouter ?\n   - [ ] Oui\n   - [ ] Non",
+    "1. Ningún test cubre X: ¿añado uno?\n   - [ ] Sí\n   - [ ] No",
+    "1. Rien ne couvre X : faut-il un test ?\n   - [ ] Oui\n   - [ ] Non",
+  ];
+  for (const list of questions) {
+    for (const heading of ["Open questions", "Questions ouvertes"]) {
+      const body = `## ${heading}\n\n${list}\n\nFrom the inbox: x`;
+      assert.equal(hasOpenQuestions(body), true, `${heading}: ${list}`);
+      assert.equal(parseQuestions(questionsSection(body)).items.length, 1);
+    }
+    const reply = replyQuestions(`<!-- needs-input -->\n## Needs your input\n\n${list}`);
+    assert.equal(reply.items[0].options.length, 2, list);
+  }
+});
+
 test("a run done but for a step only the maintainer can take asks it as a question", () => {
   // Issue #551: the pull request is ready, one blocker is left, asked rather than listed.
   const reply = [
