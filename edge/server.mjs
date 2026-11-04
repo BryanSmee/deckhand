@@ -189,6 +189,7 @@ const http = createEdgeHttp({
   dashboardDir: env.DASHBOARD_DIR || fileURLToPath(new URL("../dashboard/dist", import.meta.url)),
   secrets,
   stopping: () => stopping,
+  waiting: () => !broker.ready(),
   metrics: counted,
   log,
 });
