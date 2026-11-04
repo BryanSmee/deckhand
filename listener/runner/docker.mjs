@@ -113,6 +113,7 @@ export function createDockerRunner({
   log = () => {},
   now = Date.now,
   mirror = null, // the broker service's copy of the runs' inboxes and files (inbox.mjs)
+  metrics = null, // the runner's (../../runner/metrics.mjs): how long a start takes
 }) {
   const inbox = createInbox({ inboxDir, mirror });
   const networks = createNetworks({ config, docker, log, now });
@@ -133,6 +134,7 @@ export function createDockerRunner({
   async function start(spec) {
     const { run, name, image, labels = {}, env: values = {}, tokens, engine, ca, digest } = spec;
     const { recheck = () => {} } = spec;
+    const asked = now();
     const args = sandboxArgs(spec);
     await inbox.write(run, ca, digest);
     // Its own last: a spec's labels never make a sandbox another deployment's or another run's.
@@ -170,6 +172,8 @@ export function createDockerRunner({
       );
       // Its address is new: a lookup made since its network was created didn't see it.
       networks.forget();
+      // `docker run --detach` returns once it runs: its image is local, its agent installed.
+      metrics?.started((now() - asked) / 1000);
     } catch (error) {
       if (engine) await engines.remove(name, run);
       if (made) await networks.remove(run);

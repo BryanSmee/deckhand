@@ -305,7 +305,7 @@ test("the process's metrics and the lease's, from what they are given", async ()
   };
   processMetrics(registry, { proc, monitor, now: () => 1_000_000_000 });
   let held = false;
-  leaseMetric(registry, { runner: () => held });
+  const lease = leaseMetric(registry, { runner: () => held });
   const before = samples(await registry.render());
   assert.deepEqual(before, [
     "deckhand_process_resident_memory_bytes 123456",
@@ -314,9 +314,13 @@ test("the process's metrics and the lease's, from what they are given", async ()
     "deckhand_process_event_loop_lag_seconds 0.025",
     "deckhand_process_open_handles 3",
     'deckhand_lease_held{lease="runner"} 0',
+    'deckhand_lease_takeovers_total{lease="runner"} 0',
   ]);
   held = true;
-  assert.ok((await registry.render()).includes('deckhand_lease_held{lease="runner"} 1\n'));
+  lease.taken();
+  const after = await registry.render();
+  assert.ok(after.includes('deckhand_lease_held{lease="runner"} 1\n'));
+  assert.ok(after.includes('deckhand_lease_takeovers_total{lease="runner"} 1\n'));
 });
 
 test("the event loop's lag keeps its last value when a window has no samples", async () => {
