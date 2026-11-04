@@ -32,6 +32,26 @@ function headingOf(line) {
   return { level: heading[1].length, text };
 }
 
+// The text's lines, one walk for every reader here so they agree on what is code and what is a
+// heading → { line, code, heading, end }. `line`: its "\r" off. `code`: a fence line or inside
+// a fenced block, where nothing is a heading or a marker. `heading`: headingOf(), null in code.
+// `end`: the index of the line's "\n" in the text (its length for the last line).
+function* linesOf(text) {
+  let fenced = false;
+  let at = 0;
+  for (;;) {
+    const newline = text.indexOf("\n", at);
+    const end = newline < 0 ? text.length : newline;
+    const line = text.slice(at, end).replace(/\r$/, "");
+    const fence = FENCE.test(line);
+    if (fence) fenced = !fenced;
+    const code = fence || fenced;
+    yield { line, code, heading: code ? null : headingOf(line), end };
+    if (newline < 0) return;
+    at = end + 1;
+  }
+}
+
 // The listener reads these words in English, as the prompt asks a run to keep them whatever
 // language it writes in (../prompts/sandbox.md), and in a few common translations too: a
 // hand-written issue, or a run that translated them anyway (issue #705). French, Spanish,
@@ -53,10 +73,7 @@ const PICK = "recommended|recommandée?|recomendad[oa]|empfohlen|raccomandat[oa]
 export function questionsSection(body) {
   let level = 0;
   let lines = null;
-  let fenced = false;
-  for (const line of (body ?? "").split(/\r?\n/)) {
-    if (FENCE.test(line)) fenced = !fenced;
-    const heading = fenced ? null : headingOf(line);
+  for (const { line, heading } of linesOf(body ?? "")) {
     if (lines) {
       if (heading && heading.level <= level) break;
       lines.push(line);
@@ -248,16 +265,11 @@ function markerEnd(text) {
   const reply = text ?? "";
   const start = reply.length - reply.trimStart().length;
   if (reply.startsWith(NEEDS_INPUT, start)) return start + NEEDS_INPUT.length;
-  let fenced = false;
-  let at = 0;
-  for (const raw of reply.split("\n")) {
-    const end = at + raw.length + 1;
-    const line = raw.replace(/\r$/, "");
-    if (FENCE.test(line)) fenced = !fenced;
+  for (const { line, code, end } of linesOf(reply)) {
+    if (code) continue;
     // Indented by four spaces or more, it is a code block.
-    else if (!fenced && line.trimEnd().replace(/^ {0,3}/, "") === NEEDS_INPUT) return end - 1;
-    else if (!fenced && ITEM.test(line)) return -1;
-    at = end;
+    if (line.trimEnd().replace(/^ {0,3}/, "") === NEEDS_INPUT) return end;
+    if (ITEM.test(line)) return -1;
   }
   return -1;
 }
@@ -286,10 +298,7 @@ export function replyQuestions(text) {
   if (titled !== null) return parseQuestions(titled);
   const parts = [];
   let part = null;
-  let fenced = false;
-  for (const line of after.split(/\r?\n/)) {
-    if (FENCE.test(line)) fenced = !fenced;
-    const heading = !fenced && HEADING.test(line);
+  for (const { line, heading } of linesOf(after)) {
     if (heading) part = null;
     else if (part || line.trim()) {
       if (!part) parts.push((part = []));
