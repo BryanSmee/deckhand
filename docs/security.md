@@ -2189,11 +2189,11 @@ service's). The files holding secrets are the owner's only (`0600`):
 run's token (the broker answers those, #617); whoever reads it reads the queue and what the runs
 did. The files holding what people wrote are the owner's only (`0600`):
 
-| File                      | What                                                                                                                                                                                                                         |
-| ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `store/state.json`        | the store's keys: the queued comments and those waiting for other issues (`/after`), with their authors; each running run's state (`runs/<id>`, gone once it's over); its lease and fencing epoch; the deliveries it handled |
-| `store/keys/`             | the runs' summaries (a file each), their comments' text included                                                                                                                                                             |
-| `logs/<run>.summary.json` | a run's summary, kept while the store refused it                                                                                                                                                                             |
+| File                      | What                                                                                                                                                                           |
+| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `store/state.json`        | the store's keys: the queued comments, with their authors; each running run's state (`runs/<id>`, gone once it's over); its lease and fencing epoch; the deliveries it handled |
+| `store/keys/`             | the runs' summaries and the items of its maps (a file each): their comments' text, the comments waiting for other issues (`/after`) and their authors, issue titles            |
+| `logs/<run>.summary.json` | a run's summary, kept while the store refused it                                                                                                                               |
 
 **The store** (`STORE_URL`: a folder by default, Redis #509) never holds a secret. Each
 service's refuses a value or an event holding one it knows, a GitHub token or a private key

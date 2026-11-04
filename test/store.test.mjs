@@ -199,6 +199,62 @@ test("file: keys under `apart` are a file each, out of state.json, seen by anoth
   );
 });
 
+// #691: a map's item changed writes its own file, never state.json, which holds the queue and the
+// leases.
+test("file: a key under `apart` changed writes its file alone, not state.json", async (t) => {
+  const dir = tempDir(t);
+  let writes = 0;
+  const writeJson = (...args) => {
+    writes++;
+    return writeJsonAtomic(...args);
+  };
+  const store = fileStore({ dir, writeJson, apart: ["titles/"] });
+  t.after(() => store.close());
+  await store.set("queue", [1]);
+  await store.set("titles/acme/x#1", "One");
+  const before = writes;
+  await store.set("titles/acme/x#1", "One, renamed");
+  await store.set("titles/acme/x#2", "Two");
+  await store.delete("titles/acme/x#2");
+  assert.equal(writes, before);
+  assert.deepEqual(await fileStore({ dir }).get("queue"), [1]);
+  assert.equal(await fileStore({ dir, apart: ["titles/"] }).get("titles/acme/x#1"), "One, renamed");
+});
+
+// #691: the keys a release before kept in state.json go to their files at the first call, those
+// with a TTL left there; the values read and listed the same, once each.
+test("file: keys newly under `apart` move out of state.json at the first call", async (t) => {
+  const dir = tempDir(t);
+  const old = fileStore({ dir });
+  await old.set("queue", [1]);
+  await old.set("titles/a", "A");
+  await old.set("titles/b", "B", { ttlMs: 60_000 });
+  await old.close();
+  let fail = true;
+  const writeJson = (...args) => {
+    if (fail) throw Object.assign(new Error("disk full"), { code: "ENOSPC" });
+    return writeJsonAtomic(...args);
+  };
+  const store = fileStore({ dir, writeJson, apart: ["titles/"] });
+  t.after(() => store.close());
+  const saved = () => Object.keys(JSON.parse(readFileSync(join(dir, "state.json"), "utf8")).keys);
+  // state.json not written: the call fails, the keys kept where they were, read and listed once.
+  await assert.rejects(store.get("queue"), { code: "ENOSPC" });
+  fail = false;
+  assert.deepEqual(saved().sort(), ["queue", "titles/a", "titles/b"]);
+  assert.deepEqual((await fileStore({ dir, apart: ["titles/"] }).keys("titles/")).keys, [
+    "titles/a",
+    "titles/b",
+  ]);
+  // Then moved, at the next call.
+  assert.deepEqual(await store.get("queue"), [1]);
+  assert.deepEqual(saved().sort(), ["queue", "titles/b"]);
+  assert.deepEqual(readdirSync(join(dir, "keys")), ["titles%2Fa"]);
+  assert.equal(await store.get("titles/a"), "A");
+  assert.equal(await store.get("titles/b"), "B");
+  assert.deepEqual((await store.keys("titles/")).keys, ["titles/a", "titles/b"]);
+});
+
 test("file: a state file taken back to an older one still gives a new, higher epoch", async (t) => {
   const dir = tempDir(t);
   let at = 1_000_000;

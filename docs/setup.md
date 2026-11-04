@@ -2179,7 +2179,10 @@ final answer's first lines and the text of the comments it acted on (more for a 
 So they take about a summary's size times the runs of those days: 50 runs a day for 90 days are
 4,500 summaries, some 20 MB of Redis's memory at 4 KB each. With `0` (forever), they grow with
 every run. With the file store, each is a file of its own in its folder (`keys/`), out of its
-`state.json`, which every lease renewal (each 5 s) writes whole.
+`state.json`, which every lease renewal (each 5 s) writes whole; so is each item of the
+orchestrator's maps (a title, a pull request, a lane: #691), so that changing one writes its
+file alone. Those a release before kept in `state.json` move to their files at the store's
+first call.
 
 Secrets never go in the store: the App's key, the signing key and the agents' credentials
 stay in their service's own secret or volume. A write holding one the service knows, a

@@ -229,12 +229,33 @@ const shotsDir = join(config.dataDir, "shots");
 // the queue (restart.mjs), its lease, the deliveries it handled, the rest as the services take
 // it over (#499). Its two copies share it. The operator's secrets are refused in it
 // (lib/store.mjs), once `ctx` can say them. The runs' summaries, thousands, are a file each with
-// the file backend: out of the state file every lease renewal writes.
+// the file backend: out of the state file every lease renewal writes. So is each item of its maps
+// (below, MAPS): a title changed writes its own file, not the whole state again (#691).
 let storeSecrets = () => [];
+// The orchestrator's maps that hold data alone, in its store (below), with their options.
+const MAPS = {
+  titles: {},
+  closed: {},
+  pulls: {},
+  dismissed: {},
+  order: { moved: ranked, replace: true },
+  onboarding: {},
+  lanes: {},
+  modes: {},
+  conflicts: {},
+  "dry-runs": {},
+  requested: {},
+  waits: {},
+  inputs: {},
+  reviews: {},
+  brainstorms: {},
+  decisions: {},
+  picks: {},
+};
 const store = openStore(env.STORE_URL || pathToFileURL(join(config.dataDir, "store")).href, {
   password: env.REDIS_PASSWORD,
   secrets: () => storeSecrets(),
-  apart: [SUMMARIES],
+  apart: [SUMMARIES, ...Object.keys(MAPS).map((name) => `${name}/`)],
 });
 
 // Its fencing epoch, once it holds the lease (below).
@@ -640,34 +661,12 @@ for (const run of ctx.runs) ctx.runsById.set(run.id, run);
 // and the queue, the two writes go in the order that leaves a comment somewhere after a crash
 // between them (waits.mjs releasing() and hold(), brainstorms.mjs end()).
 maps = await persist("Reading the orchestrator's maps from the store", () =>
-  storeMaps(
-    store,
-    {
-      titles: {},
-      closed: {},
-      pulls: {},
-      dismissed: {},
-      order: { moved: ranked, replace: true },
-      onboarding: {},
-      lanes: {},
-      modes: {},
-      conflicts: {},
-      "dry-runs": {},
-      requested: {},
-      waits: {},
-      inputs: {},
-      reviews: {},
-      brainstorms: {},
-      decisions: {},
-      picks: {},
-    },
-    {
-      dir: config.dataDir,
-      secrets: () => operatorSecrets(ctx),
-      held: () => leaseHeld,
-      log,
-    },
-  ),
+  storeMaps(store, MAPS, {
+    dir: config.dataDir,
+    secrets: () => operatorSecrets(ctx),
+    held: () => leaseHeld,
+    log,
+  }),
 );
 
 // The dashboard's titles and closed states: from webhooks, else fetched (titles.mjs).
