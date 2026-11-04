@@ -121,6 +121,22 @@ test("orchestratorMetrics: the runs' lives counted, the queue's gauges from the 
   assert.match(waiting, /# TYPE deckhand_runs_queued gauge/);
   assert.equal(sample(waiting, "deckhand_runs_running"), undefined);
   assert.equal(sample(waiting, "deckhand_max_parallel"), undefined);
+  // The runs' counters at 0 before any run, every series: an increase() counts the first one.
+  assert.equal(
+    sample(waiting, 'deckhand_runs_finished_total{mode="work",outcome="error"}'),
+    'deckhand_runs_finished_total{mode="work",outcome="error"} 0',
+  );
+  assert.equal(
+    sample(
+      waiting,
+      'deckhand_runs_started_total{mode="custom",agent="antigravity",kind="auto-pickup"}',
+    ),
+    'deckhand_runs_started_total{mode="custom",agent="antigravity",kind="auto-pickup"} 0',
+  );
+  const series = (name) => samples(waiting).filter((line) => line.startsWith(`${name}{`)).length;
+  assert.equal(series("deckhand_runs_finished_total"), 12 * 4);
+  assert.equal(series("deckhand_runs_started_total"), 12 * 3 * 7);
+  assert.doesNotMatch(waiting, /="other"/);
 
   const record = { agent: "claude", startedAt: 1_000_000, light: false, reason: "review-fix" };
   const live = { mode: "work", record };

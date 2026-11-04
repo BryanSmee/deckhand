@@ -182,18 +182,28 @@ export function pickupSlots({ reserved, maxParallel, used, others }) {
 // The orchestrator's own: `ctx()` its shared state (server.mjs) once it acts, null before; the
 // gauges have no samples then.
 export function orchestratorMetrics(registry, { ctx }) {
+  const modes = [...BUILT_IN, "custom"];
+  const agents = Object.keys(AGENTS);
   const started = registry.counter(
     "deckhand_runs_started_total",
     "Runs started: past their settings, their sandbox being prepared.",
     {
       labels: ["mode", "agent", "kind"],
-      values: { mode: [...BUILT_IN, "custom"], agent: Object.keys(AGENTS), kind: KINDS },
+      values: { mode: modes, agent: agents, kind: KINDS },
+      // Every series at 0 from the start (below): their product, past the default cap.
+      maxSeries: modes.length * agents.length * KINDS.length,
     },
   );
   const finished = registry.counter("deckhand_runs_finished_total", "Runs ended, by outcome.", {
     labels: ["mode", "outcome"],
-    values: { mode: [...BUILT_IN, "custom"], outcome: OUTCOMES },
+    values: { mode: modes, outcome: OUTCOMES },
   });
+  // At 0 from the start, every series: a rate needs its first sample, or a copy's first run of
+  // each (its first error after an update, say) never counts in an increase().
+  for (const mode of modes) {
+    for (const outcome of OUTCOMES) finished.inc({ mode, outcome }, 0);
+    for (const agent of agents) for (const kind of KINDS) started.inc({ mode, agent, kind }, 0);
+  }
   const durations = registry.histogram(
     "deckhand_run_duration_seconds",
     "How long runs take, from leaving the queue to their end, in seconds.",

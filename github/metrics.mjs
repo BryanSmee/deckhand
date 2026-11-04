@@ -147,10 +147,11 @@ export function githubMetrics(
     },
   );
   // The size of that lowest one's window (5000 an hour, 15000 on Enterprise Cloud…), for an alert
-  // on its share left: none when GitHub didn't say.
+  // on its share left: none when GitHub didn't say. That share is the fewest calls left's, close
+  // to the lowest share: a key with a larger window may have less of it left, and more calls.
   registry.gauge(
     "deckhand_github_rate_limit_limit",
-    "The calls that lowest rate limit allows in its window, as GitHub said.",
+    "The calls that lowest rate limit allows in its window, as GitHub said (its share left is that key's, not always the lowest share).",
     {
       labels: ["resource"],
       values: { resource: RESOURCES },
