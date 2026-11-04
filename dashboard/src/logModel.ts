@@ -8,6 +8,25 @@ import type { Entry, Phase, StepStatus } from "./types";
 // Starts the reply of a run that stopped to ask: for the listener, not for reading.
 export const NEEDS_INPUT = "<!-- needs-input -->";
 
+// The reply without the marker the listener reads (questions.mjs markerEnd()): at its start, or
+// the first line that is the marker alone, outside code and before a numbered line. One quoted
+// in a sentence or shown in a code block is the reply's text.
+export function withoutMarker(text: string): string {
+  const reply = text.trimStart();
+  if (reply.startsWith(NEEDS_INPUT)) return reply.slice(NEEDS_INPUT.length).trim();
+  const lines = reply.split("\n");
+  let fenced = false;
+  for (const [i, line] of lines.entries()) {
+    if (/^ {0,3}(```|~~~)/.test(line)) fenced = !fenced;
+    else if (fenced) continue;
+    else if (line.trimEnd().replace(/^ {0,3}/, "") === NEEDS_INPUT) {
+      lines.splice(i, 1);
+      break;
+    } else if (/^ ?\d{1,9}[.)]\s/.test(line)) break;
+  }
+  return lines.join("\n").trim();
+}
+
 export interface Step {
   step: number;
   stage: string | null;
@@ -177,7 +196,7 @@ function itemsOf(phase: Phase, entries: Entry[], calls: Calls): Item[] {
     else if (e.kind === "meta") out.push({ id: id(), kind: "note", text: e.text });
     else if (e.kind === "result") {
       for (const call of calls.byEntry.values()) if (!call.outputs.length) calls.ended.add(call);
-      out.push({ id: id(), ...e, text: e.text.replace(NEEDS_INPUT, "").trim() });
+      out.push({ id: id(), ...e, text: withoutMarker(e.text) });
     } else if (e.kind === "step") {
       const known = steps.get(e.step);
       if (known) Object.assign(known, { ...e, output: known.output, at: known.at ?? e.at });

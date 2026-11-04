@@ -23,7 +23,7 @@ import { idOf } from "./agents/common.mjs";
 import { agentFor, entryName } from "./agents/index.mjs";
 import { entryLabel } from "./agents/select.mjs";
 import { kindOf } from "./modes.mjs";
-import { NEEDS_INPUT, replyQuestions } from "./questions.mjs";
+import { asksInput, replyQuestions, withoutMarker } from "./questions.mjs";
 import { readJson, writeJsonAtomic } from "../lib/files.mjs";
 import { partEnd, redact } from "../lib/redact.mjs";
 import { storable, values } from "../lib/store.mjs";
@@ -31,7 +31,7 @@ import { storable, values } from "../lib/store.mjs";
 // "ok", "needs-input" or "error" for an agent's `result` event (null: no result).
 export function outcome(result) {
   if (!result?.ok) return "error";
-  return (result.text ?? "").trimStart().startsWith(NEEDS_INPUT) ? "needs-input" : "ok";
+  return asksInput(result.text) ? "needs-input" : "ok";
 }
 
 // The agent's last result in these log lines, if any.
@@ -647,7 +647,7 @@ export function questionsOf(result) {
 // The first line of a run's reply, for the dashboard: what the run ended with. Headings
 // ("## Needs your input") say less than the sentence under them.
 export function summaryOf(result) {
-  const lines = (result?.text ?? "").replace(NEEDS_INPUT, "").split("\n");
+  const lines = withoutMarker(result?.text).split("\n");
   const plain = (l) => l.replace(/^[#>*\s-]+/, "").trim();
   const line =
     plain(lines.find((l) => plain(l) && !/^\s*#/.test(l)) ?? "") || plain(lines.find(plain) ?? "");
