@@ -30,8 +30,6 @@ jobs:
         ports:
           - 6379
         options: --health-cmd "redis-cli ping" --health-interval 2s --health-timeout 5s --health-retries 15
-    env:
-      TEST_REDIS_URL: "redis://localhost:${{ job.services.redis.ports['6379'] }}"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -56,6 +54,9 @@ jobs:
         run: npm ci --no-audit --no-fund && npm run build
       # Fails, too, when a real-opa or Redis test skipped: opa is on the PATH, Redis beside.
       - name: Tests
+        # Here, not in the job's env: the job context isn't there yet.
+        env:
+          TEST_REDIS_URL: "redis://localhost:${{ job.services.redis.ports['6379'] }}"
         run: |
           node --test --test-force-exit --import ./test/blocking-stdout.mjs --test-timeout=120000 \
             --test-reporter=spec --test-reporter-destination=stdout \
