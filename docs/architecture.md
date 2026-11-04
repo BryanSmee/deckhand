@@ -629,6 +629,12 @@ than at a run's end.
   engine, the egress proxy and how many hosts the grants folder grants, whether that folder
   reads without errors (the files to fix, never their errors, which quote mount roots: a repo's config panel shows its own), which Claude credentials are set, which one runs use first and which ones `FALLBACKS` names (variable names only), `ALLOWED_USERS` and `ALLOWED_REPOS`. It scans the grants folder, so
   the page reads it when it opens rather than at each poll.
+  `api/state`'s `access` says what the signed-in user may do (#732: `permissions.mjs`
+  `dashboard()`): their server-wide actions, and on each repo they see, its actions and the
+  modes they may start runs in, so that the dashboard shows only the controls the orchestrator
+  wouldn't refuse (`dashboard/src/access.ts`). `GET api/access`, for Settings › Access and
+  `server:read` only, says each of `ALLOWED_USERS`'s actions, server-wide and on each listed
+  repo, with the files that decided them (`report()`), read when the page opens.
 - **The services' health** (#560): `GET api/health` says whether each service is `up`,
   `starting` (started less than 5 minutes ago: a restart, an update) or `down` (no answer within
   2 s, a refused connection, a status other than 2xx, `ok: false`), with when it started, its

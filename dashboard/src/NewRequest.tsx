@@ -4,6 +4,7 @@
 // then the kind's form: Inbox.tsx or Analyze.tsx. The footer's main action is the form's: it
 // says what it does, and Ctrl Enter sends it.
 import { useId, useState } from "preact/hooks";
+import { type Can, useCan } from "./access";
 import { analysisRepos, AnalyzeForm } from "./Analyze";
 import { sameRepo, uniqueRepos } from "./format";
 import { INBOX_DOCS, InboxForm, type InboxKind } from "./Inbox";
@@ -40,6 +41,12 @@ const SUBS: Record<RequestKind, string> = {
     "A run reads a digest of the runs you pick and replies on a new issue with what would make them faster or more reliable. It changes no code.",
 };
 
+// The kinds in the order the dialog offers them.
+const KINDS: RequestKind[] = ["idea", "bug", "discussion", "analyze"];
+
+// The kinds the user may send somewhere (access.ts: `runs:start:<kind>`, each one a mode).
+export const requestKinds = (can: Can) => KINDS.filter((k) => can.anywhere(k));
+
 // The repos with an inbox of that kind, by name.
 export const inboxRepos = (inboxes: Record<string, Inboxes> | undefined, kind: InboxKind) =>
   uniqueRepos(Object.keys(inboxes ?? {}).filter((r) => inboxes![r][INBOX[kind].key])).sort();
@@ -68,32 +75,46 @@ export function NewRequest({
   onClose,
   onSent,
 }: Props) {
-  const [kind, setKind] = useState<RequestKind>(first);
+  // What the user may send, and where (access.ts): the other kinds and repos aren't offered.
+  const can = useCan();
+  const allowed = requestKinds(can);
+  const [kind, setKind] = useState<RequestKind>(() =>
+    allowed.includes(first) ? first : (allowed[0] ?? first),
+  );
   const [picked, setPicked] = useState<string | null>(null);
   const [action, setAction] = useState<Action | null>(null);
   const formId = useId();
 
-  const repos = kind === "analyze" ? analysisRepos(inboxes, tasks) : inboxRepos(inboxes, kind);
+  const offered = kind === "analyze" ? analysisRepos(inboxes, tasks) : inboxRepos(inboxes, kind);
+  const repos = offered.filter((r) => can.start(r, kind));
   const repo =
     repos.find((r) => sameRepo(r, picked)) ??
     repos.find((r) => sameRepo(r, tab)) ??
     repos[0] ??
     null;
   const anyDiscussions = inboxRepos(inboxes, "discussion").length > 0;
-  const kinds: Segment<RequestKind>[] = [
-    { value: "idea", label: "Idea", icon: <Icon.Idea size={14} /> },
-    { value: "bug", label: "Bug report", icon: <Icon.Bug size={14} /> },
-    ...(anyDiscussions || kind === "discussion"
-      ? [{ value: "discussion" as const, label: "Discussion", icon: <Icon.Talk size={14} /> }]
-      : []),
-    { value: "analyze", label: "Analyze runs", icon: <Icon.Chart size={14} /> },
-  ];
+  const kinds: Segment<RequestKind>[] = (
+    [
+      { value: "idea", label: "Idea", icon: <Icon.Idea size={14} /> },
+      { value: "bug", label: "Bug report", icon: <Icon.Bug size={14} /> },
+      ...(anyDiscussions || kind === "discussion"
+        ? [{ value: "discussion" as const, label: "Discussion", icon: <Icon.Talk size={14} /> }]
+        : []),
+      { value: "analyze", label: "Analyze runs", icon: <Icon.Chart size={14} /> },
+    ] as Segment<RequestKind>[]
+  ).filter((k) => allowed.includes(k.value) || k.value === kind);
 
   // The page's repo, read and without this inbox: said, with the way to set one up.
   const read = Object.keys(inboxes ?? {}).find((r) => sameRepo(r, tab));
   const without = kind !== "analyze" && read && !inboxes![read][INBOX[kind].key] ? tab : null;
   const note =
-    kind === "analyze" ? (
+    offered.length > 0 && !repos.length ? (
+      <p class={styles.note}>
+        {kind === "analyze"
+          ? "You can't start an analysis on any of these repositories."
+          : `You can't send ${INBOX[kind].name} to any of these repositories.`}
+      </p>
+    ) : kind === "analyze" ? (
       !repos.length && <p class={styles.note}>No repository has runs to analyze yet.</p>
     ) : without || !repos.length ? (
       <p class={styles.note}>

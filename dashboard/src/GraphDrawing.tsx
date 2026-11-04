@@ -261,7 +261,8 @@ interface DrawingProps {
     justDragged: () => boolean;
   };
   // A click on a node waiting for answers: its questions, in place.
-  onAsk: (task: Task) => void;
+  // Null: the user may not answer here (runs:manage), the node opens its task.
+  onAsk: ((task: Task) => void) | null;
 }
 
 export function GraphDrawing({
@@ -386,7 +387,7 @@ export function GraphDrawing({
               ]
                 .filter(Boolean)
                 .join(" ")}
-              onAsk={asks(n) ? () => onAsk(n.task) : undefined}
+              onAsk={asks(n) && onAsk ? () => onAsk(n.task) : undefined}
               justDragged={drag.justDragged}
               handlers={movable(n) ? drag.handlers(n) : {}}
             />

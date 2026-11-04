@@ -5,6 +5,7 @@
 // (api/server, read when the page opens), and the GitHub App (api/repos's `app`) with the last sync
 // and Sync now.
 import { Fragment } from "preact";
+import { useCan } from "./access";
 import { usePolled } from "./api";
 import { ago, AUTH_NAMES, dayTime, plural, reservedText, uptime, versionUrl } from "./format";
 import { Services } from "./Health";
@@ -257,6 +258,8 @@ function App({
   refresh?: () => Promise<void>;
 }) {
   const { syncing, said, sync } = useSync(refresh);
+  // Sync is server:sync's (access.ts).
+  const syncs = useCan().server("server:sync");
   const link = buttonClass("secondary", "small");
   return (
     <Card as="section" aria-labelledby="server-app">
@@ -334,16 +337,18 @@ function App({
           <dt>Webhook deliveries</dt>
           <dd class={styles.wrap}>
             <span>{lastSyncLine(lastSync, now)}</span>
-            <Button
-              size="small"
-              icon={<Icon.Sync size={14} />}
-              pending={syncing}
-              pendingLabel="Syncing…"
-              onClick={() => void sync()}
-              title="Ask GitHub again for the webhook deliveries it couldn't hand over, for the open pull requests' states, and whether they still merge"
-            >
-              Sync now
-            </Button>
+            {syncs && (
+              <Button
+                size="small"
+                icon={<Icon.Sync size={14} />}
+                pending={syncing}
+                pendingLabel="Syncing…"
+                onClick={() => void sync()}
+                title="Ask GitHub again for the webhook deliveries it couldn't hand over, for the open pull requests' states, and whether they still merge"
+              >
+                Sync now
+              </Button>
+            )}
             {/* A recorded sync's failure is on the line already: only a refusal is said. */}
             {said?.failed && !said.recorded && (
               <span role="status" class={styles.bad}>
