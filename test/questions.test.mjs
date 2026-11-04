@@ -440,6 +440,42 @@ test("withoutMarker: the marker asksInput() reads, not one quoted or shown in co
   assert.equal(withoutMarker(quoted), "Starts with `<!-- needs-input -->`.\n\nWhich?");
 });
 
+test("CRLF and fenced code: every reader of the lines agrees (#734)", () => {
+  const crlf = (text) => text.replaceAll("\n", "\r\n");
+  // A marker and headings inside a fence are code, in the section, the marker and the reply.
+  const fenced = "```\n<!-- needs-input -->\n## Open questions\n1. Not this?\n```";
+  for (const text of [fenced, crlf(fenced)]) {
+    assert.equal(questionsSection(text), null);
+    assert.equal(withoutMarker(text), text);
+    assert.equal(replyQuestions(text), null);
+  }
+  // The same reply with "\r\n": the marker found on its line, the questions after it.
+  const reply =
+    "## Needs your input\n<!-- needs-input -->\n```\n## Not a heading\n```\n## Open questions\n1. **Phones**: which?\n   - [ ] One (recommended)\n   - [ ] Two";
+  for (const [text, cr] of [
+    [reply, ""],
+    [crlf(reply), "\r"],
+  ]) {
+    // The marker goes with its line's "\r", as it always did.
+    assert.equal(withoutMarker(text), text.replace(`<!-- needs-input -->${cr}`, ""));
+    const asked = replyQuestions(text);
+    assert.deepEqual(
+      asked.items.map((q) => [q.title, q.text, q.options.map((o) => [o.label, o.recommended])]),
+      [
+        [
+          "Phones",
+          "which?",
+          [
+            ["One", true],
+            ["Two", false],
+          ],
+        ],
+      ],
+    );
+    assert.match(questionsSection(text), /^1\. \*\*Phones\*\*/);
+  }
+});
+
 test("a pick in other languages: each form of recommended", () => {
   for (const pick of [
     "recommended",
