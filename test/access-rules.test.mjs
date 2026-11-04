@@ -21,7 +21,8 @@ const noOpa = !hasOpa() && "no opa on the PATH";
 // A grants folder's access.rego, with `bindings` only.
 const bindings = (list) => `package deckhand\n\nbindings := ${JSON.stringify(list, null, 2)}\n`;
 
-// The repositories GitHub knows: name → { private, policies: name → text, branch, down }, their
+// The repositories GitHub knows: name → { private, policies: name → text, branch, down, renamed:
+// the name GitHub answers with }, their
 // policies on their default branch (`branch`, `main` by default) alone; `calls`, the paths asked.
 function fakeGithub(repos) {
   const calls = [];
@@ -36,7 +37,8 @@ function fakeGithub(repos) {
     if (repo.down) return new Response("{}", { status: 502 });
     if (!at[2]) {
       const branch = repo.branch ?? "main";
-      return Response.json({ full_name: at[1], private: repo.private, default_branch: branch });
+      const full = repo.renamed ?? at[1];
+      return Response.json({ full_name: full, private: repo.private, default_branch: branch });
     }
     const files = Object.entries(repo.policies ?? {});
     if (at[2] === "/contents/.deckhand/policy") {
@@ -504,3 +506,48 @@ test(
     assert.equal(infos(), 4);
   },
 );
+
+test(
+  "the real opa: a repository GitHub answers under another name keeps the name asked",
+  { skip: noOpa },
+  async (t) => {
+    const repos = {
+      "acme/old": { renamed: "other/new", policies: { "deny.rego": denyManage } },
+    };
+    const { policies, calls } = realAccess(t, {
+      repos,
+      operator: {
+        "access.rego": bindings([
+          { users: ["bob"], repos: ["acme/old"], role: "member" },
+          { users: ["eve"], repos: ["other/new"], role: "member" },
+        ]),
+      },
+    });
+    // Bound on the name asked: its actions, its own policies listed under that name.
+    assert.ok(await policies.can("bob", "acme/old", "tasks:read"));
+    assert.ok(!(await policies.can("bob", "acme/old", "runs:manage")));
+    assert.ok(!(await policies.can("eve", "acme/old", "tasks:read")));
+    assert.ok(calls.includes("/repos/acme/old/contents/.deckhand/policy"));
+    assert.ok(!calls.some((p) => p.startsWith("/repos/other/new")));
+    // A push under the name asked forgets what GitHub said of it.
+    policies.forget("acme/old");
+    await policies.access("bob", "acme/old");
+    assert.equal(calls.filter((p) => p === "/repos/acme/old").length, 2);
+  },
+);
+
+test("allows: a deny of the other scope's actions doesn't refuse a pattern", () => {
+  const answer = {
+    actions: ["*"],
+    denied: [{ action: "server:sync", reason: "no", file: null, layer: "operator" }],
+    files: {},
+    error: null,
+  };
+  assert.ok(allows(answer, "*"));
+  assert.ok(allows(answer, "runs:*"));
+  assert.ok(!allows(answer, "server:*", false));
+  assert.ok(allows(answer, "server:read", false));
+  const repoDeny = { ...answer, denied: [{ ...answer.denied[0], action: "runs:manage" }] };
+  assert.ok(!allows(repoDeny, "*"));
+  assert.ok(allows(repoDeny, "server:*", false));
+});

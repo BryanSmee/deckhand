@@ -84,8 +84,9 @@ export const BUILT_IN_ONLY = new Set(["merge", "review", "fix"]);
 export const OPERATOR_ONLY = new Set(["grant"]);
 
 // The decisions only the operator's layer allows: a repo's allow rule for them is a config check
-// error, evaluated (one of the wrong shape fails closed) but not counted; its deny rules narrow. Who may do what on a repository is the operator's
-// to say (#730), and a repository's maintainers may only take some of it away.
+// error, evaluated (one of the wrong shape fails closed) but not counted; its deny rules
+// narrow. Who may do what on a repository is the operator's to say (#730), and a repository's
+// maintainers may only take some of it away.
 export const OPERATOR_ALLOWS = new Set(["access"]);
 
 // The actions access() gives (#730): on a repository, and server-wide (asked with no repository).
@@ -111,16 +112,18 @@ export function actionMatches(pattern, action) {
   return action.startsWith(pattern.slice(0, -1));
 }
 
-// Whether access()'s `answer` gives `action` (on a repository when `repo`, else server-wide): an
-// allowed pattern covers it, and no deny does. A deny always wins; an error gives nothing. A
-// pattern asked (`runs:start:*`) is all of what it covers: a deny of any of it (`runs:start:work`)
-// refuses it.
+// Whether access()'s `answer` gives `action` (on a repository when `repo`, else server-wide):
+// an allowed pattern covers it, and no deny does. A deny always wins; an error gives nothing.
+// A pattern asked (`runs:start:*`) is all of what it covers: a deny of any of it
+// (`runs:start:work`) refuses it, a deny of the other scope's actions (`server:sync` on a
+// repository) doesn't.
 export function allows(answer, action, repo = true) {
   if (!answer || answer.error || typeof action !== "string") return false;
   if (action.startsWith(SERVER) === !!repo) return false;
+  const denied = answer.denied.filter((d) => d.action?.startsWith(SERVER) !== !!repo);
   return (
     answer.actions.some((p) => actionMatches(p, action)) &&
-    !answer.denied.some((d) => actionMatches(d.action, action) || actionMatches(action, d.action))
+    !denied.some((d) => actionMatches(d.action, action) || actionMatches(action, d.action))
   );
 }
 
@@ -834,6 +837,10 @@ export function createPolicies({
         if (typeof info?.default_branch !== "string" || !info.default_branch) {
           throw new Error(`GitHub gave no default branch for ${name}`);
         }
+        // A repository renamed or transferred answers with another name entirely: the name
+        // asked for stays (as repo-check.mjs keeps it), so that the bindings, its listing and
+        // forget() are all of the repository the caller asked about.
+        if (String(info.full_name).toLowerCase() !== key) info = { ...info, full_name: name };
         if (repoInfos.size >= MAX_ACCESS) repoInfos.delete(repoInfos.keys().next().value);
         repoInfos.set(key, { at: now(), info });
       }
