@@ -506,6 +506,11 @@ export function WorkQueue({
     }),
   };
 
+  // The tab's hint says what its drags do: not when none of its cards drags (access.ts).
+  const hinted = rows[tab].length
+    ? rows[tab].some((r) => r.drag)
+    : starts(picked.mode) || manages;
+
   const LISTS: Record<QueueTab, { label: string; empty: string }> = {
     backlog: {
       label: "Open issues with no task",
@@ -772,7 +777,7 @@ export function WorkQueue({
           )
         )}
       </div>
-      {!touch && <p class={styles.hint}>{HINTS[tab]}</p>}
+      {!touch && hinted && <p class={styles.hint}>{HINTS[tab]}</p>}
       {choosing && (
         <Chooser
           number={choosing.number}
