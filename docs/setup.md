@@ -1726,6 +1726,25 @@ The policy service reads your server folder as the `node` user (uid 1000): your 
 its `policy/` must be readable by that user (the usual `0644` files and `0755` folders are), or
 every policy decision is refused, and the orchestrator's log says why at start.
 
+### Upgrading: `+scan` for Redis's user (#614)
+
+With Redis as [the store](#the-store), the orchestrator now lists keys by prefix (`SCAN`) at its
+start: the maps it keeps one key per item (#615, #616), its live runs' states (#617). A
+`deckhand` user written from this page before #614 has no `+scan`: the orchestrator then stops
+at its start with `NOPERM … 'scan'` in its log. Add it before you update, in `redis.conf` (the
+`user deckhand …` line, as in [The store](#the-store)) or at once on the running Redis, as a
+user allowed `ACL` (the one you administer it with: `default` is off there). `ACL SETUSER` adds
+to the user's rules, keeping the others:
+
+```sh
+redis-cli --user <admin> --askpass ACL SETUSER deckhand +scan
+redis-cli --user <admin> --askpass ACL SAVE   # only with an aclfile: it writes the users there
+```
+
+`ACL SETUSER` alone is lost when Redis restarts on a `redis.conf` without it: change the file
+too. On Kubernetes, the `redis` component and the Helm chart write their users again each time
+Redis starts, the orchestrator's with `+scan`: nothing to do there.
+
 ### Upgrading: the orchestrator's state in its store (#615, #616)
 
 The orchestrator kept its state in JSON files in its data volume (`/data`). They go to its
