@@ -78,6 +78,8 @@ test("unmarked: the marker and the from tags taken out, joined ones too, unclose
   assert.equal(unmarked(`<!-- deckhand-${MARKER}from:x --> ok`), " ok");
   // From the first tag to the first close, as the lazy regex took it.
   assert.equal(unmarked("<!-- deckhand-from: a <!-- deckhand-from: b --> c -->"), " c -->");
+  // A marker the cut joins is gone before its "-->" could close the tag: it runs on to the next.
+  assert.equal(unmarked(`<!-- deckhand-from:a<!--${MARKER} deckhand -->Z-->`), "");
   // Unclosed, or not ours: kept.
   assert.equal(unmarked("<!-- deckhand-from: x"), "<!-- deckhand-from: x");
   assert.equal(
@@ -89,22 +91,12 @@ test("unmarked: the marker and the from tags taken out, joined ones too, unclose
 
 test("unmarked: nothing marked is left, whatever the pieces", () => {
   const pieces = [
-    "<!--",
-    "<!-",
-    "-->",
-    "->",
-    " ",
-    "deckhand",
-    "deck",
-    "hand",
-    "-from:",
-    "deckhand-from:",
-    "x",
-    MARKER,
+    ...["<!--", "<!-", "-->", "->", "<", "-", ">", " ", "\n", "\t", "x"],
+    ...["deckhand", "deck", "hand", "-from:", "deckhand-from:", "<!-- deckhand-from:", MARKER],
   ];
   let seed = 7;
   const random = () => (seed = (seed * 48271) % 2147483647) / 2147483647;
-  for (let n = 0; n < 3000; n++) {
+  for (let n = 0; n < 10_000; n++) {
     let text = "";
     for (let k = 0; k < 12; k++) text += pieces[Math.floor(random() * pieces.length)];
     const out = unmarked(text);

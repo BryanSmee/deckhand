@@ -5,15 +5,16 @@ import { normalize, repoAllowed } from "./config.mjs";
 
 // Marks our own comments, in case one ever reaches us from another account than the bot's.
 export const MARKER = "<!-- deckhand -->";
+// The signed "from" line's tag begins "<!--", spaces allowed, then this.
+const FROM = "deckhand-from:";
 
 // Text a dashboard user wrote, without the marks the listener puts on the App's posts (the
 // marker, the signed "from" line's tag, discussions.mjs fromLine()): posted as the App, it
 // would pass for Deckhand's answer or someone else's words. In one pass, each mark taken out
 // as its last character comes in, so the text around it can't join into another
 // ("<!-- deck<!-- deckhand -->hand -->"): what is left has none, and a run of unclosed tags
-// isn't read again for each of them, as a lazy regex would (#742).
-const FROM = "deckhand-from:";
-
+// isn't read again for each of them, as a lazy regex would (#742). A marker that a cut joins
+// is gone before its "-->" could close a tag, so that tag runs on to the next "-->".
 export function unmarked(text) {
   const s = String(text);
   const out = [];
