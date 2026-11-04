@@ -100,7 +100,7 @@ test(
     // Redis or a bucket shared with others keeps theirs.
     t.after(async () => {
       await runnerLogs?.remove(ID).catch(() => {});
-      await scanRedis(redis, `${prefix}*`, (key) => redis.call("DEL", key));
+      await scanRedis(redis, `${prefix}*`, (keys) => redis.call("DEL", ...keys));
       await Promise.all([store.close(), redis.close(), blobs.close()]);
     });
     const started = await runner(t, { store, blobs });
@@ -115,8 +115,8 @@ test(
     // The bytes of this log's segments in Redis, as STRLEN counts them.
     const inRedis = async () => {
       let bytes = 0;
-      await scanRedis(redis, `${prefix}b:logs/${ID}/*`, async (key) => {
-        bytes += Number(await redis.call("STRLEN", key));
+      await scanRedis(redis, `${prefix}b:logs/${ID}/*`, async (keys) => {
+        for (const key of keys) bytes += Number(await redis.call("STRLEN", key));
       });
       return bytes;
     };

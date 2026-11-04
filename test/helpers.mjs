@@ -178,13 +178,13 @@ export async function until(check, { ms = 5000, what = "the condition" } = {}) {
   }
 }
 
-// Redis's keys matching `pattern`, each given to `each`.
-export async function scanRedis(client, pattern, each) {
+// Redis's keys matching `pattern`, given to `page` a page of them at a time.
+export async function scanRedis(client, pattern, page) {
   let cursor = "0";
   do {
     const [next, keys] = await client.call("SCAN", cursor, "MATCH", pattern, "COUNT", 1000);
     cursor = String(next);
-    for (const key of keys) await each(key);
+    if (keys.length) await page(keys);
   } while (cursor !== "0");
 }
 
@@ -195,7 +195,7 @@ export function freshRedisPrefix(t, url) {
   t.after(async () => {
     const client = redisClient(url);
     try {
-      await scanRedis(client, `${prefix}*`, (key) => client.call("DEL", key));
+      await scanRedis(client, `${prefix}*`, (keys) => client.call("DEL", ...keys));
     } finally {
       await client.close();
     }
