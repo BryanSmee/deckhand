@@ -647,7 +647,7 @@ maps = await persist("Reading the orchestrator's maps from the store", () =>
       closed: {},
       pulls: {},
       dismissed: {},
-      order: { moved: ranked },
+      order: { moved: ranked, replace: true },
       onboarding: {},
       lanes: {},
       modes: {},
