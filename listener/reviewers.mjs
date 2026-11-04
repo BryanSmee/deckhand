@@ -123,11 +123,15 @@ export function createReviewers({
   log = () => {},
   now = Date.now,
 }) {
-  // Those of `logins` who may see `repo`'s tasks: a reviewer who can't is never asked.
+  // Those of `logins` who may see `repo`'s tasks: a reviewer who can't is never asked. A
+  // decision that fails throws: nothing is requested nor remembered, and the next delivery or
+  // run's end asks again.
   async function readers(repo, logins) {
     if (!permissions) return logins;
-    const may = await Promise.all(logins.map((l) => permissions.can(l, repo, "tasks:read")));
-    const out = logins.filter((_, i) => may[i]);
+    const said = await Promise.all(logins.map((l) => permissions.decide(l, repo, "tasks:read")));
+    const failed = said.find((d) => d.error);
+    if (failed) throw new Error(`who may see ${repo}'s tasks can't be decided (${failed.error})`);
+    const out = logins.filter((_, i) => said[i].ok);
     if (out.length < logins.length) {
       const left = logins.filter((l) => !out.includes(l));
       log(`${repo}: reviewers left out, without tasks:read: ${left.join(", ")}`);

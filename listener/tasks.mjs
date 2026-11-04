@@ -142,7 +142,12 @@ export function createTasks(ctx) {
       // start it holds back is its author's (`runs:start:<mode>`), a wait dropped alone a
       // manager's (`runs:manage`). Refused, nothing is said, as for a start (run-policy.mjs).
       const starts = item.trigger === "work" || !!item.modeLine;
-      const needed = starts ? startAction(item.modeLine ?? "work") : "runs:manage";
+      // `/mode policy` starts no run: what its dry run needs alone (task-modes.mjs).
+      const needed = !starts
+        ? "runs:manage"
+        : item.modeLine === "policy"
+          ? "tasks:read"
+          : startAction(item.modeLine ?? "work");
       if (ctx.permissions && !(await ctx.permissions.can(item.author, item.repo, needed))) {
         log(`${taskKey(item.repo, item.id)}: /after refused: ${item.author} has no ${needed} here`);
         return;

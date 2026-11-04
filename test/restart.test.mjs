@@ -1635,7 +1635,7 @@ test("access (#731): a comment queued while the queued ones are decided again is
   let release;
   const gate = new Promise((resolve) => (release = resolve));
   let asked = 0;
-  ctx.permissions = { can: async (...args) => (asked++, await gate, inner.can(...args)) };
+  ctx.permissions = { decide: async (...args) => (asked++, await gate, inner.decide(...args)) };
   Object.assign(ctx, {
     shotsDir: dir,
     titles: { get: () => null },
@@ -1659,5 +1659,34 @@ test("access (#731): a comment queued while the queued ones are decided again is
     said.filter((l) => /dropped/.test(l)),
     [],
   );
+  assert.ok(!settled.some(([, status]) => status === "refused"));
+});
+
+test("access (#731): a decision that fails drops no queued comment", async (t) => {
+  const dir = tempDir(t);
+  const said = [];
+  const settled = [];
+  const ctx = queueContext(t, dir, fileStore(), { log: (line) => said.push(line) });
+  ctx.settle = async (item, status) => settled.push([item.queueId, status]);
+  ctx.permissions = permissionsOf({ alice: { "org/repo": MEMBER } }, { failing: ["alice"] });
+  Object.assign(ctx, {
+    shotsDir: dir,
+    titles: { get: () => null },
+    broker: { register: () => {}, revoke: () => {}, runOf: () => null, secretsOf: () => [] },
+    runner: { state: async () => null, remove: async () => {} },
+    repoSettings: async () => ({ settings: null, errors: [], warnings: [] }),
+    answer: async () => {},
+    schedule: () => {},
+  });
+  Object.assign(ctx, createRuns(ctx), { config: { ...ctx.config, agent: "nobody" } });
+  const task = newTask({ ...queued("1"), name: "deckhand-org-repo-1" });
+  task.pending.push(queued("1", { queueId: "q-0" }));
+  ctx.tasks.set("org/repo#1", task);
+  await ctx.run(task).catch(() => {});
+  assert.deepEqual(
+    said.filter((l) => /dropped/.test(l)),
+    [],
+  );
+  assert.ok(said.some((l) => /runs:start:work not decided: the policies can't be read/.test(l)));
   assert.ok(!settled.some(([, status]) => status === "refused"));
 });

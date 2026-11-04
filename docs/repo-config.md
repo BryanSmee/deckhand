@@ -1651,7 +1651,7 @@ installations of the accounts owning a repository the login sees. A comment, an 
 only when its author has `runs:start:<mode>` for the mode it resolves to (else nothing starts,
 and nothing is said, as for an author outside the repository's `users`), `/cancel` and an
 `/after none` alone need `runs:manage`, an `/after` with a start the start's action, and `/mode policy`
-`tasks:read` (each refused without a word); queued work is checked again before it runs. An auto-pickup label starts work only
+`tasks:read` (each refused without a word); queued work is checked again before it runs (a decision that fails then drops nothing). An auto-pickup label starts work only
 when whoever added it, and whoever edited the issue since, have `runs:start:work`. A reviewer
 `review.request` names is requested only with `tasks:read`. A repository where a login has no
 action at all is hidden from it everywhere: the repositories list, the tasks, inboxes, lanes and

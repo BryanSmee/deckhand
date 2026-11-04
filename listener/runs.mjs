@@ -130,15 +130,18 @@ export function createRuns(ctx) {
       // begin() reads them again, and fails the run with the error.
     }
     // Their authors' access as it is now (permissions.mjs): `runs:start:<mode>`, the mode each
-    // was queued in. By item: a comment queued while it is decided was checked as it came.
+    // was queued in. By item: a comment queued while it is decided was checked as it came. A
+    // decision that fails drops nothing: the comment was accepted, and only a refusal undoes it
+    // (the run's own policy decisions fail it where people see it).
     const snapshot = [...task.pending];
     const verdicts = await Promise.all(
-      snapshot.map(
-        (item) =>
-          !ctx.permissions ||
-          !startedBy(item) ||
-          ctx.permissions.can(startedBy(item), task.repo, startAction(item.mode)),
-      ),
+      snapshot.map(async (item) => {
+        if (!ctx.permissions || !startedBy(item)) return true;
+        const action = startAction(item.mode);
+        const said = await ctx.permissions.decide(startedBy(item), task.repo, action);
+        if (said.error) log(`${taskKey(task.repo, task.id)}: ${action} not decided: ${said.error}`);
+        return said.ok || !!said.error;
+      }),
     );
     const may = new Map(snapshot.map((item, i) => [item, verdicts[i]]));
     let dropped = 0;

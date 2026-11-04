@@ -873,3 +873,16 @@ test("access: /after and /mode policy do nothing, and say nothing, for an author
   assert.deepEqual(dryRuns, ["bob"]);
   assert.deepEqual(replies, ["No denial."]);
 });
+
+test("access: a start whose decision fails is refused, saying it couldn't be decided", async () => {
+  const logs = [];
+  const allowed = createRunPolicy({
+    permissions: permissionsOf({ alice: { "org/repo": MEMBER } }, { failing: ["alice"] }),
+    log: (line) => logs.push(line),
+    answer: async () => {},
+  });
+  const item = itemOf();
+  assert.equal(await allowed(item, "work", "Org/Repo#12"), false);
+  assert.match(item.refused, /who may start it can't be decided now/);
+  assert.match(logs.join("\n"), /alice's runs:start:work can't be decided \(the policies/);
+});

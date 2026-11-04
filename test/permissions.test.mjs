@@ -82,6 +82,7 @@ test("apiRoute: a hidden repo answers as one outside ALLOWED_REPOS, a missing ac
       start: (req, res, user, repo) => sendJson(res, { started: repo }),
       server: (req, res, user) => sendJson(res, { server: user }),
     },
+    posts: { write: (req, res, user, repo) => sendJson(res, { wrote: repo }) },
     allowed: (repo) => repo !== "org/secret",
     permissions,
     action: ({ what }) =>
@@ -91,8 +92,8 @@ test("apiRoute: a hidden repo answers as one outside ALLOWED_REPOS, a missing ac
   const { url } = await serve(t, (req, res) => {
     if (!handle(req, res, req.headers["x-user"])) sendJson(res, { error: "not ours" }, 404);
   });
-  const ask = async (path, user) => {
-    const res = await fetch(url + path, { headers: { "x-user": user } });
+  const ask = async (path, user, init = {}) => {
+    const res = await fetch(url + path, { ...init, headers: { "x-user": user, ...init.headers } });
     return [res.status, await res.json()];
   };
   assert.deepEqual(await ask("/api/r/org/app/read", "bob"), [200, { read: "org/app" }]);
@@ -111,6 +112,14 @@ test("apiRoute: a hidden repo answers as one outside ALLOWED_REPOS, a missing ac
     hidden[1].error.replace("org/other", "X"),
     outside[1].error.replace("org/secret", "X"),
   );
+  // A POST from another site: refused before either is looked at, the same for both.
+  for (const repo of ["org/other", "org/secret"]) {
+    const post = await ask(`/api/r/${repo}/write`, "bob", { method: "POST" });
+    assert.deepEqual(post, [403, { error: "Not from this dashboard." }], repo);
+  }
+  const asked = permissions.asked.length;
+  await ask("/api/r/org/app/write", "bob", { method: "POST" });
+  assert.equal(permissions.asked.length, asked);
   // A route without a repo: server-wide.
   assert.deepEqual(await ask("/api/server-thing", "alice"), [200, { server: "alice" }]);
   assert.equal((await ask("/api/server-thing", "bob"))[0], 403);

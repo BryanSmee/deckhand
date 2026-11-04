@@ -174,9 +174,17 @@ export function createRunPolicy(ctx, now = Date.now) {
     // Who may start what where (permissions.mjs, #731), before the run's own decision. No reply,
     // as for an author outside the repo's `users`: the dashboard says it (`refused`).
     const action = startAction(mode);
-    if (ctx.permissions && !(await ctx.permissions.can(item.author, item.repo, action))) {
-      ctx.log(`${key}: ${mode} run refused: ${item.author} has no ${action} here`);
-      item.refused = `No \`${mode}\` run: ${item.author} may not start it here (\`${action}\`).`;
+    const said = ctx.permissions && (await ctx.permissions.decide(item.author, item.repo, action));
+    if (said && !said.ok) {
+      // A decision that failed says so: post the comment again once the policies answer.
+      ctx.log(
+        said.error
+          ? `${key}: ${mode} run refused: ${item.author}'s ${action} can't be decided (${said.error})`
+          : `${key}: ${mode} run refused: ${item.author} has no ${action} here`,
+      );
+      item.refused = said.error
+        ? `No \`${mode}\` run: who may start it can't be decided now; try again later.`
+        : `No \`${mode}\` run: ${item.author} may not start it here (\`${action}\`).`;
       return false;
     }
     if (!ctx.policies) return true;

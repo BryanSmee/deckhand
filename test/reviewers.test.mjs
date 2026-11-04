@@ -398,3 +398,21 @@ test("access: a requested reviewer who may not see the repo's tasks is left out"
   assert.equal(await none.reviewers.ready("pull_request", delivery("ready_for_review")), null);
   assert.deepEqual(none.posts(), []);
 });
+
+test("access: a reviewer's decision that fails requests nothing, and is asked again", async (t) => {
+  const failing = ["bob"];
+  const permissions = permissionsOf(
+    { alice: { "org/repo": VIEWER }, bob: { "org/repo": VIEWER } },
+    { failing },
+  );
+  const s = setup(t, { permissions });
+  await assert.rejects(s.reviewers.ready("pull_request", delivery("ready_for_review")), {
+    message: /who may see org\/repo's tasks can't be decided/,
+  });
+  assert.deepEqual(s.posts(), []);
+  failing.length = 0;
+  assert.deepEqual(await s.reviewers.ready("pull_request", delivery("ready_for_review")), [
+    "alice",
+    "bob",
+  ]);
+});
