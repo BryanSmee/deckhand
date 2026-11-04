@@ -723,6 +723,7 @@ const pulls = createPulls({
   listPulls: (repo) => listPulls(github, repo),
   getPull: (repo, number) => fetchPull(github, repo, number),
   readCi: (repo, sha) => commitCi(github, repo, sha),
+  mergeDelayMs: config.conflictMergeDelayMs,
 });
 
 // Failed runs dismissed from the dashboard, and runs whose questions were set aside (their
@@ -961,11 +962,13 @@ ctx.reviews = createReviews({
     }
   },
   // The dashboard's "merged by Deckhand", at once; and, merged into the default branch, the
-  // repo's other pull requests asked soon whether they still merge: no delivery comes first.
+  // repo's other pull requests asked soon whether they still merge (the watcher's, and the
+  // dashboard's in every repo): no delivery comes first.
   merged: (repo, pr) => {
     const { key, pr: entry } = pullEntry(repo, pr);
     pulls.record(key, { ...entry, autoMerged: true });
     if (intoDefaultBranch(pr)) {
+      pulls.baseMoved(repo);
       ctx.conflicts.soon(repo).catch((error) => log(`Conflicts: ${error.stack ?? error}`));
     }
   },

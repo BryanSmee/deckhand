@@ -4751,6 +4751,41 @@ allow_capabilities contains "read:pulls"
     await listener.until("done (ok)");
   });
 
+  test("conflicts: a merge into the default branch reads the dashboard's conflict again, watcher or not (#747)", async (t) => {
+    const open = {
+      number: 13,
+      state: "open",
+      mergeable: true,
+      mergeable_state: "clean",
+      labels: [],
+      head: { sha: "head-1", ref: "issue-12-fix", repo: { full_name: "org/repo" } },
+      base: { ref: "trunk", sha: "old" },
+    };
+    // No `conflicts` in the repo's config: only the dashboard asks.
+    const files = {
+      "pull:13": JSON.stringify({ ...open, mergeable: false, mergeable_state: "dirty" }),
+    };
+    const { dir, send, listener } = await listen(t, files, { CONFLICT_MERGE_DELAY_MS: "0" });
+    await send(
+      {
+        action: "opened",
+        installation: { id: 7 },
+        repository: { full_name: "org/repo", default_branch: "trunk" },
+        pull_request: { ...open, body: "Closes #12", draft: true },
+        sender: { login: "deckhand-x[bot]", type: "Bot" },
+      },
+      "pull_request",
+    );
+    await listener.until("org/repo#12: pull request #13 draft");
+    assert.equal((await storedMap(dir, "pulls"))["org/repo#12"].conflict, false);
+    // Another one merged into trunk: #13 conflicts now, at the same head, and no delivery says it.
+    await send(mergedPull(), "pull_request");
+    await until(
+      async () => (await storedMap(dir, "pulls"))["org/repo#12"].conflict === true,
+      "the conflict read again",
+    );
+  });
+
   test("/after: a run on #77 ending asks GitHub about #77 only", async (t) => {
     const files = {
       "issue:77": JSON.stringify({ state: "open" }),

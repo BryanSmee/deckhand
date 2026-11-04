@@ -703,8 +703,14 @@ are kept with it (`said`), so a later pair refused for the same ones isn't said 
 that keeps moving says it once). A refusal because GitHub couldn't be read (`unread`: the
 policies or the input) keeps no pair, nor a decision for the task's page (`keepUnread: false`): it is the repo's error for that pass, asked again at the
 next check, as any GitHub error there. What each check read is also passed to `pulls.mjs`
-(`sawMerge()`), so the dashboard's `pr.conflict` is current for those repos too; for the others it
-comes from the `pull_request` deliveries and Sync's reads (`resync()`), when GitHub computed it.
+(`sawMerge()`), so the dashboard's `pr.conflict` is current for those repos too. In every repo,
+it also comes from the `pull_request` deliveries (mostly `mergeable: null`: GitHub computes it
+after sending them), from the dashboard's Sync, which reads each open pull request itself
+(`resync({ all })`: a listing has no `mergeable`), and from `pulls.mjs` `baseMoved()`: the same
+deliveries and auto-merge that call `soon()` read the repo's open pull requests again after
+`CONFLICT_MERGE_DELAY_MS`, and once more later those GitHub hadn't computed yet, since a base
+that moves changes it at the same head without a delivery. A read that says nothing keeps the
+last value known.
 
 The dashboard's Sync runs the same pass at once (`check()`), with every opted-in repo due
 whatever its interval, and resets their next check as a tick does. During a tick, it waits for

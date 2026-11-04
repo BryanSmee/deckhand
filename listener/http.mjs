@@ -448,9 +448,11 @@ export function createHttp(ctx) {
     log(`Delivery: ${event} ${payload.action ?? ""} from ${payload.sender?.login ?? "?"}`);
     app.remember(payload.repository?.full_name, payload.installation?.id);
     // A default branch that moved: the repository list and the policies read it again, and
-    // its open pull requests are asked soon whether they still merge (conflicts.mjs).
+    // its open pull requests are asked soon whether they still merge (conflicts.mjs, and the
+    // dashboard's pr.conflict in every repo: pulls.mjs baseMoved()).
     if (refreshFor(event, payload, ctx.repoList.refresh) && payload.repository?.full_name) {
       ctx.policies?.forget(payload.repository.full_name);
+      ctx.pulls.baseMoved?.(payload.repository.full_name);
       ctx.conflicts?.soon(payload.repository.full_name)?.catch((error) => {
         log(`Conflicts: ${error.stack ?? error}`);
       });
