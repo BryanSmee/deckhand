@@ -280,21 +280,25 @@ test("s3: a call that takes too long fails at its deadline", async (t) => {
 
 test("s3: a server failing until the deadline: no retry starts past it", async (t) => {
   const s3 = await fakeS3(t);
-  // The waits move the clock on, not time.
+  // The waits move the clock on, not time. But what is left of the deadline is a real timer
+  // for each try: the jitter fixed at its most (1000, 2000, 4000 ms), the last try starts with
+  // 3 s left of 10, not a random few milliseconds a slow runner's round trip could take.
+  t.mock.method(Math, "random", () => 1);
   let clock = Date.parse("2026-11-02T00:00:00Z");
   const waits = [];
   const client = clientOf(t, s3, {
-    timeoutMs: 200,
+    timeoutMs: 10_000,
     retries: 100,
-    delayMs: 50,
+    delayMs: 1000,
     now: () => new Date(clock),
     sleep: async (ms) => (waits.push(ms), (clock += ms)),
   });
   s3.fail(...Array(100).fill({ status: 500, code: "InternalError" }));
   await assert.rejects(client.put("k", "v"), /^S3Error: S3 put k: 500 InternalError$/m);
   assert.equal(s3.requests.length, waits.length + 1);
-  assert.ok(waits.length >= 2 && waits.length <= 3, `${waits}`);
-  assert.ok(clock < Date.parse("2026-11-02T00:00:00.200Z"));
+  // The next wait, 8000 ms, would start a try past the deadline.
+  assert.deepEqual(waits, [1000, 2000, 4000]);
+  assert.ok(clock < Date.parse("2026-11-02T00:00:10Z"));
 });
 
 test("s3: an error that isn't the network's is thrown as it is, not tried again", async (t) => {
