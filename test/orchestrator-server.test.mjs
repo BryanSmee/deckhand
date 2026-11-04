@@ -4,7 +4,7 @@
 // The tests still say "listener" for the pair, edge and the orchestrator, that took its place.
 import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
-import { createHash, createHmac, generateKeyPairSync } from "node:crypto";
+import { createHash, createHmac, generateKeyPairSync, randomUUID } from "node:crypto";
 import {
   appendFileSync,
   chmodSync,
@@ -18,6 +18,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { createServer, request as httpRequest } from "node:http";
+import { connect, createServer as createNetServer } from "node:net";
 import { availableParallelism } from "node:os";
 import { dirname, join } from "node:path";
 import { describe, test } from "node:test";
@@ -56,6 +57,7 @@ import { createModels, credentialNames, runnerOf } from "../models/server.mjs";
 import { APP_EVENTS, APP_PERMISSIONS } from "../listener/github-app.mjs";
 import { gitBlob } from "../listener/images.mjs";
 import { openStore, values } from "../lib/store.mjs";
+import { encode, redisClient, replyParser } from "../lib/resp.mjs";
 import { pathToFileURL } from "node:url";
 import {
   evalResult,
@@ -66,6 +68,7 @@ import {
   isRoot,
   needsBash,
   needsModes,
+  needsSignals,
   tempDir,
   testKey,
   until as waitUntil,
@@ -770,6 +773,86 @@ test(
     // Nothing written: no folder of its own made, the state as it was.
     assert.ok(!existsSync(join(data, "logs")));
     assert.match(readFileSync(state, "utf8"), /kept/);
+  },
+);
+
+// A stop while the maps can't be read (#692): the store refuses them, the read is tried again,
+// and a SIGTERM meanwhile stops it cleanly, the lease given back at once, rather than crashing
+// on the maps it never got. A real Redis (TEST_REDIS_URL, CI's), reached through a relay that
+// refuses every command on a map's key: what the orchestrator does before them still works.
+test(
+  "a stop during the maps' first load exits cleanly and gives the lease back",
+  { skip: (!process.env.TEST_REDIS_URL && "no Redis: set TEST_REDIS_URL") || needsSignals },
+  async (t) => {
+    const dir = tempDir(t);
+    const broker = createBrokerService({
+      store: openStore("memory:"),
+      key: testKey(),
+      callers: createCallers({ networks: "orchestrator=127.0.0.0/8" }),
+      keysDir: join(dir, "keys"),
+    }).server;
+    const models = createServer((req, res) =>
+      res.end(
+        JSON.stringify(
+          req.url.startsWith("/credentials") ? { names: [] } : { salt: "s", values: [] },
+        ),
+      ),
+    );
+    const upstream = new URL(process.env.TEST_REDIS_URL);
+    const relay = createNetServer((client) => {
+      const redis = connect(Number(upstream.port || 6379), upstream.hostname);
+      client.on("error", () => redis.destroy());
+      redis.on("error", () => client.destroy());
+      client.on("close", () => redis.destroy());
+      redis.pipe(client);
+      // An unknown command in a refused one's place: its error reply comes back in order.
+      client.on(
+        "data",
+        replyParser((args) => {
+          const away = args.some((arg) => String(arg).includes(":k:store-maps/"));
+          redis.write(encode(away ? ["DECKHAND-STORE-AWAY"] : args));
+        }),
+      );
+    });
+    for (const server of [broker, models, relay]) {
+      await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+      t.after(() => (server.closeAllConnections?.(), server.close()));
+    }
+    const prefix = `deckhand-test:${randomUUID()}:`;
+    const direct = new URL(process.env.TEST_REDIS_URL);
+    direct.searchParams.set("prefix", prefix);
+    const relayed = new URL(direct);
+    relayed.host = `127.0.0.1:${relay.address().port}`;
+    const store = openStore(direct.href);
+    // Its keys removed after it: a Redis shared with other tests keeps theirs.
+    t.after(async () => {
+      await store.close();
+      const client = redisClient(process.env.TEST_REDIS_URL);
+      let cursor = "0";
+      do {
+        const [next, keys] = await client.call("SCAN", cursor, "MATCH", `${prefix}*`);
+        cursor = String(next);
+        if (keys.length) await client.call("DEL", ...keys);
+      } while (cursor !== "0");
+      await client.close();
+    });
+    const { child, until, output } = start({
+      DATA_DIR: join(dir, "data"),
+      STORE_URL: relayed.href,
+      SERVICES_PORT: "0",
+      ALLOWED_USERS: "alice",
+      GRANTS_DIR: join(dir, "grants"),
+      BROKER_SERVICE_URL: `http://127.0.0.1:${broker.address().port}`,
+      MODELS_SERVICE_URL: `http://127.0.0.1:${models.address().port}`,
+    });
+    t.after(() => child.kill("SIGKILL"));
+    await until(/Reading the orchestrator's maps from the store: .*trying again/);
+    const exited = new Promise((resolve) => child.on("close", resolve));
+    child.kill("SIGTERM");
+    assert.equal(await exited, 0, output());
+    assert.doesNotMatch(output(), /TypeError/);
+    // Given back: the next copy takes it at once, rather than once it expires.
+    assert.ok(await store.acquire("orchestrator", "test", { ttlMs: 1000 }), output());
   },
 );
 
