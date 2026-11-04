@@ -2,7 +2,6 @@
 // (its service tokens, the screenshots), a fake github service and a fake orchestrator. The deliveries' way to a
 // run and back to a reply goes through the orchestrator too: orchestrator-server.test.mjs.
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
 import { createHmac } from "node:crypto";
 import { writeFileSync } from "node:fs";
 import { request } from "node:http";
@@ -13,7 +12,15 @@ import { createBroker } from "../broker/server.mjs";
 import { signServiceToken } from "../lib/service-token.mjs";
 import { openStore } from "../lib/store.mjs";
 import { SESSION_COOKIE, SESSION_MS } from "../listener/auth.mjs";
-import { listening, needsSignals, serve, tempDir, testKey, until as waitFor } from "./helpers.mjs";
+import {
+  listening,
+  needsSignals,
+  serve,
+  startService,
+  tempDir,
+  testKey,
+  until as waitFor,
+} from "./helpers.mjs";
 
 const SECRET = "webhook-secret";
 const KEY = Buffer.alloc(32, 3);
@@ -69,42 +76,27 @@ async function startEdge(t) {
     });
     res.writeHead(200, { "content-type": "application/json" }).end('{"answered":true}');
   });
-  const child = spawn(process.execPath, ["edge/server.mjs"], {
-    cwd: join(import.meta.dirname, ".."),
-    env: {
-      PATH: process.env.PATH,
-      LOG_FORMAT: "text",
-      PORT: "0",
-      // A port the OS picks, as for PORT: one probed free first may be another test's by then.
-      INTERNAL_PORT: "0",
-      METRICS_PORT: "0",
-      DECKHAND_VERSION: "1.2.3",
-      DATA_DIR: dir,
-      ALLOWED_USERS: "alice",
-      PUBLIC_URL: "https://hooks.example.com",
-      BROKER_SERVICE_URL: `http://127.0.0.1:${brokerPort}`,
-      GITHUB_SERVICE_URL: github,
-      ORCHESTRATOR_URL: orchestrator,
-      SERVICE_NETWORKS: "orchestrator=127.0.0.0/8",
-      DRAIN_SECONDS: "2",
-    },
-    stdio: ["ignore", "pipe", "pipe"],
+  const edge = startService(t, "edge/server.mjs", {
+    PATH: process.env.PATH,
+    PORT: "0",
+    // A port the OS picks, as for PORT: one probed free first may be another test's by then.
+    INTERNAL_PORT: "0",
+    METRICS_PORT: "0",
+    DECKHAND_VERSION: "1.2.3",
+    DATA_DIR: dir,
+    ALLOWED_USERS: "alice",
+    PUBLIC_URL: "https://hooks.example.com",
+    BROKER_SERVICE_URL: `http://127.0.0.1:${brokerPort}`,
+    GITHUB_SERVICE_URL: github,
+    ORCHESTRATOR_URL: orchestrator,
+    SERVICE_NETWORKS: "orchestrator=127.0.0.0/8",
+    DRAIN_SECONDS: "2",
   });
-  let out = "";
-  child.stdout.on("data", (d) => (out += d));
-  child.stderr.on("data", (d) => (out += d));
-  t.after(() => child.kill("SIGKILL"));
-  const until = (pattern) =>
-    new Promise((resolve, reject) => {
-      const timer = setInterval(() => {
-        const found = typeof pattern === "string" ? out.includes(pattern) : pattern.exec(out);
-        if (found) (clearInterval(timer), resolve(found));
-      }, 20);
-      child.on("exit", (code) => (clearInterval(timer), reject(new Error(`exit ${code}: ${out}`))));
-    });
-  const port = Number((await until(/Listening on :(\d+)\n/))[1]);
-  const internalPort = Number((await until(/Internal port on :(\d+)\n/))[1]);
-  const metricsPort = Number((await until(/Metrics on :(\d+)\/metrics\n/))[1]);
+  const { child, until } = edge;
+  const portOf = async (re) => Number((await until(re)).match(re)[1]);
+  const port = await portOf(/Listening on :(\d+)\n/);
+  const internalPort = await portOf(/Internal port on :(\d+)\n/);
+  const metricsPort = await portOf(/Metrics on :(\d+)\/metrics\n/);
   const asOrchestrator = `Bearer ${signServiceToken({ sub: "orchestrator", aud: "edge" }, key)}`;
   const internal = (path, init = {}) =>
     fetch(`http://127.0.0.1:${internalPort}${path}`, {
@@ -124,7 +116,7 @@ async function startEdge(t) {
     asked,
     until,
     files,
-    output: () => out,
+    output: edge.output,
   };
 }
 
@@ -267,24 +259,14 @@ test("edge's own metrics: a delivery, a dashboard request and a signed-in user c
 });
 
 test("edge refuses a METRICS_PORT on its INTERNAL_PORT, before it listens", async (t) => {
-  const child = spawn(process.execPath, ["edge/server.mjs"], {
-    cwd: join(import.meta.dirname, ".."),
-    env: {
-      PATH: process.env.PATH,
-      LOG_FORMAT: "text",
-      DATA_DIR: tempDir(t),
-      ALLOWED_USERS: "alice",
-      PORT: "0",
-      INTERNAL_PORT: "9464",
-      METRICS_PORT: "9464",
-    },
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-  t.after(() => child.kill("SIGKILL"));
-  let out = "";
-  child.stdout.on("data", (d) => (out += d));
-  child.stderr.on("data", (d) => (out += d));
-  const code = await new Promise((resolve) => child.on("close", resolve));
+  const { code, out } = await startService(t, "edge/server.mjs", {
+    PATH: process.env.PATH,
+    DATA_DIR: tempDir(t),
+    ALLOWED_USERS: "alice",
+    PORT: "0",
+    INTERNAL_PORT: "9464",
+    METRICS_PORT: "9464",
+  }).exited;
   assert.equal(code, 1, out);
   assert.match(out, /Edge: METRICS_PORT: not INTERNAL_PORT's/);
   assert.doesNotMatch(out, /Listening on/);

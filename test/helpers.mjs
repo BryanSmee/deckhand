@@ -2,7 +2,7 @@
 // their test, a config, a fake GitHub's fetch. `node --test` loads it as a file of its own too
 // (everything under test/ matches its patterns), where it finds no test.
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { createHash, generateKeyPairSync, randomUUID } from "node:crypto";
 import {
   existsSync,
@@ -177,6 +177,53 @@ export async function until(check, { ms = 5000, what = "the condition" } = {}) {
     if (Date.now() > end) throw new Error(`timed out waiting for ${what}`);
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
+}
+
+// A service's entry point (`script`, from the repository's root: "edge/server.mjs"…), started
+// for real with `env` alone, its logs in text, which the tests read (lib/log.mjs's own tests
+// cover JSON). Killed after `t` (null: the caller kills `child` itself). `also()`: more output
+// output() and until() read, other processes' (what a run does is logged on every side).
+// until(text or RegExp) → the output once it has it, rejected if the service exits first;
+// exited → { code, out } once it did, its output read to the end ("close", not "exit": the
+// line it logged before exiting too).
+export function startService(t, script, env, { also } = {}) {
+  const child = spawn(process.execPath, [script], {
+    cwd: join(import.meta.dirname, ".."),
+    env: { LOG_FORMAT: "text", ...env },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  if (t) t.after(() => child.kill("SIGKILL"));
+  let out = "";
+  child.stdout.on("data", (chunk) => (out += chunk));
+  child.stderr.on("data", (chunk) => (out += chunk));
+  const output = () => out + (also?.() ?? "");
+  let gone = false;
+  const exited = new Promise((resolve) =>
+    child.on("close", (code) => ((gone = true), resolve({ code, out }))),
+  );
+  const until = (pattern) =>
+    new Promise((resolve, reject) => {
+      const found = () =>
+        typeof pattern === "string" ? output().includes(pattern) : pattern.test(output());
+      const check = () => found() && (stop(), resolve(output()));
+      const closed = () => (stop(), reject(new Error(`exit ${child.exitCode}: ${out}`)));
+      // Its own output is looked at as it comes; the others', which fires nothing here, every
+      // 20 ms.
+      const timer = also && setInterval(check, 20);
+      const stop = () => {
+        clearInterval(timer);
+        child.stdout.off("data", check);
+        child.stderr.off("data", check);
+        child.off("close", closed);
+      };
+      child.stdout.on("data", check);
+      child.stderr.on("data", check);
+      child.on("close", closed);
+      check();
+      // Asked once it had exited: no "close" to come (a no-op if it was found).
+      if (gone) closed();
+    });
+  return { child, output, own: () => out, until, exited };
 }
 
 // Redis's keys matching `pattern`, given to `page` a page of them at a time.

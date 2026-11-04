@@ -3,7 +3,6 @@
 // the check at start, the warning, and the secret key kept out of the store and the log; then
 // the broker and the runner started for real, stopped by blob storage or warning on /health.
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
 import { readdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { createServer as createNetServer } from "node:net";
 import { delimiter, join } from "node:path";
@@ -20,9 +19,15 @@ import {
 } from "../lib/blobs.mjs";
 import { createLogger } from "../lib/log.mjs";
 import { openStore } from "../lib/store.mjs";
-import { assertHealth, closedPort, fakeS3, listening, needsBash, tempDir } from "./helpers.mjs";
-
-const root = join(import.meta.dirname, "..");
+import {
+  assertHealth,
+  closedPort,
+  fakeS3,
+  listening,
+  needsBash,
+  startService as startShared,
+  tempDir,
+} from "./helpers.mjs";
 
 const s3Url = (s3, { bucket = s3.bucket, prefix = "", region = s3.region } = {}) =>
   `s3://${bucket}${prefix ? `/${prefix}` : ""}?endpoint=${encodeURIComponent(s3.endpoint)}&region=${region}`;
@@ -373,30 +378,8 @@ test("the secret key: refused in a store value, redacted from its blobs and its 
 
 // A service, started for real: a BLOB_URL that fails its check stops it with what failed,
 // before it takes a call; one that passes lets it start.
-function startService(t, script, env) {
-  const child = spawn(process.execPath, [join(root, script)], {
-    env: { PORT: "0", LOG_FORMAT: "text", STORE_URL: "memory:", ...env },
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-  t.after(() => child.kill("SIGKILL"));
-  let out = "";
-  child.stdout.on("data", (chunk) => (out += chunk));
-  child.stderr.on("data", (chunk) => (out += chunk));
-  return {
-    out: () => out,
-    // "close", not "exit": its output read to the end, the line it logged before exiting too.
-    exited: new Promise((resolve) => child.on("close", (code) => resolve({ code, out }))),
-    // Its lines on either stream (lib/log.mjs writes them all to stdout, today).
-    until: (pattern) =>
-      new Promise((resolve, reject) => {
-        const check = () => pattern.test(out) && resolve(out);
-        child.stdout.on("data", check);
-        child.stderr.on("data", check);
-        child.on("close", () => reject(new Error(`exited: ${out}`)));
-        check();
-      }),
-  };
-}
+const startService = (t, script, env) =>
+  startShared(t, script, { PORT: "0", STORE_URL: "memory:", ...env });
 
 const startBroker = (t, env) =>
   startService(t, "broker/server.mjs", {
@@ -543,6 +526,6 @@ test(
     assertHealth(health, { warnings: health.warnings, active: false });
     assert.equal(health.warnings.length, 1);
     assert.match(health.warnings[0], /^The runs' logs take Redis's memory: set BLOB_URL/);
-    assert.match(runner.out(), /WARN The runs' logs take Redis's memory/);
+    assert.match(runner.output(), /WARN The runs' logs take Redis's memory/);
   },
 );

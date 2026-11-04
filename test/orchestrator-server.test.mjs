@@ -3,7 +3,7 @@
 // plays the sandbox (asks the broker for a token, prints a result), a local server plays GitHub.
 // The tests still say "listener" for the pair, edge and the orchestrator, that took its place.
 import assert from "node:assert/strict";
-import { execFileSync, spawn } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import { createHash, createHmac, generateKeyPairSync } from "node:crypto";
 import {
   appendFileSync,
@@ -71,6 +71,7 @@ import {
   needsBash,
   needsModes,
   needsSignals,
+  startService,
   tempDir,
   testKey,
   until as waitUntil,
@@ -522,30 +523,9 @@ function tarOf(files) {
 
 // `script`: the orchestrator's, edge's or the runner's; `also()`: more output its until() and
 // output() read (edge's and the runner's, for the orchestrator's: what a run does is logged on
-// every side).
-function start(env, { script = "orchestrator/server.mjs", also = () => "" } = {}) {
-  const child = spawn(process.execPath, [script], {
-    cwd: join(import.meta.dirname, ".."),
-    // Text, which its assertions read: lib/log.mjs's own tests cover JSON.
-    env: { LOG_FORMAT: "text", ...env },
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-  let out = "";
-  child.stdout.on("data", (d) => (out += d));
-  child.stderr.on("data", (d) => (out += d));
-  const all = () => out + also();
-  const until = (text) =>
-    new Promise((resolve, reject) => {
-      const timer = setInterval(
-        () =>
-          (typeof text === "string" ? all().includes(text) : text.test(all())) &&
-          (clearInterval(timer), resolve(all())),
-        20,
-      );
-      child.on("exit", (code) => (clearInterval(timer), reject(new Error(`exit ${code}: ${out}`))));
-    });
-  return { child, until, output: all, own: () => out };
-}
+// every side). Killed by the test itself, which restarts some.
+const start = (env, { script = "orchestrator/server.mjs", also } = {}) =>
+  startService(null, script, env, { also });
 
 // The models service of a test's listener (../models/server.mjs): its settings, the agents'
 // credentials among them, as the listener's; its service tokens from the broker service, its
@@ -760,7 +740,7 @@ test(
     mkdirSync(dirname(state), { recursive: true });
     writeFileSync(state, '{"keys":{"queue":{"value":["kept"]}}}');
     chmodSync(state, 0o400);
-    const { child, output } = start({
+    const { child, output, exited } = start({
       DATA_DIR: data,
       ALLOWED_USERS: "alice",
       GRANTS_DIR: join(dir, "grants"),
@@ -768,7 +748,7 @@ test(
       MODELS_SERVICE_URL: `http://127.0.0.1:${models.address().port}`,
     });
     t.after(() => child.kill("SIGKILL"));
-    const code = await new Promise((resolve) => child.on("close", resolve));
+    const { code } = await exited;
     assert.equal(code, 1, output());
     assert.match(output(), /The orchestrator can't write .*state\.json \(EACCES\)/);
     assert.match(output(), /docker compose stop orchestrator.*--cap-add CHOWN/);
