@@ -507,9 +507,7 @@ export function WorkQueue({
   };
 
   // The tab's hint says what its drags do: not when none of its cards drags (access.ts).
-  const hinted = rows[tab].length
-    ? rows[tab].some((r) => r.drag)
-    : starts(picked.mode) || manages;
+  const hinted = rows[tab].length ? rows[tab].some((r) => r.drag) : starts(picked.mode) || manages;
 
   const LISTS: Record<QueueTab, { label: string; empty: string }> = {
     backlog: {
