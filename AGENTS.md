@@ -27,7 +27,8 @@ Node 26. The GitHub gateway has one dependency, graphql-js, bundled into a file 
 Run the first four before pushing (the dashboard's when it changed). CI runs them too, a job
 each, on every pull request and push to `main` (`.github/workflows/checks.yml`, GitHub-hosted
 runners): the tests twice, as a user that isn't root and as root in `node:26`, both with the
-real `opa` that `policy-service/Dockerfile` pins, so none of its tests skips there. A
+real `opa` that `policy-service/Dockerfile` pins and a Redis 7 beside them (`TEST_REDIS_URL`),
+so none of their tests skips there. A
 `kubernetes` job renders `deploy/kubernetes` with kustomize, alone and with each component, and
 the Helm chart, validates both with kubeconform, and runs `test/helm-chart.test.mjs` (the chart
 held to the base; it skips without `helm` and `kustomize` on the PATH, and fails the job if it
