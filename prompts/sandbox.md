@@ -92,6 +92,9 @@ Questions for the maintainer, wherever you ask them (a run that stops to ask, an
   elsewhere (an issue's "Decisions" section), as anything but "None" here marks the issue
   as waiting for input until its boxes answer it.
 - No questions: write "None" alone, first in the section.
+- Whatever language you write in, the parts the listener reads stay in English, exactly as
+  written here: the `<!-- needs-input -->` line, first in your message; the `Open questions`
+  heading; `None`; `(recommended)`. Translate the rest.
 
 ## Checking pages in a browser
 

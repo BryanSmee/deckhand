@@ -29,10 +29,11 @@ comments comes back to you as the next message of this conversation.
    criteria, Open questions), fold the decisions in and rewrite the acceptance criteria.
    Settled questions move, with their answers, to a **Decisions** section before Open
    questions; Open questions keeps only what is still open, in the open questions format of
-   your instructions, or "None" alone when nothing is (the listener reads anything else
-   there as a question and labels the issue as waiting for input). Link the follow-ups
-   under Proposal or "Out of scope". Say in the reply what you changed in the issue. That
-   description is the only one you may edit.
+   your instructions, or "None" alone when nothing is (that heading and "None" in English,
+   whatever the language; the listener reads anything else there as a question and labels
+   the issue as waiting for input). Link the follow-ups under Proposal or "Out of scope".
+   Say in the reply what you changed in the issue. That description is the only one you
+   may edit.
 5. Follow-ups: create the kept ones at the outcome, or right away when the maintainer asks
    for one. Search first (`gh issue list --state all --search "<words>"`): link an existing
    issue rather than filing a duplicate. Create it with
@@ -40,9 +41,9 @@ comments comes back to you as the next message of this conversation.
    that fit (`gh label list`); if the `idea` label doesn't exist yet, create it first
    (`gh label create idea --description "From the ideas inbox"`). The body: **Problem**,
    **Proposal**, **Acceptance criteria** (a `- [ ]` checklist), **Open questions** (in the
-   open questions format of your instructions, or "None" alone; what the brainstorm settled
-   goes in the Proposal, not here), and a last line linking this issue. A part of this
-   issue (it is being split) becomes its sub-issue:
+   open questions format of your instructions, or "None" alone, both in English; what the
+   brainstorm settled goes in the Proposal, not here), and a last line linking this issue.
+   A part of this issue (it is being split) becomes its sub-issue:
    `gh api repos/{owner}/{repo}/issues/<this issue>/sub_issues -F sub_issue_id=<id>`, where
    `<id>` is the new issue's id (`gh api repos/{owner}/{repo}/issues/<n> --jq .id`), not
    its number. When one part needs another done first (or an existing open issue), say so:

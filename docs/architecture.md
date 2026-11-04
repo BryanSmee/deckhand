@@ -176,15 +176,16 @@ posted: <status>". An orchestrator restarting before then posts it again (`live.
 false).
 
 A run that stops to ask (its final message starts with `<!-- needs-input -->`, see
-`prompts/sandbox.md`) shows as `needs-input` on the dashboard and labels the issue or pull
-request `NEEDS_INPUT_LABEL` (default `needs-input`) until the next run starts. A run asks too
-when its work is done but a step only the maintainer can take still blocks the merge (a write
-Deckhand refused, a file it may not edit, a secret to add; issue #551): its pull request stays
-ready, and each blocker is a question (`Done, carry on` / `Drop it`). A fix run (`review.fix`)
-asks the same of a finding whose fix the issue needs but it may not make, which ends the loop as
-waiting for input rather than leaving the finding for the next review (a change only a finding
-asks for is left, never asked). Its questions stop waiting earlier when
-nobody will answer them. `dismissals.mjs` `setAside()` then keeps them aside in
+`prompts/sandbox.md`, or has it on a line of its own before its first numbered line: a run that
+put a translated heading first, `asksInput()`) shows as `needs-input` on the dashboard and labels
+the issue or pull request `NEEDS_INPUT_LABEL` (default `needs-input`) until the next run
+starts. A run asks too when its work is done but a step only the maintainer can take still
+blocks the merge (a write Deckhand refused, a file it may not edit, a secret to add; issue #551):
+its pull request stays ready, and each blocker is a question (`Done, carry on` / `Drop it`). A
+fix run (`review.fix`) asks the same of a finding whose fix the issue needs but it may not
+make, which ends the loop as waiting for input rather than leaving the finding for the next
+review (a change only a finding asks for is left, never asked). Its questions stop waiting
+earlier when nobody will answer them. `dismissals.mjs` `setAside()` then keeps them aside in
 the store's `dismissed` while that run is the task's last:
 
 - someone other than the App's bot takes the label off the task's issue or pull request: an
@@ -267,7 +268,13 @@ questions so the graph doesn't open the form when it is off.
 
 The questions themselves have one format, set once in `prompts/sandbox.md` (the other prompts
 point to it): numbered, an optional `**Title**:` (a question all title is its text), options
-as an indented task list with one `(recommended)` or `(recommended: reason)`.
+as an indented task list with one `(recommended)` or `(recommended: reason)`. Whatever language
+a run writes in, the prompt keeps the parts the listener reads in English (the marker, the
+`Open questions` heading, `None`, `(recommended)`); the parser also reads a few translations
+of them (French, Spanish, German, Portuguese, Italian: hand-written issues, or a run that
+translated them anyway, issue #705). A reply's questions under headings it doesn't know are
+the first part after the marker when it parses as questions, else the first part whose
+questions have options, else the first with free-text questions.
 `parseQuestions()` (`questions.mjs`) reads them, all or nothing: a section in another shape
 comes as its markdown only (`items: null`). A task waiting for input carries
 them in `api/state` (`questions`): from the reply of its last run when that run stopped to ask

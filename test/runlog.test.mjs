@@ -85,6 +85,27 @@ test("outcome: ok, needs-input or error", () => {
     outcome({ ok: true, text: "\n<!-- needs-input -->\n## Needs your input" }),
     "needs-input",
   );
+  // Issue #705: after a translated heading or a sentence, on a line of its own, it still asks.
+  for (const text of [
+    "## Besoin de votre avis\n\n<!-- needs-input -->\n\n1. Lequel ?",
+    "Il me faut votre avis.\n<!-- needs-input -->\n1. Lequel ?",
+    "Il me faut votre avis.\r\n<!-- needs-input -->\r\n1. Lequel ?",
+  ]) {
+    assert.equal(outcome({ ok: true, text }), "needs-input", text);
+  }
+  // Not quoted in a sentence, in a code block, or after the first question.
+  for (const text of [
+    "Done. A run asks with `<!-- needs-input -->` first.",
+    "Done.\n```\n<!-- needs-input -->\n```",
+    "Done.\n1. Fixed it.\n<!-- needs-input -->",
+    "Done.\n\n<!-- needs-input --> is what a run starts with to ask.",
+    "Done.\r\n1. Fixed\r\n<!-- needs-input -->",
+    // After a numbered line, even a summary: a reply explaining the marker lists too.
+    "## Besoin de votre avis\n\nJ'ai fait :\n1. tests\n\n<!-- needs-input -->\n\n1. **A** : ?",
+    "Done. The format:\n\n    <!-- needs-input -->\n    ## Needs your input",
+  ]) {
+    assert.equal(outcome({ ok: true, text }), "ok", text);
+  }
 });
 
 test("summary: the first sentence of the reply, not its headings", () => {
@@ -95,6 +116,11 @@ test("summary: the first sentence of the reply, not its headings", () => {
     "1. Which one?",
   );
   assert.equal(summaryOf({ text: "## Only a heading" }), "Only a heading");
+  // The marker on a line of its own is gone too, after one quoted in a heading.
+  assert.equal(
+    summaryOf({ text: "## Using `<!-- needs-input -->`\n<!-- needs-input -->\n## Avis" }),
+    "Using `<!-- needs-input -->`",
+  );
   assert.equal(summaryOf({ text: "> - Quoted item" }), "Quoted item");
   const long = summaryOf({ text: "x".repeat(300) });
   assert.equal(long.length, 200);
