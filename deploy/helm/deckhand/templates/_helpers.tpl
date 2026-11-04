@@ -44,6 +44,7 @@ BLOB_ACCESS_KEY_ID: blobs.secretName (the runner's and the broker's alone)
 BLOB_SECRET_ACCESS_KEY: blobs.secretName (the runner's and the broker's alone)
 BLOB_ACCESS_KEY_ID_FILE: blobs.secretName (the runner's and the broker's alone)
 BLOB_SECRET_ACCESS_KEY_FILE: blobs.secretName (the runner's and the broker's alone)
+METRICS_PORT: metrics.port
 {{- end }}
 
 {{/* deckhand-env's data: the base's literals, the components', then the values'. */}}
@@ -282,6 +283,18 @@ spec:
 {{- if and .Values.ingress.enabled (not .Values.ingress.host) }}
 {{- fail "ingress.host: required with ingress.enabled" }}
 {{- end }}
+{{- if not .Values.metrics.namespace }}
+{{- fail "metrics.namespace: the namespace whose scraper alone reaches the metrics port" }}
+{{- end }}
+{{- if eq .Values.metrics.namespace .Values.namespaces.sandboxes .Values.namespaces.services }}
+{{- fail "metrics.namespace: your monitoring namespace, never the sandboxes' or the services'" }}
+{{- end }}
+{{- if has (int .Values.metrics.port) (list 3128 3129 8080 8081 8082 8083 8181) }}
+{{- fail (printf "metrics.port: %v is a service's own port (3128, 3129, 8080-8083, 8181): a port of its own" .Values.metrics.port) }}
+{{- end }}
+{{- if not (has .Values.metrics.serviceMonitor.kind (list "ServiceMonitor" "VMServiceScrape")) }}
+{{- fail (printf "metrics.serviceMonitor.kind: %q, where ServiceMonitor or VMServiceScrape is expected" .Values.metrics.serviceMonitor.kind) }}
+{{- end }}
 {{- if not .Values.apiServer.cidrs }}
 {{- fail "apiServer.cidrs: the API server's addresses, one at least" }}
 {{- end }}
@@ -296,4 +309,28 @@ spec:
 {{- fail "blobs.to, blobs.ports: blob storage's address and port, required with blobs.enabled" }}
 {{- end }}
 {{- end }}
+{{- end }}
+
+{{/* The metrics port (metrics.port): its pods' annotations, for the scrape jobs that read them. */}}
+{{- define "deckhand.metricsAnnotations" -}}
+annotations:
+  prometheus.io/scrape: "true"
+  prometheus.io/port: {{ .Values.metrics.port | quote }}
+  prometheus.io/path: /metrics
+{{- end }}
+
+{{- define "deckhand.metricsContainerPort" -}}
+- name: metrics
+  containerPort: {{ .Values.metrics.port }}
+{{- end }}
+
+{{- define "deckhand.metricsEnv" -}}
+- name: METRICS_PORT
+  value: {{ .Values.metrics.port | quote }}
+{{- end }}
+
+{{- define "deckhand.metricsServicePort" -}}
+- name: metrics
+  port: {{ .Values.metrics.port }}
+  targetPort: metrics
 {{- end }}

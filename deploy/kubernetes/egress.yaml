@@ -22,6 +22,11 @@ spec:
       app: deckhand-egress
   template:
     metadata:
+      # Its metrics, for the scrape jobs that read these (docs/kubernetes.md#metrics).
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9464"
+        prometheus.io/path: /metrics
       labels:
         app: deckhand-egress
     spec:
@@ -52,7 +57,12 @@ spec:
           ports:
             - name: proxy
               containerPort: 3128
+            - name: metrics
+              containerPort: 9464
           env:
+            # GET /metrics alone, from the monitoring namespace alone (network-policies.yaml).
+            - name: METRICS_PORT
+              value: "9464"
             - name: DRAIN_SECONDS
               value: "600"
             - name: SERVICE_ACCOUNT_TOKEN_FILE
@@ -128,3 +138,6 @@ spec:
     - name: proxy
       port: 3128
       targetPort: proxy
+    - name: metrics
+      port: 9464
+      targetPort: metrics

@@ -18,6 +18,7 @@ spec:
       app: deckhand-broker
   template:
     metadata:
+      {{- include "deckhand.metricsAnnotations" . | nindent 6 }}
       labels:
         app: deckhand-broker
     spec:
@@ -35,7 +36,9 @@ spec:
           ports:
             - name: http
               containerPort: 8081
+            {{- include "deckhand.metricsContainerPort" . | nindent 12 }}
           env:
+            {{- include "deckhand.metricsEnv" . | nindent 12 }}
             # Who calls, by its pod's service account (rbac.yaml): each service its own.
             - name: SERVICE_ACCOUNTS
               value: edge={{ $ns }}:deckhand-edge,orchestrator={{ $ns }}:deckhand-orchestrator,runner={{ $ns }}:deckhand-runner,github={{ $ns }}:deckhand-github,models={{ $ns }}:deckhand-models,proxy={{ $ns }}:deckhand-egress
@@ -99,3 +102,4 @@ spec:
     - name: http
       port: 8081
       targetPort: http
+    {{- include "deckhand.metricsServicePort" . | nindent 4 }}

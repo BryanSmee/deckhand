@@ -2,8 +2,9 @@
 # Whether the cluster enforces the sandboxes' NetworkPolicies (docs/kubernetes.md): a network
 # plugin that doesn't (Flannel alone, say) takes them and isolates nothing. From a pod labelled
 # as a sandbox, in the sandboxes' namespace, every port of every service's pod must be out of
-# reach, and the egress proxy's port the only one reached (its engines' port, 3129, too when its
-# Service publishes it: the engine component); the internet too stays out of reach.
+# reach (their metrics port, 9464, the monitoring namespace's alone, included), and the egress
+# proxy's port the only one reached (its engines' port, 3129, too when its Service publishes it:
+# the engine component); the internet too stays out of reach.
 #
 #   sh deploy/kubernetes/check-isolation.sh [services' namespace] [sandboxes' namespace]
 #
@@ -74,11 +75,13 @@ Promise.all(tries).then((lines) => console.log(lines.join("\n")));
 '
 
 # Whether pod $1 listens on port $2, asked from inside it (its loopback, which no policy sees):
-# "yes", "no", or "unknown" when its image has neither node nor nc.
+# "yes", "no", or "unknown" when its image has neither node nor nc. Its stdin is /dev/null: the
+# loop below reads its targets from stdin, which a kubectl that forwards it (a `docker exec -i`
+# wrapper, as deploy/kubernetes-e2e's) would take, leaving the rest unchecked.
 listens() {
-  if kubectl -n "$services" exec "$1" -- node -e "$TRY" "127.0.0.1:$2" 2>/dev/null >/tmp/deckhand-listens.$$; then
+  if kubectl -n "$services" exec "$1" -- node -e "$TRY" "127.0.0.1:$2" </dev/null 2>/dev/null >/tmp/deckhand-listens.$$; then
     case "$(cat /tmp/deckhand-listens.$$)" in *reached) echo yes ;; *) echo no ;; esac
-  elif kubectl -n "$services" exec "$1" -- nc -z -w 3 127.0.0.1 "$2" >/dev/null 2>&1; then
+  elif kubectl -n "$services" exec "$1" -- nc -z -w 3 127.0.0.1 "$2" </dev/null >/dev/null 2>&1; then
     echo yes
   else
     echo unknown

@@ -189,9 +189,9 @@ sh deploy/kubernetes/check-isolation.sh
 ```
 
 It starts a pod labelled as a sandbox in `deckhand-sandboxes`, tries every port of every service's
-pod from there and the egress proxy's, and expects the proxy's alone to answer: 3128, and 3129
-too when its Service publishes it (the `engine` component). A plugin that
-doesn't enforce NetworkPolicies fails it. The runner makes a check of its own as it starts
+pod from there (their [metrics](#metrics) port too) and the egress proxy's, and expects the
+proxy's alone to answer: 3128, and 3129 too when its Service publishes it (the `engine`
+component). A plugin that doesn't enforce NetworkPolicies fails it. The runner makes a check of its own as it starts
 ([The network probe](#the-network-probe)): its log says what it found. Then mention Deckhand on an issue
 ([setup.md, Use it](setup.md#3-use-it)): its first run starts a sandbox pod.
 
@@ -258,6 +258,7 @@ first install.
 | `buildkit.enabled`, `registry`              | off                          | the `buildkit` component ([Repo images](#repo-images)): `registry.url` is `KUBERNETES_REGISTRY` (refused without BuildKit), `registry.secretName` its pull Secret                                                 |
 | `blobs.enabled`, `.url`, `.to`, `.ports`    | off                          | the `blobs` component ([Blob storage](#blob-storage)): `BLOB_URL` and the `blobs.secretName` Secret (`deckhand-blobs`) for the runner and the broker alone, their way to its address (placeholders until set)     |
 | `engine.enabled`, `.image`, `.runtimeClass` | off                          | the `engine` component ([Container engine](#container-engine-on-kubernetes)): `SANDBOX_ENGINE=sysbox`, `ENGINE_IMAGE` (`<repository>-engine:<tag>` when empty), `KUBERNETES_ENGINE_RUNTIME_CLASS` (`sysbox-runc`) |
+| `metrics.port`, `.namespace`                | `9464`, `monitoring`         | the services' metrics port, and the only namespace that reaches it ([Metrics](#metrics)); `metrics.serviceMonitor` adds a `ServiceMonitor` or a `VMServiceScrape` for them                                        |
 | `ingress`                                   | off                          | an Ingress to edge's port 8080 for `ingress.host`, with `className`, `annotations` (cert-manager's, say) and `tlsSecretName`                                                                                      |
 
 `values.yaml` in the chart says more of each. `store`, `persistence.storageClass`,
@@ -446,6 +447,46 @@ for those two pods. Blob storage in the cluster (Garage's pods, setup.md's
 That namespace's own policies have to let them in. With Helm, `blobs.enabled`, `blobs.url`,
 `blobs.secretName`, `blobs.to` (the peers above) and `blobs.ports`.
 
+## Metrics
+
+Every service serves Prometheus metrics on a port of its own, 9464 (`METRICS_PORT`, in each
+Deployment: [setup.md](setup.md#metrics) says what they say), for Prometheus or VictoriaMetrics
+to scrape:
+
+- **The port**: a container port named `metrics` on each service's pods, the egress proxy's
+  too, and the same port on its Service, for a ServiceMonitor's endpoints. Both copies of the
+  orchestrator and the runner answer; what only the acting copy knows comes from it alone
+  (`deckhand_lease_held` says which).
+- **The annotations** on each pod, `prometheus.io/scrape: "true"`, `prometheus.io/port: "9464"`
+  and `prometheus.io/path: /metrics`: what annotation-based scrape jobs read, Prometheus'
+  `kubernetes-pods` example and VictoriaMetrics' (vmagent's) alike. With one, there is nothing
+  else to set up but the namespace below.
+- **The NetworkPolicy**, `deckhand-metrics`: the port lets in one namespace's pods alone, your
+  scraper's, by its `kubernetes.io/metadata.name`, and nothing else; never the sandboxes',
+  which [the network probe](#the-network-probe) and `check-isolation.sh` try it from, as every
+  other port. The base names `monitoring`: an overlay names yours (if its own policies deny
+  egress, let it out to the services' namespace on 9464 too):
+
+  ```yaml
+  patches:
+    - target: { kind: NetworkPolicy, name: deckhand-metrics }
+      patch: |
+        - op: replace
+          path: /spec/ingress/0/from/0/namespaceSelector/matchLabels/kubernetes.io~1metadata.name
+          value: victoria-metrics
+  ```
+
+  Not the sandboxes' namespace, nor the services' (its every pod, BuildKit's included): a
+  namespace of its own. The chart refuses both.
+
+With the chart, `metrics.namespace` is that namespace and `metrics.port` the port, everywhere
+the base says 9464. `metrics.serviceMonitor.enabled` adds a `ServiceMonitor` (the Prometheus
+Operator's) or, with `metrics.serviceMonitor.kind: VMServiceScrape`, VictoriaMetrics' operator's,
+in the services' namespace: each Service's `metrics` port, with `metrics.serviceMonitor.labels`
+for your operator's selector (`release: kube-prometheus-stack`, say) and `.interval`. Its CRD has
+to be in the cluster first: off by default. It keeps Deckhand's own `service` label
+(`honorLabels`), which is the Service's name already.
+
 ## Repo images
 
 A repository granted its own image (`dockerfile`) is built by BuildKit in the cluster and pushed
@@ -515,7 +556,8 @@ saying why. What it expects, and the manifests give it:
   (`deckhand-api-server`, [Install](#install) step 2; the runner the registries on 443 too with
   `buildkit`), and the proxy any host
   but the private ranges (add yours to its policy to grant a host of your network). The policy
-  service reaches nothing.
+  service reaches nothing. Every service's metrics port is your monitoring namespace's alone
+  (`deckhand-metrics`, [Metrics](#metrics)).
 - **The sandboxes' NetworkPolicies**: their pods are labelled `deckhand.role: sandbox`. One
   policy has to pick them for both `Ingress` and `Egress`, and none that picks them may let
   anything in, or let them out to anything but the egress proxy's pods, each rule naming the
@@ -633,7 +675,8 @@ enforces, not on how fast it applies it), it tries a TCP connection, 3 s at most
 
 - every port of every Service of the services' namespace, at its cluster IP and at one of its
   pods' addresses (some plugins treat the two differently): edge, the orchestrator, the runner,
-  the broker, the github, models and policy services, BuildKit, Redis, whatever else is there;
+  the broker, the github, models and policy services, BuildKit, Redis, whatever else is there,
+  their [metrics](#metrics) port included, the egress proxy's too;
 - with `KUBERNETES_REGISTRY` set, the registry's host and BuildKit's (`KUBERNETES_BUILDKIT`),
   and with `STORE_URL=redis://…`, Redis's, as the runner resolves them, wherever they are;
 - the cluster's DNS (the runner's own nameservers, the `kube-dns` Service), TCP and UDP 53:
