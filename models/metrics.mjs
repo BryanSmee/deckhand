@@ -192,6 +192,12 @@ export function modelMetrics(registry, { readUsage = async () => [], now = Date.
       values: { provider: PROVIDERS, agent: AGENTS, status: STATUSES },
     },
   );
+  // At 0 from the start: a rate needs its first sample, or the first 429 of a provider never
+  // counts in an increase().
+  for (const provider of PROVIDERS) {
+    for (const agent of AGENTS)
+      for (const status of STATUSES) calls.inc({ provider, agent, status }, 0);
+  }
   const durations = registry.histogram(
     "deckhand_model_call_duration_seconds",
     "How long an agent's API call took, its answer streamed whole, in seconds.",

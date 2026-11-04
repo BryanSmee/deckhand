@@ -154,24 +154,29 @@ jobs:
       KUBECONFORM_SHA256: 9bc2bffbf71f261128533edaf912153948b7ff238f9a531ae6d34466ec287883
       HELM_VERSION: 4.3.1
       HELM_SHA256: 0403a88ae20913d11b10a2467b50087721fea7581736da6b9d3992f5357fe54b
+      # promtool, for the alert rules: Prometheus' release, the one docs/setup.md's example runs.
+      PROMETHEUS_VERSION: 3.15.1
+      PROMETHEUS_SHA256: 6a726885328ad9efebbf36e876ce2fb6225468a71fd1e7ce3ba666d5f4d97a84
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 26
-      - name: Install kustomize, kubeconform and helm
+      - name: Install kustomize, kubeconform, helm and promtool
         working-directory: ${{ runner.temp }}
         run: |
           curl -fsSLo kustomize.tgz "https://github.com/kubernetes-sigs/kustomize/releases/download/kustomize%2Fv${KUSTOMIZE_VERSION}/kustomize_v${KUSTOMIZE_VERSION}_linux_amd64.tar.gz"
           curl -fsSLo kubeconform.tgz "https://github.com/yannh/kubeconform/releases/download/v${KUBECONFORM_VERSION}/kubeconform-linux-amd64.tar.gz"
           curl -fsSLo helm.tgz "https://get.helm.sh/helm-v${HELM_VERSION}-linux-amd64.tar.gz"
-          printf '%s  kustomize.tgz\n%s  kubeconform.tgz\n%s  helm.tgz\n' "$KUSTOMIZE_SHA256" "$KUBECONFORM_SHA256" "$HELM_SHA256" | sha256sum -c -
+          curl -fsSLo prometheus.tgz "https://github.com/prometheus/prometheus/releases/download/v${PROMETHEUS_VERSION}/prometheus-${PROMETHEUS_VERSION}.linux-amd64.tar.gz"
+          printf '%s  kustomize.tgz\n%s  kubeconform.tgz\n%s  helm.tgz\n%s  prometheus.tgz\n' "$KUSTOMIZE_SHA256" "$KUBECONFORM_SHA256" "$HELM_SHA256" "$PROMETHEUS_SHA256" | sha256sum -c -
           mkdir -p bin
           tar -xzf kustomize.tgz -C bin kustomize
           tar -xzf kubeconform.tgz -C bin kubeconform
           tar -xzf helm.tgz -C bin --strip-components 1 linux-amd64/helm
+          tar -xzf prometheus.tgz -C bin --strip-components 1 "prometheus-${PROMETHEUS_VERSION}.linux-amd64/promtool"
           echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
-      - run: kustomize version && kubeconform -v && helm version
+      - run: kustomize version && kubeconform -v && helm version && promtool --version
       # An overlay per combination, outside the repository as an operator's would be, with
       # relative paths: kustomize refuses an absolute one. pipefail: a kustomize that fails gives
       # kubeconform nothing, which it would pass.
@@ -221,6 +226,7 @@ jobs:
             --set image.tag=v1.2.3,persistence.storageClass=ssd,sandboxes.storageClass=ssd \
             --set registry.url=registry.example.com/deckhand,ingress.enabled=true \
             --set ingress.host=deckhand.example.com,ingress.tlsSecretName=deckhand-tls \
+            --set metrics.dashboard.enabled=true \
             | kubeconform -strict -summary
           node --test --test-reporter=spec --test-reporter-destination=stdout \
             --test-reporter=tap --test-reporter-destination="$RUNNER_TEMP/helm.tap" test/helm-chart.test.mjs
@@ -228,6 +234,12 @@ jobs:
             echo "::error::helm chart tests skipped"
             exit 1
           fi
+      # The alert rules (deploy/alerts), which the chart's PrometheusRule carries: they parse, and
+      # each fires on what its test says.
+      - name: Alert rules
+        run: |
+          promtool check rules deploy/alerts/deckhand.yaml
+          promtool test rules deploy/alerts/deckhand.test.yaml
 
   format:
     runs-on: [self-hosted, Linux] # TODO: change to ubuntu-latest on public release

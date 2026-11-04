@@ -119,7 +119,8 @@ export function githubMetrics(
     "How long GitHub's API took to answer, to its headers, in seconds.",
     { labels: ["caller"], values: { caller: CALLERS } },
   );
-  // resource → key → { remaining, reset (Unix seconds) }, from the latest answer for that key.
+  // resource → key → { remaining, limit, reset (Unix seconds) }, from the latest answer for that
+  // key.
   const limits = new Map(RESOURCES.map((r) => [r, new Map()]));
   // The lowest remaining of the keys whose window isn't over, and its reset: [resource, entry].
   function lowest() {
@@ -143,6 +144,21 @@ export function githubMetrics(
       labels: ["resource"],
       values: { resource: RESOURCES },
       collect: () => lowest().map(([resource, low]) => [{ resource }, low.remaining]),
+    },
+  );
+  // The size of that lowest one's window (5000 an hour, 15000 on Enterprise Cloud…), for an alert
+  // on its share left: none when GitHub didn't say. That share is the fewest calls left's, close
+  // to the lowest share: a key with a larger window may have less of it left, and more calls.
+  registry.gauge(
+    "deckhand_github_rate_limit_limit",
+    "The calls that lowest rate limit allows in its window, as GitHub said (its share left is that key's, not always the lowest share).",
+    {
+      labels: ["resource"],
+      values: { resource: RESOURCES },
+      collect: () =>
+        lowest()
+          .filter(([, low]) => Number.isFinite(low.limit))
+          .map(([resource, low]) => [{ resource }, low.limit]),
     },
   );
   registry.gauge(
@@ -191,6 +207,7 @@ export function githubMetrics(
     const resource = header(headers, "x-ratelimit-resource");
     const remaining = Number(header(headers, "x-ratelimit-remaining"));
     const reset = Number(header(headers, "x-ratelimit-reset"));
+    const limit = Number(header(headers, "x-ratelimit-limit") ?? NaN);
     const keys = limits.get(resource);
     // A call without a token (/setup's manifest conversion) has the address's limit, 60 an hour:
     // none of the installations' nor the App's.
@@ -198,7 +215,7 @@ export function githubMetrics(
     if (!keys || !Number.isFinite(remaining) || !Number.isFinite(reset)) return;
     const key = limitKey(authorization);
     keys.delete(key);
-    keys.set(key, { remaining, reset });
+    keys.set(key, { remaining, limit, reset });
     // The oldest dropped past the cap: a key not heard of since is the least likely the lowest.
     if (keys.size > MAX_LIMITS) keys.delete(keys.keys().next().value);
   }

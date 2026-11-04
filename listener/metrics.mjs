@@ -19,9 +19,10 @@ export const OUTCOMES = ["ok", "needs-input", "error", "cancelled"];
 export const KINDS = ["work", "light", "review", "fix", "ci-fix", "conflict", "auto-pickup"];
 
 // Why a comment waits rather than runs (queuedReasons()): a free slot, its repo's own
-// max_parallel, the pause that makes a burst one run, other issues ("/after"), the answers to
-// its issue's open questions once they are done.
-export const QUEUED = ["slot", "repo", "pause", "after", "answers"];
+// max_parallel, one of AUTO_PICKUP_SLOTS while picked runs hold them all (an auto-picked task
+// takes no other slot), the pause that makes a burst one run, other issues ("/after"), the
+// answers to its issue's open questions once they are done.
+export const QUEUED = ["slot", "repo", "pickup", "pause", "after", "answers"];
 
 // What became of a delivery (deliveryResult()).
 export const DELIVERY_RESULTS = ["taken", "ignored", "refused"];
@@ -145,19 +146,25 @@ export function deliveryResult({ event, refused = false, item = false, ci = fals
 }
 
 // Why each task with comments queued waits, and the waits for other issues: [[{ reason }, n]].
-// `tasks`: ctx.tasks' values; `waits`: waits.mjs list()'s.
-export function queuedReasons(tasks, waits, maxParallel) {
+// `tasks`: ctx.tasks' values; `waits`: waits.mjs list()'s; `reserved`: AUTO_PICKUP_SLOTS.
+export function queuedReasons(tasks, waits, maxParallel, reserved = 0) {
   const counts = new Map(QUEUED.map((reason) => [reason, 0]));
   const add = (reason) => counts.set(reason, counts.get(reason) + 1);
   const runningIn = new Map();
   for (const t of tasks) if (t.running) runningIn.set(t.repo, (runningIn.get(t.repo) ?? 0) + 1);
+  // AUTO_PICKUP_SLOTS held by auto-picked runs: once they all are, a picked task waits for one
+  // of them to end; with one free, it would start (startable()), so waiting is a `slot`'s.
+  const reservedFull =
+    reserved > 0 && tasks.filter((t) => t.running && pickedTask(t)).length >= reserved;
   for (const t of tasks) {
     if (t.running || !t.pending.length) continue;
     if (!t.ready) add("pause");
     else {
       // Held back by a cap of its own repo's below MAX_PARALLEL (repo-config.mjs startable()).
       const cap = t.settings?.maxParallel ?? maxParallel;
-      add(cap < maxParallel && (runningIn.get(t.repo) ?? 0) >= cap ? "repo" : "slot");
+      if (cap < maxParallel && (runningIn.get(t.repo) ?? 0) >= cap) add("repo");
+      // Its reserved slots alone (repo-config.mjs startable()): free ones elsewhere aren't its.
+      else add(reservedFull && pickedTask(t) ? "pickup" : "slot");
     }
   }
   for (const w of waits) add(w.answers ? "answers" : "after");
@@ -179,18 +186,29 @@ export function pickupSlots({ reserved, maxParallel, used, others }) {
 // The orchestrator's own: `ctx()` its shared state (server.mjs) once it acts, null before; the
 // gauges have no samples then.
 export function orchestratorMetrics(registry, { ctx }) {
+  const modes = [...BUILT_IN, "custom"];
+  const agents = Object.keys(AGENTS);
   const started = registry.counter(
     "deckhand_runs_started_total",
     "Runs started: past their settings, their sandbox being prepared.",
     {
       labels: ["mode", "agent", "kind"],
-      values: { mode: [...BUILT_IN, "custom"], agent: Object.keys(AGENTS), kind: KINDS },
+      values: { mode: modes, agent: agents, kind: KINDS },
+      // Every series at 0 from the start (below), past the default cap: their product with room
+      // for each label's `other`, so that a value outside them folds into its own label alone.
+      maxSeries: (modes.length + 1) * (agents.length + 1) * (KINDS.length + 1),
     },
   );
   const finished = registry.counter("deckhand_runs_finished_total", "Runs ended, by outcome.", {
     labels: ["mode", "outcome"],
-    values: { mode: [...BUILT_IN, "custom"], outcome: OUTCOMES },
+    values: { mode: modes, outcome: OUTCOMES },
   });
+  // At 0 from the start, every series: a rate needs its first sample, or a copy's first run of
+  // each (its first error after an update, say) never counts in an increase().
+  for (const mode of modes) {
+    for (const outcome of OUTCOMES) finished.inc({ mode, outcome }, 0);
+    for (const agent of agents) for (const kind of KINDS) started.inc({ mode, agent, kind }, 0);
+  }
   const durations = registry.histogram(
     "deckhand_run_duration_seconds",
     "How long runs take, from leaving the queue to their end, in seconds.",
@@ -236,7 +254,12 @@ export function orchestratorMetrics(registry, { ctx }) {
     collect: () => {
       const c = acting();
       if (!c) return [];
-      return queuedReasons([...c.tasks.values()], c.waits?.list() ?? [], c.config.maxParallel);
+      return queuedReasons(
+        [...c.tasks.values()],
+        c.waits?.list() ?? [],
+        c.config.maxParallel,
+        c.config.autoPickupSlots ?? 0,
+      );
     },
   });
   registry.gauge("deckhand_max_parallel", "MAX_PARALLEL: the most runs going at once.", {
