@@ -384,12 +384,15 @@ function startService(t, script, env) {
   child.stderr.on("data", (chunk) => (out += chunk));
   return {
     out: () => out,
-    exited: new Promise((resolve) => child.on("exit", (code) => resolve({ code, out }))),
+    // "close", not "exit": its output read to the end, the line it logged before exiting too.
+    exited: new Promise((resolve) => child.on("close", (code) => resolve({ code, out }))),
+    // Its lines on either stream (lib/log.mjs writes them all to stdout, today).
     until: (pattern) =>
       new Promise((resolve, reject) => {
         const check = () => pattern.test(out) && resolve(out);
         child.stdout.on("data", check);
-        child.on("exit", () => reject(new Error(`exited: ${out}`)));
+        child.stderr.on("data", check);
+        child.on("close", () => reject(new Error(`exited: ${out}`)));
         check();
       }),
   };
@@ -509,6 +512,7 @@ test(
     // No warning: none in it. Active or not yet, as it listens before it takes its lease.
     const health = await runnerHealth(runner);
     assertHealth(health, { active: health.active });
+    assert.equal(typeof health.active, "boolean");
     assert.match(await runner.until(/Blob storage: s3/), /Blob storage: s3, bucket deckhand at /);
     // Its check's object written, then deleted.
     assert.deepEqual(
