@@ -2,7 +2,8 @@
 # (docs/security.md#on-kubernetes). Nothing goes in or out of a pod but what a policy below lets
 # through: each service is reached by its callers alone, on its port, and only the services
 # whose Compose network has a way out (edge, the github and models services, the proxy) reach
-# beyond the cluster; the runner and the broker reach the API server's addresses alone.
+# beyond the cluster; the runner and the broker reach the API server's addresses alone. Their
+# metrics port is your monitoring namespace's alone (deckhand-metrics, at the end).
 #
 # Ways out are written as ipBlocks on 443. The proxy's way out leaves out the private
 # ranges, so a sandbox's granted host can't be a pod or a node; add one there to grant a host
@@ -491,4 +492,37 @@ spec:
         - port: 443
           protocol: TCP
         - port: 6443
+          protocol: TCP
+---
+# Every service's metrics port (METRICS_PORT, 9464): your monitoring namespace alone, whose
+# Prometheus or VictoriaMetrics scrapes it, by its kubernetes.io/metadata.name; never the
+# sandboxes', which the runner's network probe and check-isolation.sh try it from. `monitoring` is
+# a placeholder your overlay replaces with yours (docs/kubernetes.md#metrics).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: deckhand-metrics
+  namespace: deckhand
+spec:
+  podSelector:
+    matchExpressions:
+      - key: app
+        operator: In
+        values:
+          - deckhand-edge
+          - deckhand-orchestrator
+          - deckhand-runner
+          - deckhand-broker
+          - deckhand-github
+          - deckhand-models
+          - deckhand-policy
+          - deckhand-egress
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
+      ports:
+        - port: 9464
           protocol: TCP

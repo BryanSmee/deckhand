@@ -1,0 +1,34 @@
+{{- if .Values.metrics.serviceMonitor.enabled }}
+{{- $sm := .Values.metrics.serviceMonitor }}
+# The services' metrics for the Prometheus Operator (ServiceMonitor) or VictoriaMetrics' operator
+# (VMServiceScrape), which share this spec: each Service's `metrics` port, the ones without it
+# (Redis, BuildKit) picked by the selector and left out. honorLabels: Deckhand's own `service`
+# label is the Service's name already, kept as `service` rather than `exported_service`.
+{{- if eq $sm.kind "ServiceMonitor" }}
+apiVersion: monitoring.coreos.com/v1
+{{- else }}
+apiVersion: operator.victoriametrics.com/v1beta1
+{{- end }}
+kind: {{ $sm.kind }}
+metadata:
+  name: deckhand
+  namespace: {{ include "deckhand.ns" . }}
+  labels:
+    {{- include "deckhand.labels" . | nindent 4 }}
+    {{- with $sm.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "deckhand.labels" . | nindent 6 }}
+  namespaceSelector:
+    matchNames: [{{ include "deckhand.ns" . }}]
+  endpoints:
+    - port: metrics
+      path: /metrics
+      honorLabels: true
+      {{- with $sm.interval }}
+      interval: {{ . }}
+      {{- end }}
+{{- end }}

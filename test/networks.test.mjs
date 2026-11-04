@@ -131,6 +131,37 @@ test("compose.yaml: each network joins services that call each other, the runs' 
   );
 });
 
+// docs/setup.md's compose.override.yaml for metrics (#653): each service on an internal network
+// shared with the scraper alone, as one for all of them would join services that don't call each
+// other, and the scraper on none of compose.yaml's.
+test("setup.md: the metrics override puts each service on a network of its own with the scraper", () => {
+  const setup = readFileSync(join(root, "docs", "setup.md"), "utf8");
+  const [, text] = /```yaml\n(# compose\.override\.yaml: each service's metrics[^]*?)```/.exec(
+    setup,
+  );
+  const override = readCompose(text);
+  const compose = readCompose(readFileSync(join(root, "compose.yaml"), "utf8"));
+  const scraper = "prometheus";
+  const ours = Object.keys(override.services).filter((name) => name !== scraper);
+  assert.deepEqual(ours.sort(), Object.keys(RUNS).sort());
+  const scraped = networksOf(override.services[scraper]);
+  for (const name of ours) {
+    const nets = networksOf(override.services[name]);
+    assert.deepEqual(nets, [`metrics-${name}`], name);
+    assert.equal(override.networks[nets[0]].internal, true, nets[0]);
+    assert.ok(scraped.includes(nets[0]), `${scraper} on ${nets[0]}`);
+    // On no other service's, nor on compose.yaml's own networks.
+    assert.ok(!(nets[0] in compose.networks), nets[0]);
+  }
+  for (const net of scraped.filter((n) => !n.startsWith("metrics-"))) {
+    assert.ok(!(net in compose.networks), `${scraper}: on compose.yaml's ${net}`);
+  }
+  // Its scrape config names each service at METRICS_PORT.
+  const config = parseYaml(override.configs.prometheus.content);
+  const targets = config.scrape_configs[0].static_configs.flatMap((c) => c.targets);
+  assert.deepEqual(targets.sort(), ours.map((name) => `${name}:9464`).sort());
+});
+
 // The broker, the runner, the models service and the github service tell their callers apart by
 // the network a call arrives on (SERVICE_NETWORKS): each caller's subnet there has to be the one
 // of a network it shares with that service, and with no other, or another service's calls would

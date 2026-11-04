@@ -16,6 +16,7 @@ spec:
       app: deckhand-policy
   template:
     metadata:
+      {{- include "deckhand.metricsAnnotations" . | nindent 6 }}
       labels:
         app: deckhand-policy
     spec:
@@ -30,6 +31,9 @@ spec:
           ports:
             - name: http
               containerPort: 8181
+            {{- include "deckhand.metricsContainerPort" . | nindent 12 }}
+          env:
+            {{- include "deckhand.metricsEnv" . | nindent 12 }}
           {{- include "deckhand.probes" (list "http" "/ready" "/health") | nindent 10 }}
           lifecycle:
             preStop:
@@ -68,3 +72,4 @@ spec:
     - name: http
       port: 8181
       targetPort: http
+    {{- include "deckhand.metricsServicePort" . | nindent 4 }}

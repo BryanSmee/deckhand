@@ -18,6 +18,7 @@ spec:
       app: deckhand-runner
   template:
     metadata:
+      {{- include "deckhand.metricsAnnotations" . | nindent 6 }}
       labels:
         app: deckhand-runner
     spec:
@@ -35,10 +36,12 @@ spec:
           ports:
             - name: http
               containerPort: 8080
+            {{- include "deckhand.metricsContainerPort" . | nindent 12 }}
           envFrom:
             - configMapRef:
                 name: {{ include "deckhand.envName" . }}
           env:
+            {{- include "deckhand.metricsEnv" . | nindent 12 }}
             - name: SERVICE_NETWORKS
               value: none
             - name: SERVICE_ACCOUNT_TOKEN_FILE
@@ -111,3 +114,4 @@ spec:
     - name: http
       port: 8080
       targetPort: http
+    {{- include "deckhand.metricsServicePort" . | nindent 4 }}

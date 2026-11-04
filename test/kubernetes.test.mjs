@@ -2222,6 +2222,38 @@ test("network probe: a service, Redis, the registry, the cluster's DNS, the API 
   }
 });
 
+// The metrics port (9464) the manifests give every Service, the egress proxy's too
+// (deploy/kubernetes, #653): the monitoring namespace's alone, so a sandbox reaching it is a leak.
+test("network probe: every Service's metrics port, the egress proxy's too, is tried, and reaching it refuses runs", async (t) => {
+  const metrics = { name: "metrics", port: 9464, protocol: "TCP" };
+  const services = structuredClone(CLUSTER_SERVICES);
+  const slices = structuredClone(CLUSTER_SLICES);
+  for (const { spec } of Object.values(services)) spec.ports.push(metrics);
+  for (const slice of slices) slice.ports.push(metrics);
+  const p = probed(t, { services, slices });
+  await p.runner.start(spec());
+  const tried = p.targets();
+  for (const target of [
+    "10.96.0.20:9464",
+    "10.244.2.5:9464",
+    "10.96.0.11:9464",
+    "10.244.3.9:9464",
+  ]) {
+    assert.ok(tried.includes(target), target);
+  }
+  // The proxy's own port alone may be reached: its pod's 3128 isn't a target, its 9464 is.
+  assert.ok(!tried.includes("10.244.3.9:3128"));
+  const leaky = probed(t, {
+    services,
+    slices,
+    reach: (target) => target === PROXY || target === "10.244.3.9:9464",
+  });
+  await assert.rejects(
+    leaky.runner.start(spec()),
+    /reached a pod of the Service egress \(10\.244\.3\.9:9464\)/,
+  );
+});
+
 test("network probe: a pod that can't reach the egress proxy proves nothing: that run is refused, the next probes again", async (t) => {
   // No network at all, or a proxy not ready yet (a fresh install, an evicted pod).
   const p = probed(t, { reach: () => false });

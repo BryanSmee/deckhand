@@ -1313,15 +1313,15 @@ VictoriaMetrics to scrape. Off by default: set the port and each service listens
 
 - **A port of its own**, apart from the service ports: `GET /metrics` alone (any other path is
   404), with no token, so nothing secret goes in it. `compose.yaml` passes `.env`'s
-  `METRICS_PORT` to every service but the egress proxy, and publishes none: publish the ones you
-  scrape, or join your Prometheus to their networks, in a `compose.override.yaml`. Every
-  service but the egress proxy reads `metrics_port` in `config.yaml` too (the broker mounts the
-  server folder for it alone).
+  `METRICS_PORT` to every service but the egress proxy, and publishes none: your scraper joins
+  a network of each service's, below. Every service but the egress proxy reads `metrics_port`
+  in `config.yaml` too (the broker mounts the server folder for it alone).
 - **The egress proxy's is a setting of its own**, `EGRESS_METRICS_PORT`, as every sandbox
   reaches the proxy, and so its metrics port: they would read its memory, CPU and event loop
   lag, which other runs' traffic moves ([security.md](security.md#not-covered)). It reads
-  its environment alone, never `config.yaml`. On Kubernetes, give it `METRICS_PORT` and let
-  only your monitoring namespace reach that port.
+  its environment alone, never `config.yaml`. On Kubernetes, where the sandboxes reach its
+  proxy port alone, the manifests give it `METRICS_PORT` as every service
+  ([kubernetes.md](kubernetes.md#metrics)).
 - **What every service says from the start**: `deckhand_build_info{service, version}` (always
   1), and its process's `deckhand_process_resident_memory_bytes`,
   `deckhand_process_cpu_seconds_total`, `deckhand_process_start_time_seconds`,
@@ -1434,6 +1434,82 @@ add the copies up.
 
 `event` is one of the events GitHub sends the App, `other` for any other name: the header comes
 before the signature is checked, so what the internet writes there never makes a series.
+With Compose, a `compose.override.yaml` beside `compose.yaml` (read by `docker compose up -d`, no
+flag needed) puts each service on a network of its own with your scraper: one network for all of
+them would let each reach the others, which their networks keep apart
+([security.md](security.md#the-services-networks)). Each is internal, with no way out, and nothing
+is published. On them, the scraper reaches the services' other ports too, which answer their
+callers alone (by their service tokens, or the egress proxy by its address). With Prometheus, in
+the same project:
+
+```yaml
+# compose.override.yaml: each service's metrics on a network shared with the scraper alone.
+services:
+  edge:
+    networks: [metrics-edge]
+  orchestrator:
+    networks: [metrics-orchestrator]
+  runner:
+    networks: [metrics-runner]
+  broker:
+    networks: [metrics-broker]
+  github:
+    networks: [metrics-github]
+  models:
+    networks: [metrics-models]
+  policy:
+    networks: [metrics-policy]
+  # Scraped with EGRESS_METRICS_PORT=9464 alone.
+  egress:
+    networks: [metrics-egress]
+  prometheus:
+    image: prom/prometheus
+    restart: unless-stopped
+    ports: ["127.0.0.1:9090:9090"]
+    configs:
+      - source: prometheus
+        target: /etc/prometheus/prometheus.yml
+    # Its UI's (and its remote write's) network, then each service's.
+    networks:
+      - prometheus
+      - metrics-edge
+      - metrics-orchestrator
+      - metrics-runner
+      - metrics-broker
+      - metrics-github
+      - metrics-models
+      - metrics-policy
+      - metrics-egress
+    volumes: [prometheus:/prometheus]
+
+networks:
+  prometheus:
+  metrics-edge: { internal: true }
+  metrics-orchestrator: { internal: true }
+  metrics-runner: { internal: true }
+  metrics-broker: { internal: true }
+  metrics-github: { internal: true }
+  metrics-models: { internal: true }
+  metrics-policy: { internal: true }
+  metrics-egress: { internal: true }
+
+volumes:
+  prometheus:
+
+configs:
+  prometheus:
+    content: |
+      scrape_configs:
+        - job_name: deckhand
+          static_configs:
+            - targets: [edge:9464, orchestrator:9464, runner:9464, broker:9464]
+            - targets: [github:9464, models:9464, policy:9464, egress:9464]
+```
+
+`METRICS_PORT=9464` (and `EGRESS_METRICS_PORT=9464` for the proxy's) in `.env`, then
+`docker compose up -d`. A scraper of another Compose project joins the same networks as
+`external: true`, by their names in this one (`deckhand_metrics-edge`…); vmagent takes the same
+scrape config.
 
 ### The runner's
 

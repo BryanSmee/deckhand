@@ -1,6 +1,7 @@
 # deploy/kubernetes/network-policies.yaml: the services' NetworkPolicies, Compose's internal
 # networks as Kubernetes writes them. Each service is reached by its callers alone, on its port;
-# the runner and the broker reach the API server's addresses alone (apiServer.cidrs).
+# the runner and the broker reach the API server's addresses alone (apiServer.cidrs); every
+# service's metrics port is metrics.namespace's alone.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -522,6 +523,38 @@ spec:
         - port: 443
           protocol: TCP
         - port: 6443
+          protocol: TCP
+---
+# Every service's metrics port: metrics.namespace alone, never the sandboxes'.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: deckhand-metrics
+  namespace: {{ include "deckhand.ns" . }}
+  labels:
+    {{- include "deckhand.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchExpressions:
+      - key: app
+        operator: In
+        values:
+          - deckhand-edge
+          - deckhand-orchestrator
+          - deckhand-runner
+          - deckhand-broker
+          - deckhand-github
+          - deckhand-models
+          - deckhand-policy
+          - deckhand-egress
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.metrics.namespace }}
+      ports:
+        - port: {{ .Values.metrics.port }}
           protocol: TCP
 {{- if .Values.blobs.enabled }}
 ---

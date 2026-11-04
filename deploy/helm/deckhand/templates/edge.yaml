@@ -17,6 +17,7 @@ spec:
       app: deckhand-edge
   template:
     metadata:
+      {{- include "deckhand.metricsAnnotations" . | nindent 6 }}
       labels:
         app: deckhand-edge
     spec:
@@ -36,7 +37,9 @@ spec:
               containerPort: 8080
             - name: internal
               containerPort: 8083
+            {{- include "deckhand.metricsContainerPort" . | nindent 12 }}
           env:
+            {{- include "deckhand.metricsEnv" . | nindent 12 }}
             - name: DRAIN_SECONDS
               value: "25"
             - name: SERVICE_NETWORKS
@@ -105,3 +108,4 @@ spec:
     - name: internal
       port: 8083
       targetPort: internal
+    {{- include "deckhand.metricsServicePort" . | nindent 4 }}
