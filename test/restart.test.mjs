@@ -6,7 +6,13 @@ import { test } from "node:test";
 import { createBroker } from "../listener/broker.mjs";
 import { board } from "../listener/board.mjs";
 import { createPulls } from "../listener/pulls.mjs";
-import { createRestart, LIVE_PREFIX, QUEUE_KEY, savedCapabilities } from "../listener/restart.mjs";
+import {
+  createRestart,
+  liveRunIds,
+  LIVE_PREFIX,
+  QUEUE_KEY,
+  savedCapabilities,
+} from "../listener/restart.mjs";
 import { createTasks, newTask } from "../listener/tasks.mjs";
 import { ambiguous, respellMap, respelled, spellings } from "../listener/spelling.mjs";
 import { openLog } from "../listener/runlog.mjs";
@@ -189,6 +195,19 @@ test("a key under runs/ the store refuses to remove is logged, the start going o
     ["r1"],
   );
   assert.ok(lines.includes(`${LIVE_PREFIX}r2: not a run's state, its removal failed: store away`));
+  // Still there: the next takeover tries again.
+  assert.ok(await store.get(`${LIVE_PREFIX}r2`));
+});
+
+test("liveRunIds(): the ids of the runs' states in the store, not those of keys that hold none", async () => {
+  const store = fileStore();
+  await saveRun(store, "r1", 1, { agent: "claude" });
+  await store.set(`${LIVE_PREFIX}r2`, {
+    id: "r2",
+    task: { repo: "org/repo", id: 2, kind: "issue" },
+  });
+  await store.set(`${LIVE_PREFIX}r3`, "garbage");
+  assert.deepEqual([...(await liveRunIds(store))], ["r1"]);
 });
 
 test("a restored run keeps the network its tokens are bound to, and saves it again", async (t) => {

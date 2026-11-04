@@ -62,6 +62,17 @@ const liveKey = (id) => `${LIVE_PREFIX}${id}`;
 // can't be restored (a write cut short, a hand edit).
 export const isRunState = (saved) => Boolean(saved?.id && saved.task && saved.record);
 
+// The ids of the runs whose states are in the store, read before restoreRuns() (server.mjs:
+// their logs aren't summarized as ended ones). A key that holds no run's state isn't one:
+// restoreRuns() removes it.
+export async function liveRunIds(store) {
+  const ids = new Set();
+  for await (const [key, saved] of values(store, LIVE_PREFIX)) {
+    if (isRunState(saved)) ids.add(key.slice(LIVE_PREFIX.length));
+  }
+  return ids;
+}
+
 // What tells a queued comment apart, given when it is accepted (tasks.mjs accept()): a comment
 // both in the queue and in a run's saved state (a listener killed between the two writes) is the
 // run's alone.
