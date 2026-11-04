@@ -340,6 +340,12 @@ them `deckhand.e2e=true`, and refuses to start when one of them exists without t
 real install's would be overwritten, then deleted), or when the cluster can't say whether it
 does. `KEEP=1` leaves them for a look, and the next run deletes them before it starts.
 
+CI renders the overlay on every pull request without a cluster (#676): kubeconform validates it,
+and `test/kubernetes-e2e-overlay.test.mjs` checks that it installs nothing outside those
+namespaces and that binding, everything labelled, and that each of its patches still finds its
+target in the base (kustomize skips one that doesn't, without a word). A change to the base that
+breaks the check fails there, before anyone runs it.
+
 It takes about five minutes on k3s, mostly building the images. It needs `docker`, `node` and
 `openssl` where it runs, and `kubectl` without `K3S`. With `K3S` (or `PREINSTALL_AGENT=1`) it
 puts Claude Code in the agent's claim beforehand ([Agents on Kubernetes](#agents-on-kubernetes)),
