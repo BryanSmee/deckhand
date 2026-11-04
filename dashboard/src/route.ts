@@ -8,7 +8,7 @@
 //   #/settings/repositories              the repositories the App is installed on
 //   #/settings/repositories/org/repo     with one's config open
 //   #/settings/repositories/org/repo/policies   its Policies tab (/capabilities: Capabilities)
-//   #/settings/preferences, #/settings/server   Settings' other tabs
+//   #/settings/preferences, #/settings/server, #/settings/access   Settings' other tabs
 // Older addresses still parse, and the dashboard rewrites them to these (App.tsx useRoute()):
 // #/all, #/?task=… (All's tasks), #/repositories[/org/repo], #/graph/org/repo (the board),
 // #/board and #/graph (every repo's graph, now the Overview), and links from before the tabs
@@ -17,7 +17,7 @@
 // No page: a repo's tasks, or the Overview on All. "tasks" on All: every repo's tasks.
 export type Page = "tasks" | "board" | "settings";
 // Settings' tabs besides Repositories (its first, and the one with no `section`).
-export type Section = "preferences" | "clients" | "server";
+export type Section = "preferences" | "clients" | "server" | "access";
 // A repository's settings' tabs besides Config (its first, and the one with no `configTab`).
 export type ConfigTab = "policies" | "capabilities";
 
@@ -46,7 +46,7 @@ export function parseRoute(hash: string): Route {
     return task ? { repo: null, task, run: old.get("run"), page: "tasks" } : overview;
   }
   const [path, query = ""] = h.slice(1).split("?", 2);
-  // Settings: Repositories (#/settings alone too), Preferences, MCP clients or Server.
+  // Settings: Repositories (#/settings alone too), Preferences, MCP clients, Server or Access.
   const repos =
     /^(?:settings\/repositories|repositories)(?:\/([\w.-]+\/[\w.-]+)(?:\/(policies|capabilities))?)?$/.exec(
       path,
@@ -59,7 +59,7 @@ export function parseRoute(hash: string): Route {
       ...(repos[2] ? { configTab: repos[2] as ConfigTab } : {}),
     };
   }
-  const section = /^settings\/(preferences|clients|server)$/.exec(path);
+  const section = /^settings\/(preferences|clients|server|access)$/.exec(path);
   if (section) return { ...tasks(null), page: "settings", section: section[1] as Section };
   if (/^settings(?:\/[\w-]+)?$/.test(path)) return { ...tasks(null), page: "settings" };
   // The board is one repo's: every repo's graph is the Overview now.

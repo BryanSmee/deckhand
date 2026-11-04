@@ -4,6 +4,7 @@
 // lane's header renames. The issues no arrow touches come last, on their own.
 import type { ComponentChildren } from "preact";
 import { useState } from "preact/hooks";
+import { useCan } from "./access";
 import { sendLaneName } from "./api";
 import { sameRepo } from "./format";
 import {
@@ -34,7 +35,8 @@ interface Props {
   github: string;
   // A phone: each lane top to bottom, 44 px rows.
   narrow: boolean;
-  onAsk: (task: Task) => void;
+  // Null: the user may not answer here (runs:manage), the node opens its task.
+  onAsk: ((task: Task) => void) | null;
   // Reads api/state again: a new name shows from there.
   refresh?: () => Promise<void>;
 }
@@ -51,8 +53,8 @@ export function Lanes({ repo, nodes, edges, labels, github, narrow, onAsk, refre
         data-number={n.number ?? undefined}
         aria-label={nodeLabel(n, waits(n))}
         title={`${n.title ?? nodeRef(n, false, 0)} (${n.status})`}
-        aria-haspopup={asks(n) ? "dialog" : undefined}
-        onClick={nodeClick(asks(n) ? () => onAsk(n.task!) : undefined)}
+        aria-haspopup={asks(n) && onAsk ? "dialog" : undefined}
+        onClick={nodeClick(asks(n) && onAsk ? () => onAsk(n.task!) : undefined)}
         {...(n.task ? {} : { target: "_blank", rel: "noreferrer" })}
       >
         <span class={styles.rail}>
@@ -106,6 +108,8 @@ interface LaneProps {
 
 // A lane: its name, which a click on Rename makes a field, and its nodes.
 function Lane({ repo, lane, labels, narrow, refresh, children }: LaneProps) {
+  // Naming a lane is the repo's runs:manage (listener/work.mjs).
+  const renames = useCan().repo(repo, "runs:manage");
   // Its issues of this repo, which the listener names it by.
   const keys = lane.filter((n) => sameRepo(n.repo, repo)).map((n) => n.key);
   const known = laneName(
@@ -174,18 +178,20 @@ function Lane({ repo, lane, labels, narrow, refresh, children }: LaneProps) {
       ) : (
         <div class={styles.head}>
           <h2 class={styles.title}>{name}</h2>
-          <IconButton
-            variant="ghost"
-            size={narrow ? "touch" : "small"}
-            label={`Rename the lane ${name}`}
-            icon={<Icon.Pencil size={14} />}
-            disabled={!keys.length}
-            onClick={() => {
-              setText(known.source === "fallback" ? "" : name);
-              setError(null);
-              setEditing(true);
-            }}
-          />
+          {renames && (
+            <IconButton
+              variant="ghost"
+              size={narrow ? "touch" : "small"}
+              label={`Rename the lane ${name}`}
+              icon={<Icon.Pencil size={14} />}
+              disabled={!keys.length}
+              onClick={() => {
+                setText(known.source === "fallback" ? "" : name);
+                setError(null);
+                setEditing(true);
+              }}
+            />
+          )}
         </div>
       )}
       <ol class={styles.steps}>{children}</ol>

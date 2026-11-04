@@ -9,12 +9,13 @@
 // shortcuts of every page and of the tasks' list are bound here (keys.ts), with the `?` sheet
 // (Shortcuts.tsx) and Ctrl K (Palette.tsx).
 import { useEffect, useState } from "preact/hooks";
+import { AccessContext, canFrom } from "./access";
 import { type RepoList, useAppState, useHealth, useRepos } from "./api";
 import { Board, type BoardView } from "./Board";
 import { Detail } from "./Detail";
 import { type ChipId, CHIPS, inChip, isLive, matchesSearch, repoTabs, sameRepo } from "./format";
 import { useShortcuts, useShortcutsOn } from "./keys";
-import { NewRequest } from "./NewRequest";
+import { NewRequest, requestKinds } from "./NewRequest";
 import { useNotifications } from "./notify";
 import { Overview } from "./Overview";
 import { type Jumps, Palette } from "./Palette";
@@ -166,7 +167,11 @@ export function Dashboard({ state, error, repos, refresh, onOverview }: Props) {
   const first = visible.find(isLive) ?? visible[0];
   const onSettings = route.page === "settings";
   // The services' health: the shell's alert, and Settings › Server, which reads it faster.
-  const health = useHealth(onSettings && route.section === "server");
+  // Only with server:read, which api/health needs (access.ts).
+  const health = useHealth(
+    onSettings && route.section === "server",
+    canFrom(state?.access).server("server:read"),
+  );
   const onBoard = route.page === "board";
   const overview = isOverview(route);
   useEffect(() => onOverview?.(overview), [overview]);
@@ -252,7 +257,8 @@ export function Dashboard({ state, error, repos, refresh, onOverview }: Props) {
   useShortcuts({
     help: () => setHelp(true),
     palette: () => (state ? setPalette(true) : false),
-    request: () => (state ? setRequest({ kind: "idea" }) : false),
+    request: () =>
+      state && requestKinds(canFrom(state.access)).length ? setRequest({ kind: "idea" }) : false,
     overview: () => page({}),
     tasks: () => page(shownRepo ? { repo: shownRepo } : { page: "tasks" }),
     board: () => {
@@ -291,131 +297,133 @@ export function Dashboard({ state, error, repos, refresh, onOverview }: Props) {
   };
 
   return (
-    <div class={`${styles.app} ${task ? styles.reading : ""}`}>
-      {wide ? (
-        <Sidebar {...shell} repos={repos} rail={railed} onRail={selectRail} notify={notify} />
-      ) : (
-        <TopBar {...shell} onSearch={onTasks && !task ? toggleSearch : undefined} />
-      )}
-      <div class={styles.content}>
-        {/* A repository's config has its own header, its way back included. */}
-        {wide && !(onBoard && route.repo) && !(onSettings && route.config) && (
-          <PageHeader
-            route={route}
-            github={github}
-            needs={needingYou(repos?.repos ?? null, tasks)}
-            state={state}
-          />
-        )}
-        {overview ? (
-          <main class={styles.page}>
-            <Overview
-              state={state}
-              repos={repos}
-              github={github}
-              refresh={refresh}
-              onChip={selectChip}
-            />
-          </main>
-        ) : onBoard && route.repo ? (
-          <div class={styles.page}>
-            <Board
-              state={state}
-              refresh={refresh}
-              repo={route.repo}
-              narrow={!wide}
-              showClosed={showClosed}
-              onShowClosed={setShowClosed}
-              view={wide ? view : phoneView}
-              onView={selectView}
-              header={(controls) => (
-                <PageHeader route={route} github={github} state={state}>
-                  {controls}
-                </PageHeader>
-              )}
-            />
-          </div>
-        ) : onSettings ? (
-          <main class={styles.page}>
-            {repos && (
-              <Settings
-                route={route}
-                state={state}
-                error={error}
-                repos={repos}
-                narrow={!wide}
-                refresh={refresh}
-                health={health.data}
-                healthError={health.error}
-                notify={notify}
-                onOpen={(repo) =>
-                  go({ repo: null, task: null, run: null, page: "settings", config: repo })
-                }
-              />
-            )}
-          </main>
+    <AccessContext.Provider value={canFrom(state?.access)}>
+      <div class={`${styles.app} ${task ? styles.reading : ""}`}>
+        {wide ? (
+          <Sidebar {...shell} repos={repos} rail={railed} onRail={selectRail} notify={notify} />
         ) : (
-          <div class={styles.body}>
-            <aside class={styles.side}>
-              <TaskList
-                tasks={inTab}
-                chip={chip}
-                onChip={selectChip}
-                query={query}
-                onQuery={setQuery}
-                searching={wide || searchOpen}
-                onSearching={setSearchOpen}
-                selected={task?.key ?? null}
-                onSelect={(key) => go({ ...route, task: key, run: null }, true)}
-                showRepo={!route.repo}
-                now={now}
-                loading={!state}
-                touch={!wide}
-              />
-            </aside>
-            <main class={styles.main}>
-              <Detail
-                task={task}
-                run={run ?? null}
-                onRun={(id) => task && go({ ...route, task: task.key, run: id }, true)}
-                onBack={() => go({ ...route, task: null, run: null }, true)}
-                now={now}
+          <TopBar {...shell} onSearch={onTasks && !task ? toggleSearch : undefined} />
+        )}
+        <div class={styles.content}>
+          {/* A repository's config has its own header, its way back included. */}
+          {wide && !(onBoard && route.repo) && !(onSettings && route.config) && (
+            <PageHeader
+              route={route}
+              github={github}
+              needs={needingYou(repos?.repos ?? null, tasks)}
+              state={state}
+            />
+          )}
+          {overview ? (
+            <main class={styles.page}>
+              <Overview
+                state={state}
+                repos={repos}
                 github={github}
-                showRepo={!route.repo}
-                touch={!wide}
                 refresh={refresh}
+                onChip={selectChip}
               />
             </main>
-          </div>
+          ) : onBoard && route.repo ? (
+            <div class={styles.page}>
+              <Board
+                state={state}
+                refresh={refresh}
+                repo={route.repo}
+                narrow={!wide}
+                showClosed={showClosed}
+                onShowClosed={setShowClosed}
+                view={wide ? view : phoneView}
+                onView={selectView}
+                header={(controls) => (
+                  <PageHeader route={route} github={github} state={state}>
+                    {controls}
+                  </PageHeader>
+                )}
+              />
+            </div>
+          ) : onSettings ? (
+            <main class={styles.page}>
+              {repos && (
+                <Settings
+                  route={route}
+                  state={state}
+                  error={error}
+                  repos={repos}
+                  narrow={!wide}
+                  refresh={refresh}
+                  health={health.data}
+                  healthError={health.error}
+                  notify={notify}
+                  onOpen={(repo) =>
+                    go({ repo: null, task: null, run: null, page: "settings", config: repo })
+                  }
+                />
+              )}
+            </main>
+          ) : (
+            <div class={styles.body}>
+              <aside class={styles.side}>
+                <TaskList
+                  tasks={inTab}
+                  chip={chip}
+                  onChip={selectChip}
+                  query={query}
+                  onQuery={setQuery}
+                  searching={wide || searchOpen}
+                  onSearching={setSearchOpen}
+                  selected={task?.key ?? null}
+                  onSelect={(key) => go({ ...route, task: key, run: null }, true)}
+                  showRepo={!route.repo}
+                  now={now}
+                  loading={!state}
+                  touch={!wide}
+                />
+              </aside>
+              <main class={styles.main}>
+                <Detail
+                  task={task}
+                  run={run ?? null}
+                  onRun={(id) => task && go({ ...route, task: task.key, run: id }, true)}
+                  onBack={() => go({ ...route, task: null, run: null }, true)}
+                  now={now}
+                  github={github}
+                  showRepo={!route.repo}
+                  touch={!wide}
+                  refresh={refresh}
+                />
+              </main>
+            </div>
+          )}
+        </div>
+        {!wide && !task && <TabBar state={state} route={route} lastRepo={lastRepo} />}
+        {request && state && (
+          <NewRequest
+            kind={request.kind}
+            title={request.title}
+            inboxes={state.inboxes}
+            tasks={tasks}
+            repo={route.repo}
+            onClose={() => setRequest(null)}
+            onSent={() => void refresh?.()}
+          />
+        )}
+        {syncer.said && !(wide && !railed) && (
+          <p role="status" class={`${styles.note} ${syncer.said.failed ? styles.failed : ""}`}>
+            {syncer.said.text}
+          </p>
+        )}
+        {help && <ShortcutsDialog onClose={() => setHelp(false)} />}
+        {palette && state && (
+          <Palette
+            state={state}
+            repos={repos?.repos?.map((r) => r.repo)}
+            showClosed={showClosed}
+            jumps={jumps}
+            onClose={() => setPalette(false)}
+          />
         )}
       </div>
-      {!wide && !task && <TabBar state={state} route={route} lastRepo={lastRepo} />}
-      {request && state && (
-        <NewRequest
-          kind={request.kind}
-          title={request.title}
-          inboxes={state.inboxes}
-          tasks={tasks}
-          repo={route.repo}
-          onClose={() => setRequest(null)}
-          onSent={() => void refresh?.()}
-        />
-      )}
-      {syncer.said && !(wide && !railed) && (
-        <p role="status" class={`${styles.note} ${syncer.said.failed ? styles.failed : ""}`}>
-          {syncer.said.text}
-        </p>
-      )}
-      {help && <ShortcutsDialog onClose={() => setHelp(false)} />}
-      {palette && state && (
-        <Palette
-          state={state}
-          repos={repos?.repos?.map((r) => r.repo)}
-          showClosed={showClosed}
-          jumps={jumps}
-          onClose={() => setPalette(false)}
-        />
-      )}
-    </div>
+    </AccessContext.Provider>
   );
 }

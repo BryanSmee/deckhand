@@ -155,16 +155,18 @@ export const HEALTH_OPEN_MS = 15_000;
 export const HEALTH_MS = 60_000;
 
 // api/health, polled faster while `open` (Settings › Server), and read at once as it opens.
-export function useHealth(open: boolean): Polled<Health> {
-  const polled = usePolled<Health>("api/health", null);
+// Not `allowed` (no server:read, access.ts): never asked, as it would be refused.
+export function useHealth(open: boolean, allowed = true): Polled<Health> {
+  const polled = usePolled<Health>(allowed ? "api/health" : null, null);
   // usePolled() reads it as it mounts: only a later opening reads it again.
   const mounted = useRef(false);
   useEffect(() => {
+    if (!allowed) return;
     if (open && mounted.current) void polled.reload();
     mounted.current = true;
     const timer = setInterval(() => void polled.reload(), open ? HEALTH_OPEN_MS : HEALTH_MS);
     return () => clearInterval(timer);
-  }, [open]);
+  }, [open, allowed]);
   return polled;
 }
 

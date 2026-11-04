@@ -1,7 +1,10 @@
-// Settings: its tabs (Repositories, Preferences, MCP clients, Server) and the one open. The tabs
+// Settings: its tabs (Repositories, Preferences, MCP clients, Server, Access) and the one open.
+// Server and Access are server:read's, left out without it (access.ts). The tabs
 // are links, so each has its address (route.ts); on a wide screen they sit in the page header, on a
 // phone atop the page; a repository's config hides them for its own header. Preferences says it's
 // coming until its page lands.
+import { Access } from "./Access";
+import { useCan } from "./access";
 import type { RepoList } from "./api";
 import { Clients } from "./Clients";
 import type { Notify } from "./notify";
@@ -14,11 +17,12 @@ import { Count } from "./ui/Count";
 import tabs from "./ui/Tabs.module.css";
 import styles from "./Settings.module.css";
 
-const TABS: { id: Section | null; label: string }[] = [
+const TABS: { id: Section | null; label: string; server?: boolean }[] = [
   { id: null, label: "Repositories" },
   { id: "preferences", label: "Preferences" },
   { id: "clients", label: "MCP clients" },
-  { id: "server", label: "Server" },
+  { id: "server", label: "Server", server: true },
+  { id: "access", label: "Access", server: true },
 ];
 
 // Repositories' count: those that need you (Repos.tsx needsYou()).
@@ -32,9 +36,10 @@ export function SettingsTabs({
   class?: string;
 }) {
   const current = route.section ?? null;
+  const reads = useCan().server("server:read");
   return (
     <nav class={[tabs.tabs, extra].filter(Boolean).join(" ")} aria-label="Settings">
-      {TABS.map((t) => (
+      {TABS.filter((t) => reads || !t.server).map((t) => (
         <a
           key={t.label}
           class={tabs.tab}
@@ -85,12 +90,21 @@ export function Settings({
   healthError,
 }: Props) {
   const tasks = state?.tasks ?? [];
+  const reads = useCan().server("server:read");
+  const serverWide = route.section === "server" || route.section === "access";
   return (
     <div class={styles.settings}>
       {narrow && !route.config && (
         <SettingsTabs route={route} count={needingYou(repos.repos, tasks)} class={styles.tabs} />
       )}
-      {route.section === "server" ? (
+      {serverWide && !reads ? (
+        <p class={styles.refused}>
+          This page isn't yours to see: it needs <code>server:read</code>, which the operator's
+          policies give.
+        </p>
+      ) : route.section === "access" ? (
+        <Access />
+      ) : route.section === "server" ? (
         <Server
           state={state}
           error={error}

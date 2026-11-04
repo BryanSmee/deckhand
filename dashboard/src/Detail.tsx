@@ -11,6 +11,7 @@
 // reviews its pull request again and Shift F asks for one more fix round once its review loop
 // is over, [ and ] go through its thread, every run (those without a tab too) and its policies.
 import { useEffect, useRef, useState } from "preact/hooks";
+import { useCan } from "./access";
 import { sendCancel, sendDismiss, sendRerun, sendReview, useRunLog } from "./api";
 import {
   ago,
@@ -106,8 +107,14 @@ export function Detail({
   const [searching, setSearching] = useState(false);
   // A phone's More menu: GitHub, Copy and Download.
   const [more, setMore] = useState(false);
+  // What the user may do on the task's repo (access.ts): the actions they may not aren't
+  // offered, and a log they may not read isn't asked for.
+  const can = useCan();
+  const reads = !!t && can.repo(t.repo, "logs:read");
+  const manages = !!t && can.repo(t.repo, "runs:manage");
+  const starts = (mode: string | null | undefined) => !!t && can.start(t.repo, mode || "work");
   // The log of the run shown: its outcome's More menu copies it too.
-  const { entries } = useRunLog(r?.id ?? null);
+  const { entries } = useRunLog(reads ? (r?.id ?? null) : null);
   useEffect(() => {
     setSearching(false);
     setMore(false);
@@ -128,16 +135,21 @@ export function Detail({
   const size = touch ? "touch" : "small";
   // The last reply: from the latest run that has one.
   const reply = t.runs.find((x) => x.summary);
-  const asked = t.state === "needs-input" ? t.questions : undefined;
-  // The latest run only, and only when it is the one shown.
-  const failed = t.rerunnable && r && r.id === t.runs[0]?.id ? r : null;
-  const dismissable = canDismiss(t) ? t.runs[0] : null;
+  const questioned = t.state === "needs-input" ? t.questions : undefined;
+  // Answering is runs:manage, and the start of its mode when a run asked them: its session
+  // goes on (listener/work.mjs).
+  const asked =
+    manages && (questioned?.source !== "run" || starts(t.mode)) ? questioned : undefined;
+  // The latest run only, and only when it is the one shown; runs:manage, and its mode's start.
+  const failed =
+    t.rerunnable && r && r.id === t.runs[0]?.id && manages && starts(r.taskMode) ? r : null;
+  const dismissable = canDismiss(t) && manages ? t.runs[0] : null;
   const discussion = t.kind === "discussion" && t.number !== null;
   const decided = !!t.decisions?.length;
   const policies = decided && policiesOf === t.key;
   const thread = discussion && !showLog && !policies;
   const held = heldMerge(t);
-  const logShown = !thread && !policies && !!r;
+  const logShown = !thread && !policies && !!r && reads;
   const hidden = !!touch && searching && logShown;
   // A phone's More menu, for a run's log.
   const menu = !!touch && logShown;
@@ -153,9 +165,9 @@ export function Detail({
     });
   };
   // Discussions have no comment command to stop them by, nor the API's.
-  const stoppable = STOPPABLE.includes(t.state) && t.number !== null && !discussion;
+  const stoppable = STOPPABLE.includes(t.state) && t.number !== null && !discussion && manages;
   // Waiting for a slot: Stop takes it out of the queue, nothing to lose, no question.
-  const unqueue = t.state === "queued" && t.number !== null && !discussion;
+  const unqueue = t.state === "queued" && t.number !== null && !discussion && manages;
   const asking = confirming === t.key;
   const stop = async () => {
     setConfirming(null);
@@ -176,8 +188,13 @@ export function Detail({
     if (!said.error) await refresh?.();
     setRerunning(null);
   };
-  // Review or Fix of its pull request, its review loop over.
-  const offers = reviewOffers(t);
+  // Review or Fix of its pull request, its review loop over: runs:manage, and the start of a
+  // review run or of a work run.
+  const offered = reviewOffers(t);
+  const offers = {
+    review: offered.review && manages && starts("review"),
+    fix: offered.fix && manages && starts("work"),
+  };
   const outdated = reviewOutdated(t);
   const pending = reviewing?.key === t.key ? reviewing.action : null;
   const review = async (action: "review" | "fix") => {
@@ -204,21 +221,23 @@ export function Detail({
           Fix
         </Button>
       )}
-      <Button
-        size={size}
-        pending={pending === "review"}
-        pendingLabel="Reviewing…"
-        disabled={pending === "fix"}
-        title={
-          outdated
-            ? `Reviews the new head, ${shortSha(outdated.head)}, as /mode review does`
-            : "Reviews the pull request's head now, as /mode review does"
-        }
-        shortcut="review"
-        onClick={() => review("review")}
-      >
-        Review
-      </Button>
+      {offers.review && (
+        <Button
+          size={size}
+          pending={pending === "review"}
+          pendingLabel="Reviewing…"
+          disabled={pending === "fix"}
+          title={
+            outdated
+              ? `Reviews the new head, ${shortSha(outdated.head)}, as /mode review does`
+              : "Reviews the pull request's head now, as /mode review does"
+          }
+          shortcut="review"
+          onClick={() => review("review")}
+        >
+          Review
+        </Button>
+      )}
     </>
   );
   // Dismiss, or its Undo: the task's last run stops asking, or asks again.
@@ -282,7 +301,7 @@ export function Detail({
     field.scrollIntoView?.({ block: "nearest" });
   };
   keys.rerun = () => {
-    const last = t.rerunnable ? t.runs[0] : null;
+    const last = t.rerunnable && manages && starts(t.runs[0]?.taskMode) ? t.runs[0] : null;
     if (!last || rerunning) return false;
     void again(last);
   };
@@ -460,16 +479,18 @@ export function Detail({
             {t.dismissed && t.runs[0] && (
               <span class={styles.dismissed}>
                 Dismissed by @{t.dismissed.by} {ago(t.dismissed.at, now)}
-                <Button
-                  variant="ghost"
-                  size="small"
-                  pending={dismissing === t.runs[0].id}
-                  pendingLabel="Undoing…"
-                  title="Takes the dismissal back: a failure that still asks waits on you again"
-                  onClick={() => dismiss(t.runs[0], true)}
-                >
-                  Undo
-                </Button>
+                {manages && (
+                  <Button
+                    variant="ghost"
+                    size="small"
+                    pending={dismissing === t.runs[0].id}
+                    pendingLabel="Undoing…"
+                    title="Takes the dismissal back: a failure that still asks waits on you again"
+                    onClick={() => dismiss(t.runs[0], true)}
+                  >
+                    Undo
+                  </Button>
+                )}
               </span>
             )}
             {!!t.waitingFor?.length && (
@@ -600,17 +621,25 @@ export function Detail({
               dismissing={!!dismissable && dismissing === dismissable.id}
             />
           )}
-          <Log
-            key={r.id}
-            run={r}
-            entries={entries}
-            now={now}
-            touch={touch}
-            searching={searching}
-            onSearching={setSearching}
-          />
+          {reads ? (
+            <Log
+              key={r.id}
+              run={r}
+              entries={entries}
+              now={now}
+              touch={touch}
+              searching={searching}
+              onSearching={setSearching}
+            />
+          ) : (
+            <p class={styles.placeholder}>
+              Its log isn't yours to read: you don't have <code>logs:read</code> on {t.repo}.
+            </p>
+          )}
         </div>
-      ) : asked ? null : t.state === "needs-input" ? (
+      ) : asked ? null : questioned ? (
+        <p class={styles.placeholder}>Waiting for answers to its open questions</p>
+      ) : t.state === "needs-input" ? (
         // Labelled for its open questions (an inbox run filed it, or someone wrote it so).
         <p class={styles.placeholder}>Waiting for answers to its open questions on GitHub</p>
       ) : (
