@@ -494,18 +494,3 @@ test("movable: a stopped or failed open issue's node moves like its backlog card
     expect(movable(node({ state }), "org/app", false, listed)).toBe(false);
   }
 });
-
-test("a blocker of a repository the user doesn't see: a hidden issue, nothing of it named", () => {
-  const blocker = { key: "hidden-0", repo: null, number: null, title: null, closed: null };
-  const { nodes } = graphOf(
-    [task(2, { state: "queued" })],
-    [{ from: "hidden-0", to: "org/app#2", kind: "after" }],
-    [{ ...blocker, hidden: true }],
-  );
-  expect(nodes.find((n) => n.key === "hidden-0")).toMatchObject({
-    repo: "",
-    number: null,
-    title: "a hidden issue",
-    task: null,
-  });
-});

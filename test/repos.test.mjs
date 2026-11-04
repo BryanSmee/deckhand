@@ -1036,9 +1036,10 @@ test("access: the list keeps the repos with an action, the config needs repo:con
     first: [info("org/app"), info("org/hidden"), info("org/mine")],
     configured: ["org/app", "org/hidden", "org/mine"],
     backlogs: (repos, user) => (asked.push([repos, user]), {}),
+    app: () => ({ slug: "my-app", owner: "acme", name: "My App", ownerType: "User" }),
     permissions: permissionsOf({
       bob: { "org/app": VIEWER, "org/mine": [...MEMBER, "repo:config:read"] },
-      carol: { "org/app": [...VIEWER, "repo:config:read"] },
+      carol: { "org/app": [...VIEWER, "repo:config:read"], "": ["server:sync"] },
     }),
   });
   const list = await call(api, "GET", "/api/repos?backlog=1", { user: "bob" });
@@ -1046,8 +1047,17 @@ test("access: the list keeps the repos with an action, the config needs repo:con
     list.body.repos.map((r) => r.repo),
     ["org/app", "org/mine"],
   );
-  // Counted for those only.
+  // Counted for those only; the installations of their owner only, not `other`'s.
   assert.deepEqual(asked, [[["org/app", "org/mine"], "bob"]]);
+  assert.deepEqual(
+    list.body.app.installations.map((i) => i.account),
+    ["org"],
+  );
+  const nobody = await call(api, "GET", "/api/repos", { user: "dave" });
+  assert.deepEqual([nobody.body.repos, nobody.body.app.installations], [[], []]);
+  // Listing every installation again: server-wide.
+  assert.equal((await call(api, "POST", "/api/repos/refresh", { user: "bob" })).status, 403);
+  assert.equal((await call(api, "POST", "/api/repos/refresh", { user: "carol" })).status, 200);
   const config = (repo) => call(api, "GET", `/api/repos/${repo}/config`, { user: "bob" });
   assert.equal((await config("org/app")).status, 403);
   assert.equal((await config("org/hidden")).status, 404);

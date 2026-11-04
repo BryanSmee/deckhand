@@ -14,6 +14,11 @@ import { denyKept, isPolicyError, unallowed } from "./policies.mjs";
 // (`reason`: "review", "review-fix", "ci-fix", "conflict").
 export const personStarted = (item) => !!item.author && !item.reason;
 
+// Whose start `item` is, for their access (permissions.mjs): a person's run, or one of the
+// listener's a maintainer asked for from the dashboard (its Fix); null for the listener's own.
+export const startedBy = (item) =>
+  personStarted(item) || (item.dashboard && item.author) ? item.author : null;
+
 // What started `item`: "inbox" (an idea or a bug entry), "discussion", "dashboard" (a button, a
 // drag, a message sent from there), "auto-pickup" (the issue's label, added by the run's
 // sender: auto-pickup.mjs) or "comment" (on GitHub). What follows a picked run holds its slot

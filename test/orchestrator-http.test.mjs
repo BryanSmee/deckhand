@@ -36,6 +36,11 @@ test("access (#731): api/state, /status and the server's views follow the login'
     ...extra,
   });
   const runs = [run("org/app#1"), run("org/hidden#2")];
+  const rules = {
+    alice: { "org/app": VIEWER, "org/hidden": VIEWER, "": ["server:read"] },
+    bob: { "org/app": VIEWER },
+    carol: { "org/app": [...VIEWER, "logs:read"] },
+  };
   // org/app#1's lane is named after its parent, in org/hidden.
   const lanes = new Map([
     ["org/app#1", { key: "org/app#1", parent: { key: "org/hidden#9", title: "Secret plan" } }],
@@ -51,7 +56,13 @@ test("access (#731): api/state, /status and the server's views follow the login'
     runsById: new Map(runs.map((r) => [r.id, r])),
     running: 2,
     brainstorms: { list: () => [] },
-    waits: { list: () => [] },
+    // Each running task waits for another issue of its repo.
+    waits: {
+      list: () => [
+        { key: "org/app#1", repo: "org/app", blockers: [5] },
+        { key: "org/hidden#2", repo: "org/hidden", blockers: [6] },
+      ],
+    },
     inputs: { list: () => [] },
     inboxes: () => [
       ["org/app", { ideas: 3 }],
@@ -74,10 +85,9 @@ test("access (#731): api/state, /status and the server's views follow the login'
     status: (shows = () => true) => ({
       reasons: runs.filter((r) => shows(r.repo)).map((r) => r.key),
     }),
-    permissions: permissionsOf({
-      alice: { "org/app": VIEWER, "org/hidden": VIEWER, "": ["server:read"] },
-      bob: { "org/app": VIEWER },
-    }),
+    permissions: permissionsOf(rules),
+    // An empty log, its run going on: the stream stays open until access ends it.
+    runLogs: { read: async () => ({ data: Buffer.alloc(0) }) },
   };
   const http = createHttp(ctx);
   const { url } = await serve(t, (req, res) =>
@@ -97,11 +107,21 @@ test("access (#731): api/state, /status and the server's views follow the login'
     ["org/app#1"],
   );
   assert.deepEqual(Object.keys(mine.inboxes), ["org/app"]);
+  // org/hidden's wait and its blocker aren't his either: neither listed, nor their titles read.
+  assert.deepEqual(mine.edges, [{ from: "org/app#5", to: "org/app#1", kind: "after" }]);
+  assert.deepEqual(
+    mine.blockers.map((b) => b.key),
+    ["org/app#5"],
+  );
+  assert.deepEqual(
+    all.blockers.map((b) => b.key),
+    ["org/app#5", "org/hidden#6"],
+  );
   // The parent's title isn't bob's to see, nor read for him.
   assert.deepEqual(mine.lanes["org/app#1"], { name: "a hidden issue", source: "parent" });
   titled.length = 0;
   await get("/api/state", "bob");
-  assert.ok(!titled.includes("org/hidden#9"));
+  assert.ok(!titled.some((key) => key.startsWith("org/hidden")));
   // Totals stay, plans are server-wide.
   assert.equal(mine.running, 2);
   assert.equal(mine.plans, undefined);
@@ -116,7 +136,14 @@ test("access (#731): api/state, /status and the server's views follow the login'
   // A viewer has no logs:read: not even the repo it sees.
   const own = await fetch(`${url}/api/runs/org-app-1-1/stream`, { headers: { "x-user": "bob" } });
   assert.equal(own.status, 404);
+  // carol reads the logs, until her logs:read is taken away: her open stream ends then.
+  const open = await fetch(`${url}/api/runs/org-app-1-1/stream`, {
+    headers: { "x-user": "carol" },
+  });
+  assert.equal(open.status, 200);
+  rules.carol = { "org/app": VIEWER };
+  assert.equal(await open.text(), "");
   // Unknown to the decision: an empty dashboard.
-  const [, nobody] = await get("/api/state", "carol");
+  const [, nobody] = await get("/api/state", "dave");
   assert.deepEqual([nobody.tasks, nobody.inboxes], [[], {}]);
 });

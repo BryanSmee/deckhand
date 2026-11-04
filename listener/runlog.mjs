@@ -923,6 +923,8 @@ export function stream(
     "cache-control": "no-cache",
     "x-accel-buffering": "no",
   });
+  // At once, not with the first line: a run that has written none yet is still open.
+  res.flushHeaders?.();
   const reading = reader(agentFor(run.agent));
   const decoder = new StringDecoder("utf8");
   let offset = 0;

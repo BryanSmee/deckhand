@@ -2133,7 +2133,8 @@ export function createReviews({
       // From the listener, for a task an allowed user started: no comment, nobody to check.
       // From the dashboard: the maintainer who asked, checked again when it runs.
       sender: null,
-      ...(asked && { author: asked.user }),
+      // `dashboard`: its start is the maintainer's, checked again when it runs (runs.mjs).
+      ...(asked && { author: asked.user, dashboard: true }),
       reason: "review-fix",
       // For the dashboard's "Review fix 2/3" (runs.mjs newLive()).
       round,

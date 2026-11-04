@@ -417,10 +417,18 @@ export function createRepoApi({
         : r,
     );
     const current = app();
+    // Every installation with `server:read` (one may have no repo listed yet); else only those of
+    // the accounts owning a repo `user` sees: the others' names, links and missing permissions
+    // aren't theirs.
+    const owners = new Set(rows.map((r) => r.repo.split("/")[0].toLowerCase()));
+    const everyOne = !permissions || (await permissions.can(user, null, "server:read"));
+    const installations = everyOne
+      ? list.installations()
+      : list.installations().filter((i) => owners.has(String(i.account).toLowerCase()));
     return {
       repos,
       listedAt: list.listedAt(),
-      app: current && appLinks(config.githubUrl, current, list.installations()),
+      app: current && appLinks(config.githubUrl, current, installations),
     };
   }
 
@@ -614,8 +622,10 @@ export function createRepoApi({
     posts: { onboard, refresh },
     allowed: (repo) => repoAllowed(config, repo),
     permissions,
-    // Onboarding reads the config too, and starts its run.
-    action: ({ repo }) => (repo ? "repo:config:read" : null),
+    // Onboarding reads the config too, and starts its run. Refreshing the whole list lists every
+    // installation from GitHub again: server-wide, as Sync.
+    action: ({ what, repo }) =>
+      repo ? "repo:config:read" : what === "refresh" ? "server:sync" : null,
     publicUrl,
     log,
   });

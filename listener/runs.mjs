@@ -32,7 +32,7 @@ import { logSent } from "./restart.mjs";
 import { sandboxSpec, sessionName, sessionOf } from "./sandbox-spec.mjs";
 import { noLongerAllowed, pickedTask } from "./tasks.mjs";
 import { startAction } from "./permissions.mjs";
-import { personStarted } from "./run-policy.mjs";
+import { startedBy } from "./run-policy.mjs";
 import { operatorSecrets, redact } from "./secrets.mjs";
 import { newLogContext, newRequestId, withLogContext } from "../lib/log.mjs";
 
@@ -119,7 +119,8 @@ export function createRuns(ctx) {
 
   // Comments whose author may no longer run the agent here, checked against the repo's settings
   // and the access decision as they are now: its `users` or its author's actions may have
-  // narrowed while they waited (the pause, a restart, a busy repo). Dropped, their 👀 off. Settings that can't be read are begin()'s to report.
+  // narrowed while they waited (the pause, a restart, a busy repo). Dropped, their 👀 off.
+  // Settings that can't be read are begin()'s to report.
   async function dropRefused(task) {
     let settings = null;
     try {
@@ -135,8 +136,8 @@ export function createRuns(ctx) {
       task.pending.map(
         (item) =>
           !ctx.permissions ||
-          !personStarted(item) ||
-          ctx.permissions.can(item.author, task.repo, startAction(item.mode)),
+          !startedBy(item) ||
+          ctx.permissions.can(startedBy(item), task.repo, startAction(item.mode)),
       ),
     );
     task.pending = task.pending.filter((item, i) => {

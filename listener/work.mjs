@@ -822,11 +822,13 @@ export function createWorkApi({
     const { comment: text, open } = answersComment(user, questions?.items ?? null, asked, where);
     // Where the run asked: a pull request's run on an issue's task replies on the pull request.
     const replyTo = task.replyTo ?? number;
-    const posted = await comment(repo, replyTo, text);
-    const left = open.length ? ` ${open.length} still open.` : "";
     const fromRun = questions
       ? questions.source === "run"
       : task.runs?.[0]?.status === "needs-input";
+    // The session goes on in its mode: its start is the user's, before the App's comment.
+    if (fromRun && where === "from the dashboard") await startable(repo, user, task.mode ?? "work");
+    const posted = await comment(repo, replyTo, text);
+    const left = open.length ? ` ${open.length} still open.` : "";
     if (fromRun) {
       // From the dashboard, a refusal is its answer; ticked on GitHub, the reply there says it.
       await (where === "from the dashboard" ? queued : accept)({
@@ -999,6 +1001,7 @@ export function createWorkApi({
   // The dashboard's Review: what `/mode review` on the pull request queues, with the App's
   // comment for its reactions.
   async function queueReview(repo, user, { number, pr, issue, settings, base }) {
+    await startable(repo, user, "review");
     const posted = await comment(repo, number, `Review from the dashboard by @${user}.`);
     const item = {
       repo,
@@ -1029,6 +1032,8 @@ export function createWorkApi({
     // Its push is reviewed through the CI step, which drops a draft, and only a ready pull
     // request merges by itself.
     if (pr.draft) refuse(409, `#${number} is a draft: mark it ready for review first.`);
+    // A fix run is work that pushes: its start is the user's, before the App's comment.
+    await startable(repo, user, "work");
     const allowed = settings.review.maxAllowedSeverity;
     const review = await latestReview(github, config, repo, number, allowed);
     if (!review) refuse(409, `#${number} has no review of Deckhand's to fix.`);

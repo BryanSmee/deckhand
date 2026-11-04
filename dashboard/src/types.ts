@@ -355,15 +355,13 @@ export interface Edge {
   kind: "after";
 }
 
-// An issue a task waits for that isn't on the board. One in a repository the user doesn't see
-// (`hidden`, listener/http.mjs state()) has a key of its own ("hidden-0"), and nothing else.
+// An issue a task waits for that isn't on the board.
 export interface Blocker {
   key: string;
-  repo: string | null;
-  number: number | null;
+  repo: string;
+  number: number;
   title: string | null;
   closed: Closed;
-  hidden?: true;
 }
 
 // What names the lane an issue is part of (listener/lanes.mjs): a name a maintainer gave it

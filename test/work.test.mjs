@@ -2781,3 +2781,28 @@ test("access: the inbox and Analyze need their mode's start", async () => {
   assert.equal(analyze.status, 403);
   assert.match(analyze.body.error, /`runs:start:analyze`/);
 });
+
+test("access: Review, Fix and answers that go on in a session need their start, before any comment", async () => {
+  // bob may manage runs, but start none.
+  const permissions = permissionsOf({
+    alice: { "org/app": MEMBER },
+    bob: { "org/app": ["tasks:read", "runs:manage"] },
+  });
+  const w = reviewSetup({ permissions });
+  for (const action of ["review", "fix"]) {
+    const res = await review(w, { number: 8, action }, { user: "bob" });
+    assert.equal(res.status, 403, action);
+    assert.match(res.body.error, action === "fix" ? /`runs:start:work`/ : /`runs:start:review`/);
+  }
+  assert.deepEqual([w.comments, w.asked, w.accepted], [[], [], []]);
+  // A run's questions: answering goes on in its session, a start of its mode.
+  const asked = setup({
+    issues: { 5: open("Five") },
+    tasks: { "org/app#5": asking(5, "run") },
+    permissions,
+  });
+  const refused = await answer(asked, { number: 5, text: "Go" }, { user: "bob" });
+  assert.equal(refused.status, 403);
+  assert.deepEqual([asked.comments, asked.accepted], [[], []]);
+  assert.equal((await answer(asked, { number: 5, text: "Go" })).status, 200);
+});

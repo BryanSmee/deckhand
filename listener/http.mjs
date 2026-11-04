@@ -177,16 +177,9 @@ export function createHttp(ctx) {
   async function state(user) {
     const shows = await seeing(user, namedRepos());
     const { shown, queued } = shownTasks(shows);
-    const waited = waitEdges(shown, ctx.waits.list());
-    // A blocker in a repo `user` doesn't see: "a hidden issue", its key, title, lanes and pull
-    // request never read for them.
-    const hidden = new Map(
-      waited.blockers.filter((key) => !shows(repoOf(key))).map((key, i) => [key, `hidden-${i}`]),
-    );
-    const blockers = waited.blockers.filter((key) => !hidden.has(key));
-    const edges = waited.edges.map((e) =>
-      hidden.has(e.from) ? { ...e, from: hidden.get(e.from) } : e,
-    );
+    // A wait's blockers are of its own repo (waits.mjs): those of the tasks `user` sees are in a
+    // repo they see too.
+    const { edges, blockers } = waitEdges(shown, ctx.waits.list());
     const keys = [...shown.map((t) => t.key), ...blockers];
     // A lane named after a parent issue of another repo: in one `user` doesn't see, "a hidden
     // issue", its title never read for them.
@@ -228,23 +221,13 @@ export function createHttp(ctx) {
       })),
       // The graph's arrows, and the issues they come from that aren't on the board.
       edges,
-      blockers: [
-        ...blockers.map((key) => ({
-          key,
-          repo: parseKey(key)?.repo ?? null,
-          number: parseKey(key)?.number ?? null,
-          title: ctx.titles.get(key),
-          closed: ctx.titles.closed(key),
-        })),
-        ...[...hidden.values()].map((key) => ({
-          key,
-          repo: null,
-          number: null,
-          title: null,
-          closed: null,
-          hidden: true,
-        })),
-      ],
+      blockers: blockers.map((key) => ({
+        key,
+        repo: parseKey(key)?.repo ?? null,
+        number: parseKey(key)?.number ?? null,
+        title: ctx.titles.get(key),
+        closed: ctx.titles.closed(key),
+      })),
       // The names the lanes of these issues can have (lanes.mjs), by key.
       lanes,
       states: STATES,

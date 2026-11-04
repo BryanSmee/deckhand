@@ -780,3 +780,38 @@ test("access: a run starts only for an author with its mode's start, refused wit
   // Nothing said on GitHub: as an author outside the repo's users.
   assert.deepEqual(replies, []);
 });
+
+test("access: /cancel stops a run only for an author with runs:manage, and says nothing otherwise", async () => {
+  const cancelled = [];
+  const replies = [];
+  const settled = [];
+  const ctx = {
+    config: testConfig({ ALLOWED_USERS: "alice,bob" }),
+    log: () => {},
+    skip: () => null,
+    tasks: new Map(),
+    runs: [],
+    permissions: permissionsOf({ alice: { "org/repo": MEMBER }, bob: { "org/repo": VIEWER } }),
+    repoSettings: async () => ({ settings: { users: ["alice", "bob"], modes: {} }, errors: [] }),
+    cancel: (key, user) => (cancelled.push([key, user]), "running"),
+    settle: async (item, status) => settled.push([item.author, status]),
+    reply: async (repo, number, text) => replies.push(text),
+  };
+  const { admit } = createTasks(ctx);
+  const cancel = (login) => {
+    const payload = {
+      action: "created",
+      installation: { id: 7 },
+      repository: { full_name: "org/repo", default_branch: "main" },
+      issue: { number: 12 },
+      comment: { id: 99, body: "/cancel", user: { login, type: "User" } },
+      sender: { login },
+    };
+    return admit({ repo: "org/repo", id: "12", base: "main" }, "issue_comment", payload);
+  };
+  await cancel("bob");
+  assert.deepEqual([cancelled, replies, settled], [[], [], []]);
+  await cancel("alice");
+  assert.deepEqual(cancelled, [["org/repo#12", "alice"]]);
+  assert.deepEqual(settled, [["alice", "acknowledged"]]);
+});

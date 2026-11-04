@@ -72,6 +72,11 @@ export function apiRoute({
       }
       if (!user) return send(res, 401, { error: "Sign in first." });
       if (repo && !allowed(repo)) return send(res, 404, hidden(repo));
+      if (req.method === "POST" && !sameOrigin(req, publicUrl())) {
+        log(`${name}: refused for ${user}: Origin ${req.headers.origin ?? "missing"}`);
+        return send(res, 403, { error: "Not from this dashboard." });
+      }
+      // After the Origin: a decision may read GitHub, which another site's POST mustn't cost.
       if (permissions) {
         if (repo && !(await permissions.visible(user, repo))) return send(res, 404, hidden(repo));
         const needed = action(found);
@@ -79,10 +84,6 @@ export function apiRoute({
           log(`${name}: ${repo ?? pathname}: refused for ${user}: no ${needed}`);
           return send(res, 403, needs(needed, repo));
         }
-      }
-      if (req.method === "POST" && !sameOrigin(req, publicUrl())) {
-        log(`${name}: refused for ${user}: Origin ${req.headers.origin ?? "missing"}`);
-        return send(res, 403, { error: "Not from this dashboard." });
       }
       const spelled = repo && (await named(repo));
       return (req.method === "GET" ? get : post)(req, res, user, spelled, found);

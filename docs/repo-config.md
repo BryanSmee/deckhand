@@ -1642,9 +1642,12 @@ first (again after a push to its default branch).
 **Where they are asked**: each dashboard route needs its action (the backlog and a
 discussion's thread `tasks:read`; starting, queueing or laying out work, the inbox, Analyze, a
 discussion and onboarding `runs:start:<mode>` for the mode they start; cancelling, rerunning,
-answering, Review and Fix, dismissing, lanes and the run order `runs:manage`; a repository's
-config and its refresh `repo:config:read`; Settings › Server, the services' health and the plans'
-usage `server:read`; Sync `server:sync`). A comment, an inbox entry or a discussion starts a run
+answering, Review and Fix, dismissing, lanes and the run order `runs:manage`, and what starts a
+run among them (a rerun, Review, Fix, answers a session goes on with) its mode's start too, before
+anything is posted; a repository's config and its refresh `repo:config:read`; Settings › Server,
+the services' health and the plans' usage `server:read`; Sync, and refreshing the whole
+repositories list, `server:sync`). Without `server:read`, the repositories list names only the
+installations of the accounts owning a repository the login sees. A comment, an inbox entry or a discussion starts a run
 only when its author has `runs:start:<mode>` for the mode it resolves to (else nothing starts,
 and nothing is said, as for an author outside the repository's `users`), and `/cancel` needs
 `runs:manage`; queued work is checked again before it runs. An auto-pickup label starts work only
