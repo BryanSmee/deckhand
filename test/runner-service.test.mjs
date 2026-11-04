@@ -24,6 +24,8 @@ import { createRunnerClient } from "../runner/client.mjs";
 import { createEvents } from "../runner/events.mjs";
 import { createLogs } from "../runner/logs.mjs";
 import { createRunnerService, ROUTES } from "../runner/service.mjs";
+import { runnerMetrics } from "../runner/metrics.mjs";
+import { createRegistry } from "../lib/metrics.mjs";
 import { grantsFrom } from "../listener/grants.mjs";
 import {
   assertHealth,
@@ -79,15 +81,21 @@ function logsSpawn(lines) {
 }
 
 // The Docker runner on one fake docker, shared by the copies (one host's Docker).
-function host({ lines = ['{"type":"result","result":"Done."}'] } = {}) {
+function host({ lines = ['{"type":"result","result":"Done."}'], answers, metrics } = {}) {
   const calls = [];
-  const fake = fakeDocker();
+  const fake = fakeDocker({ answers });
   const docker = async (args, opts = {}) => {
     calls.push({ args, env: opts.env });
     return fake.docker(args);
   };
   const inboxDir = tempDir(null, "deckhand-runs-");
-  const runner = createDockerRunner({ config, docker, spawn: logsSpawn(lines), inboxDir });
+  const runner = createDockerRunner({
+    config,
+    docker,
+    spawn: logsSpawn(lines),
+    inboxDir,
+    metrics,
+  });
   const runs = () => calls.filter((c) => c.args[0] === "run").length;
   // A run's inbox file, as the broker gets a copy of it.
   const inbox = (run) => {
@@ -121,6 +129,7 @@ async function copy(
     log,
     refresh,
     logs = createLogs({ store }),
+    metrics,
   } = {},
 ) {
   let service;
@@ -164,6 +173,7 @@ async function copy(
       blobOf ?? (async (repo, path, ref) => `blob of ${path} at ${ref ?? "the default branch"}`),
     ...(log && { log }),
     ...(refresh && { refresh }),
+    ...(metrics && { metrics }),
   });
   // Where a test may start it again (a runner away, then back).
   await listenToRestart(service.server);
@@ -1060,4 +1070,50 @@ test("activate: a runner with leased() (Kubernetes': its network probe) is told 
   const docker = await copy(t, { store: fileStore(), backend: host() });
   assert.equal(docker.lease.active(), true);
   assert.equal(docker.service.activate() instanceof Promise, true);
+});
+
+// The runner's metrics (runner/metrics.mjs): its sandboxes by engine from the acting copy alone,
+// what a start took, and why one didn't.
+test("metrics: the acting copy's sandboxes by engine, starts timed, failed ones by why", async (t) => {
+  const store = fileStore();
+  const registry = createRegistry();
+  const copies = {};
+  const active = () => [copies.a, copies.b].find((c) => c?.lease.active());
+  const metrics = runnerMetrics(registry, {
+    runner: "docker",
+    sandboxes: async () => (active() ? active().service.sandboxes() : null),
+    active: () => Boolean(active()),
+  });
+  let failRun = false;
+  const backend = host({
+    metrics,
+    answers: { run: () => failRun && { code: 125, out: "", err: "no such image" } },
+  });
+  copies.a = await copy(t, { store, backend, metrics, ttlMs: 5000 });
+  const runner = client(copies.a.url).runner;
+  await runner.start(SPEC);
+  // Its start's record, as a start with Sysbox's engine leaves it.
+  await store.set(`starts/${SPEC.run}`, {
+    state: "started",
+    result: { engine: { backend: "sysbox" } },
+  });
+  const text = await registry.render();
+  const has = (body, line) => assert.ok(body.includes(`${line}\n`), line);
+  has(text, 'deckhand_sandboxes_running{engine="none"} 0');
+  has(text, 'deckhand_sandboxes_running{engine="sysbox"} 1');
+  has(text, 'deckhand_sandbox_start_seconds_count{runner="docker"} 1');
+  // The waiting copy has none.
+  copies.b = await copy(t, { store, backend, ttlMs: 5000 });
+  assert.equal(await copies.b.service.sandboxes(), null);
+
+  await assert.rejects(
+    runner.start({ ...SPEC, run: "dh-o-a-1-3", limits: { cpus: "64" } }),
+    /refuses its spec/,
+  );
+  failRun = true;
+  await assert.rejects(runner.start({ ...SPEC, run: "dh-o-a-1-2" }), /no such image/);
+  const after = await registry.render();
+  has(after, 'deckhand_sandboxes_failed_to_start_total{reason="refused"} 1');
+  has(after, 'deckhand_sandboxes_failed_to_start_total{reason="error"} 1');
+  has(after, 'deckhand_sandbox_start_seconds_count{runner="docker"} 1');
 });

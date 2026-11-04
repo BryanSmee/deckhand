@@ -352,6 +352,7 @@ export function createKubernetesImages({
   // a pod's) shares it (an identical build, which BuildKit's cache makes often), only the tag
   // goes, where the registry can delete a tag alone (OCI distribution 1.1), else it stays.
   // Never throws, as Docker's doesn't: a prune that fails is logged, the run goes on.
+  // → "deleted", "kept" (a pod runs it), "failed", or null (no such tag any more).
   async function remove(ref, kept = []) {
     const name = ref.slice(0, ref.lastIndexOf(":"));
     try {
@@ -359,20 +360,22 @@ export function createKubernetesImages({
         labelSelector: `deckhand.owner=${owner["deckhand.owner"]}`,
       });
       const used = items.flatMap((p) => (p.spec?.containers ?? []).map((c) => c.image));
-      if (used.includes(ref)) return;
+      if (used.includes(ref)) return "kept";
       const digest = await registry.digest(ref);
-      if (!digest) return;
+      if (!digest) return null;
       for (const other of new Set([...kept, ...used.filter((i) => i.startsWith(`${name}:`))])) {
         if (other === ref || (await registry.digest(other)) !== digest) continue;
         // Logged, as a refused delete is: the tag is tried again at the next prune.
-        await registry
-          .remove(name, ref.slice(name.length + 1))
-          .catch((error) => log(`Pruning ${ref} (its tag only): ${error.message}`));
-        return;
+        return await registry.remove(name, ref.slice(name.length + 1)).then(
+          () => "deleted",
+          (error) => (log(`Pruning ${ref} (its tag only): ${error.message}`), "failed"),
+        );
       }
       await registry.remove(name, digest);
+      return "deleted";
     } catch (error) {
       log(`Pruning ${ref}: ${error.message}`);
+      return "failed";
     }
   }
 

@@ -40,9 +40,12 @@ export function createDockerImages({ config, docker }) {
     return code === 0 ? out.split("\n").filter((t) => t && t !== "<none>") : null;
   }
 
-  // One that a container still uses refuses to go, and stays.
+  // One that a container still uses refuses to go, and stays. → "deleted", "kept" (in use) or
+  // "failed" (../../runner/metrics.mjs).
   async function remove(ref) {
-    await docker(["image", "rm", ref]);
+    const { code, err = "" } = await docker(["image", "rm", ref]);
+    if (code === 0) return "deleted";
+    return /conflict|being used|is using/i.test(err) ? "kept" : "failed";
   }
 
   return {

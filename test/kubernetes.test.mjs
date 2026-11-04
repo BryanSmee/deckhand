@@ -18,6 +18,7 @@ import {
   kubeName,
   labelValue,
   latestWarning,
+  pendingFailure,
   pendingReason,
   podSpec,
   quantity,
@@ -278,7 +279,14 @@ const GATE_OPTIONS = {
 function setup(
   t,
   options = {},
-  { now, sleep = async () => {}, kubernetes = {}, engine, probeOptions = null } = {},
+  {
+    now,
+    sleep = async () => {},
+    kubernetes = {},
+    engine,
+    probeOptions = null,
+    metrics = null,
+  } = {},
 ) {
   const fake = fakeApi(options);
   const logged = [];
@@ -310,6 +318,7 @@ function setup(
     probe: probeOptions ? null : ENFORCED,
     // The gate's addresses too.
     probeOptions: probeOptions ?? GATE_OPTIONS,
+    metrics,
   });
   return { ...fake, runner, logged, inboxDir, clock };
 }
@@ -2068,6 +2077,7 @@ function probed(
     services = CLUSTER_SERVICES,
     slices = CLUSTER_SLICES,
     gate = null,
+    metrics = null,
   } = {},
 ) {
   const answers = { reach };
@@ -2103,6 +2113,7 @@ function probed(
     { policies, slices, logs },
     {
       kubernetes,
+      metrics,
       probeOptions: {
         env,
         lookup,
@@ -2375,4 +2386,153 @@ test("network probe, with an engine: the proxy's engines' port is the proxy's, t
     off.runner.start(spec()),
     /reached the Service egress \(10\.96\.0\.11:3129\)/,
   );
+});
+
+// The runner's metrics' hooks (../runner/metrics.mjs), recorded.
+function recordedMetrics() {
+  const seen = { started: [], failed: [], probed: [] };
+  return {
+    seen,
+    started: (seconds) => seen.started.push(seconds),
+    failedToStart: (reason) => seen.failed.push(reason),
+    probed: (result, seconds) => seen.probed.push([result, seconds]),
+  };
+}
+
+test("metrics: a start timed until its pod leaves Pending, once; another copy's pod isn't timed", async (t) => {
+  const metrics = recordedMetrics();
+  const fake = {};
+  const { runner, objects } = setup(
+    t,
+    { logs: { "dh-org-repo-12-abc": ["\x1estarted\n"] } },
+    {
+      metrics,
+      sleep: async () => {
+        fake.pod.status.phase = "Running";
+      },
+    },
+  );
+  await runner.start(spec());
+  fake.pod = objects.pods.get("dh-org-repo-12-abc");
+  fake.pod.status.phase = "Pending";
+  const follow = () => runner.follow("dh-org-repo-12-abc", { onOut: () => {}, onErr: () => {} });
+  await follow();
+  // One poll of the pod (2 s on the test's clock), asked to running.
+  assert.deepEqual(metrics.seen.started, [2]);
+  await follow();
+  assert.deepEqual(metrics.seen.started, [2]);
+  const other = setup(t, { logs: { "dh-org-repo-12-abc": [] } }, { metrics });
+  other.objects.pods.set("dh-org-repo-12-abc", { ...fake.pod, status: { phase: "Running" } });
+  await other.runner.follow("dh-org-repo-12-abc", { onOut: () => {}, onErr: () => {} });
+  assert.deepEqual(metrics.seen.started, [2]);
+  assert.deepEqual(metrics.seen.failed, []);
+});
+
+test("metrics: a pod Pending past the wait counts as failed to start, by why", async (t) => {
+  const metrics = recordedMetrics();
+  const cases = {
+    unschedulable: {
+      phase: "Pending",
+      conditions: [{ type: "PodScheduled", status: "False", reason: "Unschedulable" }],
+    },
+    image_pull: {
+      phase: "Pending",
+      containerStatuses: [{ state: { waiting: { reason: "ImagePullBackOff" } } }],
+    },
+    pending: { phase: "Pending" },
+  };
+  for (const status of Object.values(cases)) {
+    const { runner, objects } = setup(t, {}, { metrics });
+    await runner.start(spec());
+    const pod = objects.pods.get("dh-org-repo-12-abc");
+    pod.metadata.creationTimestamp = "2026-10-30T09:50:00Z"; // 10 min before now()
+    pod.status = status;
+    await assert.rejects(
+      runner.follow("dh-org-repo-12-abc", { onOut: () => {}, onErr: () => {} }),
+      RunError,
+    );
+  }
+  assert.deepEqual(metrics.seen.failed, Object.keys(cases));
+  assert.deepEqual(metrics.seen.started, []);
+});
+
+test("pendingFailure: an agent's install, the gate, an image, no node, else pending", () => {
+  const pod = (status) => ({ status });
+  assert.equal(pendingFailure(pod({}), INSTALLING), "agent_install");
+  const pull = { initContainerStatuses: [{ state: { waiting: { reason: "ErrImagePull" } } }] };
+  assert.equal(pendingFailure(pod(pull), "ErrImagePull: denied"), "image_pull");
+  const invalid = { containerStatuses: [{ state: { waiting: { reason: "InvalidImageName" } } }] };
+  assert.equal(pendingFailure(pod(invalid), "x"), "image_pull");
+  const unscheduled = { conditions: [{ type: "PodScheduled", status: "False" }] };
+  assert.equal(pendingFailure(pod(unscheduled), "0/3 nodes"), "unschedulable");
+  assert.equal(pendingFailure(pod({}), "FailedMount: …"), "pending");
+});
+
+test("metrics: the network probe's verdicts, and a start it refuses says not_isolated", async (t) => {
+  const metrics = recordedMetrics();
+  const p = probed(t, { metrics });
+  await p.runner.start(spec());
+  assert.deepEqual(
+    metrics.seen.probed.map(([result]) => result),
+    ["isolated"],
+  );
+  assert.ok(metrics.seen.probed[0][1] >= 0);
+  const leaky = probed(t, { reach: () => true, metrics });
+  await assert.rejects(leaky.runner.start(spec()), (error) => error.reason === "not_isolated");
+  const blind = probed(t, { reach: () => false, metrics });
+  await assert.rejects(blind.runner.start(spec()), (error) => error.reason === "isolation_unknown");
+  assert.deepEqual(
+    metrics.seen.probed.map(([result]) => result),
+    ["isolated", "reached", "unknown"],
+  );
+});
+
+test("metrics: a namespace without the sandboxes' NetworkPolicy refuses a start as not_isolated", async (t) => {
+  const { runner } = setup(t, { policies: [] });
+  await assert.rejects(runner.start(spec()), (error) => error.reason === "not_isolated");
+});
+
+test("metrics: a failed gate or install counts once, however often its pod is followed", async (t) => {
+  const cases = { network_gate: "network-gate", agent_install: "agent-install" };
+  for (const [reason, container] of Object.entries(cases)) {
+    const metrics = recordedMetrics();
+    const { runner, objects } = setup(
+      t,
+      { logs: { "dh-org-repo-12-abc": ["said\n"] } },
+      { metrics },
+    );
+    await runner.start(spec({ volumes: [agentVolume, ...spec().volumes.slice(1)] }));
+    objects.pods.get("dh-org-repo-12-abc").status = {
+      phase: "Failed",
+      initContainerStatuses: [{ name: container, state: { terminated: { exitCode: 3 } } }],
+    };
+    const follow = () => runner.follow("dh-org-repo-12-abc", { onOut: () => {}, onErr: () => {} });
+    await assert.rejects(follow(), RunError);
+    await assert.rejects(follow(), RunError);
+    assert.deepEqual(metrics.seen.failed, [reason]);
+    assert.deepEqual(metrics.seen.started, []);
+  }
+});
+
+test("metrics: the same name's next pod isn't timed from this copy's older start, nor after a lease taken again", async (t) => {
+  const metrics = recordedMetrics();
+  const { runner, objects } = setup(t, { logs: { "dh-org-repo-12-abc": [] } }, { metrics });
+  const follow = () => runner.follow("dh-org-repo-12-abc", { onOut: () => {}, onErr: () => {} });
+  await runner.start(spec());
+  // Another copy removed it and started the issue's next run under the same name.
+  const pod = objects.pods.get("dh-org-repo-12-abc");
+  objects.pods.set("dh-org-repo-12-abc", {
+    ...pod,
+    metadata: { ...pod.metadata, uid: "another-copy's" },
+    status: { phase: "Running" },
+  });
+  await follow();
+  assert.deepEqual(metrics.seen.started, []);
+  // Taking the lease again forgets what it timed.
+  objects.pods.clear();
+  await runner.start(spec({ run: "dh-org-repo-12-abc-2" }));
+  runner.leased();
+  objects.pods.get("dh-org-repo-12-abc").status = { phase: "Running" };
+  await follow();
+  assert.deepEqual(metrics.seen.started, []);
 });

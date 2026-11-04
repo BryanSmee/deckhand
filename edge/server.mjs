@@ -228,12 +228,12 @@ const poller = activePassive({
   store,
   name: "edge/redeliveries",
   holder: `edge-${randomUUID()}`,
-  onActive: () => redeliveries.start(),
+  onActive: () => (leases.taken(), redeliveries.start()),
   onPassive: () => redeliveries.stop(),
   log,
 });
+const leases = leaseMetric(metrics.registry, { "edge/redeliveries": () => poller.active() });
 poller.start();
-leaseMetric(metrics.registry, { "edge/redeliveries": () => poller.active() });
 
 // A rolling update starts the next copy first: this one takes no new connection, lets the
 // requests in flight finish (a live log streams until the browser reconnects to the other),

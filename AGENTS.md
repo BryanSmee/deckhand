@@ -102,7 +102,8 @@ github/       the github service (#502): the only one with the GitHub App's key;
 runner/       the runner service (#503): the only one with the Docker socket or the Kubernetes
               API; server.mjs (wiring), service.mjs (its API, who may call what), client.mjs
               (what the orchestrator calls it with), logs.mjs, events.mjs, spec-check.mjs,
-              builds.mjs; it runs listener/runner/'s backends and images.mjs
+              builds.mjs, metrics.mjs (its own, #659); it runs listener/runner/'s backends and
+              images.mjs
 policy-service/ the policy service (#501): long-lived `opa` servers evaluating the operator's and
               the repos' policies for the orchestrator; its own image, no network but its callers';
               metrics.mjs (its decisions, their time, the operator's policies' loads)

@@ -280,7 +280,7 @@ const server = serverInfo(env);
 // Its metrics (../lib/metrics.mjs), on their own port when METRICS_PORT is set: the waiting copy
 // answers too, its lease not held.
 startMetrics({ service: "orchestrator", port: config.metricsPort, log, registry });
-leaseMetric(registry, { orchestrator: () => acting });
+const leases = leaseMetric(registry, { orchestrator: () => acting });
 // The runs, the queue and the rest: what only the acting copy knows from its state (`shared`,
 // the modules' `ctx` below), the waiting one has no samples of.
 let shared = null;
@@ -329,6 +329,7 @@ const lease = await new Promise((resolve) => {
     // LEASE_SECONDS (15): how long a crashed copy's lease lasts before the other takes it.
     ...(Number(env.LEASE_SECONDS) > 0 && { ttlMs: Number(env.LEASE_SECONDS) * 1000 }),
     onActive: (held) => {
+      leases.taken();
       clearTimeout(waiting);
       clearInterval(alive);
       resolve({ ...held, control: leased });

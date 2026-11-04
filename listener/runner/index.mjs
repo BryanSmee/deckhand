@@ -24,6 +24,8 @@ export function createBackend({
   // The broker service's copy of the runs' inboxes and files (inbox.mjs).
   mirror = null,
   log = () => {},
+  // The runner's metrics' hooks (../../runner/metrics.mjs), or none.
+  metrics = null,
   readNamespace = () => readFileSync(`${SERVICE_ACCOUNT}/namespace`, "utf8").trim(),
   // namespace → the API in it, with the runner's ServiceAccount (the tests' own).
   makeApi = inClusterApis(),
@@ -46,6 +48,7 @@ export function createBackend({
         mirror,
         log,
         networkGate,
+        metrics,
       }),
       images,
       // A pod of its own for the one job that needs it, the Antigravity login's refresh
@@ -57,7 +60,7 @@ export function createBackend({
     throw new Error(`RUNNER: expected docker or kubernetes, got ${config.runner}`);
   }
   return {
-    runner: createDockerRunner({ config, docker, inboxDir, mirror, log }),
+    runner: createDockerRunner({ config, docker, inboxDir, mirror, log, metrics }),
     images: createDockerImages({ config, docker }),
     jobs: createDockerJobs({ config, docker }),
   };
