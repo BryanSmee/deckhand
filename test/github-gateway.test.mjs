@@ -11,6 +11,7 @@ import {
   explained,
   logStorage,
   needed,
+  packIn,
   readsChecks,
   readsThread,
   redactBody,
@@ -1739,10 +1740,16 @@ test("each call relayed is counted: the API's as the proxy's with its rate limit
           setImmediate(() => res.destroy());
           return true;
         }
+        // GitHub's error inside a 200: an object it doesn't have.
+        if (req.headers["x-test-round"] === "missing") {
+          res.writeHead(200, { "content-type": "application/x-git-upload-pack-result" });
+          res.end("0032ERR upload-pack: not our ref 0123456789abcdef\n");
+          return true;
+        }
         const last = req.headers["x-test-round"] === "last";
         res.writeHead(200, { "content-type": "application/x-git-upload-pack-result" });
         res.end(
-          last ? "0013acknowledgments\n0008NAK\n0001000dpackfile\n0009\x01PACK" : "0008NAK\n0000",
+          last ? "0014acknowledgments\n0008NAK\n0001000dpackfile\n0009\x01PACK" : "0008NAK\n0000",
         );
         return true;
       }
@@ -1761,7 +1768,7 @@ test("each call relayed is counted: the API's as the proxy's with its rate limit
   await (await gw.call("/api/v3/repos/org/repo/issues", { secret })).arrayBuffer();
   await (await gw.call("/api/v3/repos/org/repo/issues/missing", { secret })).arrayBuffer();
   await (await gw.call("/org/repo.git/info/refs?service=git-upload-pack", { secret })).text();
-  for (const round of ["first", "last", "cut"]) {
+  for (const round of ["first", "last", "cut", "missing"]) {
     const pack = await gw.call("/org/repo.git/git-upload-pack", {
       secret,
       method: "POST",
@@ -1782,7 +1789,8 @@ test("each call relayed is counted: the API's as the proxy's with its rate limit
   // A fetch is the pack request whose answer carries the pack, not its advertisement nor a
   // round of negotiation (github-forks.test.mjs counts a real client's); one GitHub fails, failed.
   // A pack cut short isn't one come: failed.
-  assert.deepEqual(ops, ["fetch ok", "fetch failed", "fetch failed"]);
+  // GitHub's ERR inside a 200: failed too.
+  assert.deepEqual(ops, ["fetch ok", "fetch failed", "fetch failed", "fetch failed"]);
 
   // A call the sandbox gave up on before GitHub answered: counted, without a status.
   const aborted = new AbortController();
@@ -1806,4 +1814,27 @@ test("a fetch Deckhand refuses itself, too many calls at once say, is counted as
   // An API call refused the same way is no git operation.
   assert.equal((await gw.call("/api/v3/repos/org/repo", { secret })).status, 429);
   assert.deepEqual(ops, ["fetch refused"]);
+});
+
+test("packIn: a pack request's answer, pkt-line by pkt-line: its pack, GitHub's error, or neither", () => {
+  const pkt = (text) => (text.length + 4).toString(16).padStart(4, "0") + text;
+  const read = (...chunks) => {
+    const reader = packIn();
+    for (const chunk of chunks) reader.push(Buffer.from(chunk, "latin1"));
+    return reader.found() ? "pack" : reader.failed() ? "error" : null;
+  };
+  // v2: acknowledgments, then the packfile section, split anywhere.
+  const v2 =
+    pkt("acknowledgments\n") + pkt("ready\n") + "0001" + pkt("packfile\n") + pkt("\x01PACK");
+  assert.equal(read(v2), "pack");
+  assert.equal(read(...v2.match(/[\s\S]{1,3}/g)), "pack");
+  // A round of negotiation; ls-refs, even with a ref named for the mark.
+  assert.equal(read(pkt("acknowledgments\n") + pkt("NAK\n") + "0000"), null);
+  assert.equal(read(pkt(`${"a".repeat(40)} refs/heads/x000dpackfile\n`) + "0000"), null);
+  // v0: the pack on side-band 1, or bare after the NAK.
+  assert.equal(read(pkt("NAK\n") + pkt("\x01PACK\0\0\0\x02")), "pack");
+  assert.equal(read(pkt("NAK\n") + "PACK\0\0\0\x02"), "pack");
+  // GitHub's errors: an ERR line, side-band 3.
+  assert.equal(read(pkt("ERR upload-pack: not our ref " + "a".repeat(40))), "error");
+  assert.equal(read(pkt("NAK\n") + pkt("\x03fatal: out of memory")), "error");
 });

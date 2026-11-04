@@ -28,7 +28,8 @@ export const STATUSES = [
 export const RESOURCES = ["core", "graphql", "search"];
 
 // What the service does with git:
-//   clone          a mirror's first fetch, the whole repository (git-mirror.mjs)
+//   clone          a mirror's first fetch, the whole repository (git-mirror.mjs); an empty
+//                  repository leaves its mirror empty, so each of its pushes counts a clone
 //   mirror_update  a mirror fetched again before a push is checked against it
 //   fetch          a sandbox's git fetch or clone relayed to GitHub, once whatever its requests:
 //                  ok once its whole pack came (an ls-remote, or a fetch with nothing new,
@@ -109,7 +110,8 @@ export function githubMetrics(
 ) {
   const calls = registry.counter(
     "deckhand_github_api_calls_total",
-    "Calls to GitHub's API, by the caller they were made for and GitHub's status (error: no answer).",
+    "Calls to GitHub's API, by the caller they were made for and GitHub's status " +
+      "(error: no answer).",
     { labels: ["caller", "status"], values: { caller: CALLERS, status: STATUSES } },
   );
   const durations = registry.histogram(
@@ -135,7 +137,8 @@ export function githubMetrics(
   }
   registry.gauge(
     "deckhand_github_rate_limit_remaining",
-    "Calls left in GitHub's rate limit, the lowest of the installations' (and the App's), as its latest answers said.",
+    "Calls left in GitHub's rate limit, the lowest of the installations' (and the App's), " +
+      "as its latest answers said.",
     {
       labels: ["resource"],
       values: { resource: RESOURCES },
@@ -157,7 +160,8 @@ export function githubMetrics(
   );
   const gitOps = registry.counter(
     "deckhand_git_operations_total",
-    "Git operations: the mirrors' clones and updates, the sandboxes' fetches and pushes, by result.",
+    "Git operations: the mirrors' clones and updates, the sandboxes' fetches and pushes, " +
+      "by result.",
     { labels: ["op", "result"], values: { op: GIT_OPS, result: GIT_RESULTS } },
   );
   const refusals = registry.counter(
@@ -188,6 +192,9 @@ export function githubMetrics(
     const remaining = Number(header(headers, "x-ratelimit-remaining"));
     const reset = Number(header(headers, "x-ratelimit-reset"));
     const keys = limits.get(resource);
+    // A call without a token (/setup's manifest conversion) has the address's limit, 60 an hour:
+    // none of the installations' nor the App's.
+    if (!authorization) return;
     if (!keys || !Number.isFinite(remaining) || !Number.isFinite(reset)) return;
     const key = limitKey(authorization);
     keys.delete(key);

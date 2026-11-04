@@ -65,6 +65,9 @@ test("the rate limit: the lowest of the tokens' still in their window, and when 
   seen("token c", null);
   seen("token c", limit("code_search", 1, reset));
   seen("token c", { ...limit("core", 0, reset), "x-ratelimit-remaining": "lots" });
+  // No token (/setup's manifest conversion): the address's 60 an hour, no installation's.
+  seen(null, limit("core", 59, reset));
+  seen("", limit("core", 59, reset));
   let text = await render();
   assert.equal(sample(text, 'deckhand_github_rate_limit_remaining{resource="core"}'), 3990);
   assert.equal(sample(text, 'deckhand_github_rate_limit_reset_seconds{resource="core"}'), 600);

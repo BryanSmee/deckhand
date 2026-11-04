@@ -342,24 +342,46 @@ export function countInFlight() {
   };
 }
 
-// What tells a pack request's answer from a round of negotiation: protocol v2's packfile section
-// (its "packfile" pkt-line, length and all: a ref named …packfile is no match), or v0's pack. Looked for in its first MAX_PACK_SCAN bytes,
-// across chunks: acknowledgments come first, a few hundred lines at most.
-const PACK_MARKS = [Buffer.from("000dpackfile\n"), Buffer.from("PACK\0\0\0")];
+// What a pack request's answer says, read pkt-line by pkt-line from its start: whether it
+// carries the pack (protocol v2's "packfile" section line, v0's pack on side-band 1 or bare
+// after the acknowledgments), or GitHub's error ("ERR …", side-band 3: an object it doesn't
+// have, say). Neither: a round of negotiation, or ls-refs. Whole lines only, so a ref named
+// …packfile is no pack. Read until one of them, within its first MAX_PACK_SCAN bytes.
 const MAX_PACK_SCAN = 1024 * 1024;
 export function packIn() {
-  let tail = Buffer.alloc(0);
+  let held = Buffer.alloc(0);
   let seen = 0;
-  let found = false;
+  // null while reading; "pack", "error", or "unknown" for what isn't pkt-lines.
+  let said = null;
+  function line(payload) {
+    if (payload.toString("latin1") === "packfile\n") return "pack";
+    if (payload.subarray(0, 4).toString("latin1") === "ERR ") return "error";
+    if (payload[0] === 1 && payload.subarray(1, 5).toString("latin1") === "PACK") return "pack";
+    if (payload[0] === 3) return "error";
+    return null;
+  }
   return {
     push(chunk) {
-      if (found || seen > MAX_PACK_SCAN) return;
+      if (said || seen > MAX_PACK_SCAN) return;
       seen += chunk.length;
-      const window = Buffer.concat([tail, chunk]);
-      found = PACK_MARKS.some((mark) => window.includes(mark));
-      tail = window.subarray(Math.max(0, window.length - 12));
+      held = Buffer.concat([held, chunk]);
+      while (!said && held.length >= 4) {
+        const head = held.subarray(0, 4).toString("latin1");
+        if (head === "PACK") return void (said = "pack");
+        if (!/^[0-9a-f]{4}$/i.test(head)) return void (said = "unknown");
+        const length = parseInt(head, 16);
+        // A flush, delimiter or response-end packet: no payload.
+        if (length < 4) {
+          held = held.subarray(4);
+          continue;
+        }
+        if (held.length < length) return;
+        said = line(held.subarray(4, length));
+        held = held.subarray(length);
+      }
     },
-    found: () => found,
+    found: () => said === "pack",
+    failed: () => said === "error",
   };
 }
 
@@ -413,8 +435,8 @@ export function createGithubGateway({
   // (`repositories/<id>/…`), for a run's own issue's next page (ownIssueId()). None: such a
   // path is refused to a run without `read:issues`.
   repoId = async () => null,
-  // ({ caller, status, seconds, headers, authorization }) → nothing: each call relayed to GitHub's
-  // API once answered, `status` null when it wasn't (the github service's metrics).
+  // ({ caller, status, seconds, headers, authorization }) → nothing: each call relayed to
+  // GitHub's API once answered, `status` null when it wasn't (the github service's metrics).
   observe = () => {},
   // (op, result) → nothing: each git fetch or clone relayed, `ok`, `refused` or `failed` (its
   // metrics too).
@@ -982,9 +1004,9 @@ export function createGithubGateway({
     // GitHub's answer, counted once: an API call's status, rate limit and time to its headers.
     // A git fetch (or clone) is counted once whatever number of requests it takes (protocol v2:
     // the advertisement, ls-refs, a fetch per negotiation round): `failed` at the request GitHub
-    // fails, or whose answer is cut short, `ok` at the one whose answer carries the whole pack
-    // (packIn()), `refused` at the one Deckhand refuses (refuseFork(), handle()). A command that wants nothing (ls-remote, a fetch with
-    // nothing new) brings no pack: not counted.
+    // fails, answers with an error or cuts short, `ok` at the one whose answer carries the whole
+    // pack (packIn()), `refused` at the one Deckhand refuses (refuseFork(), handle()). A command
+    // that wants nothing (ls-remote, a fetch with nothing new) brings no pack: not counted.
     const advertising =
       !api &&
       req.method === "GET" &&
@@ -1133,7 +1155,7 @@ export function createGithubGateway({
     // An answer cut short (GitHub's connection lost or idle, the sandbox gone) ends the command
     // there: a pack begun isn't a pack come. An advertisement's bad status was counted already.
     const answeredWell = gitStatus > 0 && gitStatus < 400;
-    if (packing && !(answeredWell && how === "done")) onGit("fetch", "failed");
+    if (packing && (!(answeredWell && how === "done") || packed.failed())) onGit("fetch", "failed");
     else if (packing && packed.found()) onGit("fetch", "ok");
     else if (advertising && answeredWell && how !== "done") onGit("fetch", "failed");
     await after();
