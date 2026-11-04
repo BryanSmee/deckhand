@@ -1642,7 +1642,7 @@ first (again after a push to its default branch).
 A rule may give, or deny, a prefix ending in `*`: `runs:start:*` (every mode), `runs:*`,
 `server:*`, `*` (everything). The server's actions count only server-wide, the others only on
 a repository. A pattern asked (`can(login, repo, "runs:start:*")`) means all of it: a deny of
-any action it covers (`runs:start:work`) refuses it.
+any action it covers (`runs:start:work`) refuses it; `*` asked server-wide is `server:*`.
 
 **Roles and bindings**: Deckhand's `access-roles.rego` defines four roles as action sets, and
 gives each login the actions of the `bindings` that match it:

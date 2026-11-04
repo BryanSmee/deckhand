@@ -10,6 +10,7 @@ import {
   allows,
   createPolicies,
   REPO_ACTIONS,
+  repoName,
   SERVER_ACTIONS,
 } from "../listener/policies.mjs";
 import { builtInPolicies } from "../policy-service/engine.mjs";
@@ -533,8 +534,39 @@ test(
     policies.forget("acme/old");
     await policies.access("bob", "acme/old");
     assert.equal(calls.filter((p) => p === "/repos/acme/old").length, 2);
+    // Its push's webhook says GitHub's current name: a deny pushed applies under the old one.
+    assert.ok(await policies.can("bob", "acme/old", "logs:read"));
+    repos["acme/old"].policies["logs.rego"] =
+      'package deckhand\n\ndeny_access contains {"action": "logs:read", "reason": "no"} if true\n';
+    policies.forget("Other/New");
+    assert.ok(!(await policies.can("bob", "acme/old", "logs:read")));
+    assert.equal(calls.filter((p) => p === "/repos/acme/old").length, 3);
   },
 );
+
+test("access: a repository's name is owner/repo, nothing GitHub's paths would read otherwise", async (t) => {
+  const { github, calls } = fakeGithub({ "acme/y": {} });
+  const engine = policyEngineOf(t, { readOperator: () => new Map() });
+  const policies = createPolicies({ config: {}, github, service: localService(engine) });
+  for (const name of ["acme/x/../y", "acme/..", "acme/y?ref=x", "acme", "./y", "acme/y/z"]) {
+    const answer = await policies.access("bob", name);
+    assert.match(answer.error, /no repository's name/, name);
+    const info = await policies.access("bob", { full_name: name, default_branch: "main" });
+    assert.match(info.error, /no repository's name/, name);
+  }
+  assert.deepEqual(calls, []);
+  assert.ok(repoName("acme/my-repo.js"));
+  assert.ok(!repoName("acme/.."));
+});
+
+test("allows: `*` asked server-wide is every server action", () => {
+  const answer = { actions: ["*"], denied: [], files: {}, error: null };
+  assert.ok(allows(answer, "*", false));
+  assert.ok(!allows({ ...answer, actions: ["server:read"] }, "*", false));
+  const sync = [{ action: "server:sync", reason: "no", file: null, layer: "operator" }];
+  assert.ok(!allows({ ...answer, denied: sync }, "*", false));
+  assert.ok(allows({ ...answer, denied: sync }, "*"));
+});
 
 test("allows: a deny of the other scope's actions doesn't refuse a pattern", () => {
   const answer = {

@@ -120,6 +120,8 @@ export function actionMatches(pattern, action) {
 // repository) doesn't.
 export function allows(answer, action, repo = true) {
   if (!answer || answer.error || typeof action !== "string") return false;
+  // `*` asked is all of its scope's: server-wide, every server action.
+  if (action === "*" && !repo) action = `${SERVER}*`;
   if (action.startsWith(SERVER) === !!repo) return false;
   const inScope = (a) => typeof a === "string" && a.startsWith(SERVER) !== !!repo;
   return (
@@ -133,6 +135,13 @@ export function allows(answer, action, repo = true) {
 
 // Deckhand's policy/access.rego's one rule: every action, for every login (access()'s shortcut).
 const EVERY_ACTION = /^allow_access\s+contains\s+"\*"\s*(?:#.*)?$/m;
+
+// Whether `name` is a repository's `owner/repo`, nothing else: it goes into GitHub's paths, where a
+// `..` or a `?` would read another repository's policies than the one its bindings matched.
+export const repoName = (name) =>
+  typeof name === "string" &&
+  /^[\w.-]+\/[\w.-]+$/.test(name) &&
+  name.split("/").every((part) => part !== "." && part !== "..");
 
 // How long access()'s answers are kept for the same layers, login and repository (as grants()'s:
 // GRANTS_MS bounds a rule reading the time), and for how many at most.
@@ -823,6 +832,9 @@ export function createPolicies({
   // in lower case → { at, info }: kept ACCESS_MS, as the answers are, and forgotten on its push
   // (forget()), so that a kept answer costs no call and a GitHub hiccup doesn't refuse it.
   const repoInfos = new Map();
+  // A renamed or transferred repository's current name (lower case) → the names it was asked by
+  // (repoOf()): its push's webhook says the current one, and forget() clears them too.
+  const renamed = new Map();
 
   // A repository as access() takes it, its name or what GitHub says of it (its `full_name`,
   // `private`, `default_branch`) → { name, private, ref }. Without its default branch, read
@@ -832,7 +844,7 @@ export function createPolicies({
     let info = repo;
     if (typeof repo === "string" || !info?.default_branch) {
       const name = typeof repo === "string" ? repo : (info?.full_name ?? info?.name);
-      if (typeof name !== "string" || !name.includes("/")) throw new Error("no repository's name");
+      if (!repoName(name)) throw new Error("no repository's name");
       const key = name.toLowerCase();
       const kept = repoInfos.get(key);
       if (kept && now() - kept.at < ACCESS_MS) info = kept.info;
@@ -844,13 +856,18 @@ export function createPolicies({
         // A repository renamed or transferred answers with another name entirely: the name
         // asked for stays (as repo-check.mjs keeps it), so that the bindings, its listing and
         // forget() are all of the repository the caller asked about.
-        if (String(info.full_name).toLowerCase() !== key) info = { ...info, full_name: name };
+        const current = String(info.full_name).toLowerCase();
+        if (current !== key) {
+          if (renamed.size >= MAX_ACCESS) renamed.delete(renamed.keys().next().value);
+          renamed.set(current, new Set([...(renamed.get(current) ?? []), key]));
+          info = { ...info, full_name: name };
+        }
         if (repoInfos.size >= MAX_ACCESS) repoInfos.delete(repoInfos.keys().next().value);
         repoInfos.set(key, { at: now(), info });
       }
     }
     const name = info?.full_name ?? info?.name;
-    if (typeof name !== "string" || !name.includes("/")) throw new Error("no repository's name");
+    if (!repoName(name)) throw new Error("no repository's name");
     return { name, private: info.private !== false, ref: info.default_branch };
   }
 
@@ -1321,8 +1338,11 @@ export function createPolicies({
   // `repo`'s default branch moved (a push, a merge: repos.mjs refreshFor()): its policies are
   // listed again at the next decision, and what GitHub says of it read again (access()).
   function forget(repo) {
-    listings.delete(repo.toLowerCase());
-    repoInfos.delete(repo.toLowerCase());
+    const key = repo.toLowerCase();
+    for (const name of [key, ...(renamed.get(key) ?? [])]) {
+      listings.delete(name);
+      repoInfos.delete(name);
+    }
   }
 
   return {
