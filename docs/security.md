@@ -2201,7 +2201,7 @@ service's refuses a value or an event holding one it knows, a GitHub token or a 
 session key. What people wrote (a delivery's payload, a queued comment, one waiting for other
 issues) is kept with them redacted (`storable()`), rather than refused whole. A comment that
 waits (`/after`) was in a file of its own, `waits.json`, the owner's only (`0600`); in the store
-(#616), what keeps it is the store's own access: its folder, `state.json` the owner's only, or
+(#616), what keeps it is the store's own access: its folder, its file in `keys/` the owner's only, or
 Redis's user and network (docs/setup.md, The store). The file backend (`lib/store-file.mjs`) may
 be shared by several processes on one node: two copies of a service on one volume
 (`docker compose up -d --scale orchestrator=2`, or edge), or one starting while the last

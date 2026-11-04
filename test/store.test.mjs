@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import {
   appendFileSync,
   chmodSync,
+  existsSync,
   linkSync,
   mkdirSync,
   readdirSync,
@@ -221,33 +222,45 @@ test("file: a key under `apart` changed writes its file alone, not state.json", 
   assert.equal(await fileStore({ dir, apart: ["titles/"] }).get("titles/acme/x#1"), "One, renamed");
 });
 
-// #691: the keys a release before kept in state.json go to their files at the first call, those
-// with a TTL left there; the values read and listed the same, once each.
-test("file: keys newly under `apart` move out of state.json at the first call", async (t) => {
+// #691: the keys a release before kept in state.json go to their files once moveApart() is
+// called, never before (a copy of that release may still act on the folder), those with a TTL
+// left there; the values read and listed the same, once each, whatever fails on the way.
+test("file: keys newly under `apart` move out of state.json on moveApart(), only then", async (t) => {
   const dir = tempDir(t);
   const old = fileStore({ dir });
   await old.set("queue", [1]);
   await old.set("titles/a", "A");
   await old.set("titles/b", "B", { ttlMs: 60_000 });
-  await old.close();
-  let fail = true;
+  await old.set("titles/c", "C");
+  let fail = false;
   const writeJson = (...args) => {
     if (fail) throw Object.assign(new Error("disk full"), { code: "ENOSPC" });
     return writeJsonAtomic(...args);
   };
   const store = fileStore({ dir, writeJson, apart: ["titles/"] });
-  t.after(() => store.close());
+  t.after(() => Promise.all([old.close(), store.close()]));
   const saved = () => Object.keys(JSON.parse(readFileSync(join(dir, "state.json"), "utf8")).keys);
-  // state.json not written: the call fails, the keys kept where they were, read and listed once.
-  await assert.rejects(store.get("queue"), { code: "ENOSPC" });
+  // The release before still acting: its delete seen by the next, as nothing moved yet.
+  assert.deepEqual(await store.get("queue"), [1]);
+  assert.equal(await old.delete("titles/c"), true);
+  assert.equal(await store.get("titles/c"), null);
+  assert.deepEqual(saved().sort(), ["queue", "titles/a", "titles/b"]);
+  assert.equal(existsSync(join(dir, "keys", "titles%2Fa")), false);
+  // A key's file that can't be written: the call fails, nothing moved, read and listed once.
+  mkdirSync(join(dir, "keys", "titles%2Fa"));
+  writeFileSync(join(dir, "keys", "titles%2Fa", "x"), "");
+  await assert.rejects(store.moveApart());
+  rmSync(join(dir, "keys", "titles%2Fa"), { recursive: true });
+  // state.json that can't be written: the same, its file written, the key still in state.json.
+  fail = true;
+  await assert.rejects(store.moveApart(), { code: "ENOSPC" });
   fail = false;
   assert.deepEqual(saved().sort(), ["queue", "titles/a", "titles/b"]);
-  assert.deepEqual((await fileStore({ dir, apart: ["titles/"] }).keys("titles/")).keys, [
-    "titles/a",
-    "titles/b",
-  ]);
-  // Then moved, at the next call.
-  assert.deepEqual(await store.get("queue"), [1]);
+  assert.equal(await store.get("titles/a"), "A");
+  assert.deepEqual((await store.keys("titles/")).keys, ["titles/a", "titles/b"]);
+  // Then moved.
+  assert.equal(await store.moveApart(), 1);
+  assert.equal(await store.moveApart(), 0);
   assert.deepEqual(saved().sort(), ["queue", "titles/b"]);
   assert.deepEqual(readdirSync(join(dir, "keys")), ["titles%2Fa"]);
   assert.equal(await store.get("titles/a"), "A");

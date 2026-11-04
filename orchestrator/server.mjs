@@ -660,6 +660,12 @@ for (const run of ctx.runs) ctx.runsById.set(run.id, run);
 // comments they hold written without a secret (storable()); where one change writes such a map
 // and the queue, the two writes go in the order that leaves a comment somewhere after a crash
 // between them (waits.mjs releasing() and hold(), brainstorms.mjs end()).
+// With the file store, the items a release before kept in its state file go to their own files
+// first (#691), now that its copy is gone: one still acting would delete none of them.
+const apartMoved = await persist("Moving the maps' items out of the store's state file", () =>
+  store.moveApart?.(),
+);
+if (apartMoved) log(`The store: ${apartMoved} item(s) moved out of its state file, a file each`);
 maps = await persist("Reading the orchestrator's maps from the store", () =>
   storeMaps(store, MAPS, {
     dir: config.dataDir,

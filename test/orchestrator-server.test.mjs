@@ -5910,6 +5910,13 @@ mounts:
       for (const [name, value] of Object.entries(legacy)) {
         writeFileSync(join(dir, `${name}.json`), JSON.stringify(value));
       }
+      // An item the release before #691 kept in the store's state file: moved to a file of its
+      // own once this copy holds the lease.
+      mkdirSync(join(dir, "store"));
+      writeFileSync(
+        join(dir, "store", "state.json"),
+        JSON.stringify({ keys: { "modes/org/repo#3": { value: "review", expiresAt: null } } }),
+      );
       mkdirSync(join(dir, "logs"));
       writeFileSync(
         join(dir, "logs", "org-repo-9-1000.log"),
@@ -5931,7 +5938,9 @@ mounts:
     const { dir, port, send } = ctx;
     for (const name of Object.keys(legacy)) {
       assert.equal(existsSync(join(dir, `${name}.json`)), false, name);
-      assert.deepEqual(await storedMap(dir, name), legacy[name], name);
+      const expected =
+        name === "modes" ? { ...legacy.modes, "org/repo#3": "review" } : legacy[name];
+      assert.deepEqual(await storedMap(dir, name), expected, name);
     }
     // Each item a file of its own, out of the state file every lease renewal writes (#691).
     const saved = JSON.parse(readFileSync(join(dir, "store", "state.json"), "utf8")).keys;
