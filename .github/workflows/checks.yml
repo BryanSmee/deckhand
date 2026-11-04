@@ -21,6 +21,15 @@ jobs:
     # anyway run here (they skip as root, below).
     runs-on: [self-hosted, Linux] # TODO: change to ubuntu-latest on public release
     timeout-minutes: 20
+    # A real Redis, so the store's Redis tests run (test/store-redis.test.mjs, its calls made as
+    # docs/setup.md's ACL user, and the runner's handover on Redis): Redis 7, the oldest
+    # docs/setup.md supports. On a port the host picks: a self-hosted machine may run two jobs.
+    services:
+      redis:
+        image: redis:7
+        ports:
+          - 6379
+        options: --health-cmd "redis-cli ping" --health-interval 2s --health-timeout 5s --health-retries 15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -43,14 +52,21 @@ jobs:
       - name: Bundle graphql-js
         working-directory: listener/vendor
         run: npm ci --no-audit --no-fund && npm run build
-      # Fails, too, when a real-opa test skipped: opa is on the PATH here.
+      # Fails, too, when a real-opa or Redis test skipped: opa is on the PATH, Redis beside.
       - name: Tests
+        # Here, not in the job's env: the job context isn't there yet.
+        env:
+          TEST_REDIS_URL: "redis://localhost:${{ job.services.redis.ports['6379'] }}"
         run: |
           node --test --test-force-exit --import ./test/blocking-stdout.mjs --test-timeout=120000 \
             --test-reporter=spec --test-reporter-destination=stdout \
             --test-reporter=tap --test-reporter-destination="$RUNNER_TEMP/tests.tap"
           if grep "# SKIP no opa on the PATH" "$RUNNER_TEMP/tests.tap"; then
             echo "::error::real-opa tests skipped"
+            exit 1
+          fi
+          if grep "# SKIP no Redis" "$RUNNER_TEMP/tests.tap"; then
+            echo "::error::Redis tests skipped"
             exit 1
           fi
 
@@ -65,6 +81,13 @@ jobs:
     container:
       image: node:26
       options: --user 0 --init
+    # The same Redis, reached by its name on the job's network.
+    services:
+      redis:
+        image: redis:7
+        options: --health-cmd "redis-cli ping" --health-interval 2s --health-timeout 5s --health-retries 15
+    env:
+      TEST_REDIS_URL: redis://redis:6379
     steps:
       - uses: actions/checkout@v4
       - name: Install jq and opa
@@ -88,6 +111,10 @@ jobs:
             --test-reporter=tap --test-reporter-destination=/tmp/tests.tap
           if grep "# SKIP no opa on the PATH" /tmp/tests.tap; then
             echo "::error::real-opa tests skipped"
+            exit 1
+          fi
+          if grep "# SKIP no Redis" /tmp/tests.tap; then
+            echo "::error::Redis tests skipped"
             exit 1
           fi
       # What root wrote in the runner's workspace goes back to its user: the next job's
