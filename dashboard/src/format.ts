@@ -258,8 +258,7 @@ export function notClean(t: Pick<Task, "pr" | "review">): string | null {
 // review loop over and clean, CI passed on its head (none at all counts, as does one not read
 // yet), and no conflict with its base (an unknown one counts as none: GitHub often doesn't
 // know yet, and a pull request mustn't flicker).
-export const cleanReady = (t: Pick<Task, "pr" | "review">) =>
-  isReady(t) && !notClean(t) && t.pr?.ci?.state !== "running";
+export const cleanReady = (t: Pick<Task, "pr" | "review">) => readyStatus(t)?.tone === "ready";
 
 // What a state looks like: one of the six status tones (global.css .s-*), which only ever
 // mean a state. A stopped run is over, not failed: idle, like a queued one. A run or task that
@@ -299,9 +298,12 @@ export function taskStatus(t: Pick<Task, "state" | "pr" | "review">): {
   const tone = toneOf(t.state);
   const label = STATE_NAMES[t.state];
   if (tone !== "idle") return { tone, label };
+  // Queued or waiting: its pull request's tone, but its word, so the run on its way shows.
+  const own = t.state === "queued" || t.state === "waiting";
   if (t.pr?.state === "merged") return { tone: "done", label };
   if (t.pr?.state !== "ready") return { tone, label };
-  return readyStatus(t) ?? { tone: "run", label: "In review" };
+  const ready = readyStatus(t) ?? { tone: "run" as const, label: "In review" };
+  return own ? { tone: ready.tone, label } : ready;
 }
 
 export const taskTone = (t: Pick<Task, "state" | "pr" | "review">) => taskStatus(t).tone;

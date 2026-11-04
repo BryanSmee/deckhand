@@ -982,3 +982,27 @@ test("pulls: the conflict watcher's read and resync's say whether it conflicts (
   assert.equal("conflict" in pulls.get("org/repo#30"), false);
   await pulls.caughtUp();
 });
+
+test("pulls: fill() takes whether it conflicts from the pull request it reads, at the head recorded (#638)", async () => {
+  const getPull = async (repo, number) => ({
+    number,
+    state: "open",
+    draft: false,
+    head: { sha: number === 31 ? "a1" : "zz" },
+    mergeable: false,
+    mergeable_state: "dirty",
+    additions: 1,
+    deletions: 0,
+    changed_files: 1,
+    commits: 1,
+  });
+  const pulls = createPulls({ listPulls: async () => [], getPull });
+  pulls.record("org/repo#30", { ...pr(31, "ready"), head: "a1" });
+  pulls.record("org/repo#32", { ...pr(33, "ready"), head: "a1" });
+  await pulls.fill(["org/repo#30", "org/repo#32"]);
+  assert.equal(pulls.get("org/repo#30").conflict, true);
+  // Read at another head than the one recorded: says nothing of this one; its size still kept.
+  assert.equal("conflict" in pulls.get("org/repo#32"), false);
+  assert.equal(pulls.get("org/repo#32").commits, 1);
+  await pulls.caughtUp();
+});

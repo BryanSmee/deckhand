@@ -2,7 +2,16 @@
 // on you across repositories, the totals, and each repository's tasks by tone and its lanes.
 import { graphOf } from "./graphModel";
 import { lanesOf } from "./lanes";
-import { isReady, isSettled, plural, sameRepo, type Tone, taskTone, toneOf } from "./format";
+import {
+  isReady,
+  isSettled,
+  plural,
+  readyStatus,
+  sameRepo,
+  type Tone,
+  taskTone,
+  toneOf,
+} from "./format";
 import type { Blocker, Edge, Task } from "./types";
 
 // Why a task waits on you, and the one action its row offers.
@@ -37,8 +46,9 @@ function needOf(t: Task): Need | null {
   // A failure dismissed with its pull request still ready waits for the review alone.
   if (tone === "err" && !isSettled(t)) return "error";
   // Ready, clean or not (its badge says which: readyStatus()), once no run is going on it but
-  // its loop's own review.
-  if ((tone === "idle" || tone === "err" || t.state === "in-review") && isReady(t)) return "ready";
+  // its loop's own review, and its CI is over: nothing to do before.
+  const waiting = tone === "idle" || tone === "err" || t.state === "in-review";
+  if (waiting && isReady(t) && readyStatus(t)?.tone !== "run") return "ready";
   return null;
 }
 
@@ -66,8 +76,10 @@ export function repoParts(tasks: Task[], now: number): Part[] {
     const tone = taskTone(t);
     // A failure that no longer asks (isSettled()) isn't "failed" here either.
     if (tone === "err" && isSettled(t)) continue;
-    if (tone !== "idle") add(tone);
-    else if (["queued", "waiting"].includes(t.state)) add("queued");
+    // Queued or waiting, its pull request merged: still on its way.
+    if (["queued", "waiting"].includes(t.state) && (tone === "idle" || tone === "done"))
+      add("queued");
+    else if (tone !== "idle") add(tone);
     // Done without a merged pull request: ended, not idle, but not green either.
     else if (t.state === "done") add("ended");
     else add("idle");

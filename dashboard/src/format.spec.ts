@@ -301,12 +301,24 @@ describe("status tones", () => {
     expect(taskTone({ state: "cancelled", pr: pr({ state: "merged" }) })).toBe("done");
     // What it does now still wins.
     expect(taskTone({ state: "working", pr: pr({ state: "merged" }) })).toBe("run");
+    // Queued or waiting: its pull request's tone, its own word (a run is on its way).
+    expect(taskStatus({ state: "queued", pr: pr({ state: "merged" }) })).toEqual({
+      tone: "done",
+      label: "Queued",
+    });
+    expect(taskStatus({ state: "queued", pr: pr() })).toEqual({ tone: "ready", label: "Queued" });
+    expect(taskStatus({ state: "waiting", pr: pr({ conflict: true }) })).toEqual({
+      tone: "input",
+      label: "Waiting",
+    });
   });
 
   test("purple only when clean: CI passed (or none), no conflict, the loop over and clean", () => {
     const status = (over: Partial<PullRequest>, r?: ReviewLoop) =>
       taskStatus({ state: "done", pr: pr(over), review: r });
     expect(cleanReady({ pr: pr(), review: review("clean") })).toBe(true);
+    expect(cleanReady({ pr: pr({ ci: { sha: "b2", state: "running", runs: [] } }) })).toBe(false);
+    expect(cleanReady({ pr: pr(), review: review("reviewing") })).toBe(false);
     // No CI at all, or not read yet, counts as passed; an unknown conflict as none.
     expect(cleanReady({ pr: pr({ ci: { sha: "b2", state: "none", runs: [] } }) })).toBe(true);
     expect(cleanReady({ pr: pr({ ci: undefined }) })).toBe(true);

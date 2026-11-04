@@ -35,8 +35,9 @@ test("waiting on you: questions, a brainstorm's turn, failures and ready pull re
   expect(waitingOnYou([failed])[0].need).toBe("error");
 });
 
-test("a ready pull request that isn't clean still waits on you; one in its loop doesn't", () => {
+test("a ready pull request that isn't clean still waits on you; one in its loop or CI doesn't", () => {
   const ci = { sha: "b2", state: "failed" as const, runs: [] };
+  const running = { sha: "b2", state: "running" as const, runs: [] };
   const tasks = [
     makeTask({ number: 1, state: "done", pr: { ...pr("ready", 1), conflict: true } }),
     makeTask({ number: 2, state: "done", pr: { ...pr("ready", 2), ci } }),
@@ -46,6 +47,7 @@ test("a ready pull request that isn't clean still waits on you; one in its loop 
       pr: pr("ready", 3),
       review: { loop: "reviewing", round: 0, rounds: 2, history: [] },
     }),
+    makeTask({ number: 4, state: "done", pr: { ...pr("ready", 4), ci: running } }),
   ];
   expect(waitingOnYou(tasks).map((r) => [r.task.number, r.need])).toEqual([
     [1, "ready"],
@@ -89,13 +91,15 @@ test("a repository's tasks by tone, ended ones for a week", () => {
     makeTask({ number: 11, state: "done", since: now - 1000, pr: pr("merged", 0) }),
     makeTask({ number: 12, state: "in-review", pr: pr("ready", 0) }),
     makeTask({ number: 13, state: "done", pr: { ...pr("ready", 0), conflict: true } }),
+    // Queued again on a merged pull request: still queued.
+    makeTask({ number: 14, state: "queued", pr: pr("merged", 0) }),
   ];
   expect(repoParts(tasks, now).map((p) => [p.tone, p.count, p.words])).toEqual([
     ["run", 3, "3 running"],
     ["input", 2, "2 need you"],
     ["ready", 1, "1 ready"],
     ["err", 1, "1 failed"],
-    ["idle", 1, "1 queued"],
+    ["idle", 2, "2 queued"],
     ["idle", 1, "1 idle"],
     ["idle", 1, "1 done this week"],
     ["done", 1, "1 merged this week"],
