@@ -459,7 +459,9 @@ segment's first byte, size and where it is, and where the open one, the last, st
 open one is appended to. It closes at a step of the run (a `phase` line, which the orchestrator
 sends at the start of an append of its own, marked `step=1`), at `LOG_SEGMENT_MB` (8 MB by
 default), whichever comes first, and at the run's end (an empty append marked `close=1`, from
-`teardown()`). Closing takes two compare-and-sets of the index: one marks the open segment
+`teardown()`, or after the last part of an ended run's log a listener kept itself, `moveLogs()`),
+and again when the run's sandbox is removed (`DELETE /sandboxes/<name>?run=<run>`), should an
+orchestrator stopped before its close never send it (#664). Closing takes two compare-and-sets of the index: one marks the open segment
 `closing`, then whichever copy of the runner gets there first records its size as it is then.
 An append reads the index again after its write: a segment marked or closed meanwhile tells it
 whether its bytes are inside, and one past a closed segment's end is answered with the log's

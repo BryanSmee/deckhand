@@ -1015,6 +1015,43 @@ test("a run's log through the client: a step starts a segment, the run's end clo
   assert.equal(await store.blobSize(`logs/${id}/0`), null);
 });
 
+// A run's end the orchestrator never sent (#664): the log of a run that ended before the runner
+// kept logs, uploaded, and a run's sandbox removed with its last segment open.
+test("a log's last segment closes once an ended run's file is uploaded, and when its sandbox goes", async (t) => {
+  const store = fileStore();
+  const a = await copy(t, { store, backend: host() });
+  const { logs, runner } = client(a.url);
+  const index = (id) => store.get(`logs/${id}/index`);
+  const file = join(tempDir(t), "dh-o-a-2-1.log");
+  writeFileSync(file, "an ended run\n");
+  await logs.upload("dh-o-a-2-1", file, { close: true });
+  assert.deepEqual(await index("dh-o-a-2-1"), {
+    segments: [{ at: 0, size: 13, where: "store" }],
+    open: 13,
+  });
+  // A live run's: written on.
+  await logs.upload("dh-o-a-3-1", file);
+  assert.equal(await index("dh-o-a-3-1"), null);
+  // An orchestrator stopped before its close went: the sandbox's removal closes it.
+  await runner.start(SPEC);
+  const run = logs.open(SPEC.run);
+  run.write("work\n");
+  assert.equal(await run.flushed(), true);
+  assert.equal(await index(SPEC.run), null);
+  await runner.remove(SPEC.name, SPEC.run);
+  assert.deepEqual(await index(SPEC.run), {
+    segments: [{ at: 0, size: 5, where: "store" }],
+    open: 5,
+  });
+  // The close that comes after it closes nothing more; a note after it opens a segment of its own.
+  run.close();
+  run.write("a note\n");
+  run.close();
+  assert.equal(await run.flushed(), true);
+  assert.deepEqual((await index(SPEC.run)).segments.at(-1), { at: 5, size: 7, where: "store" });
+  assert.equal(await logs.text(SPEC.run), "work\na note\n");
+});
+
 // An update stops a copy: its lease goes once its calls are done, so the other copy acts at once.
 test("stop: the lease goes once the calls are done", async (t) => {
   const store = fileStore();

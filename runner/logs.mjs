@@ -9,7 +9,8 @@
 // { segments: [{ at, size, where }], open }), the closed segments' first bytes and sizes, and the
 // first byte of the open one, the last. Only the open one is appended to. It closes at a step of
 // the run (an append marked `step`: a phase's first line, ../listener/runlog.mjs enterPhase()),
-// at `segmentMax` (LOG_SEGMENT_MB), and at the run's end (an append marked `close`), by
+// at `segmentMax` (LOG_SEGMENT_MB), and at the run's end (an append marked `close`, or its
+// sandbox's removal: close()), by
 // compare-and-sets of the index, so that two copies handing over agree on where it ended: one
 // marks it `closing`, then one measures it and records its size (closeOpen()). Callers only
 // ever see offsets in the whole log. A log written before segments (`logs/<run>`, one blob, no
@@ -152,16 +153,28 @@ export function createLogs({
   // writer goes on from. `step`: it starts a step of the run, so a segment of its own; `close`:
   // the open segment closes after it (the run's end). → the log's new size.
   function append(id, at, data, { step = false, close = false } = {}) {
-    checked(id);
-    const previous = chains.get(id) ?? Promise.resolve();
-    const done = previous.then(async () => {
+    return inChain(id, async () => {
       const size = await appendOnce(id, at, data, step);
-      if (close) {
-        const place = await locate(id);
-        if (!place.legacy && place.openSize) await closeOpen(id, place);
-      }
+      if (close) await closeLast(id);
       return size;
     });
+  }
+
+  // The run is over: its open segment closed, unless it is empty (or of the old shape). Asked
+  // by the sandbox's removal too (service.mjs), should the writer's own close never come (an
+  // orchestrator stopped before it sent it, #664). An append after it opens a segment of its own.
+  const close = (id) => inChain(checked(id), () => closeLast(id));
+
+  async function closeLast(id) {
+    const place = await locate(id);
+    if (!place.legacy && place.openSize) await closeOpen(id, place);
+  }
+
+  // `job` after the log's appends and closes before it: one at a time per log.
+  function inChain(id, job) {
+    checked(id);
+    const previous = chains.get(id) ?? Promise.resolve();
+    const done = previous.then(job);
     const settled = done.catch(() => {});
     chains.set(id, settled);
     settled.then(() => chains.get(id) === settled && chains.delete(id));
@@ -365,7 +378,7 @@ export function createLogs({
 
   const moves = createMoves({ store, enabled: Boolean(blobs), moveOne, timers, now, log });
 
-  return { append, read, remove, size: sizeOf, moves };
+  return { append, close, read, remove, size: sizeOf, moves };
 }
 
 // What moves the closed segments (createLogs()'s `moves`), on the copy holding the runner's
