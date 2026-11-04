@@ -2,7 +2,7 @@
 // a phone), what to do next (Open pull request, Rerun, Dismiss), then its facts: the branch and its
 // commits, the change's size (the latest run's only: the pull request is the task's), how long, on which model, and where it replies. A run going on
 // says so instead.
-import { AUTH_NAMES, duration, plural, PR_NAMES, type Tone } from "./format";
+import { AUTH_NAMES, duration, plural, PR_NAMES, readyStatus, type Tone } from "./format";
 import type { Auth, PullRequest, Run, Task } from "./types";
 import { Button, buttonClass } from "./ui/Button";
 import * as Icon from "./ui/icons";
@@ -23,17 +23,17 @@ interface Props {
   dismissing?: boolean;
 }
 
-const PR_TONES: Record<PullRequest["state"], Tone> = {
-  draft: "idle",
-  ready: "ready",
-  merged: "done",
-  closed: "idle",
-};
-
-function prBadge(pr: PullRequest): string {
-  if (pr.state === "merged") return pr.autoMerged ? "Merged by Deckhand" : "Merged";
-  if (pr.state === "draft") return "Draft pull request";
-  return `Pull request ${PR_NAMES[pr.state].toLowerCase()}`;
+// Its tone and word: a ready one's as the task's (readyStatus()), purple only when clean.
+function prBadge(t: Task, pr: PullRequest): { tone: Tone; label: string } {
+  if (pr.state === "merged")
+    return { tone: "done", label: pr.autoMerged ? "Merged by Deckhand" : "Merged" };
+  if (pr.state === "draft") return { tone: "idle", label: "Draft pull request" };
+  const label = `Pull request ${PR_NAMES[pr.state].toLowerCase()}`;
+  if (pr.state !== "ready") return { tone: "idle", label };
+  // Still in its review loop: on its way, like the task.
+  const ready = readyStatus({ pr, review: t.review });
+  if (!ready) return { tone: "run", label: `${label} · In review` };
+  return { tone: ready.tone, label: ready.tone === "ready" ? label : `${label} · ${ready.label}` };
 }
 
 // The Claude credential a run used (Run.auth), next to its model: the plan, already paid for,
@@ -101,7 +101,7 @@ export function Outcome(props: Props) {
       <div class={styles.top}>
         {!touch && <h3 class={styles.h}>Outcome</h3>}
         <StatusBadge state={r.status} label={live ? "Working" : undefined} />
-        {pr && <StatusBadge tone={PR_TONES[pr.state]} label={prBadge(pr)} />}
+        {pr && <StatusBadge {...prBadge(t, pr)} />}
         {!touch && <span class={styles.actions}>{actions}</span>}
       </div>
       {live ? (

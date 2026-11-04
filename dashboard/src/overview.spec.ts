@@ -2,7 +2,7 @@ import { expect, test } from "vitest";
 import { age, backlogLine, laneCount, repoParts, WEEK_MS, waitingOnYou } from "./overview";
 import { makeState, makeTask } from "./testUtils";
 
-const pr = (state: "draft" | "ready", readyAt: number | null = null) => ({
+const pr = (state: "draft" | "ready" | "merged", readyAt: number | null = null) => ({
   number: 40,
   url: "https://github.example.com/acme/app/pull/40",
   state,
@@ -33,6 +33,28 @@ test("waiting on you: questions, a brainstorm's turn, failures and ready pull re
   // What asks comes first: a failed run with a ready pull request is a failure.
   const failed = makeTask({ state: "error", pr: pr("ready", 1) });
   expect(waitingOnYou([failed])[0].need).toBe("error");
+});
+
+test("a ready pull request that isn't clean still waits on you; one in its loop or CI doesn't", () => {
+  const ci = { sha: "b2", state: "failed" as const, runs: [] };
+  const running = { sha: "b2", state: "running" as const, runs: [] };
+  const tasks = [
+    makeTask({ number: 1, state: "done", pr: { ...pr("ready", 1), conflict: true } }),
+    makeTask({ number: 2, state: "done", pr: { ...pr("ready", 2), ci } }),
+    makeTask({
+      number: 3,
+      state: "in-review",
+      pr: pr("ready", 3),
+      review: { loop: "reviewing", round: 0, rounds: 2, history: [] },
+    }),
+    makeTask({ number: 4, state: "done", pr: { ...pr("ready", 4), ci: running } }),
+    // A run queued on it: it pushes there next.
+    makeTask({ number: 5, state: "queued", pr: pr("ready", 5) }),
+  ];
+  expect(waitingOnYou(tasks).map((r) => [r.task.number, r.need])).toEqual([
+    [1, "ready"],
+    [2, "ready"],
+  ]);
 });
 
 test("a failure that no longer asks isn't waiting on you, nor failed on its card", () => {
@@ -67,15 +89,24 @@ test("a repository's tasks by tone, ended ones for a week", () => {
     makeTask({ number: 8, state: "cancelled", since: now - 2 * WEEK_MS }),
     makeTask({ number: 9, state: "done", since: 0, pr: pr("ready", 0) }),
     makeTask({ number: 10, state: "error" }),
+    // Merged: green; Deckhand reviewing its own: running; ready but not clean: needs you.
+    makeTask({ number: 11, state: "done", since: now - 1000, pr: pr("merged", 0) }),
+    makeTask({ number: 12, state: "in-review", pr: pr("ready", 0) }),
+    makeTask({ number: 13, state: "done", pr: { ...pr("ready", 0), conflict: true } }),
+    // Queued on a merged or a ready pull request, waiting on another issue: still queued.
+    makeTask({ number: 14, state: "queued", pr: pr("merged", 0) }),
+    makeTask({ number: 15, state: "queued", pr: pr("ready", 0) }),
+    makeTask({ number: 16, state: "waiting", pr: { ...pr("ready", 0), conflict: true } }),
   ];
   expect(repoParts(tasks, now).map((p) => [p.tone, p.count, p.words])).toEqual([
-    ["run", 2, "2 running"],
-    ["input", 1, "1 needs you"],
+    ["run", 3, "3 running"],
+    ["input", 2, "2 need you"],
     ["ready", 1, "1 ready"],
     ["err", 1, "1 failed"],
-    ["idle", 1, "1 queued"],
+    ["idle", 4, "4 queued"],
     ["idle", 1, "1 idle"],
-    ["done", 1, "1 done this week"],
+    ["idle", 1, "1 done this week"],
+    ["done", 1, "1 merged this week"],
   ]);
   expect(repoParts([], now)).toEqual([]);
 });

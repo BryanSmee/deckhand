@@ -8,7 +8,7 @@ import type { Look } from "./dnd";
 import { kindName, numberOf, plural, shortRepo, shorten } from "./format";
 import type { NodeDrag } from "./graphHooks";
 import type { Layout } from "./graphLayout";
-import { type GraphNode, LOUD, ordinal, TONES } from "./graphModel";
+import { type GraphNode, LOUD, moving, ordinal, TONES } from "./graphModel";
 import { formatRoute } from "./route";
 import type { Edge, Task } from "./types";
 import { StatusDot, toneClass } from "./ui/Status";
@@ -69,7 +69,7 @@ export function lookClasses(n: GraphNode, s: Record<string, string>): string {
   return [
     toneClass(TONES[n.look]),
     LOUD.includes(n.look) && s.loud,
-    n.look === "done" && s.done,
+    (n.look === "done" || n.look === "implemented") && s.done,
     n.look === "pending" && s.pending,
     n.look === "talk" && s.talk,
   ]
@@ -159,7 +159,7 @@ export function GraphNodeView({
       {...(n.task ? {} : { target: "_blank", rel: "noreferrer" })}
     >
       <span class={styles.top}>
-        <StatusDot tone={TONES[n.look]} pulse={n.look === "run"} />
+        <StatusDot tone={TONES[n.look]} pulse={moving(n)} />
         <span class={styles.ref}>{nodeRef(n, false, 0)}</span>
         <span class={styles.state}>{n.status}</span>
         <PlaceBadge n={n} class={styles.place} />

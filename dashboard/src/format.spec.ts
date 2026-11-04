@@ -17,6 +17,9 @@ import {
   runKindName,
   runName,
   shortRepo,
+  cleanReady,
+  notClean,
+  taskStatus,
   taskTone,
   titleOf,
   toneOf,
@@ -25,7 +28,7 @@ import {
   when,
   whenTitle,
 } from "./format";
-import type { PrState, Run, State, Task } from "./types";
+import type { PrState, PullRequest, ReviewLoop, ReviewRound, Run, State, Task } from "./types";
 
 const state = fixture as State;
 const task = (key: string) => state.tasks.find((t) => t.key === key)!;
@@ -218,6 +221,7 @@ describe("status tones", () => {
           "brainstorm",
           "idle-brainstorm",
           "queued",
+          "in-review",
           "waiting",
           "cancelled",
           "done",
@@ -227,6 +231,8 @@ describe("status tones", () => {
         ] as const
       ).map((s) => [s, toneOf(s)]),
     );
+    // Done is grey, still with its word: green is for a merged pull request alone. In review:
+    // Deckhand still works on it.
     expect(tones).toEqual({
       scheduled: "run",
       "building-image": "run",
@@ -237,24 +243,116 @@ describe("status tones", () => {
       brainstorm: "input",
       "idle-brainstorm": "idle",
       queued: "idle",
+      "in-review": "run",
       waiting: "idle",
       cancelled: "idle",
-      done: "done",
-      ok: "done",
+      done: "idle",
+      ok: "idle",
       error: "err",
       interrupted: "err",
     });
   });
 
+  const pr = (over: Partial<PullRequest> = {}): PullRequest => ({
+    number: 1,
+    url: "",
+    state: "ready",
+    readyAt: null,
+    head: "b2",
+    ci: { sha: "b2", state: "passed", runs: [] },
+    ...over,
+  });
+  const round = (blocking: number, head = "b2"): ReviewRound => ({
+    round: 1,
+    at: 1,
+    head,
+    counts: { critical: 0, high: blocking, medium: 0, low: 0 },
+    blocking,
+  });
+  const review = (loop: ReviewLoop["loop"], last = round(0)): ReviewLoop => ({
+    loop,
+    round: 1,
+    rounds: 2,
+    history: [last],
+  });
+
   test("a ready pull request is the task's tone once nothing runs, fails or asks", () => {
-    const ready = { number: 1, url: "", state: "ready" as const, readyAt: null };
+    const ready = pr();
     expect(taskTone({ state: "done", pr: ready })).toBe("ready");
-    expect(taskTone({ state: "queued", pr: ready })).toBe("ready");
     expect(taskTone({ state: "working", pr: ready })).toBe("run");
     expect(taskTone({ state: "scheduled", pr: ready })).toBe("run");
     expect(taskTone({ state: "needs-input", pr: ready })).toBe("input");
     expect(taskTone({ state: "error", pr: ready })).toBe("err");
-    expect(taskTone({ state: "done", pr: null })).toBe("done");
+    expect(taskStatus({ state: "done", pr: ready })).toEqual({
+      tone: "ready",
+      label: "Ready for review",
+    });
+  });
+
+  test("green only for a merged pull request: a done run or task without one is grey", () => {
+    expect(taskStatus({ state: "done", pr: null })).toEqual({ tone: "idle", label: "Done" });
+    expect(taskTone({ state: "done", pr: pr({ state: "draft" }) })).toBe("idle");
+    expect(taskTone({ state: "done", pr: pr({ state: "closed" }) })).toBe("idle");
+    expect(taskStatus({ state: "done", pr: pr({ state: "merged" }) })).toEqual({
+      tone: "done",
+      label: "Done",
+    });
+    expect(taskTone({ state: "cancelled", pr: pr({ state: "merged" }) })).toBe("done");
+    // What it does now still wins.
+    expect(taskTone({ state: "working", pr: pr({ state: "merged" }) })).toBe("run");
+    // Queued or waiting: its own tone and word, whatever its pull request (a run is on its way).
+    expect(taskStatus({ state: "queued", pr: pr({ state: "merged" }) })).toEqual({
+      tone: "idle",
+      label: "Queued",
+    });
+    expect(taskStatus({ state: "queued", pr: pr() })).toEqual({ tone: "idle", label: "Queued" });
+    expect(taskStatus({ state: "waiting", pr: pr({ conflict: true }) })).toEqual({
+      tone: "idle",
+      label: "Waiting",
+    });
+  });
+
+  test("purple only when clean: CI passed (or none), no conflict, the loop over and clean", () => {
+    const status = (over: Partial<PullRequest>, r?: ReviewLoop) =>
+      taskStatus({ state: "done", pr: pr(over), review: r });
+    expect(cleanReady({ pr: pr(), review: review("clean") })).toBe(true);
+    expect(cleanReady({ pr: pr({ ci: { sha: "b2", state: "running", runs: [] } }) })).toBe(false);
+    expect(cleanReady({ pr: pr(), review: review("reviewing") })).toBe(false);
+    // No CI at all, or not read yet, counts as passed; an unknown conflict as none.
+    expect(cleanReady({ pr: pr({ ci: { sha: "b2", state: "none", runs: [] } }) })).toBe(true);
+    expect(cleanReady({ pr: pr({ ci: undefined }) })).toBe(true);
+    expect(cleanReady({ pr: pr({ conflict: false }) })).toBe(true);
+    // Not clean: amber, saying why.
+    const failed = { ci: { sha: "b2", state: "failed" as const, runs: [] } };
+    expect(status(failed)).toEqual({ tone: "input", label: "CI failed" });
+    expect(status({}, review("ci-failed"))).toEqual({ tone: "input", label: "CI failed" });
+    expect(status({ conflict: true })).toEqual({ tone: "input", label: "Conflict" });
+    expect(status({}, review("rounds-out", round(2)))).toEqual({
+      tone: "input",
+      label: "Findings left",
+    });
+    expect(status({}, review("clean", round(0, "a1")))).toEqual({
+      tone: "input",
+      label: "Reviewed before last push",
+    });
+    const unclean: [Partial<PullRequest>, ReviewLoop?][] = [
+      [failed],
+      [{ conflict: true }],
+      [{}, review("stopped", round(1))],
+    ];
+    for (const [over, r] of unclean) {
+      expect(cleanReady({ pr: pr(over), review: r })).toBe(false);
+      expect(notClean({ pr: pr(over), review: r })).not.toBeNull();
+    }
+    // CI still going, or the loop: on its way, the running tone.
+    expect(status({ ci: { sha: "b2", state: "running", runs: [] } })).toEqual({
+      tone: "run",
+      label: "Waiting for CI",
+    });
+    expect(status({}, review("ci"))).toEqual({ tone: "run", label: "In review" });
+    expect(taskTone({ state: "in-review", pr: pr(), review: review("reviewing") })).toBe("run");
+    // A draft is never ready, nor says why.
+    expect(notClean({ pr: pr({ state: "draft", conflict: true }) })).toBeNull();
   });
 });
 

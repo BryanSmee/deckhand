@@ -200,7 +200,10 @@ function Theme({ name, class: theme }: { name: string; class: string }) {
           <StatusBadge state="building-image" />
           <StatusBadge state="needs-input" />
           <StatusBadge state="brainstorm" />
+          <StatusBadge state="in-review" />
           <StatusBadge tone="ready" label="Ready for review" />
+          <StatusBadge tone="input" label="CI failed" />
+          <StatusBadge tone="done" label="Merged" />
           <StatusBadge state="done" />
           <StatusBadge state="error" />
           <StatusBadge state="queued" />
@@ -210,7 +213,11 @@ function Theme({ name, class: theme }: { name: string; class: string }) {
           {TONES.map((tone) => (
             <StatusDot key={tone} tone={tone} label={tone} />
           ))}
-          <span class={styles.help}>A dot alone names itself; running pulses.</span>
+          <span class={styles.help}>
+            A dot alone names itself; running pulses. Purple: ready for review, CI passed, no
+            conflict, review loop clean; amber with why when not. Green: merged, nothing else; a run
+            or task that is done is grey.
+          </span>
         </div>
       </section>
 

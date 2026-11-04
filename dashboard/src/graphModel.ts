@@ -1,13 +1,15 @@
 // The graph page's model: what each issue looks like, and where it goes: the graph, or the
 // work queue's Brainstorm tab (brainstormsOf()). Where each node is drawn: graphLayout.ts.
-import { inChip, STATE_NAMES, type Tone } from "./format";
-import type { Backlog, Blocker, Edge, OrderMove, Pending, PrState, Task } from "./types";
+import { inChip, readyStatus, STATE_NAMES, type Tone } from "./format";
+import type { Backlog, Blocker, Edge, OrderMove, Pending, PullRequest, Task } from "./types";
 
 // What a node looks like: the graph's own families, not the list's (format.ts toneOf()).
-// Merged is implemented, done. "pending": an action on it is on its way to the listener; not in
-// the legend, it lasts a few seconds. "input": questions wait for answers; "talk": a brainstorm
-// waits for its next comment.
-export type Look = "idle" | "input" | "talk" | "run" | "err" | "ready" | "done" | "pending";
+// Merged is done, green; closed as completed without a merged pull request is "implemented",
+// grey. "pending": an action on it is on its way to the listener; not in the legend, it lasts a
+// few seconds. "input": questions wait for answers, or a ready pull request for a fix
+// (notClean()); "talk": a brainstorm waits for its next comment.
+export type Look =
+  "idle" | "input" | "talk" | "run" | "err" | "ready" | "done" | "implemented" | "pending";
 
 // Each look's status tone (global.css .s-*): a brainstorm's turn is "Needs you" too, outlined.
 export const TONES: Record<Look, Tone> = {
@@ -18,6 +20,7 @@ export const TONES: Record<Look, Tone> = {
   err: "err",
   ready: "ready",
   done: "done",
+  implemented: "idle",
   pending: "idle",
 };
 
@@ -28,11 +31,24 @@ export const LOUD: Look[] = ["run", "input", "talk", "ready", "err"];
 export const LOOKS: { tone: Tone; name: string; means: string }[] = [
   { tone: "run", name: "Running", means: "being worked on" },
   { tone: "input", name: "Needs you", means: "questions to answer, or a brainstorm's turn" },
-  { tone: "ready", name: "Ready for review", means: "its pull request" },
+  {
+    tone: "ready",
+    name: "Ready for review",
+    means: "CI passed, no conflict, review loop clean",
+  },
   { tone: "err", name: "Error", means: "failed: what waits for it keeps waiting" },
-  { tone: "idle", name: "Waiting", means: "for a blocker, queued, or nothing started" },
-  { tone: "done", name: "Done", means: "closed as completed, or merged" },
+  {
+    tone: "idle",
+    name: "Waiting",
+    means: "for a blocker, queued, or nothing started; faded: closed as completed, not merged",
+  },
+  { tone: "done", name: "Merged", means: "its pull request is merged" },
 ];
+
+// A run going on it: its dot pulses. Not a review loop's wait, which runs too.
+const LIVE: Task["state"][] = ["scheduled", "building-image", "working", "stopping"];
+export const moving = (n: Pick<GraphNode, "look" | "task">) =>
+  n.look === "run" && !!n.task && LIVE.includes(n.task.state);
 
 // What a node or card says while an action on it is on its way.
 export function pendingName(p: Pick<Pending, "action">): string {
@@ -61,38 +77,49 @@ export interface GraphNode {
   task: Task | null;
 }
 
-// What it does now wins over how it ended: a run on a closed issue is still a run. Questions
-// win over a ready pull request (a follow-up run on it asked them), not over finished work.
-export function lookOf(t: {
+// What a node is drawn from: a task, or a blocker's closed state alone.
+type Looked = {
   state?: Task["state"] | null;
   closed: Task["closed"];
-  pr?: { state: PrState; autoMerged?: boolean } | null;
-}): Look {
-  if (t.state && ["scheduled", "building-image", "working", "stopping"].includes(t.state))
-    return "run";
-  if (t.closed === "completed" || t.pr?.state === "merged") return "done";
+  pr?: Pick<PullRequest, "state" | "autoMerged" | "ci" | "conflict" | "head"> | null;
+  review?: Task["review"];
+};
+
+// Its ready pull request's tone and word once its loop is over (format.ts readyStatus()).
+const readyOf = (t: Looked) => readyStatus({ pr: t.pr as PullRequest, review: t.review });
+
+const queuedOn = (t: Looked) => t.state === "queued" || t.state === "waiting";
+
+// What it does now wins over how it ended: a run on a closed issue is still a run. Questions
+// win over a ready pull request (a follow-up run on it asked them), not over finished work. A
+// ready pull request is purple only when clean (format.ts cleanReady()): amber when it needs a
+// fix first, running while its review loop or CI goes on.
+export function lookOf(t: Looked): Look {
+  if (t.state && LIVE.includes(t.state)) return "run";
+  if (t.pr?.state === "merged") return "done";
+  if (t.closed === "completed") return "implemented";
   if (t.state === "needs-input") return "input";
-  if (t.pr?.state === "ready") return "ready";
+  // A run queued or waiting to start on it: on its way, as the list has it (taskStatus()).
+  if (t.pr?.state === "ready" && queuedOn(t)) return "idle";
+  if (t.pr?.state === "ready") {
+    const tone = t.state === "in-review" ? "run" : readyOf(t)?.tone;
+    return tone === "ready" ? "ready" : tone === "input" ? "input" : "run";
+  }
   if (t.state === "brainstorm" || t.state === "idle-brainstorm") return "talk";
   if (t.state === "error" || t.state === "interrupted") return "err";
   return "idle";
 }
 
-function statusOf(
-  look: Look,
-  t: {
-    state?: Task["state"] | null;
-    closed: Task["closed"];
-    pr?: { state: PrState; autoMerged?: boolean } | null;
-  },
-) {
+function statusOf(look: Look, t: Looked) {
   // Merged with no human review: the graph says so, for a maintainer looking for them later.
-  if (look === "done" && t.pr?.state === "merged" && t.pr.autoMerged) return "Merged by Deckhand";
-  if (look === "done") return t.closed === "completed" ? "Implemented" : "Merged";
-  // Deckhand still reviews it, between the runs of its review-and-fix loop.
-  if (look === "ready" && t.state === "in-review") return "In review";
-  if (look === "ready") return "Ready for review";
-  if (look === "input" && t.pr?.state === "ready") return "Needs input, PR ready";
+  if (look === "done") return t.pr?.autoMerged ? "Merged by Deckhand" : "Merged";
+  if (look === "implemented") return "Implemented";
+  if (look === "input" && t.state === "needs-input" && t.pr?.state === "ready")
+    return "Needs input, PR ready";
+  const ready = t.pr?.state === "ready" && !queuedOn(t);
+  if (ready && look !== "run") return readyOf(t)!.label;
+  // Deckhand still reviews it, between the runs of its review-and-fix loop, or waits for CI.
+  if (ready && !(t.state && LIVE.includes(t.state))) return readyOf(t)?.label ?? "In review";
   if (t.closed === "not_planned") return "Closed, not planned";
   // "Done" in the list: its last run replied, which isn't implemented.
   if (t.state === "done") return "Run done";
@@ -224,7 +251,7 @@ function withPending(tasks: Task[], edges: Edge[], pending: Pending[]) {
 // Closed: implemented, or closed as not planned. A run on it isn't.
 function isClosed(n: GraphNode): boolean {
   if (n.look === "run") return false;
-  return n.look === "done" || n.closed === "not_planned";
+  return n.look === "done" || n.look === "implemented" || n.closed === "not_planned";
 }
 
 // The nodes of `tasks` (one tab's, or all) and the issues they wait for, with the arrows
