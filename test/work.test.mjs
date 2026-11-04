@@ -2806,3 +2806,20 @@ test("access: Review, Fix and answers that go on in a session need their start, 
   assert.deepEqual([asked.comments, asked.accepted], [[], []]);
   assert.equal((await answer(asked, { number: 5, text: "Go" })).status, 200);
 });
+
+test("access: boxes ticked in a run's reply by a viewer post nothing and start nothing", async () => {
+  const items = [QUESTIONS[0]];
+  const edited = items.map((q) => ({
+    ...q,
+    options: q.options.map((o, j) => ({ ...o, checked: !!o.checked || j === 0 })),
+  }));
+  const w = setup({
+    issues: { 5: open("Five") },
+    tasks: { "org/app#5": asking(5, "run", items) },
+    board: ["org/app#5"],
+    permissions: permissionsOf({ bob: { "org/app": VIEWER } }),
+  });
+  const ticked = w.api.ticked("org/app", "bob", { number: 5, pr: false, items: edited });
+  await assert.rejects(ticked, { status: 403, message: /`runs:start:work`/ });
+  assert.deepEqual([w.comments, w.posted, w.accepted], [[], [], []]);
+});

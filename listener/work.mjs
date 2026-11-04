@@ -825,8 +825,9 @@ export function createWorkApi({
     const fromRun = questions
       ? questions.source === "run"
       : task.runs?.[0]?.status === "needs-input";
-    // The session goes on in its mode: its start is the user's, before the App's comment.
-    if (fromRun && where === "from the dashboard") await startable(repo, user, task.mode ?? "work");
+    // The session goes on in its mode: its start is the user's, before the App's comment, from the
+    // dashboard or ticked on GitHub (ticked(), whose caller logs the refusal).
+    if (fromRun) await startable(repo, user, task.mode ?? "work");
     const posted = await comment(repo, replyTo, text);
     const left = open.length ? ` ${open.length} still open.` : "";
     if (fromRun) {
