@@ -8,15 +8,40 @@ export const MARKER = "<!-- deckhand -->";
 
 // Text a dashboard user wrote, without the marks the listener puts on the App's posts (the
 // marker, the signed "from" line's tag, discussions.mjs fromLine()): posted as the App, it
-// would pass for Deckhand's answer or someone else's words. Until nothing changes: taking one
-// out can join the text around it into another ("<!-- deck<!-- deckhand -->hand -->").
+// would pass for Deckhand's answer or someone else's words. In one pass, each mark taken out
+// as its last character comes in, so the text around it can't join into another
+// ("<!-- deck<!-- deckhand -->hand -->"): what is left has none, and a run of unclosed tags
+// isn't read again for each of them, as a lazy regex would (#742).
+const FROM = "deckhand-from:";
+
 export function unmarked(text) {
-  let out = String(text);
-  for (let before = null; out !== before;) {
-    before = out;
-    out = out.replaceAll(MARKER, "").replace(/<!--\s*deckhand-from:[^]*?-->/g, "");
+  const s = String(text);
+  const out = [];
+  // Where the first unclosed "<!-- deckhand-from:" begins in `out`, -1 without one.
+  let from = -1;
+  for (let i = 0; i < s.length; i++) {
+    out.push(s[i]);
+    if (endsWith(out, MARKER)) out.length -= MARKER.length;
+    else if (from >= 0 && endsWith(out, "-->")) {
+      out.length = from;
+      from = -1;
+    } else if (from < 0 && endsWith(out, FROM)) from = opening(out, out.length - FROM.length);
   }
-  return out;
+  return out.join("");
+}
+
+function endsWith(chars, tail) {
+  const at = chars.length - tail.length;
+  if (at < 0) return false;
+  for (let i = 0; i < tail.length; i++) if (chars[at + i] !== tail[i]) return false;
+  return true;
+}
+
+// Where the "<!--" before `at` begins, spaces between them allowed, -1 without one.
+function opening(chars, at) {
+  let i = at;
+  while (i > 0 && /\s/.test(chars[i - 1])) i--;
+  return i >= 4 && chars.slice(i - 4, i).join("") === "<!--" ? i - 4 : -1;
 }
 
 // A task's key: "org/repo#12" (an issue), "org/repo#pr-5" (a pull request of its own),

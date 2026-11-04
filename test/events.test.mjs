@@ -20,6 +20,7 @@ import {
   takeOptions,
   taskKey,
   touchedItems,
+  unmarked,
   verified,
   workItem,
 } from "../listener/events.mjs";
@@ -65,6 +66,59 @@ test("issueItem: an issue's item, with what the caller adds", () => {
     trigger: "work",
   });
   assert.equal(issueItem("o/r", { number: 7 }).title, null);
+});
+
+test("unmarked: the marker and the from tags taken out, joined ones too, unclosed ones kept", () => {
+  const tag = "<!-- deckhand-from:bob:abc -->";
+  assert.equal(unmarked(`It ${MARKER}hangs ${tag}`), "It hangs ");
+  assert.equal(unmarked("a <!--\n  deckhand-from:x --> b"), "a  b");
+  // Taking one out joins the text around it into another: that one goes too.
+  assert.equal(unmarked(`It <!-- deck${MARKER}hand -->fails`), "It fails");
+  assert.equal(unmarked(`<!-<!-- deckhand-from:x -->- deckhand-from:bob:abc --> ok`), " ok");
+  assert.equal(unmarked(`<!-- deckhand-${MARKER}from:x --> ok`), " ok");
+  // From the first tag to the first close, as the lazy regex took it.
+  assert.equal(unmarked("<!-- deckhand-from: a <!-- deckhand-from: b --> c -->"), " c -->");
+  // Unclosed, or not ours: kept.
+  assert.equal(unmarked("<!-- deckhand-from: x"), "<!-- deckhand-from: x");
+  assert.equal(
+    unmarked("<!-- note --> deckhand-from: --> <!-- deckhand"),
+    "<!-- note --> deckhand-from: --> <!-- deckhand",
+  );
+  assert.equal(unmarked(42), "42");
+});
+
+test("unmarked: nothing marked is left, whatever the pieces", () => {
+  const pieces = [
+    "<!--",
+    "<!-",
+    "-->",
+    "->",
+    " ",
+    "deckhand",
+    "deck",
+    "hand",
+    "-from:",
+    "deckhand-from:",
+    "x",
+    MARKER,
+  ];
+  let seed = 7;
+  const random = () => (seed = (seed * 48271) % 2147483647) / 2147483647;
+  for (let n = 0; n < 3000; n++) {
+    let text = "";
+    for (let k = 0; k < 12; k++) text += pieces[Math.floor(random() * pieces.length)];
+    const out = unmarked(text);
+    assert.ok(!out.includes(MARKER), text);
+    assert.doesNotMatch(out, /<!--\s*deckhand-from:[^]*?-->/, text);
+  }
+});
+
+test("unmarked: many unclosed tags or nested markers are one pass (#742)", () => {
+  // Quadratic, the lazy regex took seconds here; no wall-clock bound, only the result.
+  const open = "<!-- deckhand-from:".repeat(50_000);
+  assert.equal(unmarked(open), open);
+  const nested = "<!-- deck".repeat(20_000) + MARKER + "hand -->".repeat(20_000);
+  assert.equal(unmarked(`a${nested}b`), "ab");
 });
 
 test("webhook signatures: only the App's secret passes", () => {
