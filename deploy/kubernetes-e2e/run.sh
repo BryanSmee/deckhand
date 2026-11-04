@@ -2,7 +2,8 @@
 # Deckhand's end-to-end check on a cluster (#391): the base (../kubernetes) deployed with this
 # checkout's images, GitHub and Anthropic replaced by fakes (fakes.mjs), then one run:
 #
-#   1. check-isolation.sh passes: a pod labelled as a sandbox reaches the egress proxy alone;
+#   1. check-isolation.sh passes: a pod labelled as a sandbox reaches the egress proxy alone, not
+#      another one;
 #   2. a comment on an issue (a signed webhook to edge) starts a sandbox pod, whose agent (Claude
 #      Code, installed at its pinned version) talks to the fake model through the models service;
 #   3. while it runs, a second comment is sent, and every service is restarted (`kubectl rollout

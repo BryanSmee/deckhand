@@ -189,9 +189,9 @@ sh deploy/kubernetes/check-isolation.sh
 ```
 
 It starts a pod labelled as a sandbox in `deckhand-sandboxes`, tries every port of every service's
-pod from there (their [metrics](#metrics) port too) and the egress proxy's, and expects the
-proxy's alone to answer: 3128, and 3129 too when its Service publishes it (the `engine`
-component). A plugin that doesn't enforce NetworkPolicies fails it. The runner makes a check of its own as it starts
+pod from there (their [metrics](#metrics) port too), the egress proxy's, and a second sandbox's pod
+it starts beside it, listening, and expects the proxy's alone to answer: 3128, and 3129 too when
+its Service publishes it (the `engine` component). A plugin that doesn't enforce NetworkPolicies fails it. The runner makes a check of its own as it starts
 ([The network probe](#the-network-probe)): its log says what it found. Then mention Deckhand on an issue
 ([setup.md, Use it](setup.md#3-use-it)): its first run starts a sandbox pod.
 
@@ -314,7 +314,7 @@ and Anthropic replaced by fakes in a namespace of their own (`fakes.mjs`: GitHub
 repository over git's smart HTTP, a scripted model, both over HTTPS from a CA the script makes),
 then checks one run from start to end:
 
-1. `check-isolation.sh` passes: a sandbox's pod reaches the egress proxy alone;
+1. `check-isolation.sh` passes: a sandbox's pod reaches the egress proxy alone, not another sandbox's;
 2. a signed comment on an issue, sent to edge, starts a sandbox pod, whose agent (Claude Code, at
    its pinned version) talks to the fake model through the models service;
 3. a second comment is sent while the agent works, and every service is updated
