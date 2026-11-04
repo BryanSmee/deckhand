@@ -25,7 +25,7 @@ import { fingerprint, fingerprintRedactor } from "../lib/fingerprints.mjs";
 import { join } from "node:path";
 import { createAnalysis } from "../listener/analysis.mjs";
 import { planWarning } from "../listener/agents/credentials.mjs";
-import { AGENT_SECRETS, ENTRIES } from "../listener/agents/index.mjs";
+import { AGENT_SECRETS } from "../listener/agents/index.mjs";
 import { createModelsService } from "../listener/models-service.mjs";
 import { createBroker } from "../listener/broker.mjs";
 import { createBrokerService } from "../listener/broker-service.mjs";
@@ -112,7 +112,7 @@ import { createOrder, ranked } from "../listener/order.mjs";
 import { createTitles } from "../listener/titles.mjs";
 import { createWaits } from "../listener/waits.mjs";
 import { createWorkApi } from "../listener/work.mjs";
-import { orchestratorMetrics, serviceCallMetrics } from "../listener/metrics.mjs";
+import { fallbacksMetric, orchestratorMetrics, serviceCallMetrics } from "../listener/metrics.mjs";
 import { createHealth } from "../listener/health.mjs";
 
 // How long the egress policy's answers in flight get once the rest is saved: they are quick.
@@ -457,11 +457,7 @@ const ctx = {
   models,
   // The runs whose provider failed, another entry of FALLBACKS taking over (runs.mjs fallBack()):
   // the models service's calls say why, the fallback is decided here.
-  fallbacks: registry.counter(
-    "deckhand_model_fallbacks_total",
-    "Runs whose provider failed, put back for the next entry of FALLBACKS (from, to: agent@provider[:credential]).",
-    { labels: ["from", "to"], values: { from: ENTRIES, to: ENTRIES } },
-  ),
+  fallbacks: fallbacksMetric(registry),
   storeSecrets: () => operatorSecrets(ctx),
   // Its metrics (listener/metrics.mjs): the runs', the deliveries', the checks'.
   metrics: counted,
