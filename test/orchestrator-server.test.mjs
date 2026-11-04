@@ -6525,6 +6525,25 @@ mounts:
     // The shape dashboard/src/types.ts expects: change both together.
     assertShape(board, STATE_KEYS, "State");
     assertShape(board.server, SERVER_KEYS, "ServerInfo");
+    // What alice may do (#732): Deckhand's default policies give every action.
+    assertShape(board.access, ACCESS_KEYS, "Access");
+    assert.deepEqual(board.access.server, ["server:read", "server:sync"]);
+    for (const repo of Object.values(board.access.repos)) {
+      assertShape(repo, REPO_ACCESS_KEYS, "RepoAccess");
+      assert.deepEqual(repo.starts, ["*"]);
+    }
+    // Settings › Access: who has what.
+    const report = await (await get("/api/access", session)).json();
+    assertShape(report, ACCESS_REPORT_KEYS, "AccessReport");
+    assert.deepEqual(
+      report.users.map((u) => u.login),
+      ["alice", "bob"],
+    );
+    for (const u of report.users) {
+      assertShape(u, USER_ACCESS_KEYS, "UserAccess");
+      for (const d of [u.server, ...u.repos])
+        assertShape(d, ACCESS_DECISION_KEYS, "AccessDecision");
+    }
     // Built from source: no version to link, and up since this listener started.
     assert.deepEqual([board.server.version, board.server.source], ["dev", ""]);
     assert.ok(board.server.startedAt <= board.now);
@@ -6740,8 +6759,13 @@ mounts:
       "lastSync",
       "now",
     ],
-    ["inboxes", "lanes", "plans"],
+    ["inboxes", "lanes", "plans", "access"],
   ];
+  const ACCESS_KEYS = [["server", "repos"], []];
+  const REPO_ACCESS_KEYS = [["actions", "starts", "startsDenied"], []];
+  const ACCESS_REPORT_KEYS = [["users", "repos", "error"], []];
+  const USER_ACCESS_KEYS = [["login", "server", "repos"], []];
+  const ACCESS_DECISION_KEYS = [["actions", "denied", "error", "outside"], ["repo"]];
   const SERVER_KEYS = [["version", "startedAt", "node", "source"], []];
   const SYNC_KEYS = [["at", "by", "redelivered", "pulls", "conflicts"], ["error"]];
   const SETUP_KEYS = [["engine", "proxy", "grants", "allowedUsers", "allowedRepos"], ["claude"]];
