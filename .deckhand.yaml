@@ -1,6 +1,8 @@
 max_parallel: 4
 # The open issues labelled auto-pickup start by themselves, in the operator's AUTO_PICKUP_SLOTS.
 auto_pickup: true
+auto_pickup_slots: 2
+
 inbox:
   ideas: 15
   bugs: 16
@@ -27,6 +29,5 @@ conflicts:
 review:
   on: ready
   model: opus
-  effort: high
-  fix: 3
+  fix: 5
   follow_ups_auto_pickup: true
