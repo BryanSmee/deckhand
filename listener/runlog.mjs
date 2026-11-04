@@ -215,6 +215,10 @@ export const isRunState = (saved) => Boolean(saved?.id && saved.task && saved.re
 // doesn't keep it from starting. A log whose summary can't be written stays here, as does one
 // the runner doesn't take, and is sent at the next start.
 //
+// A run's summary is in logs/ or in the store (`summarized`: the ids of those there): once
+// moveSummaries() moved it, logs/ has none, and a log the runner didn't take would be read
+// again at every start, for a summary setIfAbsent() discards (#697).
+//
 // A live run's log (its state in the store, `live`: their ids, or a .live.json of the release
 // before that is a run's state: one that isn't, which restart.mjs leaves where it is, is no live
 // run's, #695) is written on at the runner once its move is over
@@ -233,6 +237,7 @@ export function moveLogs(
     sleep = unrefSleep,
     retryMs = 5000,
     live: liveIds = new Set(),
+    summarized = new Set(),
   } = {},
 ) {
   const all = readdirSync(logDir);
@@ -258,7 +263,7 @@ export function moveLogs(
     const id = file.slice(0, -4);
     try {
       const isLive = liveIds.has(id) || isRunState(readJson(join(logDir, `${id}.live.json`)));
-      if (!isLive && readJson(summaryPath(logDir, id))?.id !== id) {
+      if (!isLive && !summarized.has(id) && readJson(summaryPath(logDir, id))?.id !== id) {
         // Not saveSummary(), which logs a failure and goes on: without its summary, a log
         // sent and removed would leave its run listed nowhere.
         writeJsonAtomic(summaryPath(logDir, id), runOf(logDir, file, max, log));

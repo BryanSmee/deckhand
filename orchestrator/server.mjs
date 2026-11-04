@@ -20,7 +20,7 @@
 // run, and which module does what: ../docs/architecture.md. No dependencies: node:http,
 // node:crypto.
 import { createHash, randomUUID } from "node:crypto";
-import { mkdirSync, readFileSync, rmSync } from "node:fs";
+import { mkdirSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { fingerprint, fingerprintRedactor } from "../lib/fingerprints.mjs";
 import { join } from "node:path";
 import { createAnalysis } from "../listener/analysis.mjs";
@@ -48,7 +48,7 @@ import {
 import { activePassive } from "../lib/active.mjs";
 import { drain } from "../lib/drain.mjs";
 import { pathToFileURL } from "node:url";
-import { openStore } from "../lib/store.mjs";
+import { freshKeys, openStore } from "../lib/store.mjs";
 import { storeMaps } from "../lib/store-map.mjs";
 import { readJson } from "../lib/files.mjs";
 import { createLogger, deliveryContext, withLogContext } from "../lib/log.mjs";
@@ -660,7 +660,15 @@ const { github, graphql } = createGitHub(() => ctx.app);
 // The live runs' ids first, from their states in the store (restart.mjs): their logs aren't
 // summarized as ended ones.
 const liveIds = await liveRunIds(store);
-const moved = moveLogs(logDir, runnerClient.logs, { log, live: liveIds });
+// And the runs summarized in the store, whose logs aren't read again (#697): listed only while
+// a log is left here.
+const summarized = new Set();
+if (readdirSync(logDir).some((f) => f.endsWith(".log"))) {
+  for await (const keys of freshKeys(store, SUMMARIES)) {
+    for (const key of keys) summarized.add(key.slice(SUMMARIES.length));
+  }
+}
+const moved = moveLogs(logDir, runnerClient.logs, { log, live: liveIds, summarized });
 ctx.logsMoving = moved.moving;
 // A log on its way there is read once it arrived (a digest, the dashboard's live view).
 ctx.logMoved = (id) => moved.moving.get(id) ?? Promise.resolve();
