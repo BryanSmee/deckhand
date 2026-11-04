@@ -15,8 +15,8 @@
 #
 # Logins and repositories match whatever their case. A repository's pattern: `owner/repo`,
 # `owner/*` or `*/*`. Server-wide (no repository: input.repo is null), a binding of the user's
-# matches whatever its `repos`, and gives its server actions (`server:…`) alone; on a repository,
-# it gives the others. Deny rules (`deny_access`, of the operator's or a repository's
+# matches whatever its `repos`, and gives its server actions (`server:…`, and its `*` when it is
+# on every repository) alone; on a repository, it gives the others. Deny rules (`deny_access`, of the operator's or a repository's
 # .deckhand/policy/) take actions away; a deny always wins. Replacing this file replaces the
 # roles too.
 package deckhand
@@ -43,7 +43,7 @@ allow_access contains action if {
   access_user(binding)
   access_where(binding)
   some action in access_actions(binding)
-  access_scoped(action)
+  access_scoped(binding, action)
 }
 
 access_user(binding) if {
@@ -51,7 +51,7 @@ access_user(binding) if {
   lower(user) == lower(input.user.login)
 }
 
-# Server-wide, every binding of the user's, for its `server:…` actions alone.
+# Server-wide, every binding of the user's, for the server actions access_scoped() keeps.
 access_where(_) if input.repo == null
 
 access_where(binding) if {
@@ -70,18 +70,29 @@ access_repo(pattern, name) if {
   startswith(name, trim_suffix(pattern, "*"))
 }
 
-# Server-wide, the server's actions (and `*`, every one of them); on a repository, the others.
-access_scoped(action) if {
+# Server-wide, the server's actions; on a repository, the others. A `*` counts server-wide only
+# for a binding on every repository (no `repos`, or `*/*`): one limited to some repositories gives
+# the server's actions only when it names them.
+access_scoped(_, action) if {
   input.repo == null
   startswith(action, "server:")
 }
 
-access_scoped("*") if input.repo == null
+access_scoped(binding, "*") if {
+  input.repo == null
+  access_everywhere(binding)
+}
 
-access_scoped(action) if {
+access_scoped(_, action) if {
   input.repo != null
   not startswith(action, "server:")
 }
+
+access_everywhere(binding) if not binding.repos
+
+access_everywhere(binding) if count(binding.repos) == 0
+
+access_everywhere(binding) if "*/*" in binding.repos
 
 # A binding's role's actions and its own, both when it names both (an unknown role gives none).
 access_actions(binding) := access_role(binding) | {a | some a in object.get(binding, "actions", [])}

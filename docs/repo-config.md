@@ -1675,8 +1675,9 @@ bindings := [
 
 A binding names logins (`users`), repositories (`repos`: `owner/repo`, `owner/*` or `*/*`),
 both whatever their case, and a `role`, `actions` of its own, or both (it gives their union).
-Server-wide, a binding of the login's matches whatever its `repos`, for its server actions (`*`
-included). Other rules of the operator's can
+Server-wide, a binding of the login's matches whatever its `repos`, for the server actions it
+names (`server:read`, `server:*`); its `*` counts there only when it is on every repository (no
+`repos`, or `*/*`). Other rules of the operator's can
 give actions too (`allow_access contains "tasks:read" if not input.repo.private`), and deny
 them, on the operator's side for every repository:
 

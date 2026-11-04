@@ -158,6 +158,8 @@ test(
           { users: ["carol"], role: "operator" },
           { users: ["dan"], repos: ["acme/web"], actions: ["logs:read", "server:read"] },
           { users: ["erin"], actions: ["*"] },
+          { users: ["hal"], repos: ["acme/api"], actions: ["*"] },
+          { users: ["ida"], repos: ["*/*"], actions: ["*"] },
           { users: ["frank"], repos: ["acme/api"], role: "viewer", actions: ["logs:read"] },
           { users: ["gus"], repos: ["acme/api"], role: "viwer" },
         ]),
@@ -191,6 +193,12 @@ test(
     // unknown role, nothing.
     assert.deepEqual(await actions("erin", null), ["*"]);
     assert.ok(await policies.can("erin", null, "server:sync"));
+    // Limited to some repositories, its `*` is theirs: no server action.
+    assert.deepEqual(await actions("hal", null), []);
+    assert.ok(!(await policies.can("hal", null, "server:read")));
+    assert.deepEqual(await actions("hal", repo("acme/api")), ["*"]);
+    assert.ok(await policies.can("hal", repo("acme/api"), "runs:start:work"));
+    assert.deepEqual(await actions("ida", null), ["*"]);
     assert.deepEqual(await actions("frank", repo("acme/api")), ["logs:read", "tasks:read"]);
     assert.deepEqual(await actions("gus", repo("acme/api")), []);
     // Nobody bound: nothing, anywhere.

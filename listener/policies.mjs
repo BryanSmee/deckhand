@@ -84,7 +84,7 @@ export const BUILT_IN_ONLY = new Set(["merge", "review", "fix"]);
 export const OPERATOR_ONLY = new Set(["grant"]);
 
 // The decisions only the operator's layer allows: a repo's allow rule for them is a config check
-// error, and not asked; its deny rules narrow. Who may do what on a repository is the operator's
+// error, evaluated (one of the wrong shape fails closed) but not counted; its deny rules narrow. Who may do what on a repository is the operator's
 // to say (#730), and a repository's maintainers may only take some of it away.
 export const OPERATOR_ALLOWS = new Set(["access"]);
 
