@@ -16,7 +16,15 @@ import {
   openerOf,
   runFields,
 } from "../listener/reviewers.mjs";
-import { localService, policyEngine, policyEngineOf, testConfig, hasOpa } from "./helpers.mjs";
+import {
+  VIEWER,
+  localService,
+  permissionsOf,
+  policyEngine,
+  policyEngineOf,
+  testConfig,
+  hasOpa,
+} from "./helpers.mjs";
 
 const config = { ...testConfig({ ALLOWED_USERS: "alice,bob" }), bot: "deckhand-app[bot]" };
 
@@ -120,6 +128,7 @@ function setup(t, { yaml = "review:\n  request: [alice, bob]\n", run, ...over } 
     runOf: (key, pr) =>
       key === "org/repo#12" && pr.number === 5 ? (run ?? { taskMode: "work", light: false }) : null,
     policies: over.policies ?? null,
+    permissions: over.permissions ?? null,
     decided: (repo, pr, entry) => decided.push(entry),
     log: (line) => logs.push(line),
     now: () => 1_800_000_000_000,
@@ -375,3 +384,17 @@ test(
     assert.deepEqual(await asked(broad, "brainstorm"), []);
   },
 );
+
+test("access: a requested reviewer who may not see the repo's tasks is left out", async (t) => {
+  const permissions = permissionsOf({ alice: { "org/repo": VIEWER } });
+  const s = setup(t, { permissions });
+  assert.deepEqual(await s.reviewers.ready("pull_request", delivery("ready_for_review")), [
+    "alice",
+  ]);
+  assert.deepEqual(s.posts(), ["alice"]);
+  assert.match(s.logs.join("\n"), /org\/repo: reviewers left out, without tasks:read: bob/);
+  // Nobody left: nothing requested.
+  const none = setup(t, { permissions: permissionsOf({}) });
+  assert.equal(await none.reviewers.ready("pull_request", delivery("ready_for_review")), null);
+  assert.deepEqual(none.posts(), []);
+});

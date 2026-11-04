@@ -70,6 +70,7 @@ import { repoAllowed } from "./config.mjs";
 import { FAILED } from "./board.mjs";
 import { createDismissals } from "./dismissals.mjs";
 import { createOrder } from "./order.mjs";
+import { startAction } from "./permissions.mjs";
 import { tagger } from "./discussions.mjs";
 import {
   inboxItem,
@@ -94,7 +95,7 @@ import { latestReview } from "./reviews.mjs";
 import { issueList, waitsFor } from "./waits.mjs";
 import { taskId } from "./spelling.mjs";
 import { readJsonBody, refuse, send } from "../lib/http.mjs";
-import { apiRoute } from "./web.mjs";
+import { apiRoute, mustDo } from "./web.mjs";
 
 // How long a repo's open issues are served before they are read again (in the background):
 // the dashboard polls them.
@@ -106,6 +107,19 @@ const MAX_BODY = 4096;
 // The answers' text, and the JSON around it (escapes, indexes).
 const MAX_ANSWER_BODY = 4 * MAX_TEXT;
 const ACTIONS = ["start", "queue", "plan", "dequeue", "stop", "cancel"];
+// What the routes need (permissions.mjs), checked before their handler; `work` and `inbox` check
+// the mode they start (`runs:start:<mode>`), or `runs:manage` to cancel or dequeue.
+const MANAGE = "runs:manage";
+const WORK_ACTIONS = {
+  issues: "tasks:read",
+  analyze: startAction("analyze"),
+  answer: MANAGE,
+  rerun: MANAGE,
+  review: MANAGE,
+  dismiss: MANAGE,
+  lane: MANAGE,
+  order: MANAGE,
+};
 // The task page's buttons on a pull request whose review loop is over.
 const REVIEW_ACTIONS = ["review", "fix"];
 // An inbox entry's kind, and the repo config's key for its issue.
@@ -179,6 +193,8 @@ export function createWorkApi({
   reviews = null,
   // What the operator's policies grant a repo (grants.mjs grantsBy()): research's, for its mode.
   granted = null,
+  // Who may do what where (permissions.mjs): each route's action, and a start's mode's.
+  permissions = null,
   publicUrl = () => null,
   // The key of the dashboard's "from" lines (discussions.mjs fromKey()), or null; or what tags
   // them, edge's (discussions.mjs tagger() `tags`).
@@ -428,6 +444,10 @@ export function createWorkApi({
     });
   }
 
+  // Throws a 403 unless `user` may start a run in `mode` on `repo` (permissions.mjs): checked
+  // before anything is posted for it.
+  const startable = (repo, user, mode) => mustDo(permissions, user, repo, startAction(mode));
+
   const inMode = (mode) => (mode === "work" ? "" : ` in \`${mode}\` mode`);
 
   // accept() → its mode, null when it runs nothing. `key`: the task whose wait it replaces once
@@ -469,6 +489,8 @@ export function createWorkApi({
   // issue with open questions doesn't move: they are answered first, unless the repo's
   // `wait_for_answers` is off.
   async function act(repo, user, { action, number, after, mode, pr }, answers = null) {
+    if (action === "cancel" || action === "dequeue") await mustDo(permissions, user, repo, MANAGE);
+    if (action === "stop") await startable(repo, user, "stop");
     // Whatever the issue's state: a run may go on once it is closed.
     if (action === "cancel") return cancelTask(repo, user, number, pr);
     const key = taskKey(repo, number);
@@ -488,6 +510,7 @@ export function createWorkApi({
     // Moving a wait keeps its mode, unless another one is picked.
     const wanted = mode ?? wait?.item.modeLine ?? "work";
     if (!modeNames(settings).includes(wanted)) refuse(422, `${repo} has no mode \`${wanted}\`.`);
+    await startable(repo, user, wanted);
     const item = itemOf(repo, issue, wanted, user, base, settings);
     if (answers) item.text = answers;
     const also = answers ? `\n\n${answers}` : "";
@@ -553,6 +576,7 @@ export function createWorkApi({
       // A waiting one keeps its mode, unless another one is picked.
       const wanted = mode ?? waits.get(key)?.item.modeLine ?? "work";
       if (!modeNames(settings).includes(wanted)) refuse(422, `${repo} has no mode \`${wanted}\`.`);
+      await startable(repo, user, wanted);
     }
     const planned = waitsOf(tree, { after, existing: blockersOf(repo) });
     // Those that wait first: the ones that start can't end before their waits are there.
@@ -683,6 +707,7 @@ export function createWorkApi({
       if (!modeNames(settings).includes(wanted)) refuse(422, `${repo} has no mode \`${wanted}\`.`);
     };
     known(modeOf(queuedTask(key).item));
+    await startable(repo, user, modeOf(queuedTask(key).item));
     if ((await waitable(repo, number, after)) !== "open") {
       return `#${after} is done already: #${number} stays queued.`;
     }
@@ -698,6 +723,7 @@ export function createWorkApi({
     }
     const wanted = modeOf(held);
     known(wanted);
+    await startable(repo, user, wanted);
     // No await from queuedTask() above: unqueue() holds that same comment. One pair: the wait in
     // the store first, then the queue without its comments (`saved`, restart.mjs park()), so an
     // orchestrator killed in between leaves them in both, to the wait (loadQueue()).
@@ -908,6 +934,7 @@ export function createWorkApi({
     }
     const mode = run.taskMode;
     if (!modeNames(settings).includes(mode)) refuse(422, `${repo} has no mode \`${mode}\` now.`);
+    await startable(repo, user, mode);
     const replyTo = run.replyTo ?? number;
     const ended = { error: "failed", cancelled: "was stopped" }[run.status] ?? "was interrupted";
     const posted = await comment(
@@ -1071,6 +1098,7 @@ export function createWorkApi({
   // comment on the inbox issue (an entry, not a reply: no marker), then the run it starts,
   // queued here since bot comments never reach admit(). The run reads the entry as the user's.
   async function sendToInbox(repo, user, { kind, text }) {
+    await startable(repo, user, kind);
     const { settings, base } = await checkedRepo(repo, user);
     const number = settings.inbox?.[INBOXES[kind]];
     if (!number) {
@@ -1281,6 +1309,8 @@ export function createWorkApi({
       analyze: previewAnalysis,
     },
     allowed: (repo) => repoAllowed(config, repo),
+    permissions,
+    action: ({ what }) => WORK_ACTIONS[what] ?? null,
     named: nameOf,
     publicUrl,
     log,

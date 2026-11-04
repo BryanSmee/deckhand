@@ -163,9 +163,14 @@ export function createTasks(ctx) {
 
   // A `/cancel` comment: the task's run stops (runs.mjs cancel()), or its queued comments are
   // dropped, and the comment gets a 👍; the run's reply says who stopped it. With nothing to
-  // stop, a reply says so.
+  // stop, a reply says so. Its author needs `runs:manage`.
   async function cancelRun(item) {
     const key = taskKey(item.repo, item.id);
+    // As a refused start: nothing said (permissions.mjs).
+    if (ctx.permissions && !(await ctx.permissions.can(item.author, item.repo, "runs:manage"))) {
+      log(`${key}: /cancel refused: ${item.author} has no runs:manage here`);
+      return;
+    }
     if (!ctx.cancel(key, item.author)) {
       log(`${key}: /cancel with nothing running`);
       const text = `Nothing is running on #${item.replyTo}.`;

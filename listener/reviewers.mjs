@@ -118,9 +118,23 @@ export function createReviewers({
   runOf = () => null,
   policies = null,
   decided = () => {},
+  // Who may do what where (permissions.mjs): a reviewer needs `tasks:read` on the repo.
+  permissions = null,
   log = () => {},
   now = Date.now,
 }) {
+  // Those of `logins` who may see `repo`'s tasks: a reviewer who can't is never asked.
+  async function readers(repo, logins) {
+    if (!permissions) return logins;
+    const may = await Promise.all(logins.map((l) => permissions.can(l, repo, "tasks:read")));
+    const out = logins.filter((_, i) => may[i]);
+    if (out.length < logins.length) {
+      const left = logins.filter((l) => !out.includes(l));
+      log(`${repo}: reviewers left out, without tasks:read: ${left.join(", ")}`);
+    }
+    return out;
+  }
+
   // In `requested`, "org/repo#pr-5" → { head, at }: the head commit last asked about,
   // requested or refused.
   // Pull request key → the request being decided: a delivery and a run's end at once ask once.
@@ -161,7 +175,7 @@ export function createReviewers({
       if (!pr || !ownReady(config, repo, pr)) return null;
       const head = pr.head?.sha ?? null;
       if (head && requested.get(key)?.head === head) return null;
-      const reviewers = reviewersFor(config, settings, pr);
+      const reviewers = await readers(repo, reviewersFor(config, settings, pr));
       if (!reviewers.length) return null;
       // Never asked about before (its ready delivery was lost, or `review.request` is new):
       // this is its turning ready, as far as its reviewers know.

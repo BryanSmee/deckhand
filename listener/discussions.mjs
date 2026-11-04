@@ -18,6 +18,7 @@ import { MARKER, discussionEntryItem, taskKey, unmarked } from "./events.mjs";
 import { same } from "./html.mjs";
 import { CONFIG_FILE } from "./repo-config.mjs";
 import { readJsonBody, refuse, send } from "../lib/http.mjs";
+import { startAction } from "./permissions.mjs";
 import { apiRoute } from "./web.mjs";
 
 // How long a thread is kept: the dashboard polls it while it is open.
@@ -170,6 +171,8 @@ export function createDiscussionApi({
   // them, edge's (tagger() `tags`).
   key = () => null,
   tags = null,
+  // Who may do what where (permissions.mjs): reading a thread, starting or commenting on one.
+  permissions = null,
   now = Date.now,
   log = () => {},
 }) {
@@ -403,6 +406,8 @@ export function createDiscussionApi({
     posts: { start: started, comment: numbered(commented) },
     gets: { thread: numbered((req, res, user, repo, number) => read(res, repo, user, number)) },
     allowed: (repo) => repoAllowed(config, repo),
+    permissions,
+    action: ({ what }) => (what === "thread" ? "tasks:read" : startAction("discussion")),
     named: nameOf,
     publicUrl,
     log,

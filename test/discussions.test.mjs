@@ -12,7 +12,7 @@ import {
 } from "../listener/discussions.mjs";
 import { MARKER, workItem } from "../listener/events.mjs";
 import { createRepoCheck } from "../listener/repo-check.mjs";
-import { tempDir, testConfig } from "./helpers.mjs";
+import { MEMBER, VIEWER, permissionsOf, tempDir, testConfig } from "./helpers.mjs";
 
 const ORIGIN = "https://deckhand.example.com";
 const BOT = "deckhand[bot]";
@@ -66,7 +66,14 @@ function discussion8(extra = {}) {
 
 // The discussions API with a fake GitHub (GraphQL for the discussions, REST for the repo's
 // checks through the work area's), the repo's config as `settings` says.
-function setup({ env = {}, settings = {}, errors = [], categories, discussions } = {}) {
+function setup({
+  env = {},
+  settings = {},
+  errors = [],
+  categories,
+  discussions,
+  permissions = null,
+} = {}) {
   const config = testConfig({
     ALLOWED_USERS: "alice,bob",
     DATA_DIR: tempDir(null),
@@ -167,6 +174,7 @@ function setup({ env = {}, settings = {}, errors = [], categories, discussions }
     },
     publicUrl: () => ORIGIN,
     key: () => KEY,
+    permissions,
     now: () => w.clock,
     log: (line) => w.logs.push(line),
   });
@@ -514,4 +522,17 @@ test("refused by the policies: a 403 with their reply, for a new discussion and 
   const said = await comment(w, { text: "And the waits?" });
   assert.deepEqual([said.status, said.body.error ?? said.body.message], [403, w.refusing]);
   assert.equal(w.accepted.length, 2);
+});
+
+test("access: a viewer reads a thread but starts or comments nothing; a hidden repo is a 404", async () => {
+  const w = setup({
+    permissions: permissionsOf({ bob: { "org/app": VIEWER }, alice: { "org/app": MEMBER } }),
+  });
+  assert.equal((await read(w, { user: "bob" })).status, 200);
+  const refused = await start(w, { title: "Hi", body: "A question" }, { user: "bob" });
+  assert.equal(refused.status, 403);
+  assert.match(refused.body.error, /`runs:start:discussion`/);
+  assert.deepEqual(w.accepted, []);
+  assert.equal((await read(w, { user: "carol" })).status, 404);
+  assert.equal((await start(w, { title: "Hi", body: "A question" })).status, 200);
 });

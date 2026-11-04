@@ -18,8 +18,11 @@ import {
   repoStatus,
 } from "../listener/repos.mjs";
 import {
+  MEMBER,
+  VIEWER,
   capabilityPolicies,
   needsPosixPaths,
+  permissionsOf,
   recordingFetch,
   tempDir,
   testConfig,
@@ -327,6 +330,7 @@ function apiSetup({
   app = () => null,
   policies,
   backlogs,
+  permissions,
   ...opts
 } = {}) {
   const s = setup({ grants, granted, fs, ...opts });
@@ -336,6 +340,7 @@ function apiSetup({
     list: s.list,
     policies,
     backlogs,
+    permissions,
     app,
     grants: grantsOf(grants, s.config),
     granted,
@@ -1023,4 +1028,33 @@ test("known() and usersOf(): the repos read, with their inbox issues (the dashbo
   // A repo without a config has no settings read: only the configured one.
   assert.deepEqual(list.known(), ["Org/App"]);
   assert.deepEqual(list.usersOf("org/app").inbox, { ideas: 4 });
+});
+
+test("access: the list keeps the repos with an action, the config needs repo:config:read", async () => {
+  const asked = [];
+  const { api, started } = apiSetup({
+    first: [info("org/app"), info("org/hidden"), info("org/mine")],
+    configured: ["org/app", "org/hidden", "org/mine"],
+    backlogs: (repos, user) => (asked.push([repos, user]), {}),
+    permissions: permissionsOf({
+      bob: { "org/app": VIEWER, "org/mine": [...MEMBER, "repo:config:read"] },
+      carol: { "org/app": [...VIEWER, "repo:config:read"] },
+    }),
+  });
+  const list = await call(api, "GET", "/api/repos?backlog=1", { user: "bob" });
+  assert.deepEqual(
+    list.body.repos.map((r) => r.repo),
+    ["org/app", "org/mine"],
+  );
+  // Counted for those only.
+  assert.deepEqual(asked, [[["org/app", "org/mine"], "bob"]]);
+  const config = (repo) => call(api, "GET", `/api/repos/${repo}/config`, { user: "bob" });
+  assert.equal((await config("org/app")).status, 403);
+  assert.equal((await config("org/hidden")).status, 404);
+  assert.equal((await config("org/mine")).status, 200);
+  // Onboarding starts a run too: repo:config:read alone isn't enough.
+  const onboard = await call(api, "POST", "/api/repos/org/app/onboard", { user: "carol" });
+  assert.equal(onboard.status, 403);
+  assert.match(onboard.body.error, /`runs:start:onboarding`/);
+  assert.deepEqual(started, []);
 });

@@ -22,7 +22,16 @@ import {
 import { createTaskModes } from "../listener/task-modes.mjs";
 import { createTasks } from "../listener/tasks.mjs";
 import { createWaits } from "../listener/waits.mjs";
-import { hasOpa, localService, policyEngineOf, tempDir, testConfig } from "./helpers.mjs";
+import {
+  MEMBER,
+  VIEWER,
+  hasOpa,
+  localService,
+  permissionsOf,
+  policyEngineOf,
+  tempDir,
+  testConfig,
+} from "./helpers.mjs";
 
 const config = testConfig();
 const MODES = "modes:\n  plan:\n    instructions: .deckhand/plan.md\n    session: fresh\n";
@@ -740,4 +749,34 @@ test("tasks.mjs: a refused comment whose /after issues are all done keeps the is
 test("SHIPPED_RUN_SHA256 is policy/run.rego's: the listener decides as the run.rego it ships", () => {
   const text = readFileSync(new URL("../policy/run.rego", import.meta.url), "utf8");
   assert.equal(createHash("sha256").update(text).digest("hex"), SHIPPED_RUN_SHA256);
+});
+
+test("access: a run starts only for an author with its mode's start, refused without a reply", async () => {
+  const logs = [];
+  const replies = [];
+  const permissions = permissionsOf({
+    alice: { "org/repo": MEMBER },
+    bob: { "org/repo": VIEWER },
+    carol: { "org/repo": ["runs:start:brainstorm"] },
+  });
+  const allowed = createRunPolicy({
+    permissions,
+    log: (line) => logs.push(line),
+    answer: async (item, text) => replies.push(text),
+  });
+  assert.equal(await allowed(itemOf(), "work", "Org/Repo#12"), true);
+  const viewer = itemOf({ author: "bob" });
+  assert.equal(await allowed(viewer, "work", "Org/Repo#12"), false);
+  assert.match(viewer.refused, /bob may not start it here \(`runs:start:work`\)/);
+  assert.match(logs.join("\n"), /Org\/Repo#12: work run refused: bob has no runs:start:work here/);
+  // The mode it resolves to: a brainstorm, not work.
+  assert.equal(await allowed(itemOf({ author: "carol" }), "brainstorm", "Org/Repo#12"), true);
+  assert.equal(await allowed(itemOf({ author: "carol" }), "work", "Org/Repo#12"), false);
+  // Someone on no repo of the decision's: nothing.
+  assert.equal(await allowed(itemOf({ author: "dave" }), "work", "Org/Repo#12"), false);
+  // The listener's own runs and an onboarding issue's aren't anyone's.
+  assert.equal(await allowed(itemOf({ author: "bob", reason: "conflict" }), "work", "k"), true);
+  assert.equal(await allowed(itemOf({ author: undefined }), "onboarding", "k"), true);
+  // Nothing said on GitHub: as an author outside the repo's users.
+  assert.deepEqual(replies, []);
 });

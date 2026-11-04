@@ -308,10 +308,11 @@ export function graphOf(
     const look = lookOf({ closed: b?.closed ?? null });
     nodes.set(e.from, {
       key: e.from,
-      repo: b?.repo ?? e.from.slice(0, at),
-      number: b?.number ?? (Number(e.from.slice(at + 1)) || null),
+      // One of a repository the user doesn't see: nothing of it but that.
+      repo: b?.hidden ? "" : (b?.repo ?? e.from.slice(0, at)),
+      number: b?.hidden ? null : (b?.number ?? (Number(e.from.slice(at + 1)) || null)),
       kind: null,
-      title: b?.title ?? null,
+      title: b?.hidden ? "a hidden issue" : (b?.title ?? null),
       look,
       status: statusOf(look, { closed: b?.closed ?? null }),
       closed: b?.closed ?? null,

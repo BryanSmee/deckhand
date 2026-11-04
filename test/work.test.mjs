@@ -13,7 +13,7 @@ import { createAnalysis } from "../listener/analysis.mjs";
 import { MAX_TEXT } from "../listener/answers.mjs";
 import { board as boardOf } from "../listener/board.mjs";
 import { MARKER, parseKey, workItem } from "../listener/events.mjs";
-import { tempDir, testConfig, fileMap } from "./helpers.mjs";
+import { MEMBER, VIEWER, permissionsOf, tempDir, testConfig, fileMap } from "./helpers.mjs";
 import { openStore } from "../lib/store.mjs";
 import { storeMap } from "../lib/store-map.mjs";
 
@@ -46,6 +46,8 @@ function setup({
   reviews = {},
   // The Map the waits are kept in, else one in a file.
   waits = null,
+  // Who may do what where (permissions.mjs); none: every action.
+  permissions = null,
 } = {}) {
   const config = testConfig({
     ALLOWED_USERS: "alice,bob",
@@ -275,6 +277,7 @@ function setup({
         return { item };
       },
     },
+    permissions,
     publicUrl: () => ORIGIN,
     now: () => w.clock,
     log: (line) => w.logs.push(line),
@@ -2719,4 +2722,62 @@ test("review fix refused on a draft, which a review isn't", async () => {
   assert.equal(res.body.error, "#8 is a draft: mark it ready for review first.");
   assert.deepEqual([draft.comments, draft.asked], [[], []]);
   assert.equal((await review(draft, { number: 8, action: "review" })).status, 200);
+});
+
+test("access: a viewer reads the backlog but starts nothing, a member starts, a hidden repo is a 404", async () => {
+  const permissions = permissionsOf({
+    alice: { "org/app": MEMBER },
+    bob: { "org/app": VIEWER },
+    carol: { "org/app": ["tasks:read", "runs:start:brainstorm"] },
+  });
+  const w = setup({
+    env: { ALLOWED_USERS: "alice,bob,carol,dave" },
+    issues: { 3: open("Fix it") },
+    settings: { modes: { brainstorm: {} } },
+    permissions,
+  });
+  const get = (user) => call(w.api, "GET", "/api/repos/org/app/issues", { user });
+  assert.equal((await get("bob")).status, 200);
+  // Nothing on the repo: hidden, as a repo outside ALLOWED_REPOS.
+  const hidden = await get("dave");
+  assert.equal(hidden.status, 404);
+  assert.equal(hidden.body.error, "org/app isn't one of this dashboard's repositories.");
+  const start = (user, extra = {}) => post(w, { action: "start", number: 3, ...extra }, { user });
+  // A viewer's start: refused before anything is posted or queued.
+  const refused = await start("bob");
+  assert.equal(refused.status, 403);
+  assert.match(refused.body.error, /`runs:start:work`/);
+  assert.deepEqual([w.posted, w.comments, w.accepted], [[], [], []]);
+  assert.equal((await post(w, { action: "cancel", number: 3 }, { user: "bob" })).status, 403);
+  assert.deepEqual(w.cancelled, []);
+  // A brainstorm, but no work.
+  assert.equal((await start("carol")).status, 403);
+  assert.equal((await start("carol", { mode: "brainstorm" })).status, 200);
+  assert.equal(w.accepted.length, 1);
+  // The rerun, the lanes and the rest need runs:manage.
+  const lane = { keys: ["org/app#3"], name: "Later" };
+  const named = (user) => call(w.api, "POST", "/api/repos/org/app/lane", { body: lane, user });
+  assert.equal((await named("carol")).status, 403);
+  assert.equal((await named("alice")).status, 200);
+  // A member starts work.
+  assert.equal((await start("alice")).status, 200);
+  assert.equal(w.accepted.at(-1).author, "alice");
+});
+
+test("access: the inbox and Analyze need their mode's start", async () => {
+  const permissions = permissionsOf({
+    alice: { "org/app": ["tasks:read", "runs:start:idea"] },
+  });
+  const issues = { 7: open("Ideas"), 8: open("Bugs") };
+  const w = setup({ settings: { inbox: { ideas: 7, bugs: 8 } }, issues, permissions });
+  const send = (kind) =>
+    call(w.api, "POST", "/api/repos/org/app/inbox", { body: { kind, text: "An idea" } });
+  assert.equal((await send("bug")).status, 403);
+  // Only the repo's spelling read: nothing posted.
+  assert.deepEqual(w.calls, ["GET /repos/org/app"]);
+  assert.equal((await send("idea")).status, 200);
+  assert.equal(w.accepted.at(-1).trigger, "idea");
+  const analyze = await call(w.api, "GET", "/api/repos/org/app/analyze?kinds=work");
+  assert.equal(analyze.status, 403);
+  assert.match(analyze.body.error, /`runs:start:analyze`/);
 });

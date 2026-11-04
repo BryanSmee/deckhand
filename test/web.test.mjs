@@ -135,7 +135,7 @@ test("apiRoute: methods, sign-in, ALLOWED_REPOS and Origin, in that order, then 
   ]);
   assert.deepEqual(await ask("GET", "/api/r/org/secret/read"), [
     404,
-    { error: "org/secret is not in ALLOWED_REPOS." },
+    { error: "org/secret isn't one of this dashboard's repositories." },
   ]);
   assert.deepEqual(await ask("GET", "/api/r/org/app/read", { origin: null }), [
     200,

@@ -32,7 +32,12 @@ import { publicRun, stream } from "./runlog.mjs";
 import { endPicks } from "./picks.mjs";
 import { closedAs } from "./titles.mjs";
 import { send, sendJson } from "../lib/http.mjs";
-import { apiRoute } from "./web.mjs";
+import { apiRoute, needs } from "./web.mjs";
+
+// The action that shows a repo's tasks (permissions.mjs).
+const TASKS = "tasks:read";
+// What the dashboard calls an issue of a repo the user doesn't see.
+const HIDDEN = "a hidden issue";
 
 // The dashboard's Sync asks GitHub at most this often: each one lists the App's deliveries.
 const SYNC_MS = 30_000;
@@ -84,27 +89,55 @@ export function createHttp(ctx) {
   // Comments on their way to the queue: an orchestrator that stops saves them too.
   const admitting = new Set();
 
-  // Whether `user` may see a repo's tasks and logs: the repo's own `users`, where the orchestrator
-  // knows them (ctx.usersOf()), narrow ALLOWED_USERS. Tool output in the logs may hold the
-  // repo's secrets.
+  // Without permissions (some tests): whether `user` may see a repo's tasks and logs, the repo's
+  // own `users`, where the orchestrator knows them (ctx.usersOf()), narrowing ALLOWED_USERS.
   function sees(user, repo) {
     if (!repo) return false;
     const users = ctx.usersOf(repo);
     return !users || users.includes(user);
   }
 
+  // Which of `repos` (names) `user` may do `action` on (permissions.mjs which(): the access
+  // decision, the repos' `users` narrowing it) → a predicate on a repo's name. Tool output in the
+  // logs may hold the repo's secrets; a repo with no action is hidden altogether.
+  async function seeing(user, repos, action = TASKS) {
+    if (!ctx.permissions) return (repo) => sees(user, repo);
+    const seen = await ctx.permissions.which(user, repos, action);
+    return (repo) => !!repo && seen.has(repo.toLowerCase());
+  }
+
+  // Whether `user` may do server-wide `action` (Settings › Server, health, plans, Sync).
+  const serverWide = async (user, action) =>
+    !ctx.permissions || (await ctx.permissions.can(user, null, action));
+
   const repoOf = (key) => parseKey(key)?.repo ?? null;
 
-  // The dashboard's tasks: each issue and pull request with its state (board.mjs). `user`:
-  // only the repos they may see; all of them without one.
-  function shownTasks(user = null) {
-    const mine = (list) => (user ? list.filter((x) => sees(user, repoOf(x.key))) : list);
-    const places = runPlaces(ctx.queueOrder?.() ?? [], (repo) => !user || sees(user, repo));
+  // Every repo the dashboard's state may name: its runs, tasks, brainstorms, waits (their
+  // blockers are of the same repo), open questions and inboxes.
+  function namedRepos() {
+    const repos = new Set();
+    const add = (x) => {
+      const repo = x?.repo ?? (typeof x?.key === "string" ? repoOf(x.key) : null);
+      if (repo) repos.add(repo);
+    };
+    for (const list of [ctx.runs, [...tasks.values()], ctx.brainstorms.list(), ctx.waits.list()]) {
+      list.forEach(add);
+    }
+    if (config.needsInputLabel) ctx.inputs.list().forEach(add);
+    for (const [repo] of ctx.inboxes?.() ?? []) repos.add(repo);
+    return [...repos];
+  }
+
+  // The dashboard's tasks: each issue and pull request with its state (board.mjs). `shows(repo)`:
+  // only the repos it says (a signed-in user's: seeing()); all of them without one.
+  function shownTasks(shows = null) {
+    const mine = (list) => (shows ? list.filter((x) => shows(repoOf(x.key))) : list);
+    const places = runPlaces(ctx.queueOrder?.() ?? [], (repo) => !shows || shows(repo));
     // A running task's comments are queued only when they wait for a follow-up run: the others
     // are on their way to the live session.
     const queued = [...tasks.values()]
       .filter((t) => t.pending.length > (t.running ? ctx.deliverable(t) : 0))
-      .filter((t) => !user || sees(user, t.repo))
+      .filter((t) => !shows || shows(t.repo))
       .map((t) => ({
         key: taskKey(t.repo, t.id),
         kind: kindOf(t.pending.at(-1).mode, t.kind),
@@ -140,17 +173,39 @@ export function createHttp(ctx) {
     return { shown, queued };
   }
 
-  // What the dashboard shows `user`.
-  function state(user) {
-    const { shown, queued } = shownTasks(user);
-    const { edges, blockers } = waitEdges(shown, ctx.waits.list());
+  // What the dashboard shows `user`: the repos they have `tasks:read` on, the totals of all.
+  async function state(user) {
+    const shows = await seeing(user, namedRepos());
+    const { shown, queued } = shownTasks(shows);
+    const waited = waitEdges(shown, ctx.waits.list());
+    // A blocker in a repo `user` doesn't see: "a hidden issue", its key, title, lanes and pull
+    // request never read for them.
+    const hidden = new Map(
+      waited.blockers.filter((key) => !shows(repoOf(key))).map((key, i) => [key, `hidden-${i}`]),
+    );
+    const blockers = waited.blockers.filter((key) => !hidden.has(key));
+    const edges = waited.edges.map((e) =>
+      hidden.has(e.from) ? { ...e, from: hidden.get(e.from) } : e,
+    );
     const keys = [...shown.map((t) => t.key), ...blockers];
-    const plans = ctx.models?.plans?.() ?? [];
+    // A lane named after a parent issue of another repo: in one `user` doesn't see, "a hidden
+    // issue", its title never read for them.
+    const parentOf = (key) => ctx.lanes?.parentKeys([key])[0] ?? null;
+    const parents = keys.map(parentOf).filter(Boolean);
+    const parentShows = await seeing(user, parents.map(repoOf));
+    const hiddenParent = (key) => !!parentOf(key) && !parentShows(repoOf(parentOf(key)));
+    const lanes =
+      ctx.lanes?.labels(keys, { title: ctx.titles.get, inboxes: ctx.inboxes?.() ?? [] }) ?? {};
+    for (const [key, lane] of Object.entries(lanes)) {
+      if (lane.source === "parent" && hiddenParent(key)) lanes[key] = { ...lane, name: HIDDEN };
+    }
+    // How much of each plan the runs used: server-wide.
+    const plans = (await serverWide(user, "server:read")) ? (ctx.models?.plans?.() ?? []) : [];
     // Titles and parents the orchestrator doesn't have yet show on a later poll; a lane's parent's
     // title names it.
     if (ctx.app) {
       ctx.lanes?.fill(keys);
-      ctx.titles.fill([...keys, ...(ctx.lanes?.parentKeys(keys) ?? [])]);
+      ctx.titles.fill([...keys, ...parents.filter((key) => parentShows(repoOf(key)))]);
       ctx.pulls.fill(shown.map((t) => t.key));
     }
     // `now`: the dashboard compares run start times with the server clock, not its own.
@@ -173,16 +228,25 @@ export function createHttp(ctx) {
       })),
       // The graph's arrows, and the issues they come from that aren't on the board.
       edges,
-      blockers: blockers.map((key) => ({
-        key,
-        repo: parseKey(key)?.repo ?? null,
-        number: parseKey(key)?.number ?? null,
-        title: ctx.titles.get(key),
-        closed: ctx.titles.closed(key),
-      })),
+      blockers: [
+        ...blockers.map((key) => ({
+          key,
+          repo: parseKey(key)?.repo ?? null,
+          number: parseKey(key)?.number ?? null,
+          title: ctx.titles.get(key),
+          closed: ctx.titles.closed(key),
+        })),
+        ...[...hidden.values()].map((key) => ({
+          key,
+          repo: null,
+          number: null,
+          title: null,
+          closed: null,
+          hidden: true,
+        })),
+      ],
       // The names the lanes of these issues can have (lanes.mjs), by key.
-      lanes:
-        ctx.lanes?.labels(keys, { title: ctx.titles.get, inboxes: ctx.inboxes?.() ?? [] }) ?? {},
+      lanes,
       states: STATES,
       running: ctx.running,
       queued: queued.length,
@@ -198,7 +262,7 @@ export function createHttp(ctx) {
         },
       }),
       // Each repo read so far: its inbox issues and discussions category (New request).
-      inboxes: Object.fromEntries((ctx.inboxes?.() ?? []).filter(([repo]) => sees(user, repo))),
+      inboxes: Object.fromEntries((ctx.inboxes?.() ?? []).filter(([repo]) => shows(repo))),
       // GitHub Enterprise: the dashboard's links go where the orchestrator's do.
       githubUrl: config.githubUrl,
       // Which Deckhand runs and since when (status.mjs serverInfo()): the Repositories page.
@@ -213,12 +277,18 @@ export function createHttp(ctx) {
   }
 
   // The dashboard's API that edge passes on (GET), for its signed-in `user`.
-  function serveDashboard(req, res, user) {
+  async function serveDashboard(req, res, user) {
     const url = new URL(req.url, "http://localhost");
     if (!ctx.app) return res.writeHead(503).end();
     if (!user) return res.writeHead(401).end();
     res.setHeader("cache-control", "no-store");
-    if (url.pathname === "/api/state") return sendJson(res, state(user));
+    if (url.pathname === "/api/state") return sendJson(res, await state(user));
+    // Settings › Server and the services' health: server-wide.
+    if (url.pathname === "/api/server" || (url.pathname === "/api/health" && ctx.health)) {
+      if (!(await serverWide(user, "server:read"))) {
+        return sendJson(res, needs("server:read", null), 403);
+      }
+    }
     // Read when Settings › Server opens, not at each poll: it scans the grants folder.
     if (url.pathname === "/api/server") return sendJson(res, ctx.serverSetup());
     // The services' health (health.mjs), probed at most every 10 s whoever asks: no URL in it.
@@ -233,9 +303,13 @@ export function createHttp(ctx) {
     }
     const match = /^\/api\/runs\/([\w.-]+)\/stream$/.exec(url.pathname);
     const run = match && ctx.runsById.get(match[1]);
-    const visible = () => sees(user, run.repo ?? repoOf(run.key));
+    // Asked again each second while it streams: an access taken away ends it.
+    const visible = async () => {
+      const repo = run.repo ?? repoOf(run.key);
+      return (await seeing(user, [repo].filter(Boolean), "logs:read"))(repo);
+    };
     // The log is the runner's: read from it as edge (../runner/client.mjs readLog()).
-    if (run && visible())
+    if (run && (await visible()))
       return stream(req, res, run, {
         read: async (offset) => {
           await ctx.logMoved?.(run.id);
@@ -439,6 +513,12 @@ export function createHttp(ctx) {
   const syncApi = apiRoute({
     name: "Sync",
     route: (pathname) => (pathname === "/api/sync" ? { what: "sync" } : null),
+    // Read at each request: the permissions are set up after this.
+    permissions: {
+      visible: async () => true,
+      can: (user, repo, action) => serverWide(user, action),
+    },
+    action: () => "server:sync",
     posts: {
       sync: async (req, res, user) => {
         if (synced !== null && Date.now() - synced < SYNC_MS) {
@@ -468,20 +548,24 @@ export function createHttp(ctx) {
   // container. One request's unexpected throw answers 500 and is logged: it never takes the
   // orchestrator down.
   function handle(req, res, { user = null, local = false } = {}) {
-    try {
-      route(req, res, user, local);
-    } catch (error) {
+    const failed = (error) => {
       (log.error ?? log)(`${req.method} ${req.url}: ${error.stack ?? error}`);
       if (!res.headersSent) res.writeHead(500);
       res.end();
+    };
+    try {
+      route(req, res, user, local).catch(failed);
+    } catch (error) {
+      failed(error);
     }
   }
 
-  function route(req, res, user, local) {
+  async function route(req, res, user, local) {
     if (req.url === "/status") {
       if (!local && !user) return res.writeHead(401).end();
       // A signed-in user's: only the repos they may see, as in api/state.
-      return sendJson(res, ctx.status(user ? (repo) => sees(user, repo) : undefined));
+      const shows = user ? await seeing(user, namedRepos()) : undefined;
+      return sendJson(res, ctx.status(shows));
     }
     if (req.url.startsWith("/api/sync")) {
       if (!ctx.app) return res.writeHead(503).end();

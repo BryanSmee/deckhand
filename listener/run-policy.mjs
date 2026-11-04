@@ -7,6 +7,7 @@
 // added before it starts changes nothing. Input: ../docs/repo-config.md#the-run-input.
 import { getJson } from "./github.mjs";
 import { BUILT_IN, isFresh } from "./modes.mjs";
+import { startAction } from "./permissions.mjs";
 import { denyKept, isPolicyError, unallowed } from "./policies.mjs";
 
 // Whether `item` is a run a person asked for: one with an author, not one of the listener's own
@@ -119,7 +120,8 @@ export function runRefusedText(mode, messages) {
 // `ctx` (server.mjs): `policies`, `github`, `graphql`, `decisions`, `answer`, `log`. →
 // allowed(item, mode, key): whether `item` may run in `mode`; refused, it replies with the
 // messages, keeps the decision for the task's page and marks the item (`refused`: the reply's
-// text, for the dashboard's answer: work.mjs). Without policies (some tests), nothing is asked.
+// text, for the dashboard's answer: work.mjs). Its author needs `runs:start:<mode>` first
+// (`ctx.permissions`). Without policies (some tests), nothing is asked.
 export function createRunPolicy(ctx, now = Date.now) {
   // The refusal kept for task `key`: the opa path's (denyKept()) or the defaults' own.
   const keep = (key, entry) => {
@@ -163,7 +165,16 @@ export function createRunPolicy(ctx, now = Date.now) {
   }
 
   return async function allowed(item, mode, key) {
-    if (!ctx.policies || !personStarted(item)) return true;
+    if (!personStarted(item)) return true;
+    // Who may start what where (permissions.mjs, #731), before the run's own decision. No reply,
+    // as for an author outside the repo's `users`: the dashboard says it (`refused`).
+    const action = startAction(mode);
+    if (ctx.permissions && !(await ctx.permissions.can(item.author, item.repo, action))) {
+      ctx.log(`${key}: ${mode} run refused: ${item.author} has no ${action} here`);
+      item.refused = `No \`${mode}\` run: ${item.author} may not start it here (\`${action}\`).`;
+      return false;
+    }
+    if (!ctx.policies) return true;
     const messages = await decide(item, mode, key);
     if (!messages.length) return true;
     ctx.log(`${key}: ${mode} run refused by the policies`);

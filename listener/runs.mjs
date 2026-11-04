@@ -31,6 +31,8 @@ import {
 import { logSent } from "./restart.mjs";
 import { sandboxSpec, sessionName, sessionOf } from "./sandbox-spec.mjs";
 import { noLongerAllowed, pickedTask } from "./tasks.mjs";
+import { startAction } from "./permissions.mjs";
+import { personStarted } from "./run-policy.mjs";
 import { operatorSecrets, redact } from "./secrets.mjs";
 import { newLogContext, newRequestId, withLogContext } from "../lib/log.mjs";
 
@@ -116,8 +118,8 @@ export function createRuns(ctx) {
   }
 
   // Comments whose author may no longer run the agent here, checked against the repo's settings
-  // as they are now: its `users` may have narrowed while they waited (the pause, a restart, a
-  // busy repo). Dropped, their 👀 off. Settings that can't be read are begin()'s to report.
+  // and the access decision as they are now: its `users` or its author's actions may have
+  // narrowed while they waited (the pause, a restart, a busy repo). Dropped, their 👀 off. Settings that can't be read are begin()'s to report.
   async function dropRefused(task) {
     let settings = null;
     try {
@@ -127,8 +129,20 @@ export function createRuns(ctx) {
       // begin() reads them again, and fails the run with the error.
     }
     const before = task.pending.length;
-    task.pending = task.pending.filter((item) => {
-      const refused = noLongerAllowed(config, item, settings);
+    // Their authors' access as it is now (permissions.mjs): `runs:start:<mode>`, the mode each
+    // was queued in.
+    const may = await Promise.all(
+      task.pending.map(
+        (item) =>
+          !ctx.permissions ||
+          !personStarted(item) ||
+          ctx.permissions.can(item.author, task.repo, startAction(item.mode)),
+      ),
+    );
+    task.pending = task.pending.filter((item, i) => {
+      const refused =
+        noLongerAllowed(config, item, settings) ||
+        (!may[i] && `${item.author} may no longer start ${startAction(item.mode)} here`);
       if (!refused) return true;
       log(`${taskKey(task.repo, task.id)}: a queued comment dropped: ${refused}`);
       ctx.track(ctx.settle(item, "refused"));
