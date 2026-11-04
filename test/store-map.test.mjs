@@ -105,7 +105,7 @@ test("storeMap: people's text goes without a secret, rather than refused whole",
   assert.equal(map.get("org/repo#1"), `Leaked ${secret} in a title`);
 });
 
-test("storeMap: a file from the release before is moved, then removed; moved twice, nothing changes", async (t) => {
+test("storeMap: a file from the release before is moved, then removed; moved twice, nothing changes; after a rollback, it replaces the store's", async (t) => {
   const dir = tempDir(t);
   const file = join(dir, "order.json");
   const legacy = { "org/app#3": { key: "org/app#3" }, "org/app#1": { key: "Org/app#1" } };
@@ -121,26 +121,41 @@ test("storeMap: a file from the release before is moved, then removed; moved twi
   });
   assert.match(logs[0], /order: 2 item\(s\) moved to the store/);
 
-  // A crash before the file went: moved again, the store's values kept (the same ones, or a
-  // newer one written since).
-  map.set("org/app#1", { key: "org/app#1", rank: 5 });
-  await map.settled();
+  // A crash before the file went: moved again, the same values.
   writeFileSync(file, JSON.stringify(legacy));
   calls.length = 0;
   const again = await storeMap(store, "order", { file, moved });
   assert.equal(existsSync(file), false);
-  assert.deepEqual(again.get("org/app#1"), { key: "org/app#1", rank: 5 });
-  assert.deepEqual(again.get("org/app#3"), { key: "org/app#3", rank: 0 });
+  assert.deepEqual(Object.fromEntries(again), Object.fromEntries(map));
   assert.deepEqual(
     calls.map(([name, key]) => [name, key]),
     [
-      ["setIfAbsent", "order/org/app#3"],
-      ["setIfAbsent", "order/org/app#1"],
+      ["set", "order/org/app#3"],
+      ["set", "order/org/app#1"],
     ],
   );
+
+  // Back to the release before, then this one again (#690): what that release wrote replaces the
+  // store's older values, those it dropped deleted, rather than coming back.
+  again.set("org/app#1", { key: "org/app#1", rank: 0.5 });
+  again.set("org/app#9", { key: "org/app#9", rank: 7 });
+  await again.settled();
+  writeFileSync(file, JSON.stringify({ "org/app#1": { key: "org/app#1" } }));
+  calls.length = 0;
+  const upgraded = await storeMap(store, "order", { file, moved });
+  assert.equal(existsSync(file), false);
+  assert.deepEqual(Object.fromEntries(upgraded), { "org/app#1": { key: "org/app#1", rank: 0 } });
+  assert.deepEqual(await all(store, "order/"), {
+    "order/org/app#1": { key: "org/app#1", rank: 0 },
+  });
+  assert.deepEqual(calls.map(([name, key]) => [name, key]).sort(), [
+    ["delete", "order/org/app#3"],
+    ["delete", "order/org/app#9"],
+    ["set", "order/org/app#1"],
+  ]);
   // No file: nothing moved, nothing written.
   calls.length = 0;
-  assert.equal((await storeMap(store, "order", { file, moved })).size, 2);
+  assert.equal((await storeMap(store, "order", { file, moved })).size, 1);
   assert.deepEqual(calls, []);
 });
 
