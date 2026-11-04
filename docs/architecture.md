@@ -1630,7 +1630,7 @@ The services and how they hand over: [services.md](services.md). The modules bel
 reader and the settings parser, redaction, HTTP helpers, the JSON state files, draining, the
 tokens (run and service tokens, what each caller may do) and the store (`lib/store.mjs`, its
 file backend `lib/store-file.mjs`, its Redis backend `lib/store-redis.mjs` and the Redis client
-`lib/resp.mjs`; the maps kept there one key per item, `lib/store-map.mjs`), and an S3 client (`lib/s3.mjs`: SigV4 signing, PUT, ranged GET, HEAD and
+`lib/resp.mjs`, the arguments both backends check alike in `lib/store-checks.mjs`; the maps kept there one key per item, `lib/store-map.mjs`), and an S3 client (`lib/s3.mjs`: SigV4 signing, PUT, ranged GET, HEAD and
 DELETE, retries on 5xx) for blob storage (`lib/blobs.mjs`, #604: `BLOB_URL`'s S3, folder or
 store backends behind one interface, checked at start). Nothing in it imports from `listener/`.
 
