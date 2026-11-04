@@ -13,8 +13,9 @@ const FROM = "deckhand-from:";
 // would pass for Deckhand's answer or someone else's words. In one pass, each mark taken out
 // as its last character comes in, so the text around it can't join into another
 // ("<!-- deck<!-- deckhand -->hand -->"): what is left has none, and a run of unclosed tags
-// isn't read again for each of them, as a lazy regex would (#742). A marker that a cut joins
-// is gone before its "-->" could close a tag, so that tag runs on to the next "-->".
+// isn't read again for each of them, as a lazy regex would (#742). Text a cut joins is read as
+// it forms, not on a later pass: a marker joined inside an open tag is gone before its "-->"
+// could close the tag, which runs on to the next "-->", or stays unclosed (kept) without one.
 export function unmarked(text) {
   const s = String(text);
   const out = [];

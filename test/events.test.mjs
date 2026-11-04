@@ -78,8 +78,10 @@ test("unmarked: the marker and the from tags taken out, joined ones too, unclose
   assert.equal(unmarked(`<!-- deckhand-${MARKER}from:x --> ok`), " ok");
   // From the first tag to the first close, as the lazy regex took it.
   assert.equal(unmarked("<!-- deckhand-from: a <!-- deckhand-from: b --> c -->"), " c -->");
-  // A marker the cut joins is gone before its "-->" could close the tag: it runs on to the next.
+  // A marker the cut joins is gone before its "-->" could close the tag: it runs on to the
+  // next, or stays unclosed without one (the loop of passes closed it on the joined marker).
   assert.equal(unmarked(`<!-- deckhand-from:a<!--${MARKER} deckhand -->Z-->`), "");
+  assert.equal(unmarked(`<!-- deckhand-from:<!--${MARKER} deckhand -->`), "<!-- deckhand-from:");
   // Unclosed, or not ours: kept.
   assert.equal(unmarked("<!-- deckhand-from: x"), "<!-- deckhand-from: x");
   assert.equal(
@@ -89,20 +91,44 @@ test("unmarked: the marker and the from tags taken out, joined ones too, unclose
   assert.equal(unmarked(42), "42");
 });
 
+// Random texts of `pieces`, the same on every run.
+function* texts(pieces, count) {
+  let seed = 7;
+  const random = () => (seed = (seed * 48271) % 2147483647) / 2147483647;
+  for (let n = 0; n < count; n++) {
+    let text = "";
+    for (let k = 0; k < 12; k++) text += pieces[Math.floor(random() * pieces.length)];
+    yield text;
+  }
+}
+
 test("unmarked: nothing marked is left, whatever the pieces", () => {
   const pieces = [
     ...["<!--", "<!-", "-->", "->", "<", "-", ">", " ", "\n", "\t", "x"],
     ...["deckhand", "deck", "hand", "-from:", "deckhand-from:", "<!-- deckhand-from:", MARKER],
   ];
-  let seed = 7;
-  const random = () => (seed = (seed * 48271) % 2147483647) / 2147483647;
-  for (let n = 0; n < 10_000; n++) {
-    let text = "";
-    for (let k = 0; k < 12; k++) text += pieces[Math.floor(random() * pieces.length)];
+  for (const text of texts(pieces, 10_000)) {
     const out = unmarked(text);
     assert.ok(!out.includes(MARKER), text);
     assert.doesNotMatch(out, /<!--\s*deckhand-from:[^]*?-->/, text);
   }
+});
+
+test("unmarked: what the loop of passes gave, when no cut joins text into a mark", () => {
+  // The code #742 replaced. Where a cut joins a mark, it read it a pass later: that differs.
+  const passes = (text) => {
+    let out = text;
+    for (let before = null; out !== before;) {
+      before = out;
+      out = out.replaceAll(MARKER, "").replace(/<!--\s*deckhand-from:[^]*?-->/g, "");
+    }
+    return out;
+  };
+  const pieces = [
+    ...[MARKER, "<!-- deckhand-from:", "<!--\tdeckhand-from:", "<!--\n deckhand-from:bob:x -->"],
+    ...["-->", "x", " ", "\n", "deckhand", "<!-- note -->"],
+  ];
+  for (const text of texts(pieces, 10_000)) assert.equal(unmarked(text), passes(text), text);
 });
 
 test("unmarked: many unclosed tags or nested markers are one pass (#742)", () => {
