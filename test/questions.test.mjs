@@ -410,6 +410,25 @@ test("long lines: an unclosed title, a pick or a heading read in one pass", () =
   assert.equal(option.label, `A${spaces}x`);
   assert.equal(hasOpenQuestions(`# a${spaces}x\n\n1. A?`), false);
   assert.equal(questionsSection(`## Open questions${spaces}##\n\n1. A?`), "1. A?");
+  // A pick never closed (issue #736).
+  const open = parseQuestions(`1. Q?\n   - [ ] A (recommended${spaces}\n   - [ ] B`);
+  assert.equal(open.items[0].options[0].label, "A (recommended");
+  assert.equal(open.items[0].options[0].recommended, false);
+});
+
+test("HTML comments: dropped, an unclosed one kept, read in one pass", () => {
+  const read = parseQuestions("1. Q? <!-- note -->\n   - [ ] A <!-- a\nb --> (recommended)");
+  assert.deepEqual(read.items[0], {
+    title: null,
+    text: "Q?",
+    options: [{ label: "A", recommended: true, checked: false }],
+  });
+  assert.equal(parseQuestions("<!-- only a comment -->"), null);
+  assert.equal(parseQuestions("1. Q? <!-- never closed").items[0].text, "Q? <!-- never closed");
+  // Anyone's edit is read (editedInput()): a lazy regex looked for `-->` from each `<!--`.
+  const many = "<!--".repeat(16000);
+  assert.ok(parseQuestions(`1. Q?\n${many}`).items[0].text === `Q?\n${many}`);
+  assert.equal(hasOpenQuestions(`## Open questions\n\n${many}`), true);
 });
 
 test("withoutMarker: the marker asksInput() reads, not one quoted or shown in code", () => {
@@ -659,6 +678,14 @@ test("editing the section moves the label; other edits don't", () => {
   // A title edit, or an edit by someone not allowed.
   assert.equal(map("edited", { text: asks, changes: { title: { from: "x" } } }), null);
   assert.equal(edit(none, asks, [], { login: "mallory", type: "User" }), null);
+  // Theirs, or on someone else's issue, on an issue not labelled: not even read.
+  const unread = (opts) => {
+    const p = issues("edited", { text: asks, changes: { body: { from: none } }, ...opts });
+    Object.defineProperty(p.issue, "body", { get: () => assert.fail("read") });
+    return inputEvent(config, "issues", p, BOT);
+  };
+  assert.equal(unread({ sender: { login: "mallory", type: "User" } }), null);
+  assert.equal(unread({ user: "mallory", sender: { login: "bob", type: "User" } }), null);
   assert.equal(edit(none, asks, [], { login: BOT, type: "Bot" }).by, null);
 });
 
