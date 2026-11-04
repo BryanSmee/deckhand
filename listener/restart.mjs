@@ -58,6 +58,10 @@ export const QUEUE_KEY = "queue";
 export const LIVE_PREFIX = "runs/";
 const liveKey = (id) => `${LIVE_PREFIX}${id}`;
 
+// Whether what a file or the store holds is a run's state: one without its id, task or record
+// can't be restored (a write cut short, a hand edit).
+export const isRunState = (saved) => Boolean(saved?.id && saved.task && saved.record);
+
 // What tells a queued comment apart, given when it is accepted (tasks.mjs accept()): a comment
 // both in the queue and in a run's saved state (a listener killed between the two writes) is the
 // run's alone.
@@ -115,10 +119,22 @@ export function createRestart(ctx) {
   let leftLive = null;
   const readLive = () => (leftLive ??= moveLive().then(listLive));
 
+  // The runs' states in the store. A key that holds no run's state is logged and removed: else
+  // it would be listed again at every takeover. A removal the store refuses is logged, the start
+  // going on: the next takeover tries again.
   async function listLive() {
     const found = [];
-    for await (const [, saved] of values(ctx.store, LIVE_PREFIX)) {
-      if (saved?.id && saved.task && saved.record) found.push(saved);
+    for await (const [key, saved] of values(ctx.store, LIVE_PREFIX)) {
+      if (isRunState(saved)) {
+        found.push(saved);
+        continue;
+      }
+      try {
+        await ctx.store.delete(key);
+        log(`${key}: not a run's state, removed`);
+      } catch (err) {
+        log(`${key}: not a run's state, its removal failed: ${err.message}`);
+      }
     }
     return found;
   }
@@ -138,7 +154,7 @@ export function createRestart(ctx) {
     for (const file of files) {
       const path = join(ctx.logDir, file);
       const saved = readJson(path);
-      if (!saved?.id || !saved.task || !saved.record) {
+      if (!isRunState(saved)) {
         log(`${file}: not a run's state, left there`);
         continue;
       }

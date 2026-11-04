@@ -152,6 +152,45 @@ test("a restored run keeps the issues it created, the comments it posted and the
   ]);
 });
 
+test("a key under runs/ that holds no run's state is logged and removed, the runs beside it restored", async (t) => {
+  const lines = [];
+  const ctx = runContext(tempDir(t), { log: (line) => lines.push(line) });
+  await saveRun(ctx.store, "r1", 1, { agent: "claude" });
+  // No record (a write cut short, a hand edit), and not even an object.
+  await ctx.store.set(`${LIVE_PREFIX}r2`, {
+    id: "r2",
+    task: { repo: "org/repo", id: 2, kind: "issue" },
+  });
+  await ctx.store.set(`${LIVE_PREFIX}r3`, "garbage");
+  await createRestart(ctx).restoreRuns();
+  assert.deepEqual(
+    [...ctx.tasks.values()].map((task) => task.live.id),
+    ["r1"],
+  );
+  assert.equal(await savedRun(ctx.store, "r2"), null);
+  assert.equal(await savedRun(ctx.store, "r3"), null);
+  assert.ok(await savedRun(ctx.store, "r1"));
+  for (const id of ["r2", "r3"])
+    assert.ok(lines.includes(`${LIVE_PREFIX}${id}: not a run's state, removed`));
+});
+
+test("a key under runs/ the store refuses to remove is logged, the start going on", async (t) => {
+  const lines = [];
+  const store = fileStore();
+  store.delete = async () => {
+    throw new Error("store away");
+  };
+  const ctx = runContext(tempDir(t), { log: (line) => lines.push(line), store });
+  await saveRun(store, "r1", 1, { agent: "claude" });
+  await store.set(`${LIVE_PREFIX}r2`, { id: "r2" });
+  await createRestart(ctx).restoreRuns();
+  assert.deepEqual(
+    [...ctx.tasks.values()].map((task) => task.live.id),
+    ["r1"],
+  );
+  assert.ok(lines.includes(`${LIVE_PREFIX}r2: not a run's state, its removal failed: store away`));
+});
+
 test("a restored run keeps the network its tokens are bound to, and saves it again", async (t) => {
   const dir = tempDir(t);
   const broker = createBroker({});
