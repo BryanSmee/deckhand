@@ -2753,6 +2753,8 @@ function followUpSetup(
     yaml = "review:\n  on: manual\n",
     settings = config,
     pull = null,
+    // The issues' creation, the labels' time with them.
+    created = "2026-11-02T10:00:01Z",
   } = {},
 ) {
   let fails = failReads;
@@ -2794,7 +2796,7 @@ function followUpSetup(
       if (refuse.includes(body.title)) return new Response("{}", { status: 410 });
       // Listed with the label from then on, as GitHub would.
       existing.push({ number: next, title: body.title });
-      return Response.json({ number: next++, created_at: "2026-11-02T10:00:01Z" }, { status: 201 });
+      return Response.json({ number: next++, created_at: created }, { status: 201 });
     }
     if (method === "GET" && path === "/repos/org/repo/pulls/5" && pull) return Response.json(pull);
     return new Response("{}", { status: 404 });
@@ -3743,6 +3745,32 @@ test("follow-ups auto-picked: filed with both labels after an allowed user's mer
   assert.equal(s.reviews.followUpPick("org/other", 40, at), null);
   // Who merged it, from the delivery: the pull request isn't read again.
   assert.equal(s.calls.filter((c) => c.path === "/repos/org/repo/pulls/5").length, 0);
+});
+
+test("follow-ups auto-picked: the records last 90 days from their filing, not from the first review (#682)", async (t) => {
+  const DAY = 24 * 3600_000;
+  // setup()'s clock, 60 days on: the merge comes long after the review.
+  const filedAt = 1_800_000_000_000 + 60 * DAY;
+  const s = followUpSetup(t, {
+    posted: [postedBody(SECTIONS)],
+    yaml: PICKUP_YAML,
+    settings: pickupConfig,
+    created: new Date(filedAt).toISOString(),
+  });
+  await s.record(SECTIONS);
+  s.advance(60 * DAY);
+  assert.deepEqual(await s.merged(mergedBy("alice")), [40, 41]);
+  // Another pull request's review prunes what is past 90 days: 100 days after the review,
+  // 40 after the filing, the records still vouch for the labels.
+  s.advance(40 * DAY);
+  const other = { repo: "org/repo", number: 6, base: "trunk", settings: s.read.settings };
+  await s.reviews.settle(other, posted(HIGH_ONE, { number: 6 }));
+  assert.deepEqual(s.reviews.followUpPick("org/repo", 40, filedAt), { by: "alice", pr: 5 });
+  // 91 days after the filing, they are gone with the pull request's entry.
+  s.advance(51 * DAY);
+  await s.reviews.settle({ ...other, number: 7 }, posted(HIGH_ONE, { number: 7 }));
+  assert.equal(s.reviews.followUpPick("org/repo", 40, filedAt), null);
+  assert.equal(s.reviews.entry("org/repo", 5), null);
 });
 
 test("follow-ups auto-picked: off by default, without auto_pickup or the operator's slots", async (t) => {
