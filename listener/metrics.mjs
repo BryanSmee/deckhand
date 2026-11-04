@@ -194,8 +194,9 @@ export function orchestratorMetrics(registry, { ctx }) {
     {
       labels: ["mode", "agent", "kind"],
       values: { mode: modes, agent: agents, kind: KINDS },
-      // Every series at 0 from the start (below): their product, past the default cap.
-      maxSeries: modes.length * agents.length * KINDS.length,
+      // Every series at 0 from the start (below), past the default cap: their product with room
+      // for each label's `other`, so that a value outside them folds into its own label alone.
+      maxSeries: (modes.length + 1) * (agents.length + 1) * (KINDS.length + 1),
     },
   );
   const finished = registry.counter("deckhand_runs_finished_total", "Runs ended, by outcome.", {

@@ -9,7 +9,15 @@ import { test } from "node:test";
 import { createRegistry } from "../lib/metrics.mjs";
 import { openStore } from "../lib/store.mjs";
 import { loginSeal, LoginError, planLogin } from "../models/logins.mjs";
-import { MAX_READ, modelMetrics, statusOf, usageReader } from "../models/metrics.mjs";
+import {
+  AGENTS,
+  MAX_READ,
+  modelMetrics,
+  PROVIDERS,
+  STATUSES,
+  statusOf,
+  usageReader,
+} from "../models/metrics.mjs";
 import { baseOf, createApiProxy } from "../models/upstream.mjs";
 import { createUsage } from "../models/usage.mjs";
 import { serve, tempDir, tokenBroker } from "./helpers.mjs";
@@ -341,7 +349,7 @@ test("the calls' counter at 0 before any call, every series: an increase() count
     "0",
   );
   const series = text.split("\n").filter((l) => l.startsWith("deckhand_model_calls_total{"));
-  assert.equal(series.length, 4 * 3 * 8);
+  assert.equal(series.length, PROVIDERS.length * AGENTS.length * STATUSES.length);
 });
 
 test("without a registry, nothing is counted and nothing throws", () => {

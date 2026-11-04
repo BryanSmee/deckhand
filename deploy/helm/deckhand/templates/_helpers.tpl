@@ -298,6 +298,14 @@ spec:
 {{- if not (has .Values.metrics.rules.kind (list "PrometheusRule" "VMRule")) }}
 {{- fail (printf "metrics.rules.kind: %q, where PrometheusRule or VMRule is expected" .Values.metrics.rules.kind) }}
 {{- end }}
+{{- if .Values.metrics.rules.enabled }}
+{{- if and (not .Values.metrics.serviceMonitor.enabled) (not .Values.metrics.rules.job) }}
+{{- fail "metrics.rules.job: the job your scrape config gives Deckhand's pods, required without metrics.serviceMonitor (whose job is deckhand)" }}
+{{- end }}
+{{- if and .Values.metrics.serviceMonitor.enabled .Values.metrics.rules.job (ne .Values.metrics.rules.job "deckhand") }}
+{{- fail (printf "metrics.rules.job: %q, where metrics.serviceMonitor names the job deckhand" .Values.metrics.rules.job) }}
+{{- end }}
+{{- end }}
 {{- if not .Values.apiServer.cidrs }}
 {{- fail "apiServer.cidrs: the API server's addresses, one at least" }}
 {{- end }}

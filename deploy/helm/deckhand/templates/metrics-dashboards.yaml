@@ -40,5 +40,7 @@ metadata:
     {{- toYaml . | nindent 4 }}
     {{- end }}
 spec:
-  {{- .Files.Get "files/alerts.yaml" | trim | nindent 2 }}
+  {{- /* The job DeckhandServiceDown selects: the ServiceMonitor's, or metrics.rules.job. */}}
+  {{- $job := $m.rules.job | default "deckhand" }}
+  {{- .Files.Get "files/alerts.yaml" | replace "job=\"deckhand\"" (printf "job=%q" $job) | trim | nindent 2 }}
 {{- end }}

@@ -3,9 +3,12 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createRegistry } from "../lib/metrics.mjs";
+import { AGENTS } from "../listener/agents/index.mjs";
 import { createHttp } from "../listener/http.mjs";
 import {
   deliveryResult,
+  KINDS,
+  OUTCOMES,
   modeLabel,
   orchestratorMetrics,
   pickupSlots,
@@ -14,6 +17,7 @@ import {
   serviceCallMetrics,
   statusLabel,
 } from "../listener/metrics.mjs";
+import { BUILT_IN } from "../listener/modes.mjs";
 import { testConfig } from "./helpers.mjs";
 
 // The samples of `text` (no comments), each line as it is.
@@ -143,8 +147,22 @@ test("orchestratorMetrics: the runs' lives counted, the queue's gauges from the 
     'deckhand_runs_started_total{mode="custom",agent="antigravity",kind="auto-pickup"} 0',
   );
   const series = (name) => samples(waiting).filter((line) => line.startsWith(`${name}{`)).length;
-  assert.equal(series("deckhand_runs_finished_total"), 12 * 4);
-  assert.equal(series("deckhand_runs_started_total"), 12 * 3 * 7);
+  const modes = BUILT_IN.size + 1;
+  assert.equal(series("deckhand_runs_finished_total"), modes * OUTCOMES.length);
+  assert.equal(
+    series("deckhand_runs_started_total"),
+    modes * Object.keys(AGENTS).length * KINDS.length,
+  );
+  // An agent outside AGENTS folds into its own label alone, the series' cap leaving room.
+  const other = createRegistry({ log: () => {} });
+  orchestratorMetrics(other, { ctx: () => null }).runStarted({
+    mode: "work",
+    record: { agent: "someone", light: false },
+  });
+  assert.match(
+    await other.render(),
+    /deckhand_runs_started_total\{mode="work",agent="other",kind="work"\} 1/,
+  );
   assert.doesNotMatch(waiting, /="other"/);
 
   const record = { agent: "claude", startedAt: 1_000_000, light: false, reason: "review-fix" };

@@ -496,7 +496,10 @@ charts look for), in `metrics.dashboard.namespace` (empty: the services'; one th
 with `metrics.dashboard.annotations` for a folder (`grafana_folder`, by the sidecar's
 `folderAnnotation`). `metrics.rules.enabled` adds `deploy/alerts/deckhand.yaml`'s rules as a
 `PrometheusRule`, or a `VMRule` with `metrics.rules.kind: VMRule`, with `metrics.rules.labels`
-for your operator's rule selector; its CRD has to be in the cluster first. With the kustomize
+for your operator's rule selector; its CRD has to be in the cluster first. Their
+`DeckhandServiceDown` selects the job the ServiceMonitor names, `deckhand`: without
+`metrics.serviceMonitor`, `metrics.rules.job` says your scrape job's (an annotation-based
+`kubernetes-pods`, say), which the chart requires then. With the kustomize
 base, the same files go to your monitoring stack as it takes them (a `configMapGenerator` of
 your overlay's, say).
 

@@ -22,8 +22,8 @@ groups:
 
       # A target that doesn't answer: crashed, or its metrics port unreachable, for as long as it
       # stays down. A copy replaced by a rollout leaves the targets, and doesn't fire it; nor
-      # does one no target is left for (the orchestrator's copies found by DNS, all stopped):
-      # DeckhandNoLeaseHolder catches those.
+      # does a service no target is left for (the orchestrator's copies found by DNS, all
+      # stopped; a pod Pending, or none): DeckhandServiceMissing and DeckhandNoLeaseHolder do.
       - alert: DeckhandServiceDown
         expr: up{job="deckhand"} == 0
         for: 5m
@@ -34,6 +34,26 @@ groups:
           description: >-
             {{ $labels.instance }} hasn't answered its metrics port for 5 minutes. Its logs
             (docker compose logs, kubectl logs --previous) say why.
+
+      # No copy of a service answers at all: on Kubernetes its pods Pending or gone, which leave
+      # its Service's endpoints and so the targets. By Deckhand's own `service` label, which every
+      # target has; the services with a lease are DeckhandNoLeaseHolder's. Not the egress proxy,
+      # whose metrics port is off by default with Compose (EGRESS_METRICS_PORT).
+      - alert: DeckhandServiceMissing
+        expr: |
+          absent(deckhand_build_info{service="broker"})
+          or absent(deckhand_build_info{service="github"})
+          or absent(deckhand_build_info{service="models"})
+          or absent(deckhand_build_info{service="policy"})
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "No copy of Deckhand's {{ $labels.service }} service answers"
+          description: >-
+            No copy of the {{ $labels.service }} service has answered for 5 minutes: every run
+            needs it. On Kubernetes, kubectl get pods (Pending: no node with the room; none: its
+            Deployment scaled down); with Compose, docker compose ps.
 
       # No copy acts: no run starts (orchestrator), no sandbox starts (runner), no failed
       # delivery is asked again (edge/redeliveries). Either every copy answering waits, or no

@@ -521,7 +521,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "sum by (mode) (rate(deckhand_runs_started_total[$__rate_interval])) * 3600",
+          "expr": "sum by (mode) (rate(deckhand_runs_started_total[$__rate_interval])) * 3600 > 0",
           "legendFormat": "{{mode}}",
           "refId": "A",
           "range": true
@@ -699,7 +699,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "sum by (kind, agent) (rate(deckhand_runs_started_total[$__rate_interval])) * 3600",
+          "expr": "sum by (kind, agent) (rate(deckhand_runs_started_total[$__rate_interval])) * 3600 > 0",
           "legendFormat": "{{kind}} {{agent}}",
           "refId": "A",
           "range": true
@@ -1129,7 +1129,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "sum by (provider, status) (rate(deckhand_model_calls_total[$__rate_interval])) * 60",
+          "expr": "sum by (provider, status) (rate(deckhand_model_calls_total[$__rate_interval])) * 60 > 0",
           "legendFormat": "{{provider}} {{status}}",
           "refId": "A",
           "range": true

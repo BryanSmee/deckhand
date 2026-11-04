@@ -51,6 +51,29 @@ tests:
               summary: "Deckhand's edge:9464 doesn't answer"
               description: "edge:9464 hasn't answered its metrics port for 5 minutes. Its logs (docker compose logs, kubectl logs --previous) say why."
 
+  # The broker's only target leaves (its pod Pending, no endpoint left); the others answer.
+  - interval: 1m
+    input_series:
+      - series: deckhand_build_info{job="deckhand", instance="b:9464", service="broker", version="1"}
+        values: 1 1
+      - series: deckhand_build_info{job="deckhand", instance="g:9464", service="github", version="1"}
+        values: 1x20
+      - series: deckhand_build_info{job="deckhand", instance="m:9464", service="models", version="1"}
+        values: 1x20
+      - series: deckhand_build_info{job="deckhand", instance="p:9464", service="policy", version="1"}
+        values: 1x20
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: DeckhandServiceMissing
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: DeckhandServiceMissing
+        exp_alerts:
+          - exp_labels: { severity: critical, service: broker }
+            exp_annotations:
+              summary: "No copy of Deckhand's broker service answers"
+              description: "No copy of the broker service has answered for 5 minutes: every run needs it. On Kubernetes, kubectl get pods (Pending: no node with the room; none: its Deployment scaled down); with Compose, docker compose ps."
+
   # The orchestrator's copies both wait; the runner's and edge's are held.
   - interval: 1m
     input_series:

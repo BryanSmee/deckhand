@@ -543,7 +543,8 @@ test(
       ["PrometheusRule", "monitoring.coreos.com/v1"],
       ["VMRule", "operator.victoriametrics.com/v1beta1"],
     ]) {
-      const values = { metrics: { rules: { enabled: true, kind, labels: { release: "kps" } } } };
+      const ruleValues = { enabled: true, kind, labels: { release: "kps" } };
+      const values = { metrics: { rules: ruleValues, serviceMonitor: { enabled: true } } };
       const rule = named(helm(t, values), kind, "deckhand");
       assert.equal(rule.apiVersion, apiVersion);
       assert.equal(rule.metadata.namespace, "deckhand");
@@ -551,8 +552,26 @@ test(
       assert.deepEqual(rule.spec, rules);
     }
     assert.match(
-      helmFails(t, { metrics: { rules: { enabled: true, kind: "AlertingRule" } } }),
+      helmFails(t, { metrics: { rules: { enabled: true, kind: "AlertingRule", job: "x" } } }),
       /metrics\.rules\.kind/,
+    );
+    // DeckhandServiceDown's job: the ServiceMonitor's, or the scrape job's given, never none
+    // (a critical alert matching nothing) nor another than the ServiceMonitor's.
+    const serviceDown = (objects) =>
+      named(objects, "PrometheusRule", "deckhand")
+        .spec.groups.flatMap((g) => g.rules)
+        .find((r) => r.alert === "DeckhandServiceDown").expr;
+    const job = "kubernetes-pods";
+    assert.equal(
+      serviceDown(helm(t, { metrics: { rules: { enabled: true, job } } })),
+      'up{job="kubernetes-pods"} == 0',
+    );
+    assert.match(helmFails(t, { metrics: { rules: { enabled: true } } }), /metrics\.rules\.job/);
+    assert.match(
+      helmFails(t, {
+        metrics: { rules: { enabled: true, job }, serviceMonitor: { enabled: true } },
+      }),
+      /metrics\.rules\.job: "kubernetes-pods"/,
     );
   },
 );

@@ -171,6 +171,10 @@ metrics:
     kind: PrometheusRule
     # What your operator's rule selector picks (`release: kube-prometheus-stack`, say).
     labels: {}
+    # The job Deckhand's targets are scraped as, which DeckhandServiceDown selects: with
+    # metrics.serviceMonitor, `deckhand` (its jobLabel), the default; without it, your scrape
+    # job's (an annotation-based `kubernetes-pods`, say), required.
+    job: ""
 
 # Your ingress, to edge's port 8080 alone: GitHub's webhooks and the dashboard, over HTTPS.
 ingress:
