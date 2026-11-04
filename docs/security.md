@@ -2056,7 +2056,7 @@ it couldn't see of a label:
   rather than as the earlier labeller's;
 - the label vouches for the issue as it was when it went on. A title changed (a `renamed`
   event) or a description edited (GraphQL's `userContentEdits`) after it, or in the same
-  second, by anyone but an allowed user, holds the issue: on a public repository, an
+  second, by anyone but an allowed user with `runs:start:work`, holds the issue: on a public repository, an
   outsider's issue rewritten once labelled would otherwise run as the labeller's. Every edit
   since the label counts, not only the last one (an allowed user's typo fix doesn't vouch for
   an outsider's rewrite before it). The issue's own last edit (`lastEditedAt`, `editor`) is
@@ -2076,7 +2076,7 @@ it couldn't see of a label:
   of each such issue (its number, the merger, the issue's creation time), and a labelling by
   the App counts only when it matches one, the same issue within two seconds
   (`followUpPick()`, `listener/reviews.mjs`). The run is then the merger's, checked against
-  `ALLOWED_USERS` and `users` at the pick as any labeller, and the edit check above starts
+  `ALLOWED_USERS`, `users` and `runs:start:work` at the pick as any labeller, and the edit check above starts
   from the label's time (the original GitHub lists for an edited description, the App's at
   the issue's creation, isn't an edit since; any later edit of the App's is). A merge by Deckhand itself (`review.merge`), a bot or anyone not
   allowed labels nothing. A run can't forge a record: it would have to file the issue
@@ -2118,7 +2118,7 @@ deliveries again.
 
 **Hidden repositories.** A repository where a login has no action at all is hidden from it
 everywhere: the repositories list, the tasks, inboxes, lanes and blockers of `api/state`,
-`/status` and the live logs (MCP's tools, #482 and #483, ask the same checks). Its routes answer as one outside `ALLOWED_REPOS` (the same
+`/status` and the live logs (MCP's tools will ask the same checks once #482 and #483 land). Its routes answer as one outside `ALLOWED_REPOS` (the same
 404 and message), so a login can't tell a hidden repository from one that doesn't exist; a
 blocker in a repository it doesn't see is "a hidden issue", its title never read for it.
 Without `server:read`, the repositories list names only the installations of the accounts
@@ -2126,12 +2126,14 @@ owning a repository the login sees. Totals without names stay (running, queued, 
 
 **Fail closed.** An unknown login, a repository no rule names, a policy that doesn't compile or
 errs, policies that can't be read and a policy service that can't be reached all give no action:
-the repository is hidden, a comment starts nothing (and gets no reply), an action on a
-repository still shown answers that it can't be decided now, and a server-wide route answers 503. A failure is never
+the repository is hidden, a comment starts nothing (and gets no reply), a repository's route
+answers as one hidden (the 404 above, the log saying the decision failed), and a server-wide
+route answers 503. A failure is never
 mistaken for a refusal that sticks: queued work isn't dropped and an auto-pickup label isn't held
 for one, they are asked again. So **the dashboard needs the policy service**, as the runs'
-writes do: each answer is kept a minute for the same policy files, login and repository, after
-which a policy service away hides every repository until it is back. Deckhand's default
+writes do: every decision first reads the operator's layer, which the orchestrator asks the
+service for again once 30 seconds have passed (`DEFAULTS_MS`), whatever answer is kept, so a
+policy service away hides every repository within about 30 seconds, until it is back. Deckhand's default
 `access.rego` alone, with no repository policy, is decided without evaluating `opa`, but still
 needs the service's listing of its policies.
 
@@ -2237,9 +2239,9 @@ resource_metadata="<PUBLIC_URL>/.well-known/oauth-protected-resource/mcp"` (RFC 
   Settings › MCP clients (the login's own clients, posted from the dashboard's origin), or the
   client's own `POST /oauth/revoke` (RFC 7009). A login keeps 20 clients at most: a 21st ends
   the oldest.
-- What a client may then do is its login's, as on the dashboard: `/mcp`'s tools (#482, #483)
-  check `ALLOWED_REPOS` and the login's [access](#access) (each repository's `users`
-  included) on every call, a hidden repository staying hidden.
+- What a client may then do will be its login's, as on the dashboard: `/mcp`'s tools, once
+  #482 and #483 land, will check `ALLOWED_REPOS` and the login's [access](#access) (each
+  repository's `users` included) on every call, a hidden repository staying hidden.
 
 ## Edge's and the orchestrator's data
 
@@ -2338,8 +2340,8 @@ Each action is written on the issue as the App's comment ("Started from the dash
 @alice"), so the issue's history says who started what, as a trigger comment would. The
 App's comments are ignored as triggers, so the orchestrator queues or holds the work itself
 rather than through a webhook. The backlog (`GET /api/repos/<owner>/<repo>/issues`) lists a
-repository's open issues to signed-in users in its `users` with `tasks:read` (all of its users
-while its config has errors), from GitHub at most once every 30 seconds per repository, or after an `issues`
+repository's open issues to signed-in users in its `users` with `tasks:read` (every signed-in user
+with `tasks:read` while its config has errors), from GitHub at most once every 30 seconds per repository, or after an `issues`
 delivery for it, one read at a time; the dashboard keeps the last one in memory only, not in
 the browser's storage. The repository list's backlog counts (`GET /api/repos?backlog=1`, the
 Overview) come from the same reads under the same `users` rule (a repository whose `users`

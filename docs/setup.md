@@ -1746,7 +1746,7 @@ Nothing to do: Deckhand's `policy/access.rego` gives every login of `ALLOWED_USE
 action, on every repository and server-wide, as before. `ALLOWED_USERS` still decides who signs
 in, uses MCP and comments, and a repository's `users` still narrows it. The policy service
 answers the dashboard now too ([Access](security.md#access)): with it away, the dashboard shows
-no repository after a minute, until it is back.
+no repository within about 30 seconds, until it is back.
 
 To give some people some actions on some repositories only, write a `policy/access.rego` in the
 grants folder: it replaces Deckhand's, so each login then has the actions of its bindings alone,
@@ -1761,7 +1761,7 @@ logins, repository patterns (`owner/repo`, `owner/*`, `*/*`) and a role
 | `admin`    | a member's, and read the repository's config, grants and policies (`repo:config:read`)    |
 | `operator` | Settings › Server and › Access, the services' health, the plans' usage, Sync (`server:*`) |
 
-<!-- access.rego: test/access-rules.test.mjs evaluates this block with the real opa -->
+<!-- migration access.rego: test/access-rules.test.mjs evaluates this block with the real opa -->
 
 ```rego
 # server/grants/policy/access.rego

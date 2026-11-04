@@ -79,6 +79,14 @@ function realAccess(t, { operator = {}, repos = {}, now = Date.now } = {}) {
   return { policies, calls, asked: () => asked };
 }
 
+// The Rego block after `<!-- <marker>: test/access-rules.test.mjs … -->` in docs/<file>.
+function docsBlock(file, marker) {
+  const docs = readFileSync(new URL(`../docs/${file}`, import.meta.url), "utf8");
+  const at = docs.indexOf(`<!-- ${marker}: test/access-rules.test.mjs`);
+  assert.ok(at >= 0, `no ${marker} block in docs/${file}`);
+  return /```rego\n([\s\S]*?)```/.exec(docs.slice(at))[1];
+}
+
 const repo = (name, isPrivate = true) => ({
   full_name: name,
   private: isPrivate,
@@ -454,10 +462,7 @@ test(
   "the real opa: docs/repo-config.md's bindings give what its roles' table says",
   { skip: noOpa },
   async (t) => {
-    const docs = readFileSync(new URL("../docs/repo-config.md", import.meta.url), "utf8");
-    const marker = docs.indexOf("<!-- access.rego: test/access-rules.test.mjs");
-    assert.ok(marker > 0);
-    const [, text] = /```rego\n([\s\S]*?)```/.exec(docs.slice(marker));
+    const text = docsBlock("repo-config.md", "access.rego");
     const { policies } = realAccess(t, { operator: { "access.rego": text } });
     const actions = async (login, where) => (await policies.access(login, where)).actions;
     assert.deepEqual(await actions("alice", repo("acme/docs")), ["tasks:read"]);
@@ -478,10 +483,7 @@ test(
   "the real opa: docs/setup.md's bindings give what its migration notes say",
   { skip: noOpa },
   async (t) => {
-    const docs = readFileSync(new URL("../docs/setup.md", import.meta.url), "utf8");
-    const marker = docs.indexOf("<!-- access.rego: test/access-rules.test.mjs");
-    assert.ok(marker > 0);
-    const [, text] = /```rego\n([\s\S]*?)```/.exec(docs.slice(marker));
+    const text = docsBlock("setup.md", "migration access.rego");
     const { policies } = realAccess(t, { operator: { "access.rego": text } });
     const actions = async (login, where) => (await policies.access(login, where)).actions;
     assert.ok((await actions("alice", repo("other/repo"))).includes("repo:config:read"));
@@ -508,10 +510,7 @@ test(
   "the real opa: docs/repo-config.md's repository deny_access narrows what Deckhand's default gives",
   { skip: noOpa },
   async (t) => {
-    const docs = readFileSync(new URL("../docs/repo-config.md", import.meta.url), "utf8");
-    const marker = docs.indexOf("<!-- repository deny_access: test/access-rules.test.mjs");
-    assert.ok(marker > 0);
-    const [, text] = /```rego\n([\s\S]*?)```/.exec(docs.slice(marker));
+    const text = docsBlock("repo-config.md", "repository deny_access");
     const repos = { "acme/api": { policies: { "access.rego": text } } };
     const { policies } = realAccess(t, { repos });
     assert.ok(await policies.can("alice", repo("acme/api"), "runs:start:work"));
