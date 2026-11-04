@@ -1,7 +1,8 @@
 // Closed log segments moving to blob storage (../runner/logs.mjs, #608): a log ends with only its
 // index in the store, a live run's segments move while it goes on, a move cut short after any
 // step finishes on the next start with no read failing meanwhile, blob storage away keeps them in
-// the store (and /health says so), and retention deletes them there too.
+// the store (and /health says so), and retention deletes them there too. Segments closed with no
+// note (BLOB_URL unset then, #671) are found in the logs' indexes once.
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { openBlobs } from "../lib/blobs.mjs";
@@ -12,6 +13,7 @@ import {
   MOVES,
   PASS_MS,
   RETRY_MS,
+  SWEPT,
   waitingWarning,
   WAITING_READ_MS,
 } from "../runner/logs.mjs";
@@ -500,6 +502,7 @@ test("a pass of the lease's stops with it; one started by hand goes on", async (
   const { blobs } = await s3Blobs(t);
   const store = fileStore();
   await noted(store, blobs);
+  await store.set(SWEPT, 1); // the indexes swept already: only the writer's notes
   let logs;
   const losing = {
     ...blobs,
@@ -529,4 +532,87 @@ test("a segment noted twice (two copies finished its closing) is counted once", 
   await store.append(MOVES, { id: ID, n: 0, size: 3 });
   await logs.moves.pass();
   assert.deepEqual(await logs.moves.waiting(), { segments: 2, bytes: 6 });
+});
+
+// Closed with no note: BLOB_URL unset then, or a release before the notes handing over (#671).
+async function unnoted(store, id = ID, parts = ["abc", "def"]) {
+  const logs = createLogs({ store, segmentMax: 8 });
+  let at = 0;
+  for (const part of parts) at = await logs.append(id, at, Buffer.from(part), { step: true });
+  await logs.append(id, at, Buffer.alloc(0), { close: true });
+  return parts.join("");
+}
+
+test("segments closed with no note move once the lease holder swept the indexes, once", async (t) => {
+  const { blobs } = await s3Blobs(t);
+  const store = fileStore();
+  const whole = await unnoted(store);
+  await unnoted(store, "dh-o-a-2-1", ["ghi"]);
+  // A log of the old shape has no index: it stays as it is.
+  await store.appendBlobAt("logs/dh-o-a-3-1", 0, Buffer.from("old"));
+  assert.deepEqual(await store.read(MOVES, "runner"), []);
+
+  const lines = [];
+  const timers = manualTimers();
+  const logs = createLogs({ store, blobs, timers, log: (line) => lines.push(line) });
+  t.after(() => logs.moves.stop());
+  logs.moves.start();
+  await timers.fire();
+  assert.equal(await storeSegments(store), 0);
+  assert.ok((await index(store)).segments.every((s) => s.where === "blobs"));
+  assert.ok((await store.get("logs/dh-o-a-2-1/index")).segments.every((s) => s.where === "blobs"));
+  assert.equal(await store.blobSize("logs/dh-o-a-3-1"), 3);
+  assert.equal(await readAll(logs), whole);
+  assert.deepEqual(await store.read(MOVES, "runner"), []);
+  assert.equal(typeof (await store.get(SWEPT)), "number");
+  assert.ok(lines.some((line) => /3 closed before their moves were noted/.test(line)));
+
+  // Swept: what closes with no note after it stays, until the indexes are swept again.
+  await unnoted(store, "dh-o-a-4-1", ["jkl"]);
+  logs.moves.stop();
+  logs.moves.start();
+  await timers.fire();
+  assert.equal((await store.get("logs/dh-o-a-4-1/index")).segments[0].where, "store");
+});
+
+test("a copy acting without blob storage has the indexes swept again once it is set", async (t) => {
+  const { blobs } = await s3Blobs(t);
+  const store = fileStore();
+  await store.set(SWEPT, 1);
+  const without = createLogs({ store, segmentMax: 8 });
+  without.moves.start();
+  await until(async () => (await store.get(SWEPT)) === null);
+  await unnoted(store);
+
+  const logs = createLogs({ store, blobs });
+  await logs.moves.pass();
+  assert.equal(await storeSegments(store), 0);
+});
+
+test("a sweep cut short as the lease goes is done again by the next holder", async (t) => {
+  const { blobs } = await s3Blobs(t);
+  const shared = fileStore();
+  await unnoted(shared);
+  await unnoted(shared, "dh-o-a-2-1", ["ghi"]);
+  let logs;
+  const store = {
+    ...shared,
+    get: async (key) => {
+      if (/^logs\/.*\/index$/.test(key) && !(await shared.get(SWEPT))) logs.moves.stop();
+      return shared.get(key);
+    },
+  };
+  logs = createLogs({ store, blobs, timers: manualTimers() });
+  logs.moves.start();
+  await logs.moves.pass();
+  assert.equal(await shared.get(SWEPT), null);
+  assert.deepEqual(await shared.read(MOVES, "runner"), []);
+  assert.equal(await storeSegments(shared), 2);
+
+  const next = createLogs({ store: shared, blobs, timers: manualTimers() });
+  next.moves.start();
+  await next.moves.pass();
+  next.moves.stop();
+  assert.equal(await storeSegments(shared), 0);
+  assert.equal((await shared.get("logs/dh-o-a-2-1/index")).segments[0].where, "blobs");
 });

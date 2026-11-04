@@ -490,6 +490,14 @@ measures otherwise in blob storage (trying again would send the same bytes) is l
 in the store, and the notes after it go on. Retention deletes a log's segments in blob storage first, then its index: one that
 fails stays for the next day's pass.
 
+Some closed segments have no note (#671): those closed while `BLOB_URL` was unset, and those the
+release before the notes closed as it handed over. The first copy acting with blob storage
+notes them before its first pass, from the logs' indexes (`logs/<run>/index`, the only values
+under `logs/`, listed once): a key of its store (`log-moves/swept`) says it was done, so the
+next holder doesn't list them again, and a copy acting without blob storage deletes it, so that
+setting `BLOB_URL` again sweeps again. A sweep cut short by the lease going is done again by the
+next holder; a segment noted twice moves once.
+
 The run's record keeps its phase too, for the dashboard's task state (`board.mjs`
 `runState()`): `scheduled` from the moment the run leaves the queue (`setup`: its settings,
 sandbox, clone and the repo's `setup`), `building-image` while the image builds (a step of
