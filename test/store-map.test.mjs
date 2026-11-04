@@ -106,8 +106,9 @@ test("storeMap: people's text goes without a secret, rather than refused whole",
 });
 
 // The file's mtime at `seconds` after the epoch, as an earlier release writing it then leaves it.
+// A string as it is (a file cut short).
 function writeAt(file, value, seconds) {
-  writeFileSync(file, JSON.stringify(value));
+  writeFileSync(file, typeof value === "string" ? value : JSON.stringify(value));
   utimesSync(file, seconds, seconds);
 }
 
@@ -193,31 +194,60 @@ test("storeMap: a file written after the store's copy, by a release gone back to
     "o/r#1": { after: 3, comment: "since" },
     "o/r#5": { after: 6 },
   });
+  // closed.json's null, an issue reopened since: the store's closed state goes.
+  const closedFile = join(dir, "closed.json");
+  const closed = await storeMap(store, "closed", { file: closedFile, now: () => 200_000 });
+  closed.set("o/r#1", "completed");
+  closed.set("o/r#2", "not_planned");
+  await closed.settled();
+  writeAt(closedFile, { "o/r#1": null }, 300);
+  const reopened = await storeMap(store, "closed", { file: closedFile });
+  assert.deepEqual(Object.fromEntries(reopened), { "o/r#2": "not_planned" });
+  assert.equal(await store.get("closed/o/r#1"), null);
 });
 
-test("storeMap: a file left unreadable, then fixed, only fills the store's gaps: its copy is newer", async (t) => {
+test(
+  "storeMap: a file left unreadable, its owner fixed since, only fills the store's gaps: its copy is newer",
+  { skip: (isRoot && "root reads anything") || needsModes },
+  async (t) => {
+    const dir = tempDir(t);
+    const store = openStore("memory:");
+    const file = join(dir, "reviews.json");
+    writeAt(file, { "o/r#1": { round: 2 }, "o/r#3": { round: 1 } }, 100);
+    // Another user's when this release first started: left as it is.
+    chmodSync(file, 0o000);
+    const reviews = await storeMap(store, "reviews", { file, now: () => 200_000 });
+    assert.equal(existsSync(file), true);
+    reviews.set("o/r#1", { round: 4 });
+    reviews.set("o/r#2", { round: 1 });
+    await reviews.settled();
+
+    // Its owner fixed: its mtime unchanged, older than the store's copy.
+    chmodSync(file, 0o600);
+    const next = await storeMap(store, "reviews", { file, replace: true, now: () => 400_000 });
+    assert.equal(existsSync(file), false);
+    assert.deepEqual(Object.fromEntries(next), {
+      "o/r#1": { round: 4 },
+      "o/r#2": { round: 1 },
+      "o/r#3": { round: 1 },
+    });
+  },
+);
+
+test("storeMap: a file cut short, then edited, counts as written after the store's copy", async (t) => {
   const dir = tempDir(t);
   const store = openStore("memory:");
   const file = join(dir, "reviews.json");
-  // Cut short when this release first started: left as it is.
-  writeFileSync(file, '{"o/r#1": {"round');
-  utimesSync(file, 100, 100);
+  writeAt(file, '{"o/r#1": {"round', 100);
   const reviews = await storeMap(store, "reviews", { file, now: () => 200_000 });
   assert.equal(existsSync(file), true);
   reviews.set("o/r#1", { round: 4 });
-  reviews.set("o/r#2", { round: 1 });
   await reviews.settled();
 
-  // Mended by the operator, as it was before the update.
-  writeFileSync(file, JSON.stringify({ "o/r#1": { round: 2 }, "o/r#3": { round: 1 } }));
-  utimesSync(file, 100, 100);
-  const next = await storeMap(store, "reviews", { file, replace: true, now: () => 400_000 });
-  assert.equal(existsSync(file), false);
-  assert.deepEqual(Object.fromEntries(next), {
-    "o/r#1": { round: 4 },
-    "o/r#2": { round: 1 },
-    "o/r#3": { round: 1 },
-  });
+  // Mended in an editor: written now, so it wins (docs/setup.md says to remove it instead).
+  writeAt(file, { "o/r#1": { round: 2 } }, 300);
+  const next = await storeMap(store, "reviews", { file, now: () => 400_000 });
+  assert.deepEqual(Object.fromEntries(next), { "o/r#1": { round: 2 } });
 });
 
 test("storeMap: a file's null items aren't moved; a file that can't be read is left, and said", async (t) => {

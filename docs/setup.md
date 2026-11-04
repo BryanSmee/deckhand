@@ -1756,8 +1756,9 @@ The orchestrator kept its state in JSON files in its data volume (`/data`). They
 orchestrator writes each file's items to the store (those it doesn't have yet), then removes the
 file, and its log says so (`titles: 120 item(s) moved to the store from /data/titles.json`). A
 crash midway moves them again at the next start, the same values. A file it can't read (another user's,
-or cut short) is left where it is, and its log says why: fix its owner, or remove it: once it can be read, it too only fills what the store
-lacks, the store's items being newer. `reactions.json`, which the
+or cut short) is left where it is, and its log says why. Fix its owner (`chown`, `chmod`), and it is moved at
+the next start, filling only what the store lacks. Remove one cut short rather than edit it:
+an edited file counts as written after the store's items, and replaces them. `reactions.json`, which the
 github service took over before (#458), is removed once handed over.
 
 With Redis as the store, these items are Redis keys under the store's prefix
@@ -1775,12 +1776,14 @@ before #616, the waits, the review loops' counts and the brainstorms too).
 Updating again after that (#690): a file that release wrote after this one last started (its
 modification time later, on the orchestrator's clock: the store keeps when each map was last
 loaded, `store-maps/<name>`) is newer than the store's items, and its items replace those of the
-same key, so what that release changed (a dismissal, an onboarding issue, a wait) holds. The
+same key (a `null` one deletes it: an issue reopened), so what that release changed (a dismissal,
+an onboarding issue, a wait) holds. The
 store's other items are kept: that release started without them rather than deleted them. The
 run order is the exception: its file replaces it whole, as its ranks don't mix with the store's.
 A file it never wrote (nothing of that kind changed while it ran) leaves the store's items as
-they were before going back. An orchestrator from before #690 kept no such time: going back to one that already had the
-store, then updating again, moves the files as at the first update.
+they were before going back. An orchestrator from before #690 that already had the store kept no
+such time. If you go back from one of those to a release from before the store, then update
+again, the files only fill what the store lacks, as at the first update.
 
 ### Upgrading: a live run's state in the store (#617)
 
