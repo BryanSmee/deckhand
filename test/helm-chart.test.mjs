@@ -339,6 +339,7 @@ test(
   (t) => {
     const objects = helm(t, {
       namespaces: { services: "dh", sandboxes: "dh-runs" },
+      metrics: { namespace: "dh-monitoring" },
       store: "redis",
       buildkit: { enabled: true },
     });
@@ -349,6 +350,7 @@ test(
     ];
     assert.deepEqual([...new Set(mentioned.map((m) => m[1]))].sort(), [
       "dh",
+      "dh-monitoring",
       "dh-runs",
       "kube-system",
     ]);
@@ -429,6 +431,74 @@ test(
     const off = helm(t);
     assert.equal(named(off, "NetworkPolicy", "deckhand-blobs"), undefined);
     assert.ok(!JSON.stringify(off).includes("BLOB_"));
+  },
+);
+
+test(
+  "helm: metrics.port everywhere the base says 9464, metrics.namespace the port's only peer, and a ServiceMonitor or VMServiceScrape",
+  { skip },
+  (t) => {
+    const objects = helm(t, { metrics: { port: 9500, namespace: "observability" } });
+    const services = deployments(objects).filter((d) => d.metadata.name !== "buildkitd");
+    assert.equal(services.length, 8);
+    for (const d of services) {
+      const { metadata, spec } = d.spec.template;
+      assert.equal(metadata.annotations["prometheus.io/port"], "9500", d.metadata.name);
+      const [main] = spec.containers;
+      assert.equal(main.env.find((e) => e.name === "METRICS_PORT").value, "9500");
+      assert.equal(main.ports.find((p) => p.name === "metrics").containerPort, 9500);
+      const service = named(objects, "Service", d.metadata.name);
+      assert.equal(service.spec.ports.find((p) => p.name === "metrics").port, 9500);
+    }
+    const policy = named(objects, "NetworkPolicy", "deckhand-metrics");
+    assert.deepEqual(policy.spec.ingress, [
+      {
+        from: [
+          {
+            namespaceSelector: { matchLabels: { "kubernetes.io/metadata.name": "observability" } },
+          },
+        ],
+        ports: [{ port: 9500, protocol: "TCP" }],
+      },
+    ]);
+    assert.ok(!JSON.stringify(objects).includes("9464"));
+    // deckhand-env can't set it apart from the rest.
+    assert.match(
+      helmFails(t, { env: { METRICS_PORT: "1" } }),
+      /env\.METRICS_PORT: .*metrics\.port/,
+    );
+    // Off by default: no CRD needed.
+    assert.ok(!helm(t).some((o) => /Monitor|Scrape/.test(o.kind)));
+    for (const [kind, apiVersion] of [
+      ["ServiceMonitor", "monitoring.coreos.com/v1"],
+      ["VMServiceScrape", "operator.victoriametrics.com/v1beta1"],
+    ]) {
+      const serviceMonitor = { enabled: true, kind, labels: { release: "kps" }, interval: "30s" };
+      const monitor = named(helm(t, { metrics: { serviceMonitor } }), kind, "deckhand");
+      assert.equal(monitor.apiVersion, apiVersion);
+      assert.equal(monitor.metadata.namespace, "deckhand");
+      assert.equal(monitor.metadata.labels.release, "kps");
+      assert.deepEqual(monitor.spec, {
+        selector: { matchLabels: { "app.kubernetes.io/part-of": "deckhand" } },
+        namespaceSelector: { matchNames: ["deckhand"] },
+        endpoints: [{ port: "metrics", path: "/metrics", honorLabels: true, interval: "30s" }],
+      });
+    }
+    // Never a service's own port, which deckhand-metrics would open to the monitoring namespace.
+    for (const port of [3128, 3129, 8080, 8081, 8082, 8083, 8181]) {
+      assert.match(
+        helmFails(t, { metrics: { port } }),
+        /metrics\.port: \d+ is a service's own port/,
+      );
+    }
+    // Never the sandboxes' namespace, nor the services' (every pod of it, BuildKit's too).
+    for (const namespace of ["deckhand-sandboxes", "deckhand", ""]) {
+      assert.match(helmFails(t, { metrics: { namespace } }), /metrics\.namespace/);
+    }
+    assert.match(
+      helmFails(t, { metrics: { serviceMonitor: { enabled: true, kind: "PodMonitor" } } }),
+      /metrics\.serviceMonitor\.kind/,
+    );
   },
 );
 

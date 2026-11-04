@@ -24,6 +24,9 @@ import { DRAIN_MS as POLICY_DRAIN_MS } from "../policy-service/service.mjs";
 const root = join(import.meta.dirname, "..", "deploy", "kubernetes");
 const SERVICES_NS = "deckhand";
 const SANDBOXES_NS = "deckhand-sandboxes";
+// The placeholder an overlay replaces with its scraper's namespace (deckhand-metrics).
+const MONITORING_NS = "monitoring";
+const METRICS_PORT = 9464;
 
 // Each file's documents, as lib/yaml.mjs reads them.
 const docs = (file) =>
@@ -57,8 +60,9 @@ const UNTOKENED = { proxy: ["orchestrator"], orchestrator: ["proxy"] };
 const callees = (service) => [...CALLS[service], ...(UNTOKENED[service] ?? [])].sort();
 const callers = (service) => SERVICES.filter((caller) => callees(caller).includes(service)).sort();
 // Who else may reach a service: the internet edge's public port, the sandboxes' namespace and
-// BuildKit the proxy.
+// BuildKit the proxy; the monitoring namespace every service's metrics port.
 const OUTSIDE_CALLERS = { edge: ["internet"], proxy: ["sandboxes", "buildkitd"] };
+const outsideCallers = (service) => [...(OUTSIDE_CALLERS[service] ?? []), "monitoring"];
 // Ways out beyond the cluster's pods, as INTERNET in test/networks.test.mjs; the runner's and
 // the broker's include the API server's port.
 const WAYS_OUT = {
@@ -72,12 +76,14 @@ const WAYS_OUT = {
 const API = ["runner", "broker"];
 const API_PLACEHOLDER = "192.0.2.1/32";
 
-// A policy peer → who it is: a service, "sandboxes", "buildkitd", "dns", "internet".
+// A policy peer → who it is: a service, "sandboxes", "monitoring", "buildkitd", "dns",
+// "internet".
 function peer(p) {
   if (p.ipBlock) return p.ipBlock.cidr === API_PLACEHOLDER ? "api" : "internet";
   const ns = p.namespaceSelector?.matchLabels?.["kubernetes.io/metadata.name"];
   if (ns === "kube-system") return "dns";
   if (ns === SANDBOXES_NS) return "sandboxes";
+  if (ns === MONITORING_NS && !p.podSelector) return "monitoring";
   const app = p.podSelector?.matchLabels?.app;
   if (app === "buildkitd") return "buildkitd";
   return SERVICE_OF[app] ?? `unknown ${JSON.stringify(p)}`;
@@ -264,7 +270,7 @@ test("deploy/kubernetes: each service's NetworkPolicies let in its callers alone
   }
   for (const service of SERVICES) {
     const { ins, outs, out } = reach(service);
-    const expectedIns = [...callers(service), ...(OUTSIDE_CALLERS[service] ?? [])].sort();
+    const expectedIns = [...callers(service), ...outsideCallers(service)].sort();
     assert.deepEqual([...ins].sort(), expectedIns, `who reaches ${service}`);
     const ways = WAYS_OUT[service];
     const expectedOuts = [
@@ -285,6 +291,51 @@ test("deploy/kubernetes: each service's NetworkPolicies let in its callers alone
   for (const range of ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"]) {
     assert.ok(blocks[0].ipBlock.except.includes(range), range);
   }
+});
+
+// The metrics port (#653): on every service, annotated for the scrape jobs that read pods'
+// annotations, published by its Service (a ServiceMonitor's, and the runner's network probe tries
+// it from a sandbox's pod), and reached from the monitoring namespace alone, which reaches
+// nothing else.
+test("deploy/kubernetes: every service's metrics port, annotated, on its Service, the monitoring namespace's alone", () => {
+  for (const service of SERVICES) {
+    assert.equal(env(service).METRICS_PORT, String(METRICS_PORT), service);
+    const port = container(service).ports.find((p) => p.name === "metrics");
+    assert.equal(port?.containerPort, METRICS_PORT, service);
+    assert.deepEqual(
+      deployment(service).spec.template.metadata.annotations,
+      {
+        "prometheus.io/scrape": "true",
+        "prometheus.io/port": String(METRICS_PORT),
+        "prometheus.io/path": "/metrics",
+      },
+      service,
+    );
+    const published = named("Service", APP[service], base).spec.ports.find(
+      (p) => p.name === "metrics",
+    );
+    assert.deepEqual(published, { name: "metrics", port: METRICS_PORT, targetPort: "metrics" });
+    // Its only peer on that port is the monitoring namespace, every pod of it; that namespace
+    // reaches that port alone. Every rule names its ports, so none lets 9464 in unsaid.
+    for (const policy of reach(service).picking) {
+      for (const rule of policy.spec.ingress ?? []) {
+        assert.ok(rule.ports?.length, `${policy.metadata.name}: a rule with no ports`);
+        const peers = (rule.from ?? [{ ipBlock: {} }]).map(peer);
+        const metrics = rule.ports.some((p) => p.port === METRICS_PORT);
+        if (metrics || peers.includes("monitoring")) {
+          assert.deepEqual(peers, ["monitoring"], `${service}: ${policy.metadata.name}`);
+          assert.deepEqual(rule.ports, [{ port: METRICS_PORT, protocol: "TCP" }], service);
+        }
+      }
+    }
+  }
+  // Never the sandboxes' namespace, nor the services': a namespace of its own.
+  assert.ok(![SANDBOXES_NS, SERVICES_NS].includes(MONITORING_NS));
+  // No ServiceMonitor in the base: its CRD may not be there (the chart's is a value).
+  assert.deepEqual(
+    all.filter((r) => /Monitor|Scrape/.test(r.kind)),
+    [],
+  );
 });
 
 test("deploy/kubernetes: the sandboxes' and install pods' NetworkPolicies pass the runner's check, with the services apart", () => {
@@ -712,12 +763,12 @@ test("components/engine: the engines' port published, and the sandboxes' policy 
   const service = named("Service", "egress", withEngine);
   assert.deepEqual(
     service.spec.ports.map((p) => p.port),
-    [3128, 3129],
+    [3128, METRICS_PORT, 3129],
   );
   const ports = named("Deployment", "egress", withEngine).spec.template.spec.containers[0].ports;
   assert.deepEqual(
     ports.map((p) => p.containerPort),
-    [3128, 3129],
+    [3128, METRICS_PORT, 3129],
   );
   const policies = of("NetworkPolicy", withEngine).filter(
     (p) => p.metadata.namespace === SANDBOXES_NS,

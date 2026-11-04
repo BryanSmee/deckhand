@@ -22,6 +22,11 @@ spec:
       app: deckhand-edge
   template:
     metadata:
+      # Its metrics, for the scrape jobs that read these (docs/kubernetes.md#metrics).
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9464"
+        prometheus.io/path: /metrics
       labels:
         app: deckhand-edge
     spec:
@@ -55,7 +60,12 @@ spec:
               containerPort: 8080
             - name: internal
               containerPort: 8083
+            - name: metrics
+              containerPort: 9464
           env:
+            # GET /metrics alone, from the monitoring namespace alone (network-policies.yaml).
+            - name: METRICS_PORT
+              value: "9464"
             # Its default, written here so test/kubernetes-manifests.test.mjs holds it to the
             # grace period above.
             - name: DRAIN_SECONDS
@@ -164,3 +174,6 @@ spec:
     - name: internal
       port: 8083
       targetPort: internal
+    - name: metrics
+      port: 9464
+      targetPort: metrics

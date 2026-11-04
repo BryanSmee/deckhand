@@ -22,6 +22,11 @@ spec:
       app: deckhand-runner
   template:
     metadata:
+      # Its metrics, for the scrape jobs that read these (docs/kubernetes.md#metrics).
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9464"
+        prometheus.io/path: /metrics
       labels:
         app: deckhand-runner
     spec:
@@ -54,10 +59,15 @@ spec:
           ports:
             - name: http
               containerPort: 8080
+            - name: metrics
+              containerPort: 9464
           envFrom:
             - configMapRef:
                 name: deckhand-env
           env:
+            # GET /metrics alone, from the monitoring namespace alone (network-policies.yaml).
+            - name: METRICS_PORT
+              value: "9464"
             # Its callers' service tokens tell the orchestrator and the models service apart,
             # and network-policies.yaml lets only their pods in.
             - name: SERVICE_NETWORKS
@@ -165,3 +175,6 @@ spec:
     - name: http
       port: 8080
       targetPort: http
+    - name: metrics
+      port: 9464
+      targetPort: metrics

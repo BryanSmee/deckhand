@@ -22,6 +22,11 @@ spec:
       app: deckhand-broker
   template:
     metadata:
+      # Its metrics, for the scrape jobs that read these (docs/kubernetes.md#metrics).
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9464"
+        prometheus.io/path: /metrics
       labels:
         app: deckhand-broker
     spec:
@@ -52,7 +57,12 @@ spec:
           ports:
             - name: http
               containerPort: 8081
+            - name: metrics
+              containerPort: 9464
           env:
+            # GET /metrics alone, from the monitoring namespace alone (network-policies.yaml).
+            - name: METRICS_PORT
+              value: "9464"
             # Who calls, by its pod's service account (rbac.yaml): each service its own.
             - name: SERVICE_ACCOUNTS
               value: edge=deckhand:deckhand-edge,orchestrator=deckhand:deckhand-orchestrator,runner=deckhand:deckhand-runner,github=deckhand:deckhand-github,models=deckhand:deckhand-models,proxy=deckhand:deckhand-egress
@@ -131,3 +141,6 @@ spec:
     - name: http
       port: 8081
       targetPort: http
+    - name: metrics
+      port: 9464
+      targetPort: metrics

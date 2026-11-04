@@ -20,6 +20,11 @@ spec:
       app: deckhand-policy
   template:
     metadata:
+      # Its metrics, for the scrape jobs that read these (docs/kubernetes.md#metrics).
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9464"
+        prometheus.io/path: /metrics
       labels:
         app: deckhand-policy
     spec:
@@ -41,6 +46,12 @@ spec:
           ports:
             - name: http
               containerPort: 8181
+            - name: metrics
+              containerPort: 9464
+          env:
+            # GET /metrics alone, from the monitoring namespace alone (network-policies.yaml).
+            - name: METRICS_PORT
+              value: "9464"
           readinessProbe:
             httpGet:
               path: /ready
@@ -105,3 +116,6 @@ spec:
     - name: http
       port: 8181
       targetPort: http
+    - name: metrics
+      port: 9464
+      targetPort: metrics

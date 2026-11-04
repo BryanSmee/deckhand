@@ -132,6 +132,25 @@ blobs:
   # Its port: 443 for a hosted service over HTTPS, 3900 for Garage's.
   ports: [443]
 
+# Every service's Prometheus metrics (docs/kubernetes.md#metrics): METRICS_PORT on each, its pods
+# annotated for annotation-based scrape jobs (prometheus.io/scrape, port, path), and the port open
+# to your monitoring namespace alone.
+metrics:
+  port: 9464
+  # Your scraper's namespace (Prometheus', VictoriaMetrics'), by its kubernetes.io/metadata.name:
+  # the only one reaching the port. Never the sandboxes' or the services' (refused).
+  namespace: monitoring
+  # A ServiceMonitor (the Prometheus Operator's) or a VMServiceScrape (VictoriaMetrics'
+  # operator's) for the services, once its CRD is in the cluster.
+  serviceMonitor:
+    enabled: false
+    # ServiceMonitor or VMServiceScrape.
+    kind: ServiceMonitor
+    # What your operator's selector picks (`release: kube-prometheus-stack`, say).
+    labels: {}
+    # 30s, say; empty: the scraper's own.
+    interval: ""
+
 # Your ingress, to edge's port 8080 alone: GitHub's webhooks and the dashboard, over HTTPS.
 ingress:
   enabled: false

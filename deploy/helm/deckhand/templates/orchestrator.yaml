@@ -18,6 +18,7 @@ spec:
       app: deckhand-orchestrator
   template:
     metadata:
+      {{- include "deckhand.metricsAnnotations" . | nindent 6 }}
       labels:
         app: deckhand-orchestrator
     spec:
@@ -37,10 +38,12 @@ spec:
               containerPort: 8082
             - name: services
               containerPort: 8083
+            {{- include "deckhand.metricsContainerPort" . | nindent 12 }}
           envFrom:
             - configMapRef:
                 name: {{ include "deckhand.envName" . }}
           env:
+            {{- include "deckhand.metricsEnv" . | nindent 12 }}
             - name: SERVICE_NETWORKS
               value: none
             - name: SERVICE_ACCOUNT_TOKEN_FILE
@@ -92,3 +95,4 @@ spec:
     - name: services
       port: 8083
       targetPort: services
+    {{- include "deckhand.metricsServicePort" . | nindent 4 }}
