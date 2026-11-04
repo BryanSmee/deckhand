@@ -137,6 +137,14 @@ test("the service: probes without a token, the rest by its table, an engine's an
   assert.deepEqual(await (await post("/check", { layer: "repo", files: [] })).json(), {
     errors: [],
   });
+  // Who may do what (#730): the orchestrator's to ask alone.
+  assert.equal((await post("/access", { inputs: {} })).status, 403);
+  const access = await fetch(`${url}/access`, {
+    method: "POST",
+    headers: { authorization: bearer(key, "orchestrator") },
+    body: JSON.stringify({ inputs: {} }),
+  });
+  assert.deepEqual(await access.json(), { results: {} });
   // The runner: a repository's grants only, of the operator's layer (#498).
   const asRunner = (body) =>
     fetch(`${url}/evaluate`, {
@@ -155,7 +163,7 @@ test("the service: probes without a token, the rest by its table, an engine's an
     assert.equal(res.status, 403, JSON.stringify(body));
     assert.match((await res.json()).error, /the runner asks a repository's grants only/);
   }
-  for (const path of ["/capabilities", "/check"]) {
+  for (const path of ["/capabilities", "/check", "/access"]) {
     const res = await fetch(`${url}${path}`, {
       method: "POST",
       headers: { authorization: bearer(key, "runner") },
@@ -771,8 +779,8 @@ test("the capabilities: each file's rules renamed apart as its set is staged, an
   assert.equal(
     readFileSync(join(served.cwd, "policy", "operator", "capabilities", "union.rego"), "utf8"),
     "package deckhand\n\n" +
-      "allow_capabilities contains c if some c in allow_capabilities__0\n" +
-      "allow_capabilities contains c if some c in allow_capabilities__1\n",
+      "allow_capabilities contains x if some x in allow_capabilities__0\n" +
+      "allow_capabilities contains x if some x in allow_capabilities__1\n",
   );
   // Both inputs in one query, which asks each file's rules by its index.
   const [query] = opa.evals();
@@ -823,7 +831,8 @@ test("the capabilities: what the engine refuses, and a union's error said as the
       file: null,
       layer: "repo",
       row: null,
-      message: "`allow_capabilities` and `deny_capabilities` must be sets (`contains` rules)",
+      message:
+        "`allow_capabilities`, `deny_capabilities`, `allow_access` and `deny_access` must be sets (`contains` rules)",
     },
     {
       file: "caps.rego",
@@ -835,7 +844,8 @@ test("the capabilities: what the engine refuses, and a union's error said as the
       file: null,
       layer: "operator",
       row: null,
-      message: "`allow_capabilities` and `deny_capabilities` must be sets (`contains` rules)",
+      message:
+        "`allow_capabilities`, `deny_capabilities`, `allow_access` and `deny_access` must be sets (`contains` rules)",
     },
   ]);
   // The deciders', but the runner's: it asks the grants alone (#498).
@@ -844,6 +854,8 @@ test("the capabilities: what the engine refuses, and a union's error said as the
     ROUTES["POST /evaluate"].filter((caller) => caller !== "runner"),
   );
   assert.ok(ROUTES["GET /policies"].includes("runner"));
+  // Who may do what: the orchestrator's alone, for the people it serves (#730).
+  assert.deepEqual(ROUTES["POST /access"], ["orchestrator"]);
   assert.ok(!ROUTES["POST /check"].includes("runner"));
 });
 
@@ -964,7 +976,7 @@ test("its metrics: decisions by policy and result, opa's time on them, each load
 });
 
 test("its metrics: every decision the listener asks has its policy label", () => {
-  assert.deepEqual(POLICIES, [...DECISIONS, "capabilities"]);
+  assert.deepEqual(POLICIES, [...DECISIONS, "capabilities", "access"]);
   assert.equal(resultOf({ error: "x" }), "error");
   assert.equal(
     resultOf({ operator: { allow: true, denies: [] }, repo: { allow: null, denies: [] } }),

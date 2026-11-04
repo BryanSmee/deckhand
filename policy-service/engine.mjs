@@ -36,6 +36,7 @@ import {
   layerDigest,
   MAX_CAPABILITY_INPUTS,
   operatorPolicies,
+  SET_FAMILIES,
   UNION_DIR,
   UNION_FILE,
 } from "../lib/policy-files.mjs";
@@ -201,7 +202,8 @@ export function opaErrors(stdout, stderr = "") {
             // Its folder, not anything else of the path: the temp folder may hold `/repo/`.
             layer: inUnion[1],
             row: null,
-            message: "`allow_capabilities` and `deny_capabilities` must be sets (`contains` rules)",
+            message:
+              "`allow_capabilities`, `deny_capabilities`, `allow_access` and `deny_access` must be sets (`contains` rules)",
           };
         }
         return {
@@ -608,8 +610,22 @@ export function createEngine({
     return said;
   }
 
+  // The access rules (#730), as evaluateCapabilities() evaluates the capabilities': `allow_access`
+  // and `deny_access` on each of `inputs` (a login's, on a repository or server-wide). What the
+  // actions mean is the caller's (listener/policies.mjs access()).
+  async function evaluateAccess(asked) {
+    const timing = { seconds: null };
+    const said = await setsOf("access", asked, timing);
+    metrics.decision("access", said.error ? "error" : "allow", timing.seconds);
+    return said;
+  }
+
   // evaluateCapabilities()'s, timed as decide() is.
-  async function capabilitiesOf({ inputs, repo = null, operator = true, operatorDigest }, timing) {
+  const capabilitiesOf = (asked, timing) => setsOf("capabilities", asked, timing);
+
+  // The set rules of `family` (SET_FAMILIES: `allow_<family>`, `deny_<family>`) on `inputs`, as
+  // evaluateCapabilities() says them.
+  async function setsOf(family, { inputs, repo = null, operator = true, operatorDigest }, timing) {
     const failed = (error, errorLayer = null) => ({ error, errorLayer });
     if (
       !inputs ||
@@ -629,6 +645,7 @@ export function createEngine({
       ...(repoFiles.size && { repo: { pkg: `${REPO_NS}.deckhand`, files: repoFiles } }),
     };
     if (!Object.keys(asks).length) return failed("nothing to ask");
+    if (!Object.hasOwn(SET_FAMILIES, family)) return failed(`no set rules ${family}`);
     // Each layer's files as stage() numbered them.
     const names = Object.fromEntries(
       Object.entries(asks).map(([layer, { files }]) => [layer, byFile(files).names]),
@@ -636,7 +653,7 @@ export function createEngine({
     const rule = (pkg, name, i = null) =>
       `[x | x := data.${pkg}.${name}${i === null ? "" : `__${i}`}]`;
     const both = (pkg, i) =>
-      `{"allow": ${rule(pkg, "allow_capabilities", i)}, "deny": ${rule(pkg, "deny_capabilities", i)}}`;
+      `{"allow": ${rule(pkg, `allow_${family}`, i)}, "deny": ${rule(pkg, `deny_${family}`, i)}}`;
     // The whole rules decide; each file's say which file gave what.
     const value = `{${Object.entries(asks)
       .map(
@@ -658,7 +675,7 @@ export function createEngine({
     } catch (error) {
       return failed(`opa didn't answer (${error.message ?? error})`);
     }
-    const late = `the capabilities' rules took more than ${timeoutMs / 1000} s`;
+    const late = `the ${family === "access" ? "access" : "capabilities'"} rules took more than ${timeoutMs / 1000} s`;
     if (res.timedOut) return failed(late);
     if (res.status !== 200) {
       const { text, list, cancelled } = opaErrors(res.body);
@@ -782,6 +799,7 @@ export function createEngine({
   return {
     evaluate,
     evaluateCapabilities,
+    evaluateAccess,
     compile,
     policies,
     operatorDigest,

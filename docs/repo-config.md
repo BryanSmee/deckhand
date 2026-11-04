@@ -1116,11 +1116,12 @@ repository's). Eight decisions:
 | `deny_github`         | Each write a run makes to GitHub (a comment, an issue edit, a label…), REST or a GraphQL mutation's field, after [the built-in checks](#the-github-input); a run's reads of CI's checks and of projects. | Refuses the write: GitHub's error shape with the messages, which `gh` prints to the agent, and a line in the run's log.                                                                                                                                                                                                                                                                                                                                         |
 | `deny_push`           | Each branch a push updates, after the git gateway's built-in checks ([the push input](#the-push-input)).                                                                                                 | Refuses the whole push: git prints the messages for each ref, and a line in Deckhand's log.                                                                                                                                                                                                                                                                                                                                                                     |
 
-Each has its allow rule (`allow_merge`…), and [capabilities](#capabilities) two of their own.
-Another `allow_*` or `deny_*` rule is reported by the
+Each has its allow rule (`allow_merge`…), and [capabilities](#capabilities) and
+[access](#access) two of their own each. Another `allow_*` or `deny_*` rule is reported by the
 config check, as probably misspelled. `allow_grant` and `deny_grant`, what the operator grants
 the repository ([the grants](security.md#the-grants)), are the operator's alone: here they are
-ignored, and a config check error.
+ignored, and a config check error. So is `allow_access`: a repository's `deny_access` only takes
+access away.
 
 **Fail closed**: a policy that doesn't compile, takes more than 2 seconds, or makes an allow
 rule anything but a boolean or a deny rule anything but a set of strings refuses the decision,
@@ -1611,6 +1612,86 @@ already, so its later runs get none.
 
 <!-- onboarding: end -->
 
+### Access
+
+Who may do what on which repository, among the people `ALLOWED_USERS` lets in (it still decides
+who signs in, uses MCP and comments: access only narrows within it). Asked as
+`allow_access` (a set of actions) and `deny_access` (`{"action": …, "reason": …}` objects): a
+login has an action when an allow rule of **the operator's** policies gives it and no deny rule
+of either layer takes it away. A deny always wins; no allow, a policy error, policies that can't
+be read or a policy service away give no action.
+
+**The input**: `version`, `decision: "access"`, `user` (`login`, lower case) and `repo` (`name`,
+`"owner/repo"` in lower case, and `private`, `true` unless GitHub says it is public), or
+`repo: null` for the server-wide actions. One evaluation per login and repository gives every
+action there; its answer is kept a minute for the same policy files, the repository's listed
+first (again after a push to its default branch).
+
+**The actions**:
+
+| Action              | On                                                            |
+| ------------------- | ------------------------------------------------------------- |
+| `tasks:read`        | A repository: its tasks and runs.                             |
+| `logs:read`         | A repository: its runs' live logs.                            |
+| `runs:start:<mode>` | A repository: starting a run in `<mode>` (its own modes too). |
+| `runs:manage`       | A repository: cancelling, rerunning, answering its runs.      |
+| `repo:config:read`  | A repository: its configuration and policies.                 |
+| `server:read`       | Server-wide (`repo: null`): the server's setup and grants.    |
+| `server:sync`       | Server-wide: Sync.                                            |
+
+A rule may give, or deny, a prefix ending in `*`: `runs:start:*` (every mode), `runs:*`,
+`server:*`, `*` (everything). The server's actions count only server-wide, the others only on
+a repository.
+
+**Roles and bindings**: Deckhand's `access-roles.rego` defines four roles as action sets, and
+gives each login the actions of the `bindings` that match it:
+
+| Role       | Actions                                                    |
+| ---------- | ---------------------------------------------------------- |
+| `viewer`   | `tasks:read`                                               |
+| `member`   | a viewer's, `logs:read`, `runs:start:*`, `runs:manage`     |
+| `admin`    | a member's, `repo:config:read`                             |
+| `operator` | `server:*` (server-wide only: bind it beside another role) |
+
+Deckhand's `access.rego` gives every action to every login (`allow_access contains "*"`), as
+before access had rules. The grants folder's `policy/access.rego` replaces it, usually with
+bindings only: each login then has its bindings' actions, and nobody else anything.
+
+<!-- access.rego: test/access-rules.test.mjs evaluates this block with the real opa -->
+
+```rego
+# grants folder: policy/access.rego
+package deckhand
+
+bindings := [
+  {"users": ["alice"], "repos": ["acme/*"], "role": "viewer"},
+  {"users": ["bob"], "repos": ["acme/api", "acme/web"], "role": "member"},
+  {"users": ["carol"], "repos": ["*/*"], "role": "admin"},
+  {"users": ["carol"], "role": "operator"},
+  {"users": ["dan"], "repos": ["acme/api"], "actions": ["logs:read"]},
+]
+```
+
+A binding names logins (`users`), repositories (`repos`: `owner/repo`, `owner/*` or `*/*`),
+both whatever their case, and a `role`, or `actions` of its own. Server-wide, a binding of the
+login's matches whatever its `repos`, for its server actions. Other rules of the operator's can
+give actions too (`allow_access contains "tasks:read" if not input.repo.private`), and deny
+them, on the operator's side for every repository:
+
+```rego
+# grants folder: policy/public.rego
+package deckhand
+
+deny_access contains {"action": "runs:*", "reason": "no runs on public repositories"} if {
+  input.repo.private == false
+}
+```
+
+or in a repository's `.deckhand/policy/`, for its own (`deny_access contains {"action":
+"runs:start:work", "reason": "…"} if input.user.login != "release-bot"`). A repository's
+`allow_access` is ignored, a config check error, and its `.deckhand.yaml`'s `users` still
+narrows on its own.
+
 ### The default policies
 
 Deckhand's default policies say what each kind of run gets and does. They ship in the policy
@@ -1638,6 +1719,9 @@ operator's layer, under the operator's files:
   runs](#the-run-input).
 - **`review.rego`** for the reviews that start by themselves: it skips other bots' pull
   requests ([below](#reviewrego)), which no allowlist stops, as the allowlist lists people.
+- **`access.rego`** gives every login every action, and **`access-roles.rego`** the roles
+  and the rule that turns the operator's `bindings` into actions ([access](#access)): the
+  grants folder's `policy/access.rego` replaces the first, usually with bindings only.
 - **Broadening a mode**: the operator's file with the same name replaces Deckhand's, for every
   repository (a copy of `mode-work.rego` without its rule on `assign` lets work runs assign
   people); another file of the operator's adds allow rules beside it. A repository can't
