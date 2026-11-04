@@ -46,8 +46,10 @@ function needOf(t: Task): Need | null {
   // A failure dismissed with its pull request still ready waits for the review alone.
   if (tone === "err" && !isSettled(t)) return "error";
   // Ready, clean or not (its badge says which: readyStatus()), once no run is going on it but
-  // its loop's own review, and its CI is over: nothing to do before.
-  const waiting = tone === "idle" || tone === "err" || t.state === "in-review";
+  // its loop's own review, none is queued or waits to start, and its CI is over: nothing to do
+  // before.
+  const queued = t.state === "queued" || t.state === "waiting";
+  const waiting = (tone === "idle" && !queued) || tone === "err" || t.state === "in-review";
   if (waiting && isReady(t) && readyStatus(t)?.tone !== "run") return "ready";
   return null;
 }
@@ -76,9 +78,8 @@ export function repoParts(tasks: Task[], now: number): Part[] {
     const tone = taskTone(t);
     // A failure that no longer asks (isSettled()) isn't "failed" here either.
     if (tone === "err" && isSettled(t)) continue;
-    // Queued or waiting, its pull request merged: still on its way.
-    if (["queued", "waiting"].includes(t.state) && (tone === "idle" || tone === "done"))
-      add("queued");
+    // Queued or waiting: on its way, whatever its pull request (taskStatus()).
+    if (["queued", "waiting"].includes(t.state)) add("queued");
     else if (tone !== "idle") add(tone);
     // Done without a merged pull request: ended, not idle, but not green either.
     else if (t.state === "done") add("ended");

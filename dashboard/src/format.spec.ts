@@ -279,7 +279,6 @@ describe("status tones", () => {
   test("a ready pull request is the task's tone once nothing runs, fails or asks", () => {
     const ready = pr();
     expect(taskTone({ state: "done", pr: ready })).toBe("ready");
-    expect(taskTone({ state: "queued", pr: ready })).toBe("ready");
     expect(taskTone({ state: "working", pr: ready })).toBe("run");
     expect(taskTone({ state: "scheduled", pr: ready })).toBe("run");
     expect(taskTone({ state: "needs-input", pr: ready })).toBe("input");
@@ -301,14 +300,14 @@ describe("status tones", () => {
     expect(taskTone({ state: "cancelled", pr: pr({ state: "merged" }) })).toBe("done");
     // What it does now still wins.
     expect(taskTone({ state: "working", pr: pr({ state: "merged" }) })).toBe("run");
-    // Queued or waiting: its pull request's tone, its own word (a run is on its way).
+    // Queued or waiting: its own tone and word, whatever its pull request (a run is on its way).
     expect(taskStatus({ state: "queued", pr: pr({ state: "merged" }) })).toEqual({
-      tone: "done",
+      tone: "idle",
       label: "Queued",
     });
-    expect(taskStatus({ state: "queued", pr: pr() })).toEqual({ tone: "ready", label: "Queued" });
+    expect(taskStatus({ state: "queued", pr: pr() })).toEqual({ tone: "idle", label: "Queued" });
     expect(taskStatus({ state: "waiting", pr: pr({ conflict: true }) })).toEqual({
-      tone: "input",
+      tone: "idle",
       label: "Waiting",
     });
   });

@@ -288,7 +288,7 @@ export function toneOf(state: TaskState | RunStatus): Tone {
 }
 
 // A task's tone and word: its state's, but once no run is going and nothing failed or asks,
-// its pull request's: merged, green; ready for review and clean (cleanReady()), purple; ready
+// unless a run is queued or waits to start, its pull request's: merged, green; ready for review and clean (cleanReady()), purple; ready
 // but not clean, amber with why (notClean()); still in its review loop or waiting for CI, the
 // running tone.
 export function taskStatus(t: Pick<Task, "state" | "pr" | "review">): {
@@ -297,13 +297,11 @@ export function taskStatus(t: Pick<Task, "state" | "pr" | "review">): {
 } {
   const tone = toneOf(t.state);
   const label = STATE_NAMES[t.state];
-  if (tone !== "idle") return { tone, label };
-  // Queued or waiting: its pull request's tone, but its word, so the run on its way shows.
-  const own = t.state === "queued" || t.state === "waiting";
+  // Queued or waiting: a run is on its way to its pull request, which says nothing yet.
+  if (tone !== "idle" || t.state === "queued" || t.state === "waiting") return { tone, label };
   if (t.pr?.state === "merged") return { tone: "done", label };
   if (t.pr?.state !== "ready") return { tone, label };
-  const ready = readyStatus(t) ?? { tone: "run" as const, label: "In review" };
-  return own ? { tone: ready.tone, label } : ready;
+  return readyStatus(t) ?? { tone: "run", label: "In review" };
 }
 
 export const taskTone = (t: Pick<Task, "state" | "pr" | "review">) => taskStatus(t).tone;

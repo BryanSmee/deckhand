@@ -153,6 +153,9 @@ function Totals({ state, onChip }: { state: State; onChip: (chip: ChipId) => voi
         chip="input"
         onChip={onChip}
       />
+      {/* Purple though it counts the ones that aren't clean too: it counts what the Ready chip
+          lists (every ready pull request whose loop is over, all waiting on the maintainer),
+          and its meta says how many aren't clean; their rows below are amber. */}
       <Tile
         tone="ready"
         label="Ready for review"

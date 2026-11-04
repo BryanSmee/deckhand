@@ -48,6 +48,8 @@ test("a ready pull request that isn't clean still waits on you; one in its loop 
       review: { loop: "reviewing", round: 0, rounds: 2, history: [] },
     }),
     makeTask({ number: 4, state: "done", pr: { ...pr("ready", 4), ci: running } }),
+    // A run queued on it: it pushes there next.
+    makeTask({ number: 5, state: "queued", pr: pr("ready", 5) }),
   ];
   expect(waitingOnYou(tasks).map((r) => [r.task.number, r.need])).toEqual([
     [1, "ready"],
@@ -91,15 +93,17 @@ test("a repository's tasks by tone, ended ones for a week", () => {
     makeTask({ number: 11, state: "done", since: now - 1000, pr: pr("merged", 0) }),
     makeTask({ number: 12, state: "in-review", pr: pr("ready", 0) }),
     makeTask({ number: 13, state: "done", pr: { ...pr("ready", 0), conflict: true } }),
-    // Queued again on a merged pull request: still queued.
+    // Queued on a merged or a ready pull request, waiting on another issue: still queued.
     makeTask({ number: 14, state: "queued", pr: pr("merged", 0) }),
+    makeTask({ number: 15, state: "queued", pr: pr("ready", 0) }),
+    makeTask({ number: 16, state: "waiting", pr: { ...pr("ready", 0), conflict: true } }),
   ];
   expect(repoParts(tasks, now).map((p) => [p.tone, p.count, p.words])).toEqual([
     ["run", 3, "3 running"],
     ["input", 2, "2 need you"],
     ["ready", 1, "1 ready"],
     ["err", 1, "1 failed"],
-    ["idle", 2, "2 queued"],
+    ["idle", 4, "4 queued"],
     ["idle", 1, "1 idle"],
     ["idle", 1, "1 done this week"],
     ["done", 1, "1 merged this week"],

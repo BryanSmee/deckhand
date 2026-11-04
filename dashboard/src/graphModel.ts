@@ -88,6 +88,8 @@ type Looked = {
 // Its ready pull request's tone and word once its loop is over (format.ts readyStatus()).
 const readyOf = (t: Looked) => readyStatus({ pr: t.pr as PullRequest, review: t.review });
 
+const queuedOn = (t: Looked) => t.state === "queued" || t.state === "waiting";
+
 // What it does now wins over how it ended: a run on a closed issue is still a run. Questions
 // win over a ready pull request (a follow-up run on it asked them), not over finished work. A
 // ready pull request is purple only when clean (format.ts cleanReady()): amber when it needs a
@@ -97,6 +99,8 @@ export function lookOf(t: Looked): Look {
   if (t.pr?.state === "merged") return "done";
   if (t.closed === "completed") return "implemented";
   if (t.state === "needs-input") return "input";
+  // A run queued or waiting to start on it: on its way, as the list has it (taskStatus()).
+  if (t.pr?.state === "ready" && queuedOn(t)) return "idle";
   if (t.pr?.state === "ready") {
     const tone = t.state === "in-review" ? "run" : readyOf(t)?.tone;
     return tone === "ready" ? "ready" : tone === "input" ? "input" : "run";
@@ -112,10 +116,10 @@ function statusOf(look: Look, t: Looked) {
   if (look === "implemented") return "Implemented";
   if (look === "input" && t.state === "needs-input" && t.pr?.state === "ready")
     return "Needs input, PR ready";
-  if (t.pr?.state === "ready" && look !== "run") return readyOf(t)!.label;
+  const ready = t.pr?.state === "ready" && !queuedOn(t);
+  if (ready && look !== "run") return readyOf(t)!.label;
   // Deckhand still reviews it, between the runs of its review-and-fix loop, or waits for CI.
-  if (t.pr?.state === "ready" && !(t.state && LIVE.includes(t.state)))
-    return readyOf(t)?.label ?? "In review";
+  if (ready && !(t.state && LIVE.includes(t.state))) return readyOf(t)?.label ?? "In review";
   if (t.closed === "not_planned") return "Closed, not planned";
   // "Done" in the list: its last run replied, which isn't implemented.
   if (t.state === "done") return "Run done";

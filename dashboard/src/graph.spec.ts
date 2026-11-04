@@ -172,6 +172,7 @@ test("a ready pull request's node: purple only when clean, else why, or on its w
       task(9, { state: "in-review", pr, review: looping }),
       task(11, { closed: "completed" }),
       task(13, { state: "working", pr }),
+      task(15, { state: "queued", pr }),
     ],
     [],
     [],
@@ -185,6 +186,8 @@ test("a ready pull request's node: purple only when clean, else why, or on its w
     [9, "run", "In review"],
     [11, "implemented", "Implemented"],
     [13, "run", "Working"],
+    // A run queued on it: on its way, as in the list.
+    [15, "idle", "Queued"],
   ]);
   // Only a run going on pulses.
   expect(nodes.filter(moving).map((n) => n.number)).toEqual([13]);
