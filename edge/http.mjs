@@ -86,7 +86,8 @@ async function startTaking(store, id, now) {
 // `app`: app.mjs's; `auth`, `setup`: ../listener/auth.mjs's and setup.mjs's; `oauth`: MCP
 // clients' sign-in (oauth.mjs), none: not served; `orchestrator`:
 // forward.mjs's; `shots`: shots.mjs's; `redeliveries`: whether a delivery is one edge asked again (redelivered());
-// `dashboardDir`: the dashboard's build; `stopping()`: true once SIGTERM came; `metrics`:
+// `dashboardDir`: the dashboard's build; `stopping()`: true once SIGTERM came; `waiting()`: true
+// until the broker has answered it (../listener/broker-service.mjs ready()); `metrics`:
 // metrics.mjs edgeMetrics()'s, none: not counted.
 export function createEdgeHttp({
   config,
@@ -101,6 +102,7 @@ export function createEdgeHttp({
   dashboardDir,
   secrets = () => [],
   stopping = () => false,
+  waiting = () => false,
   metrics = null,
   log = () => {},
   now = Date.now,
@@ -284,6 +286,13 @@ export function createEdgeHttp({
       return res.writeHead(400).end();
     }
     if (req.method === "GET" && path === "/health") return res.end("ok");
+    // The readiness probe's: out of rotation while it drains, and until the broker has answered
+    // it, as the orchestrator's service tokens can't be checked before (its keys) nor its calls
+    // passed on (its own tokens): a new pod may not get out for a few seconds (#391, #675).
+    if (req.method === "GET" && path === "/ready") {
+      const status = stopping() ? "draining" : waiting() ? "waiting for the broker" : "ready";
+      return res.writeHead(status === "ready" ? 200 : 503).end(status);
+    }
     // Public, like any image in a GitHub comment; the folder token is the only protection.
     if (req.method === "GET" && path.startsWith("/shots/")) return shots.serve(req, res);
     if (setup.handle(req, res)) return;

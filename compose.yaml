@@ -95,7 +95,7 @@ services:
       - ${DECKHAND_SERVER_DIR:-./server}:/etc/deckhand:ro
     # Its public port's, with node: every image has it, not all of them curl or wget.
     healthcheck:
-      test: node -e "fetch('http://127.0.0.1:8080/health').then(r=>process.exit(+!r.ok),()=>process.exit(1))"
+      test: node -e "fetch('http://127.0.0.1:8080/ready').then(r=>process.exit(+!r.ok),()=>process.exit(1))"
       interval: 30s
       timeout: 5s
       start_period: 1m

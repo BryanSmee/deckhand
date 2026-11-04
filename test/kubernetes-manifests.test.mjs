@@ -556,10 +556,10 @@ const DRAIN_DEFAULTS = {
 // Each service that pauses before its SIGTERM → its drain (s): its DRAIN_SECONDS, or its default.
 const drain = (service) => Number(env(service).DRAIN_SECONDS ?? DRAIN_DEFAULTS[service] / 1000);
 const PAUSED = ["edge", "github", "broker", "models", "policy", "proxy"];
-// Readiness on /ready, but: edge has none (it stops taking connections as it drains); the
-// orchestrator's and the runner's answer on the acting copy alone, and the next copy only acts
-// once the old one has stopped, so a rolling update waiting for it would never end.
-const READINESS = { edge: "/health", orchestrator: "/health", runner: "/health" };
+// Readiness on /ready, but: the orchestrator's and the runner's answer on the acting copy alone,
+// and the next copy only acts once the old one has stopped, so a rolling update waiting for it
+// would never end.
+const READINESS = { orchestrator: "/health", runner: "/health" };
 
 test("deploy/kubernetes: two copies of each service, one of the proxy, each update starting the next copy first", () => {
   for (const service of SERVICES) {

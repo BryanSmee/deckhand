@@ -54,7 +54,7 @@ spec:
             - name: STORE_URL
               value: file:///data/store
             {{- end }}
-          {{- include "deckhand.probes" (list "http" "/health" "/health") | nindent 10 }}
+          {{- include "deckhand.probes" (list "http" "/ready" "/health") | nindent 10 }}
           lifecycle:
             preStop:
               exec:

@@ -2,7 +2,8 @@
 # your ingress to the Service's port 8080. Its internal port, 8083, is the orchestrator's alone
 # (network-policies.yaml). It holds the webhook secret, the session key and the OAuth client's,
 # in its own Secret (deckhand-edge). Two copies, both active on one store. Its readiness is
-# /health: it has no /ready, and stops taking connections as it drains.
+# /ready: 503 as it drains, and until the broker has answered it (its keys, which the
+# orchestrator's service tokens are checked with, and its own service tokens).
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -84,7 +85,7 @@ spec:
               value: file:///data/store
           readinessProbe:
             httpGet:
-              path: /health
+              path: /ready
               port: http
             periodSeconds: 5
           # Its process answers: restarted after a minute without.

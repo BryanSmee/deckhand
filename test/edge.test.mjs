@@ -49,7 +49,15 @@ const signed = (body) => `sha256=${createHmac("sha256", SECRET).update(body).dig
 // dashboard's API is passed on to.
 async function edgeCopy(
   t,
-  { store, dir = tempDir(t), orchestrator, logs = [], config = testConfig({ PORT: "0" }) } = {},
+  {
+    store,
+    dir = tempDir(t),
+    orchestrator,
+    logs = [],
+    config = testConfig({ PORT: "0" }),
+    stopping,
+    waiting,
+  } = {},
 ) {
   writeFileSync(join(dir, "app.json"), JSON.stringify(CREDENTIALS));
   const app = createEdgeApp({ dir });
@@ -64,6 +72,8 @@ async function edgeCopy(
     redeliveries,
     dashboardDir: dir,
     secrets: () => app.secrets(),
+    stopping,
+    waiting,
     log: (line) => logs.push(line),
   });
   const { url } = await serve(t, http.handle);
@@ -306,6 +316,26 @@ test("the orchestrator reads the deliveries, acknowledges each once handled; one
   assert.deepEqual(await store.read(DELIVERIES, "orchestrator"), []);
   // Handled, gone from the stream: no reader finds their payloads any more.
   assert.deepEqual(await store.read(DELIVERIES, "anyone"), []);
+});
+
+test("GET /ready: 503 until the broker has answered, and once it drains; /health answers throughout (#675)", async (t) => {
+  let [answered, stopping] = [false, false];
+  const { url } = await edgeCopy(t, {
+    store: openStore("memory:"),
+    waiting: () => !answered,
+    stopping: () => stopping,
+  });
+  const ready = async () => {
+    const res = await fetch(`${url}/ready`);
+    return [res.status, await res.text()];
+  };
+  assert.deepEqual(await ready(), [503, "waiting for the broker"]);
+  assert.equal((await fetch(`${url}/health`)).status, 200);
+  answered = true;
+  assert.deepEqual(await ready(), [200, "ready"]);
+  stopping = true;
+  assert.deepEqual(await ready(), [503, "draining"]);
+  assert.equal((await fetch(`${url}/health`)).status, 200);
 });
 
 test("edge's internal port: GET /health without a token, its start and version, nothing else", async (t) => {
