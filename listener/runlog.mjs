@@ -203,6 +203,10 @@ export async function moveSummaries(logDir, store, { log = console.error, secret
 }
 const MOVE_BATCH = 50;
 
+// Whether what a file or the store holds is a run's state (restart.mjs): one without its id,
+// task or record can't be restored (a write cut short, a hand edit).
+export const isRunState = (saved) => Boolean(saved?.id && saved.task && saved.record);
+
 // The logs a listener kept itself (logs/<run>.log), before the runner kept them (#503): each
 // summarized now when its run has no summary (a log from before summaries, or of a listener
 // that died mid-run) and isn't live, so that loadRuns() lists it (moveSummaries() takes it to
@@ -212,7 +216,8 @@ const MOVE_BATCH = 50;
 // the runner doesn't take, and is sent at the next start.
 //
 // A live run's log (its state in the store, `live`: their ids, or a .live.json of the release
-// before) is written on at the runner once its move is over
+// before that is a run's state: one that isn't, which restart.mjs leaves where it is, is no live
+// run's, #695) is written on at the runner once its move is over
 // (restart.mjs): those go first, on a chain of their own, so that a live run waits for its own
 // log, never the history's. A live run's move that fails is tried again until it is done: its
 // writer would otherwise go on after a part of it, and the rest, sent at the next start, land
@@ -252,7 +257,7 @@ export function moveLogs(
   for (const file of files) {
     const id = file.slice(0, -4);
     try {
-      const isLive = liveIds.has(id) || existsSync(join(logDir, `${id}.live.json`));
+      const isLive = liveIds.has(id) || isRunState(readJson(join(logDir, `${id}.live.json`)));
       if (!isLive && readJson(summaryPath(logDir, id))?.id !== id) {
         // Not saveSummary(), which logs a failure and goes on: without its summary, a log
         // sent and removed would leave its run listed nowhere.

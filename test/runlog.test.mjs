@@ -39,6 +39,8 @@ import { openStore } from "../lib/store.mjs";
 import { tempDir } from "./helpers.mjs";
 
 const line = (event) => JSON.stringify(event);
+// A run's state as a release before #617 kept it (logs/<run>.live.json).
+const runState = (id) => JSON.stringify({ id, task: { repo: "org/repo" }, record: { id } });
 
 // The runner's logs (runner/client.mjs logs), as moveLogs() sends them: each upload's id, and
 // its text then, by id. `refuse`: ids it doesn't take.
@@ -318,7 +320,10 @@ test("runs: logs kept here are summarized, sent to the runner, then listed newes
   );
   // No listener line and no result: an old log, interrupted.
   writeFileSync(join(dir, "deckhand-org-repo-2-2000.log"), "Cloning\n");
-  writeFileSync(join(dir, "deckhand-org-repo-1-1000.live.json"), "{}");
+  writeFileSync(
+    join(dir, "deckhand-org-repo-1-1000.live.json"),
+    runState("deckhand-org-repo-1-1000"),
+  );
   // Stopped to ask: its questions, for the task rather than the run.
   const asked = "<!-- needs-input -->\n## Needs your input\n\n1. **Name**: which one?";
   writeFileSync(
@@ -670,7 +675,7 @@ test("runs: live runs' logs move first, on their own; a failed try is tried agai
   }
   // The last one is live.
   const live = ids[2];
-  writeFileSync(join(dir, `${live}.live.json`), "{}");
+  writeFileSync(join(dir, `${live}.live.json`), runState(live));
   const order = [];
   let failures = 2;
   let release;
@@ -701,11 +706,37 @@ test("runs: live runs' logs move first, on their own; a failed try is tried agai
   assert.deepEqual(Object.fromEntries(closed), { [ids[0]]: true, [ids[1]]: true, [live]: false });
 });
 
+// #695: restart.mjs leaves a .live.json that isn't a run's state where it is: its log isn't
+// held as a live run's forever, it is summarized and sent as an ended one's.
+test("runs: a .live.json that isn't a run's state leaves its log an ended run's", async (t) => {
+  const dir = tempDir(t);
+  const ids = ["deckhand-org-repo-1-1000", "deckhand-org-repo-2-1000", "deckhand-org-repo-3-1000"];
+  for (const [i, id] of ids.entries()) {
+    writeFileSync(
+      join(dir, `${id}.log`),
+      line({ type: "listener", key: `org/repo#${i + 1}`, startedAt: 1000 }),
+    );
+  }
+  writeFileSync(join(dir, `${ids[0]}.live.json`), "{}");
+  writeFileSync(join(dir, `${ids[1]}.live.json`), "not json");
+  writeFileSync(join(dir, `${ids[2]}.live.json`), JSON.stringify({ id: ids[2], task: {} }));
+  const closed = new Map();
+  const runner = { upload: async (id, _, { close }) => closed.set(id, close) };
+  const moved = moveLogs(dir, runner, { log: () => {}, sleep: async () => {} });
+  assert.equal(await moved.done, 3);
+  // Each closed at the runner, as an ended run's, and listed from its summary.
+  assert.deepEqual(Object.fromEntries(closed), Object.fromEntries(ids.map((id) => [id, true])));
+  const runs = await listed(dir, { log: () => {} });
+  assert.deepEqual(runs.map((r) => r.id).sort(), ids);
+  // The files themselves stay, for the operator (docs/setup.md).
+  for (const id of ids) assert.equal(existsSync(join(dir, `${id}.live.json`)), true);
+});
+
 test("runs: a live run's log the runner holds more of is given up, not tried forever", async (t) => {
   const dir = tempDir(t);
   const id = "deckhand-org-repo-9-1000";
   writeFileSync(join(dir, `${id}.log`), line({ type: "listener", key: id, startedAt: 1000 }));
-  writeFileSync(join(dir, `${id}.live.json`), "{}");
+  writeFileSync(join(dir, `${id}.live.json`), runState(id));
   let tries = 0;
   const runner = {
     upload: async () => {
@@ -860,7 +891,7 @@ test("runs: a live run gets no summary from its log, the one written when it end
   const id = "deckhand-org-repo-7-1000";
   const logPath = join(dir, `${id}.log`);
   writeFileSync(logPath, line({ type: "listener", key: "org/repo#7", startedAt: 1000 }));
-  writeFileSync(join(dir, `${id}.live.json`), "{}");
+  writeFileSync(join(dir, `${id}.live.json`), runState(id));
   // restoreRuns() lists it.
   const store = openStore("memory:");
   assert.deepEqual(await started(dir, { store }), []);
