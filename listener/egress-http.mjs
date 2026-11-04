@@ -6,7 +6,7 @@
 import { createServer } from "node:http";
 import { agentFor } from "./agents/index.mjs";
 import { addressOf } from "./broker.mjs";
-import { egressPolicy, githubContent, githubHosts, matchHost } from "./egress.mjs";
+import { egressPolicy, githubContent, githubHosts, matchHost, refused } from "./egress.mjs";
 import { restricted } from "./github-forks.mjs";
 import { tunnelsGitHub } from "./github-app.mjs";
 import { taskKey } from "./events.mjs";
@@ -124,10 +124,10 @@ export function createEgressHttp(ctx) {
     if (installs === false && live) live.pastInstall = true;
     if (installs || installs === null) {
       const hosts = agentFor(live.record?.agent).install(config).hosts ?? [];
-      const answer = egressPolicy(host, hosts, [], [], [], { decrypt: false });
-      if (installs === null && matchHost(host, live.hosts) === null) {
-        Object.assign(answer, { allowed: false, reason: "not_granted" });
-      }
+      const answer =
+        installs === null && matchHost(host, live.hosts) === null
+          ? refused("not_granted")
+          : egressPolicy(host, hosts, [], [], [], { decrypt: false });
       answer.source = "install";
       if (!answer.allowed)
         log(`Egress: refused ${host} for ${taskKey(task.repo, task.id)}'s agent install`);
@@ -154,14 +154,7 @@ export function createEgressHttp(ctx) {
           relayed: [...(github ? githubHosts(config) : []), ...files, ...(agent.relayed ?? [])],
           blocked: agent.blocked,
         })
-      : {
-          allowed: false,
-          private: false,
-          cache: false,
-          decrypt: false,
-          relay: false,
-          reason: "no_run",
-        };
+      : refused("no_run");
     answer.source = source;
     // An agent's relayed host (the Antigravity CLI's, with a plan's login): its calls go to the
     // models service (#504), which the proxy vouches the sandbox's network (or pod) to.

@@ -11,6 +11,7 @@ import {
   matchHost,
   operatorHosts,
   proxyEnv,
+  refused,
   GITHUB_FILES,
   githubContent,
 } from "../listener/egress.mjs";
@@ -356,5 +357,23 @@ test("limits: built in, under default.yaml's, and checked", () => {
   assert.throws(
     () => grantsFrom({ "default.yaml": "limits: { cpus: -1 }\n" }, config),
     /default\.yaml: limits\.cpus: expected/,
+  );
+});
+
+test("refused: every field of a granted answer, refused, with its reason", () => {
+  const granted = egressPolicy("github.com", ["github.com"], ["github.com"], ["github.com"]);
+  const answer = refused("no_run");
+  assert.deepEqual(Object.keys(answer).sort(), [...Object.keys(granted), "reason"].sort());
+  assert.deepEqual(answer, {
+    allowed: false,
+    private: false,
+    cache: false,
+    decrypt: false,
+    relay: false,
+    reason: "no_run",
+  });
+  assert.deepEqual(
+    egressPolicy("x.net", ["*"], [], [], [], { blocked: ["x.net"] }),
+    refused("blocked"),
   );
 });
