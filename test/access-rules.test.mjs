@@ -10,9 +10,9 @@ import {
   allows,
   createPolicies,
   REPO_ACTIONS,
-  repoName,
   SERVER_ACTIONS,
 } from "../listener/policies.mjs";
+import { validRepo } from "../listener/repo-config.mjs";
 import { builtInPolicies } from "../policy-service/engine.mjs";
 import { opaBinary } from "../policy-service/opa.mjs";
 import { hasOpa, localService, policyEngineOf } from "./helpers.mjs";
@@ -380,6 +380,10 @@ test(
     const listings = () => calls.filter((p) => p.endsWith("/contents/.deckhand/policy")).length;
     assert.ok(await policies.can("bob", repo("acme/api"), "runs:manage"));
     assert.equal(asked(), 1);
+    // The kept answer is read-only: a caller can't change the next one's.
+    const kept = await policies.access("bob", repo("acme/api"));
+    assert.ok(Object.isFrozen(kept) && Object.isFrozen(kept.actions));
+    assert.throws(() => kept.actions.push("repo:config:read"), TypeError);
     // Every action from the one answer, the login and the name in another case too.
     assert.ok(await policies.can("Bob", repo("Acme/API"), "logs:read"));
     assert.ok(!(await policies.can("bob", repo("acme/api"), "repo:config:read")));
@@ -555,8 +559,9 @@ test("access: a repository's name is owner/repo, nothing GitHub's paths would re
     assert.match(info.error, /no repository's name/, name);
   }
   assert.deepEqual(calls, []);
-  assert.ok(repoName("acme/my-repo.js"));
-  assert.ok(!repoName("acme/.."));
+  assert.ok(validRepo("acme/my-repo.js"));
+  assert.ok(!validRepo("acme/.."));
+  assert.ok(!validRepo(`acme/${"x".repeat(101)}`));
 });
 
 test("allows: `*` asked server-wide is every server action", () => {

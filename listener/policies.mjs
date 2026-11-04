@@ -40,6 +40,7 @@ import {
   SET_FAMILIES,
 } from "../lib/policy-files.mjs";
 import { redact } from "../lib/redact.mjs";
+import { validRepo } from "./repo-config.mjs";
 import { ANY_REPO, GRANTS, ownerProbe, REPO_ONLY } from "./grants.mjs";
 
 // Where a repo's policies are, on its default branch.
@@ -136,12 +137,16 @@ export function allows(answer, action, repo = true) {
 // Deckhand's policy/access.rego's one rule: every action, for every login (access()'s shortcut).
 const EVERY_ACTION = /^allow_access\s+contains\s+"\*"\s*(?:#.*)?$/m;
 
-// Whether `name` is a repository's `owner/repo`, nothing else: it goes into GitHub's paths, where a
-// `..` or a `?` would read another repository's policies than the one its bindings matched.
-export const repoName = (name) =>
-  typeof name === "string" &&
-  /^[\w.-]+\/[\w.-]+$/.test(name) &&
-  name.split("/").every((part) => part !== "." && part !== "..");
+// access()'s answer, read-only: kept and given to every caller for ACCESS_MS.
+const frozen = ({ actions, denied, files, error }) =>
+  Object.freeze({
+    actions: Object.freeze([...actions]),
+    denied: Object.freeze(denied.map((d) => Object.freeze({ ...d }))),
+    files: Object.freeze(
+      Object.fromEntries(Object.entries(files).map(([a, f]) => [a, Object.freeze([...f])])),
+    ),
+    error,
+  });
 
 // How long access()'s answers are kept for the same layers, login and repository (as grants()'s:
 // GRANTS_MS bounds a rule reading the time), and for how many at most.
@@ -844,7 +849,7 @@ export function createPolicies({
     let info = repo;
     if (typeof repo === "string" || !info?.default_branch) {
       const name = typeof repo === "string" ? repo : (info?.full_name ?? info?.name);
-      if (!repoName(name)) throw new Error("no repository's name");
+      if (!validRepo(name)) throw new Error("no repository's name");
       const key = name.toLowerCase();
       const kept = repoInfos.get(key);
       if (kept && now() - kept.at < ACCESS_MS) info = kept.info;
@@ -867,7 +872,7 @@ export function createPolicies({
       }
     }
     const name = info?.full_name ?? info?.name;
-    if (!repoName(name)) throw new Error("no repository's name");
+    if (!validRepo(name)) throw new Error("no repository's name");
     return { name, private: info.private !== false, ref: info.default_branch };
   }
 
@@ -888,7 +893,10 @@ export function createPolicies({
   // `error`, why nothing is given (a policy error, policies or GitHub that can't be read, a policy
   // service away), null otherwise. allows() reads it: a deny wins. A repo's allow rules aren't
   // read (OPERATOR_ALLOWS): its listing is read first (forget() on its push), and its deny rules
-  // apply. One evaluation per login and repository gives them all; kept (`accessKept`).
+  // apply. One evaluation per login and repository gives them all; kept (`accessKept`), frozen,
+  // as every later caller gets the same answer. Pass a repository's name, or GitHub's current
+  // info about it: a stale one (its old name, with its default branch) isn't read again, so its
+  // push's forget(), under the current name, wouldn't clear what is kept under the old one.
   async function access(login, repo = null) {
     const nothing = (error) => ({ actions: [], denied: [], files: {}, error });
     const who = typeof login === "string" ? login.toLowerCase() : "";
@@ -951,6 +959,7 @@ export function createPolicies({
         };
       }
       if (accessKept.size >= MAX_ACCESS) accessKept.delete(accessKept.keys().next().value);
+      answer = frozen(answer);
       accessKept.set(key, { at: now(), said: answer });
       return answer;
     }

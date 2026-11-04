@@ -8,18 +8,12 @@ import { grantOf, loadGrants, notGranted } from "../listener/grants.mjs";
 import { AGENTS } from "../listener/agents/index.mjs";
 import { operatorHosts } from "../listener/egress.mjs";
 import { gitBlob as blobOf } from "../listener/images.mjs";
-import { repoPath } from "../listener/repo-config.mjs";
+import { repoPath, validRepo } from "../listener/repo-config.mjs";
 
-const REPO = /^[A-Za-z0-9_.-]{1,100}\/[A-Za-z0-9_.-]{1,100}$/;
 const REF = /^[A-Za-z0-9_./-]{1,250}$/;
 
-export function validRepo(repo) {
-  return (
-    typeof repo === "string" &&
-    REPO.test(repo) &&
-    repo.split("/").every((part) => part !== "." && part !== "..")
-  );
-}
+// The service's callers import it from here.
+export { validRepo };
 
 // The repository's grant, with what the operator's policies grant it (`granted`), or a Refused:
 // no grant read is no build.
