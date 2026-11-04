@@ -3,11 +3,12 @@
 // Access, which lists who has what).
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/preact";
 import { beforeEach, expect, test, vi } from "vitest";
-import { canFrom } from "./access";
+import { AccessContext, canFrom } from "./access";
 import type { RepoList } from "./api";
 import { Dashboard } from "./App";
+import { Overview } from "./Overview";
 import { BACKLOG as EMPTY, FakeSource, makeState, mockApi } from "./testUtils";
-import type { Access, AccessReport, Backlog, RepoAccess } from "./types";
+import type { Access, AccessReport, Backlog, Repo, RepoAccess } from "./types";
 
 const REPOS = ["acme/app", "acme/api", "acme/notes"];
 const on = (repo: RepoAccess): Record<string, RepoAccess> =>
@@ -226,4 +227,63 @@ test("an operator: Sync, the server's tabs, and Settings › Access lists who ha
   });
   expect(screen.queryByRole("region", { name: "@alice" })).toBeNull();
   expect(screen.getByRole("region", { name: "@carol" })).toBeTruthy();
+});
+
+test("Onboard on the Overview: a not-onboarded repo access names gets it, one it doesn't, not", () => {
+  const infra: Repo = {
+    repo: "acme/infra",
+    url: "https://github.com/acme/infra",
+    private: false,
+    issues: true,
+    status: "not-onboarded",
+    issue: null,
+    readAt: null,
+    autoMerge: false,
+  };
+  const card = (access: Access) =>
+    render(
+      <AccessContext.Provider value={canFrom(access)}>
+        <Overview
+          state={makeState({ access })}
+          repos={{ ...noRepos, repos: [infra] }}
+          github="https://github.com"
+          onChip={() => {}}
+        />
+      </AccessContext.Provider>,
+    );
+  const everything = {
+    actions: OPERATOR.repos["acme/app"].actions,
+    starts: ["*"],
+    startsDenied: [],
+  };
+  const { unmount } = card({ ...OPERATOR, repos: { ...OPERATOR.repos, "acme/infra": everything } });
+  expect(screen.getByRole("button", { name: "Onboard" })).toBeTruthy();
+  unmount();
+  card(OPERATOR);
+  expect(screen.queryByRole("button", { name: "Onboard" })).toBeNull();
+});
+
+test("open questions: a run's need its mode's start, an issue's runs:manage alone", () => {
+  // A member who may not start review runs, acme/api#138's mode.
+  const access: Access = {
+    server: [],
+    repos: on({
+      actions: ["tasks:read", "logs:read", "runs:manage"],
+      starts: ["work"],
+      startsDenied: [],
+    }),
+  };
+  const show = (source: "run" | "issue") => {
+    history.replaceState(null, "", `#/?task=${encodeURIComponent("acme/api#138")}`);
+    const state = makeState({ access });
+    const tasks = state.tasks.map((t) =>
+      t.key === "acme/api#138" ? { ...t, questions: { ...t.questions!, source } } : t,
+    );
+    return render(<Dashboard state={{ ...state, tasks }} error={null} repos={noRepos} />);
+  };
+  const { unmount } = show("run");
+  expect(screen.queryByRole("form", { name: "Open questions" })).toBeNull();
+  unmount();
+  show("issue");
+  expect(screen.getByRole("form", { name: "Open questions" })).toBeTruthy();
 });

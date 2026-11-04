@@ -165,7 +165,7 @@ test("access (#731): api/state, /status and the server's views follow the login'
 
 test("access (#732): api/state's actions name the boards' repos; Settings › Access for server:read", async (t) => {
   const rules = {
-    alice: { "org/app": MEMBER, "org/board": VIEWER, "": ["server:read"] },
+    alice: { "org/app": MEMBER, "org/board": VIEWER, "org/new": ["*"], "": ["server:read"] },
     bob: { "org/app": VIEWER },
   };
   let listing = async () => ["org/board", "org/app"];
@@ -183,8 +183,9 @@ test("access (#732): api/state's actions name the boards' repos; Settings › Ac
     inputs: { list: () => [] },
     titles: { get: () => null, closed: () => null, fill: () => {} },
     pulls: { get: () => null, fill: () => {} },
-    // org/board's config was read (its board), though nothing of it is in the state.
-    repoList: { known: () => ["org/board"], names: () => listing() },
+    // org/board's config was read (its board), and org/new, listed, has none (not onboarded):
+    // nothing of either is in the state.
+    repoList: { listed: () => ["org/board", "org/new"], names: () => listing() },
     usersOf: () => null,
     permissions: permissionsOf(rules),
   };
@@ -199,6 +200,12 @@ test("access (#732): api/state's actions name the boards' repos; Settings › Ac
   const [, state] = await get("/api/state", "alice");
   assert.deepEqual(state.access.repos, {
     "org/board": { actions: ["tasks:read"], starts: [], startsDenied: [] },
+    // Its Onboard and Config are offered.
+    "org/new": {
+      actions: ["tasks:read", "logs:read", "runs:manage", "repo:config:read"],
+      starts: ["*"],
+      startsDenied: [],
+    },
   });
   assert.deepEqual(state.access.server, ["server:read"]);
   // Settings › Access: server:read only.

@@ -136,8 +136,10 @@ export function Detail({
   // The last reply: from the latest run that has one.
   const reply = t.runs.find((x) => x.summary);
   const questioned = t.state === "needs-input" ? t.questions : undefined;
-  // Answering is runs:manage, and the session goes on in its mode.
-  const asked = manages && starts(t.mode) ? questioned : undefined;
+  // Answering is runs:manage, and the start of its mode when a run asked them: its session
+  // goes on (listener/work.mjs).
+  const asked =
+    manages && (questioned?.source !== "run" || starts(t.mode)) ? questioned : undefined;
   // The latest run only, and only when it is the one shown; runs:manage, and its mode's start.
   const failed =
     t.rerunnable && r && r.id === t.runs[0]?.id && manages && starts(r.taskMode) ? r : null;

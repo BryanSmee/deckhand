@@ -107,10 +107,6 @@ export function createHttp(ctx) {
     return (repo) => !!repo && seen.has(repo.toLowerCase());
   }
 
-  // Whether `user` may do server-wide `action` (Settings › Server, health, plans, Sync).
-  const serverWide = async (user, action) =>
-    !ctx.permissions || (await ctx.permissions.can(user, null, action));
-
   const repoOf = (key) => parseKey(key)?.repo ?? null;
 
   // Every repo the dashboard's state may name: its runs, tasks, brainstorms, waits (their
@@ -194,11 +190,12 @@ export function createHttp(ctx) {
       if (lane.source === "parent" && hiddenParent(key)) lanes[key] = { ...lane, name: HIDDEN };
     }
     // What `user` may do (#732): server-wide, and on each repo they see that the dashboard may
-    // name, those in the state and those whose config was read (the boards'), so that it shows
-    // only the controls they may use. Without permissions (some tests): left out, everything.
+    // name, those in the state and those the repositories' list has (configured or not: their
+    // Onboard and Config), so that it shows only the controls they may use. Without permissions
+    // (some tests): left out, everything.
     const access =
       ctx.permissions &&
-      (await ctx.permissions.dashboard(user, [...namedRepos(), ...(ctx.repoList?.known() ?? [])]));
+      (await ctx.permissions.dashboard(user, [...namedRepos(), ...(ctx.repoList?.listed() ?? [])]));
     // How much of each plan the runs used: server-wide.
     const plans = (access ? access.server.includes("server:read") : true)
       ? (ctx.models?.plans?.() ?? [])

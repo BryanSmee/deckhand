@@ -217,7 +217,7 @@ function WaitingOnYou({
   const [dismissing, setDismissing] = useState<string | null>(null);
   const [said, setSaid] = useState<{ text: string; error?: boolean } | null>(null);
   // What the user may do on each task's repo (access.ts): answers, Rerun and Dismiss are
-  // runs:manage, an answer and a rerun the start of the task's mode too.
+  // runs:manage, a rerun and a run's questions the start of the task's mode too.
   const can = useCan();
   const manages = (t: Task) => can.repo(t.repo, "runs:manage");
   const goesOn = (t: Task, mode: string | null | undefined) =>
@@ -285,7 +285,8 @@ function WaitingOnYou({
     const page = taskHref(t);
     const issue = githubUrl(t, github);
     if (need === "input") {
-      if (t.questions && goesOn(t, t.mode))
+      // A run's questions: its session goes on in its mode.
+      if (t.questions && (t.questions.source === "run" ? goesOn(t, t.mode) : manages(t)))
         return (
           <Button size="small" class={place} onClick={() => setAnswering(t)}>
             {label}

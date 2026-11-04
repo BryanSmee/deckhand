@@ -117,6 +117,8 @@ export function createRepoList({
 }) {
   let listing = null; // Promise<repo infos>, while fresh
   let listedAt = 0;
+  // The repos' names as last listed, for what can't wait for a listing (http.mjs state()).
+  let listedNames = [];
   // The installations as last listed, [{ account, url, missing }]: the Manage App links.
   let installed = [];
   // installation id → what it lacked when last warned about ("" for nothing).
@@ -155,7 +157,9 @@ export function createRepoList({
         if (!r.archived && repoAllowed(config, r.full_name)) infos.push(r);
       }
     }
-    return infos.sort((a, b) => a.full_name.localeCompare(b.full_name));
+    infos.sort((a, b) => a.full_name.localeCompare(b.full_name));
+    listedNames = infos.map((r) => r.full_name);
+    return infos;
   }
 
   // What an installation lacks of what its App has: an owner of its account has yet to accept
@@ -316,6 +320,9 @@ export function createRepoList({
 
   // The repos' names, without reading their configs.
   const names = async () => (await repos()).map((r) => r.full_name);
+  // The repos' names as last listed, or whose config was read (any, with a file or not), now:
+  // [] before the first listing.
+  const listed = () => [...new Set([...listedNames, ...[...configs.values()].map((k) => k.repo)])];
 
   return {
     list,
@@ -324,6 +331,7 @@ export function createRepoList({
     refresh,
     refreshAll,
     names,
+    listed,
     usersOf,
     known,
     autoPickup,

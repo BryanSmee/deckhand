@@ -1028,6 +1028,8 @@ test("known() and usersOf(): the repos read, with their inbox issues (the dashbo
   // A repo without a config has no settings read: only the configured one.
   assert.deepEqual(list.known(), ["Org/App"]);
   assert.deepEqual(list.usersOf("org/app").inbox, { ideas: 4 });
+  // listed() (#732): every repo listed, configured or not, without asking GitHub.
+  assert.deepEqual(list.listed(), ["Org/App", "org/lib"]);
 });
 
 test("access: the list keeps the repos with an action, the config needs repo:config:read", async () => {
