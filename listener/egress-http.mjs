@@ -99,16 +99,10 @@ export function createEgressHttp(ctx) {
       // The network (or pod) the call came from, which the proxy vouches for to the service:
       // what the run's tokens are bound to.
       const sandbox = allowed ? (task.live.sandbox ?? null) : null;
-      return sendJson(res, {
-        allowed,
-        private: false,
-        cache: false,
-        decrypt: false,
-        relay: false,
-        ...(sandbox && { sandbox }),
-        source,
-        ...(!allowed && { reason: task || other ? "not_forwarded" : "no_run" }),
-      });
+      const answer = allowed
+        ? { allowed, private: false, cache: false, decrypt: false, relay: false }
+        : refused(task || other ? "not_forwarded" : "no_run");
+      return sendJson(res, { ...answer, ...(sandbox && { sandbox }), source });
     }
     if (other) {
       if (!other.allowed) log(`Egress: refused ${host} for ${ip} (a build or an install)`);

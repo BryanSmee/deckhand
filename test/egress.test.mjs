@@ -360,7 +360,7 @@ test("limits: built in, under default.yaml's, and checked", () => {
   );
 });
 
-test("refused: every field of a granted answer, refused, with its reason", () => {
+test("refused: the fields egressPolicy() answers with, refused, and its reason", () => {
   const granted = egressPolicy("github.com", ["github.com"], ["github.com"], ["github.com"]);
   const answer = refused("no_run");
   assert.deepEqual(Object.keys(answer).sort(), [...Object.keys(granted), "reason"].sort());
