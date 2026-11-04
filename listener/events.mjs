@@ -548,6 +548,7 @@ export function pullEntry(repo, pr, readyAt = null) {
       state: prState(pr),
       readyAt,
       ...pullSize(pr),
+      ...mergeConflict(pr),
       ...(typeof pr.head?.sha === "string" && { head: pr.head.sha }),
       // When GitHub last changed it: an older delivery handled late doesn't move the head back.
       ...(Number.isFinite(Date.parse(pr.updated_at)) && { updatedAt: Date.parse(pr.updated_at) }),
@@ -583,6 +584,14 @@ export function quietPayload(config, event, p) {
     repository: { full_name: ci.repo },
     ...(event === "check_suite" ? { check_suite: { head_sha: ci.sha } } : { sha: ci.sha }),
   };
+}
+
+// { conflict } of a pull request as GitHub has it: whether it conflicts with its base, once
+// GitHub computed it; {} while it hasn't (`mergeable: null`, as webhooks often send it), so the
+// one known stays (pulls.mjs record()). Merely behind its base isn't a conflict.
+export function mergeConflict(pr) {
+  if (typeof pr?.mergeable !== "boolean" || pr.mergeable_state === "unknown") return {};
+  return { conflict: pr.mergeable === false || pr.mergeable_state === "dirty" };
 }
 
 // A pull request's size fields, the dashboard's name → GitHub's.

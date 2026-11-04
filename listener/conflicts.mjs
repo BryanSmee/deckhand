@@ -14,7 +14,7 @@
 // that keeps moving doesn't repeat it), and keeps the pair as an attempt.
 import { repoAllowed } from "./config.mjs";
 import { waitsForInput } from "./comments.mjs";
-import { parseKey, headInRepo } from "./events.mjs";
+import { headInRepo, mergeConflict, parseKey } from "./events.mjs";
 import { getJson } from "./github.mjs";
 import { denyKept, passed } from "./policies.mjs";
 import { fixInput, policyWhy, readPullInput } from "./reviews.mjs";
@@ -209,11 +209,13 @@ export function createConflicts({
     if (busy(key)) return "skipped";
     const pr = await json(repo, `/repos/${repo}/pulls/${number}`, [404]);
     if (!pr || pr.state !== "open" || !headInRepo(pr, repo)) return "skipped";
-    if (pr.mergeable === null || pr.mergeable === undefined || pr.mergeable_state === "unknown") {
-      return "pending";
-    }
-    // Conflicts only: a pull request merely behind its base merges as it is.
-    if (pr.mergeable !== false && pr.mergeable_state !== "dirty") return "clean";
+    // What it found, for the dashboard (pulls.mjs): read here anyway.
+    pulls.sawMerge?.(key, pr);
+    // The dashboard's rule (events.mjs mergeConflict()): not computed yet, pending; conflicts
+    // only, a pull request merely behind its base merges as it is.
+    const { conflict } = mergeConflict(pr);
+    if (conflict === undefined) return "pending";
+    if (!conflict) return "clean";
     const target = parseKey(key);
     const issue = target.kind === "issue" ? target.number : null;
     if (await waitsForInput(github, config, repo, pr, issue)) return "skipped";

@@ -1,7 +1,15 @@
 import { expect, test } from "vitest";
 import { issueOfLink } from "./dnd";
 import { dropTarget, layout, SIZES } from "./graphLayout";
-import { brainstormsOf, graphOf, type GraphNode, lookOf, movable } from "./graphModel";
+import {
+  brainstormsOf,
+  graphOf,
+  type GraphNode,
+  lookOf,
+  movable,
+  moving,
+  TONES,
+} from "./graphModel";
 import type { Pending, Task, WorkAction } from "./types";
 
 const task = (n: number, extra: Partial<Task> = {}): Task => ({
@@ -121,9 +129,10 @@ test("issues waiting for each other still get a place each", () => {
   expect(at(l, 1).x).not.toBe(at(l, 2).x);
 });
 
-test("the looks: implemented is green, not a run that ended done", () => {
+test("the looks: merged is green, not implemented without one nor a run that ended done", () => {
   expect(lookOf(task(1))).toBe("idle");
-  expect(lookOf(task(1, { closed: "completed" }))).toBe("done");
+  expect(lookOf(task(1, { closed: "completed" }))).toBe("implemented");
+  expect(TONES[lookOf(task(1, { closed: "completed" }))]).toBe("idle");
   const pr = (state: "draft" | "ready" | "merged") => ({
     number: 2,
     url: "",
@@ -141,11 +150,49 @@ test("the looks: implemented is green, not a run that ended done", () => {
   // Finished work still wins.
   expect(lookOf(task(1, { state: "needs-input", pr: pr("ready") }))).toBe("input");
   expect(lookOf(task(1, { state: "needs-input", pr: pr("merged") }))).toBe("done");
-  expect(lookOf(task(1, { state: "needs-input", closed: "completed" }))).toBe("done");
+  expect(lookOf(task(1, { state: "needs-input", closed: "completed" }))).toBe("implemented");
+  expect(lookOf(task(1, { closed: "completed", pr: pr("merged") }))).toBe("done");
   expect(lookOf(task(1, { state: "working", closed: "completed" }))).toBe("run");
   expect(lookOf(task(1, { state: "scheduled" }))).toBe("run");
   expect(lookOf(task(1, { state: "interrupted" }))).toBe("err");
   expect(lookOf(task(1, { state: "queued" }))).toBe("idle");
+});
+
+test("a ready pull request's node: purple only when clean, else why, or on its way (#638)", () => {
+  const pr = { number: 2, url: "", state: "ready" as const, readyAt: null, head: "b2" };
+  const failed = { ...pr, ci: { sha: "b2", state: "failed" as const, runs: [] } };
+  const running = { ...pr, ci: { sha: "b2", state: "running" as const, runs: [] } };
+  const looping = { loop: "reviewing" as const, round: 0, rounds: 2, history: [] };
+  const { nodes } = graphOf(
+    [
+      task(1, { pr }),
+      task(3, { pr: failed }),
+      task(5, { pr: { ...pr, conflict: true } }),
+      task(7, { pr: running }),
+      task(9, { state: "in-review", pr, review: looping }),
+      task(11, { closed: "completed" }),
+      task(13, { state: "working", pr }),
+      task(15, { state: "queued", pr }),
+    ],
+    [],
+    [],
+    { showClosed: true },
+  );
+  expect(nodes.map((n) => [n.number, n.look, n.status])).toEqual([
+    [1, "ready", "Ready for review"],
+    [3, "input", "CI failed"],
+    [5, "input", "Conflict"],
+    [7, "run", "Waiting for CI"],
+    [9, "run", "In review"],
+    [11, "implemented", "Implemented"],
+    [13, "run", "Working"],
+    // A run queued on it: on its way, as in the list.
+    [15, "idle", "Queued"],
+  ]);
+  // Only a run going on pulses.
+  expect(nodes.filter(moving).map((n) => n.number)).toEqual([13]);
+  // Implemented without a merge is closed: hidden unless asked for.
+  expect(graphOf([task(11, { closed: "completed" })], [], []).hidden).toBe(1);
 });
 
 test("a run that asked on a ready pull request says both", () => {

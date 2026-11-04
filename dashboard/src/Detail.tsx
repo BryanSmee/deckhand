@@ -27,7 +27,7 @@ import {
   reviewOutdated,
   runName,
   shortSha,
-  taskTone,
+  taskStatus,
   titleOf,
 } from "./format";
 import { type Handlers, useShortcuts, withKey } from "./keys";
@@ -432,7 +432,7 @@ export function Detail({
             </div>
           </div>
           <div class={styles.facts}>
-            <StatusBadge state={t.state} tone={taskTone(t)} />
+            <StatusBadge state={t.state} {...taskStatus(t)} />
             {loopLine(t) && <span>{loopLine(t)}</span>}
             {held && <StatusBadge tone="input" label="Not merged automatically" />}
             {r && (

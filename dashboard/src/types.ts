@@ -122,6 +122,10 @@ export interface PullRequest {
   // (reviewOutdated()).
   head?: string;
   ci?: Ci;
+  // Its head conflicts with its base, as GitHub last computed it (listener/pulls.mjs): absent
+  // while unknown (webhooks often send `mergeable: null`) or since a push, counted as no
+  // conflict (cleanReady()).
+  conflict?: boolean;
   // When GitHub last changed it, as the delivery that recorded it said. Sent, not shown.
   updatedAt?: number;
   // Its last CI read failed (a 5xx, a rate limit): `ci` may be out of date until the next one
