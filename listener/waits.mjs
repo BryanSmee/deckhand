@@ -172,12 +172,15 @@ export function createWaits({
   // A wait released into the queue: out of memory now, out of the store once `started()`
   // resolves (to whether it was queued; a promise of it). One pair: the queue written first,
   // then the wait deleted (`queueSaved()`), so a copy killed in between finds the comment in both,
-  // and keeps the queue's (dedupe()), never in neither. Resolves to what `started()` did.
-  async function releasing(key, started) {
+  // and keeps the queue's (dedupe()), never in neither. "answers" (not queued, its questions
+  // open): `wait` is kept (keep()) before the delete may be written, which that set replaces,
+  // so the store never goes without it. Resolves to what `started()` did.
+  async function releasing(key, wait, started) {
     let done;
     waits.delete(key, { after: new Promise((resolve) => (done = resolve)) });
     try {
       const result = await started();
+      if (result === "answers") keep(key, wait);
       done(result === true ? queueSaved() : undefined);
       return result;
     } catch (error) {
@@ -251,9 +254,8 @@ export function createWaits({
         continue;
       }
       log(`${key}: #${number} done, starting`);
-      const started = await releasing(key, () => resume(item));
+      const started = await releasing(key, wait, () => resume(item));
       if (started === "answers") {
-        await keep(key, wait);
         await answer(
           item,
           `#${number} is done, but this issue's open questions aren't answered yet: I'll start once they are.`,
@@ -264,8 +266,8 @@ export function createWaits({
   }
 
   // A wait whose issues are done, kept until the issue's questions are answered, unless a
-  // new comment replaced it meanwhile.
-  async function keep(key, wait) {
+  // new comment replaced it meanwhile (releasing()'s).
+  function keep(key, wait) {
     if (waits.has(key)) return;
     waits.set(key, { ...wait, blockers: [], answers: true, since: now() });
     log(`${key}: waits for the answers to its open questions`);
@@ -281,8 +283,8 @@ export function createWaits({
     if (!wait?.answers) return;
     if (reserved.has(key)) return void reserved.get(key).missed.push(() => answered(repo, number));
     const item = revive(wait.item);
-    const started = await releasing(key, () => resume(item));
-    if (started === "answers") return keep(key, wait);
+    const started = await releasing(key, wait, () => resume(item));
+    if (started === "answers") return;
     log(`${key}: ${started ? "answered, starting" : "answered, not started"}`);
     if (started) await answer(item, "The open questions are answered: starting.");
     else settle(item, "stopped").catch(() => {});
