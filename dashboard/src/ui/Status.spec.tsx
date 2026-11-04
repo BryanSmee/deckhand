@@ -22,7 +22,8 @@ test("a badge has its state's word and tone", () => {
   expect(screen.getByText("Needs input").className).toContain("s-input");
   expect(screen.getByText("Scheduled").className).toContain("s-run");
   expect(screen.getByText("Stopped").className).toContain("s-idle");
-  expect(screen.getByText("Done").className).toContain("s-done");
+  // Done is grey: green is for a merged pull request alone (format.ts taskStatus()).
+  expect(screen.getByText("Done").className).toContain("s-idle");
   expect(screen.getByText("Ready for review").className).toContain("s-ready");
 });
 

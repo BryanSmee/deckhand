@@ -446,3 +446,25 @@ test("a maintainer's own review brings no second ready notification", () => {
   );
   expect(FakeNotification.shown).toHaveLength(1);
 });
+
+test("a ready notification waits for CI to end, and says why it isn't clean (#638)", () => {
+  vi.stubGlobal("Notification", FakeNotification);
+  FakeNotification.shown = [];
+  const base = {
+    ...state.tasks.find((t) => t.key === KEY)!.pr!,
+    state: "ready" as const,
+    readyAt: state.now + 1000,
+    head: "b2",
+  };
+  const ci = (s: "running" | "failed") => ({ sha: "b2", state: s, runs: [] });
+  const { rerender } = render(<Dashboard state={state} error={null} />);
+  const at = (over: Partial<Task>, now: number) => ({ ...withReview(state, over), now });
+  const running = { state: "done" as const, pr: { ...base, ci: ci("running") }, review: undefined };
+  rerender(<Dashboard state={at(running, state.now + 2000)} error={null} />);
+  expect(FakeNotification.shown).toHaveLength(0);
+  const failed = { state: "done" as const, pr: { ...base, ci: ci("failed") }, review: undefined };
+  rerender(<Dashboard state={at(failed, state.now + 4000)} error={null} />);
+  expect(FakeNotification.shown.map((n) => n.options.body)).toEqual([
+    "acme/app · pull request #25 · CI failed",
+  ]);
+});

@@ -17,7 +17,7 @@ import {
   prName,
   prTitle,
   repoTabs,
-  taskTone,
+  taskStatus,
   titleOf,
   when,
   whenTitle,
@@ -30,7 +30,7 @@ import { AutoMark } from "./ui/AutoMark";
 import { Field } from "./ui/Field";
 import { FilterChip } from "./ui/FilterChip";
 import { Search } from "./ui/icons";
-import { StatusDot, stateName, toneClass } from "./ui/Status";
+import { StatusDot, toneClass } from "./ui/Status";
 import styles from "./TaskList.module.css";
 
 interface Props {
@@ -180,7 +180,7 @@ function Row({
   onSelect: (key: string) => void;
   now: number;
 }) {
-  const tone = taskTone(t);
+  const { tone, label } = taskStatus(t);
   const kind = kindOf(t);
   const parts = [
     repo && (
@@ -220,7 +220,7 @@ function Row({
           </Fragment>
         ))}
       </span>
-      <span class={`${styles.state} ${toneClass(tone)}`}>{stateName(t.state)}</span>
+      <span class={`${styles.state} ${toneClass(tone)}`}>{label}</span>
       {isReady(t) && <ReviewMarks task={t} class={styles.left} />}
     </button>
   );

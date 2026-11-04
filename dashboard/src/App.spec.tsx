@@ -94,7 +94,7 @@ test("a reserved slot a pick holds between runs (asking, between loop steps) sho
   expect(screen.getByText("1 queued · 1 auto-pickup slot (1 held between runs)")).toBeTruthy();
 });
 
-test("a done task whose pull request is ready shows the ready tone, in the list and open", () => {
+test("a done task whose pull request is ready and clean shows the ready tone, in the list and open", () => {
   history.replaceState(null, "", `#/?task=${encodeURIComponent("acme/api#131")}`);
   render(<Dashboard state={state} error={null} />);
   // Its row: the title's button (the heading has the title too).
@@ -102,9 +102,11 @@ test("a done task whose pull request is ready shows the ready tone, in the list 
     .getAllByText("Dark mode for the settings page")
     .map((el) => el.closest("button"))
     .find(Boolean)!;
-  expect(within(row).getByText("Done").className).toContain("s-ready");
+  expect(within(row).getByText("Ready for review").className).toContain("s-ready");
   const head = screen.getByRole("heading", { level: 2, name: /Dark mode/ }).closest("header")!;
-  expect(within(head).getByText("Done").className).toContain("s-ready");
+  // Its badge (the pull request's own facts say it too).
+  const badges = within(head).getAllByText("Ready for review");
+  expect(badges.some((b) => b.className.includes("s-ready"))).toBe(true);
 });
 
 test("links go to the listener's GitHub", () => {

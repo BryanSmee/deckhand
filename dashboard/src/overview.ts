@@ -2,7 +2,7 @@
 // on you across repositories, the totals, and each repository's tasks by tone and its lanes.
 import { graphOf } from "./graphModel";
 import { lanesOf } from "./lanes";
-import { isReady, isSettled, plural, sameRepo, type Tone, taskTone } from "./format";
+import { isReady, isSettled, plural, sameRepo, type Tone, taskTone, toneOf } from "./format";
 import type { Blocker, Edge, Task } from "./types";
 
 // Why a task waits on you, and the one action its row offers.
@@ -33,10 +33,12 @@ export function waitingOnYou(tasks: Task[]): Waiting[] {
 function needOf(t: Task): Need | null {
   if (t.state === "needs-input") return "input";
   if (t.state === "brainstorm") return "turn";
-  const tone = taskTone(t);
+  const tone = toneOf(t.state);
   // A failure dismissed with its pull request still ready waits for the review alone.
   if (tone === "err" && !isSettled(t)) return "error";
-  if ((tone === "ready" || tone === "err") && isReady(t)) return "ready";
+  // Ready, clean or not (its badge says which: readyStatus()), once no run is going on it but
+  // its loop's own review.
+  if ((tone === "idle" || tone === "err" || t.state === "in-review") && isReady(t)) return "ready";
   return null;
 }
 
@@ -64,10 +66,11 @@ export function repoParts(tasks: Task[], now: number): Part[] {
     const tone = taskTone(t);
     // A failure that no longer asks (isSettled()) isn't "failed" here either.
     if (tone === "err" && isSettled(t)) continue;
-    // In review: Deckhand still works on it, between the runs of its loop.
-    if (t.state === "in-review") add("run");
-    else
-      add(tone === "idle" ? (["queued", "waiting"].includes(t.state) ? "queued" : "idle") : tone);
+    if (tone !== "idle") add(tone);
+    else if (["queued", "waiting"].includes(t.state)) add("queued");
+    // Done without a merged pull request: ended, not idle, but not green either.
+    else if (t.state === "done") add("ended");
+    else add("idle");
   }
   const words: Record<string, (n: number) => string> = {
     run: (n) => `${n} running`,
@@ -76,13 +79,14 @@ export function repoParts(tasks: Task[], now: number): Part[] {
     err: (n) => `${n} failed`,
     queued: (n) => `${n} queued`,
     idle: (n) => `${n} idle`,
-    done: (n) => `${n} done this week`,
+    ended: (n) => `${n} done this week`,
+    done: (n) => `${n} merged this week`,
   };
-  const keys = ["run", "input", "ready", "err", "queued", "idle", "done"];
+  const keys = ["run", "input", "ready", "err", "queued", "idle", "ended", "done"];
   return keys
     .filter((k) => counts.get(k))
     .map((k) => ({
-      tone: (k === "queued" ? "idle" : k) as Tone,
+      tone: (k === "queued" || k === "ended" ? "idle" : k) as Tone,
       count: counts.get(k)!,
       words: words[k](counts.get(k)!),
     }))

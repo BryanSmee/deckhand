@@ -8,14 +8,13 @@ import { useState } from "preact/hooks";
 import { type RepoList, sendDismiss, sendRerun } from "./api";
 import {
   type ChipId,
-  findingsLeft,
-  reviewOutdated,
   githubUrl,
   heldText,
   inChip,
   issueList,
   numberOf,
   plural,
+  readyStatus,
   repoTabs,
   sameRepo,
   titleOf,
@@ -117,6 +116,8 @@ function Totals({ state, onChip }: { state: State; onChip: (chip: ChipId) => voi
   const failed = of("error");
   const rerunnable = failed.filter((t) => t.rerunnable).length;
   const numbers = ready.flatMap((t) => (t.pr ? [t.pr.number] : []));
+  // Ready, but CI failed, a conflict, findings left or a review before the last push.
+  const unclean = ready.filter((t) => readyStatus(t)?.tone === "input").length;
   return (
     <div class={styles.tiles}>
       <Tile
@@ -156,13 +157,16 @@ function Totals({ state, onChip }: { state: State; onChip: (chip: ChipId) => voi
         tone="ready"
         label="Ready for review"
         count={ready.length}
-        meta={
+        meta={[
           !ready.length
             ? "nothing to review"
             : numbers.length <= 3
               ? `${numbers.length === 1 ? "pull request" : "pull requests"} ${issueList(numbers)}`
-              : plural(ready.length, "pull request")
-        }
+              : plural(ready.length, "pull request"),
+          unclean && `${unclean} not clean`,
+        ]
+          .filter(Boolean)
+          .join(" · ")}
         chip="review"
         onChip={onChip}
       />
@@ -318,13 +322,14 @@ function WaitingOnYou({
             return (
               <li
                 key={t.key}
-                class={`${styles.need} ${row.need === "ready" && (findingsLeft(t) || reviewOutdated(t)) ? styles.warned : ""}`}
+                class={`${styles.need} ${row.need === "ready" && readyStatus(t)?.tone === "input" ? styles.warned : ""}`}
               >
                 <StatusBadge
                   class={styles.badge}
                   state={t.state}
-                  tone={row.need === "ready" ? "ready" : undefined}
-                  label={BADGES[row.need].label || undefined}
+                  {...(row.need === "ready"
+                    ? readyStatus(t)
+                    : { label: BADGES[row.need].label || undefined })}
                 />
                 <span class={styles.titleCell}>
                   <a class={styles.needTitle} href={taskHref(t)}>

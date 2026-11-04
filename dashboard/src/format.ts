@@ -242,8 +242,28 @@ export function matchesSearch(t: Task, query: string): boolean {
   return words.every((w) => text.includes(w));
 }
 
+// Why a pull request ready for review (isReady()) isn't for the maintainer to review as it is:
+// its CI failed, it conflicts with its base, its review loop left blocking findings, or a
+// commit came after the last review; null when none of these. What its badge says instead.
+export function notClean(t: Pick<Task, "pr" | "review">): string | null {
+  if (!isReady(t)) return null;
+  if (t.pr?.ci?.state === "failed" || t.review?.loop === "ci-failed") return "CI failed";
+  if (t.pr?.conflict) return "Conflict";
+  if (findingsLeft(t)) return "Findings left";
+  if (reviewOutdated(t)) return "Reviewed before last push";
+  return null;
+}
+
+// Ready for the maintainer's review, what purple means everywhere: open and not a draft, its
+// review loop over and clean, CI passed on its head (none at all counts, as does one not read
+// yet), and no conflict with its base (an unknown one counts as none: GitHub often doesn't
+// know yet, and a pull request mustn't flicker).
+export const cleanReady = (t: Pick<Task, "pr" | "review">) =>
+  isReady(t) && !notClean(t) && t.pr?.ci?.state !== "running";
+
 // What a state looks like: one of the six status tones (global.css .s-*), which only ever
-// mean a state. A stopped run is over, not failed: idle, like a queued one.
+// mean a state. A stopped run is over, not failed: idle, like a queued one. A run or task that
+// is done is idle too: green is for a merged pull request alone (taskStatus()).
 export type Tone = "run" | "input" | "ready" | "done" | "err" | "idle";
 
 export function toneOf(state: TaskState | RunStatus): Tone {
@@ -257,12 +277,9 @@ export function toneOf(state: TaskState | RunStatus): Tone {
     case "needs-input":
     case "brainstorm":
       return "input";
-    // Deckhand reviews its own pull request: the one the maintainer reviews next.
+    // Deckhand reviews its own pull request: still at work, between the runs of its loop.
     case "in-review":
-      return "ready";
-    case "done":
-    case "ok":
-      return "done";
+      return "run";
     case "error":
     case "interrupted":
       return "err";
@@ -271,11 +288,32 @@ export function toneOf(state: TaskState | RunStatus): Tone {
   }
 }
 
-// A task's tone: its state's, but a pull request ready for review is what it waits on once
-// no run is going and nothing failed or asks.
-export function taskTone(t: Pick<Task, "state" | "pr">): Tone {
+// A task's tone and word: its state's, but once no run is going and nothing failed or asks,
+// its pull request's: merged, green; ready for review and clean (cleanReady()), purple; ready
+// but not clean, amber with why (notClean()); still in its review loop or waiting for CI, the
+// running tone.
+export function taskStatus(t: Pick<Task, "state" | "pr" | "review">): {
+  tone: Tone;
+  label: string;
+} {
   const tone = toneOf(t.state);
-  return t.pr?.state === "ready" && (tone === "done" || tone === "idle") ? "ready" : tone;
+  const label = STATE_NAMES[t.state];
+  if (tone !== "idle") return { tone, label };
+  if (t.pr?.state === "merged") return { tone: "done", label };
+  if (t.pr?.state !== "ready") return { tone, label };
+  return readyStatus(t) ?? { tone: "run", label: "In review" };
+}
+
+export const taskTone = (t: Pick<Task, "state" | "pr" | "review">) => taskStatus(t).tone;
+
+// A pull request ready for review whose loop is over (isReady()): its tone and word, as the
+// task's (taskStatus()) and the Overview's rows have them; null otherwise.
+export function readyStatus(t: Pick<Task, "pr" | "review">): { tone: Tone; label: string } | null {
+  if (!isReady(t)) return null;
+  const why = notClean(t);
+  if (why) return { tone: "input", label: why };
+  if (t.pr?.ci?.state === "running") return { tone: "run", label: "Waiting for CI" };
+  return { tone: "ready", label: PR_NAMES.ready };
 }
 
 export const isLive = (t: Task) =>

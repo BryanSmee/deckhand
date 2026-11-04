@@ -16,7 +16,7 @@ import {
   PlaceBadge,
   QuestionBadge,
 } from "./GraphDrawing";
-import { TONES, type GraphNode } from "./graphModel";
+import { moving, TONES, type GraphNode } from "./graphModel";
 import { laneName, lanesOf } from "./lanes";
 import type { Edge, LaneLabel, Task } from "./types";
 import { Button, IconButton } from "./ui/Button";
@@ -56,7 +56,7 @@ export function Lanes({ repo, nodes, edges, labels, github, narrow, onAsk, refre
         {...(n.task ? {} : { target: "_blank", rel: "noreferrer" })}
       >
         <span class={styles.rail}>
-          <StatusDot tone={TONES[n.look]} pulse={n.look === "run"} />
+          <StatusDot tone={TONES[n.look]} pulse={moving(n)} />
         </span>
         <span class={styles.name}>
           <span class={styles.ref}>{nodeRef(n, false, 0)}</span> {n.title ?? ""}

@@ -8,8 +8,8 @@ import {
   matchesSearch,
   repoTabs,
   sameRepo,
-  STATE_NAMES,
-  taskTone,
+  taskStatus,
+  type Tone,
   titleOf,
   uniqueRepos,
 } from "./format";
@@ -49,7 +49,7 @@ interface Item {
   icon: ComponentChildren;
   // On the right: a task's state, an action's key.
   aside?: ComponentChildren;
-  tone?: ReturnType<typeof taskTone>;
+  tone?: Tone;
   open: () => void;
   // Its page on GitHub, for Ctrl Enter.
   url?: string | null;
@@ -123,7 +123,7 @@ export function Palette({ state, repos = [], showClosed = false, jumps, onClose 
     .filter((t) => matchesSearch(t, query))
     .sort((a, b) => Number(b.number === Number(number)) - Number(a.number === Number(number)));
   for (const t of tasks) {
-    const tone = taskTone(t);
+    const { tone, label } = taskStatus(t);
     items.push({
       id: `task:${t.key}`,
       group: "Tasks",
@@ -136,7 +136,7 @@ export function Palette({ state, repos = [], showClosed = false, jumps, onClose 
       ),
       icon: <StatusDot tone={tone} />,
       tone,
-      aside: <span class={styles.state}>{STATE_NAMES[t.state]}</span>,
+      aside: <span class={styles.state}>{label}</span>,
       open: () => jumps.task(t),
       url: githubUrl(t, github),
     });

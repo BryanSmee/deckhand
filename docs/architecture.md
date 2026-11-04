@@ -688,7 +688,9 @@ kept as the pair's attempt: a "No rebase run" comment quotes its messages, and o
 are kept with it (`said`), so a later pair refused for the same ones isn't said again (a base
 that keeps moving says it once). A refusal because GitHub couldn't be read (`unread`: the
 policies or the input) keeps no pair, nor a decision for the task's page (`keepUnread: false`): it is the repo's error for that pass, asked again at the
-next check, as any GitHub error there.
+next check, as any GitHub error there. What each check read is also passed to `pulls.mjs`
+(`sawMerge()`), so the dashboard's `pr.conflict` is current for those repos too; for the others it
+comes from the `pull_request` deliveries and Sync's reads (`resync()`), when GitHub computed it.
 
 The dashboard's Sync runs the same pass at once (`check()`), with every opted-in repo due
 whatever its interval, and resets their next check as a tick does. During a tick, it waits for
