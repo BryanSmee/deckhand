@@ -964,6 +964,17 @@ export function modeNames(settings) {
   return [...PICKED_MODES, ...review, ...Object.keys(settings?.modes ?? {})];
 }
 
+// Whether `repo` is a repository's `owner/repo`, nothing else: it goes into GitHub's paths and
+// the runner's builds, where a `..` or a `?` would reach another repository than the one asked.
+const REPO = /^[A-Za-z0-9_.-]{1,100}\/[A-Za-z0-9_.-]{1,100}$/;
+export function validRepo(repo) {
+  return (
+    typeof repo === "string" &&
+    REPO.test(repo) &&
+    repo.split("/").every((part) => part !== "." && part !== "..")
+  );
+}
+
 // "docker/Dockerfile" → itself; absolute paths, "..", odd characters → null.
 export function repoPath(value) {
   if (typeof value !== "string" || !/^[\w./@+-]+$/.test(value)) return null;

@@ -2,7 +2,7 @@
 // decision, the config checks and the Policies tab go there, and the listener starts no `opa`.
 // The same methods as the service's engine (../policy-service/engine.mjs createEngine()), which
 // the tests pass in its place: policies(), evaluate(body), evaluateCapabilities(body),
-// compile(body).
+// evaluateAccess(body), compile(body).
 //
 // Each call carries a service token (`header()`: lib/service-token.mjs serviceTokens()'s). A
 // service that refuses the connection or answers 503 (stopping, or not started yet) is asked again
@@ -95,6 +95,7 @@ export function policyClient({
     policies: () => call("GET", "/policies"),
     evaluate: (body) => call("POST", "/evaluate", body),
     evaluateCapabilities: (body) => call("POST", "/capabilities", body),
+    evaluateAccess: (body) => call("POST", "/access", body),
     compile: (body) => call("POST", "/check", body),
   };
 }

@@ -619,7 +619,7 @@ test(
     );
     assert.equal(
       await error({ "a.rego": 'package deckhand\n\nallow_capabilities := "pull"\n' }),
-      "policy error: `allow_capabilities` and `deny_capabilities` must be sets (`contains` rules)",
+      "policy error: `allow_capabilities`, `deny_capabilities`, `allow_access` and `deny_access` must be sets (`contains` rules)",
     );
     assert.equal(
       await error({

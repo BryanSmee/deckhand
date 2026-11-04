@@ -10,7 +10,8 @@
 // (grants.mjs GRANTS: grants() below, the operator's alone). A decision is allowed when an allow rule
 // matches and no deny rule does: a deny always wins. What a run gets as it starts has rules of
 // its own, sets of names (capabilityRules(), capabilities.mjs), which the service evaluates for
-// every mode at once and says the file that decided each of.
+// every mode at once and says the file that decided each of; and so has who may do what on a
+// repository or server-wide (`access`, #730: access() below, the operator's allow alone).
 //
 // Two layers, each in a namespace of its own so that neither's files can define or break the
 // other's rules: the operator's, Deckhand's own defaults under GRANTS_DIR/policy/*.rego, which
@@ -29,14 +30,17 @@
 import { createHash } from "node:crypto";
 import { getJson } from "./github.mjs";
 import {
+  ACCESS_RULES,
   CAPABILITY_RULES,
   FILE,
   layerDigest,
   MAX_CAPABILITY_INPUTS,
   operatorPolicies,
   rulesOf,
+  SET_FAMILIES,
 } from "../lib/policy-files.mjs";
 import { redact } from "../lib/redact.mjs";
+import { validRepo } from "./repo-config.mjs";
 import { ANY_REPO, GRANTS, ownerProbe, REPO_ONLY } from "./grants.mjs";
 
 // Where a repo's policies are, on its default branch.
@@ -60,6 +64,7 @@ export const DECISIONS = [
 export const RULES = [
   ...DECISIONS.flatMap((d) => [`allow_${d}`, `deny_${d}`]),
   ...CAPABILITY_RULES,
+  ...ACCESS_RULES,
 ];
 
 // The inputs one call of the policy service's capabilities takes (lib/policy-files.mjs, its
@@ -68,7 +73,7 @@ export const CAPABILITY_INPUTS_MAX = MAX_CAPABILITY_INPUTS;
 
 // Where they are now (lib/policy-files.mjs, which the policy service shares): the listener's
 // modules and tests import them from here.
-export { CAPABILITY_RULES, rulesOf };
+export { ACCESS_RULES, CAPABILITY_RULES, rulesOf };
 
 // The decisions only about built-in modes' runs (a review, its fix run, the merge): a repo's
 // allow rule for them would count for no run, and is a config check error.
@@ -78,6 +83,75 @@ export const BUILT_IN_ONLY = new Set(["merge", "review", "fix"]);
 // are a config check error, and not asked. What a repository gets beyond any run is the
 // operator's to say; it narrows what its runs do with its other rules.
 export const OPERATOR_ONLY = new Set(["grant"]);
+
+// The decisions only the operator's layer allows: a repo's allow rule for them is a config check
+// error, evaluated (one of the wrong shape fails closed) but not counted; its deny rules
+// narrow. Who may do what on a repository is the operator's to say (#730), and a repository's
+// maintainers may only take some of it away.
+export const OPERATOR_ALLOWS = new Set(["access"]);
+
+// The actions access() gives (#730): on a repository, and server-wide (asked with no repository).
+// A rule may give a prefix ending in `*` (`runs:start:*`, `server:*`, `*`: all of them), and a
+// deny may name one too. `runs:start:<mode>`: any mode, a repository's own too.
+export const REPO_ACTIONS = [
+  "tasks:read",
+  "logs:read",
+  "runs:start:*",
+  "runs:manage",
+  "repo:config:read",
+];
+export const SERVER_ACTIONS = ["server:read", "server:sync"];
+// The server-wide actions' prefix: they count only asked with no repository, the others only on
+// one, whatever a rule's prefix gives.
+const SERVER = "server:";
+
+// Whether `pattern` (an action, or a prefix ending in `*`) covers `action`. A pattern's `*`
+// covers a pattern's (`runs:*` covers `runs:start:*`): what it gives, it gives all of.
+export function actionMatches(pattern, action) {
+  if (typeof pattern !== "string" || typeof action !== "string") return false;
+  if (!pattern.endsWith("*")) return pattern === action;
+  return action.startsWith(pattern.slice(0, -1));
+}
+
+// Whether access()'s `answer` gives `action` (on a repository when `repo`, else server-wide):
+// an allowed pattern covers it, and no deny does. A deny always wins; an error gives nothing.
+// A deny that covers the action asked refuses it (`*` refuses everything, server-wide too). A
+// pattern asked (`runs:start:*`) is all of what it covers: a deny of any of it, in its scope
+// (`runs:start:work`), refuses it; one of the other scope's actions (`server:sync` on a
+// repository) doesn't.
+export function allows(answer, action, repo = true) {
+  if (!answer || answer.error || typeof action !== "string") return false;
+  // `*` asked is all of its scope's: server-wide, every server action.
+  if (action === "*" && !repo) action = `${SERVER}*`;
+  if (action.startsWith(SERVER) === !!repo) return false;
+  const inScope = (a) => typeof a === "string" && a.startsWith(SERVER) !== !!repo;
+  return (
+    answer.actions.some((p) => actionMatches(p, action)) &&
+    !answer.denied.some(
+      (d) =>
+        actionMatches(d.action, action) || (inScope(d.action) && actionMatches(action, d.action)),
+    )
+  );
+}
+
+// Deckhand's policy/access.rego's one rule: every action, for every login (access()'s shortcut).
+const EVERY_ACTION = /^allow_access\s+contains\s+"\*"\s*(?:#.*)?$/m;
+
+// access()'s answer, read-only: kept and given to every caller for ACCESS_MS.
+const frozen = ({ actions, denied, files, error }) =>
+  Object.freeze({
+    actions: Object.freeze([...actions]),
+    denied: Object.freeze(denied.map((d) => Object.freeze({ ...d }))),
+    files: Object.freeze(
+      Object.fromEntries(Object.entries(files).map(([a, f]) => [a, Object.freeze([...f])])),
+    ),
+    error,
+  });
+
+// How long access()'s answers are kept for the same layers, login and repository (as grants()'s:
+// GRANTS_MS bounds a rule reading the time), and for how many at most.
+export const ACCESS_MS = 60_000;
+const MAX_ACCESS = 5000;
 
 // `deny_merge`, `allow_merge` or `merge` → "merge".
 export const decisionOf = (rule) => rule.replace(/^(?:allow|deny)_/, "");
@@ -444,15 +518,27 @@ export function createPolicies({
   // isn't asked (no decision kept, without a repo's files). Deckhand's files are known: rulesOf()
   // reads them right.
   async function onlyBuiltInAllowing(decision, files) {
+    const always = new RegExp(`^allow_${decision}\\s*:=\\s*true\\s*$`, "m");
+    return !!(await builtInGiving(decision, files, always));
+  }
+
+  // The files of the operator's layer `files` whose rule `always` (a RegExp) allows `decision`
+  // whatever the input, when that layer is Deckhand's own policies only, unchanged (DEFAULTS_MS),
+  // none of them defining `deny_<decision>`: their names, else null.
+  async function builtInGiving(decision, files, always) {
     if (!fresh()) await served().catch(() => null);
     const own = fresh() ? knownOwn : null;
-    if (!own) return false;
-    const always = new RegExp(`^allow_${decision}\\s*:=\\s*true\\s*$`, "m");
-    return (
-      [...files].every(
-        ([name, text]) => own.get(name) === text && !rulesOf(text).includes(`deny_${decision}`),
-      ) && [...files.values()].some((text) => always.test(text))
-    );
+    if (!own) return null;
+    const all = [...files];
+    if (
+      all.some(
+        ([name, text]) => own.get(name) !== text || rulesOf(text).includes(`deny_${decision}`),
+      )
+    ) {
+      return null;
+    }
+    const giving = all.filter(([, text]) => always.test(text)).map(([name]) => name);
+    return giving.length ? giving : null;
   }
 
   // The layers of `asking` ({ operator, repo }: name → text, either absent: not asked) on
@@ -518,7 +604,9 @@ export function createPolicies({
   // One layer's (or file's) two capabilities' rules as the service gave them (`said`: { allow,
   // deny }, each the rule's value in a list, empty when undefined) → { allow: names, deny: [{
   // capability, reason }] }, or a failure: a rule of the wrong shape refuses.
-  function shapedRules(said, layer) {
+  // `family`: SET_FAMILIES's, whose deny objects name a `capability` or an `action` (`what`).
+  function shapedRules(said, layer, family = "capabilities") {
+    const what = SET_FAMILIES[family];
     const listed = (v) => Array.isArray(v) && v.length <= 1;
     if (!listed(said?.allow) || !listed(said?.deny)) {
       return { error: "the policy service's answer can't be read", errorLayer: null };
@@ -526,19 +614,19 @@ export function createPolicies({
     const [allow = []] = said.allow;
     const [deny = []] = said.deny;
     if (!Array.isArray(allow) || allow.some((n) => typeof n !== "string")) {
-      return { error: "`allow_capabilities` must be a set of strings", errorLayer: layer };
+      return { error: `\`allow_${family}\` must be a set of strings`, errorLayer: layer };
     }
-    const shaped = (d) => d && typeof d.capability === "string" && typeof d.reason === "string";
+    const shaped = (d) => d && typeof d[what] === "string" && typeof d.reason === "string";
     if (!Array.isArray(deny) || !deny.every(shaped)) {
       return {
-        error: '`deny_capabilities` must be a set of {"capability": …, "reason": …} objects',
+        error: `\`deny_${family}\` must be a set of {"${what}": …, "reason": …} objects`,
         errorLayer: layer,
       };
     }
-    return { allow, deny };
+    return { allow, deny: deny.map((d) => ({ [what]: d[what], reason: d.reason })) };
   }
 
-  const denyKey = (d) => JSON.stringify([d.capability, d.reason]);
+  const denyKey = (d, what) => JSON.stringify([d[what], d.reason]);
 
   // The capabilities' rules (issue #495) of `layers` ({ operator, repo }: name → text, either
   // absent or empty: not asked) on each of `inputs` (key → input document, the version added), by
@@ -547,7 +635,13 @@ export function createPolicies({
   // file being one whose own rule gave it (byFile()), null when none did } or { error, errorLayer },
   // as evaluateLayers() says them. The operator's files are the service's own: they go as their
   // digest, as for a decision.
-  async function evaluateCapabilities(layers, inputs) {
+  const evaluateCapabilities = (layers, inputs) => evaluateSets("capabilities", layers, inputs);
+
+  // evaluateCapabilities()'s work for the set rules of `family` (SET_FAMILIES), the policy
+  // service's `evaluate<Family>`: each deny names its `capability`, or its `action`.
+  async function evaluateSets(family, layers, inputs) {
+    const what = SET_FAMILIES[family];
+    const method = family === "access" ? "evaluateAccess" : "evaluateCapabilities";
     const failed = (what, errorLayer = null) => ({ error: what, errorLayer });
     const asked = Object.keys(layers).filter((layer) => layers[layer]?.size);
     const docs = Object.fromEntries(
@@ -562,7 +656,7 @@ export function createPolicies({
       );
       let got;
       try {
-        got = await service.evaluateCapabilities({
+        got = await service[method]({
           inputs: part,
           operator: asked.includes("operator"),
           repo: asked.includes("repo") ? [...layers.repo] : null,
@@ -588,7 +682,7 @@ export function createPolicies({
       results[key] = {};
       for (const layer of asked) {
         const got = said.results[key]?.[layer];
-        const whole = shapedRules(got?.all, layer);
+        const whole = shapedRules(got?.all, layer, family);
         if (whole.error) return whole;
         // Each name and deny of the whole rules with the files whose own rules gave it: none
         // when only a rule byFile() couldn't rename did (indented, or in a file whose package
@@ -596,18 +690,20 @@ export function createPolicies({
         const allowFiles = new Map();
         const denyFiles = new Map();
         for (const [file, rules] of Object.entries(got.files ?? {})) {
-          const own = shapedRules(rules, layer);
+          const own = shapedRules(rules, layer, family);
           if (own.error) return own;
           for (const name of own.allow)
             allowFiles.set(name, [...(allowFiles.get(name) ?? []), file]);
-          for (const d of own.deny)
-            denyFiles.set(denyKey(d), [...(denyFiles.get(denyKey(d)) ?? []), file]);
+          for (const d of own.deny) {
+            const key = denyKey(d, what);
+            denyFiles.set(key, [...(denyFiles.get(key) ?? []), file]);
+          }
         }
         results[key][layer] = {
           allow: new Map(whole.allow.map((name) => [name, allowFiles.get(name) ?? [null]])),
           deny: whole.deny.flatMap((d) =>
-            (denyFiles.get(denyKey(d)) ?? [null]).map((file) => ({
-              capability: d.capability,
+            (denyFiles.get(denyKey(d, what)) ?? [null]).map((file) => ({
+              [what]: d[what],
               reason: line(d.reason),
               file,
             })),
@@ -730,6 +826,148 @@ export function createPolicies({
       granted.set(key, { at: now(), said: answer });
       return answer;
     }
+  }
+
+  // access()'s answers, by the layers' digests, the login and the repository: the same files give
+  // the same answer, so an edit of the operator's, or a push that changes the repo's (forget()),
+  // is asked again at once. ACCESS_MS bounds a rule reading the time; a failure isn't kept.
+  const accessKept = new Map();
+
+  // What GitHub said of a repository access() was given by name (GET /repos/{repo}), by its name
+  // in lower case → { at, info }: kept ACCESS_MS, as the answers are, and forgotten on its push
+  // (forget()), so that a kept answer costs no call and a GitHub hiccup doesn't refuse it.
+  const repoInfos = new Map();
+  // A renamed or transferred repository's current name (lower case) → the names it was asked by
+  // (repoOf()): its push's webhook says the current one, and forget() clears them too.
+  const renamed = new Map();
+
+  // A repository as access() takes it, its name or what GitHub says of it (its `full_name`,
+  // `private`, `default_branch`) → { name, private, ref }. Without its default branch, read
+  // (repoInfos), never guessed: another branch's listing would drop its deny rules. Not known to
+  // be public: private (fail closed). GitHub can't say: throws.
+  async function repoOf(repo) {
+    let info = repo;
+    if (typeof repo === "string" || !info?.default_branch) {
+      const name = typeof repo === "string" ? repo : (info?.full_name ?? info?.name);
+      if (!validRepo(name)) throw new Error("no repository's name");
+      const key = name.toLowerCase();
+      const kept = repoInfos.get(key);
+      if (kept && now() - kept.at < ACCESS_MS) info = kept.info;
+      else {
+        info = await getJson(github, name, `/repos/${name}`);
+        if (typeof info?.default_branch !== "string" || !info.default_branch) {
+          throw new Error(`GitHub gave no default branch for ${name}`);
+        }
+        // A repository renamed or transferred answers with another name entirely: the name
+        // asked for stays (as repo-check.mjs keeps it), so that the bindings, its listing and
+        // forget() are all of the repository the caller asked about.
+        const current = String(info.full_name).toLowerCase();
+        if (current !== key) {
+          if (renamed.size >= MAX_ACCESS) renamed.delete(renamed.keys().next().value);
+          renamed.set(current, new Set([...(renamed.get(current) ?? []), key]));
+          info = { ...info, full_name: name };
+        }
+        if (repoInfos.size >= MAX_ACCESS) repoInfos.delete(repoInfos.keys().next().value);
+        repoInfos.set(key, { at: now(), info });
+      }
+    }
+    const name = info?.full_name ?? info?.name;
+    if (!validRepo(name)) throw new Error("no repository's name");
+    return { name, private: info.private !== false, ref: info.default_branch };
+  }
+
+  // Deckhand's own policies alone (builtInGiving()), one giving every action to every login (its
+  // access.rego), and no repo file: every action, without a call. `layers`: policiesFor()'s →
+  // the files giving it, or null.
+  async function everyAction(layers) {
+    if (layers.repo.size) return null;
+    return builtInGiving("access", layers.operator, EVERY_ACTION);
+  }
+
+  // Who may do what (#730): the actions `login` has on `repo` (its name, or GitHub's info about
+  // it: repoOf()), or server-wide when `repo` is null, as the operator's `allow_access` gives them
+  // and neither layer's `deny_access` takes them away, asked with { user: { login }, repo: { name,
+  // private } | null }, both names in lower case → { actions, denied, files, error }: `actions`,
+  // the patterns allowed (`runs:start:*`, `*`), sorted; `denied`, [{ action, reason, file, layer
+  // }]; `files`, each action → the operator's files whose own rule gives it (Settings › Access);
+  // `error`, why nothing is given (a policy error, policies or GitHub that can't be read, a policy
+  // service away), null otherwise. allows() reads it: a deny wins. A repo's allow rules aren't
+  // read (OPERATOR_ALLOWS): its listing is read first (forget() on its push), and its deny rules
+  // apply. One evaluation per login and repository gives them all; kept (`accessKept`), frozen,
+  // as every later caller gets the same answer. Pass a repository's name, or GitHub's current
+  // info about it: a stale one (its old name, with its default branch) isn't read again, so its
+  // push's forget(), under the current name, wouldn't clear what is kept under the old one.
+  async function access(login, repo = null) {
+    const nothing = (error) => ({ actions: [], denied: [], files: {}, error });
+    const who = typeof login === "string" ? login.toLowerCase() : "";
+    if (!who) return nothing("no login");
+    for (let attempt = 0; ; attempt++) {
+      let where = null;
+      let layers;
+      try {
+        if (repo != null) where = await repoOf(repo);
+        layers = {
+          operator: await defaults(),
+          repo: where ? await repoPolicies(where.name, where.ref, { cached: true }) : new Map(),
+        };
+      } catch (error) {
+        const what =
+          where?.name ?? (repo == null ? "server-wide" : (repo.full_name ?? repo.name ?? repo));
+        log(`${what}: ${who}'s access: ${error.message ?? error}`);
+        return nothing(failure(`the policies can't be read (${error.message ?? error})`)[0]);
+      }
+      const input = {
+        version: INPUT_VERSION,
+        decision: "access",
+        user: { login: who },
+        repo: where && { name: where.name.toLowerCase(), private: where.private },
+      };
+      const key = JSON.stringify([
+        layerDigest(layers.operator),
+        layerDigest(layers.repo),
+        input.user,
+        input.repo,
+      ]);
+      const kept = accessKept.get(key);
+      if (kept && now() - kept.at < ACCESS_MS) return kept.said;
+      let answer;
+      const giving = await everyAction(layers);
+      if (giving) answer = { actions: ["*"], denied: [], files: { "*": giving }, error: null };
+      else {
+        const said = await evaluateSets("access", layers, { access: input });
+        if (said.mismatch && attempt === 0) {
+          knownOwn = null;
+          continue;
+        }
+        if (said.error) {
+          const [message] = failure(said.error);
+          log(`${where?.name ?? "server-wide"}: ${who}'s access refused: ${message}`);
+          return nothing(message);
+        }
+        const { operator, repo: own } = said.results.access;
+        const actions = [...operator.allow.keys()].sort();
+        answer = {
+          actions,
+          denied: [
+            ...operator.deny.map((d) => ({ ...d, layer: "operator" })),
+            ...(own?.deny ?? []).map((d) => ({ ...d, layer: "repo" })),
+          ],
+          files: Object.fromEntries(
+            actions.map((a) => [a, operator.allow.get(a).filter((f) => f !== null)]),
+          ),
+          error: null,
+        };
+      }
+      if (accessKept.size >= MAX_ACCESS) accessKept.delete(accessKept.keys().next().value);
+      answer = frozen(answer);
+      accessKept.set(key, { at: now(), said: answer });
+      return answer;
+    }
+  }
+
+  // Whether `login` may do `action` on `repo` (access()'s), or server-wide when `repo` is null.
+  async function can(login, repo, action) {
+    return allows(await access(login, repo), action, repo != null);
   }
 
   // Why `rule` (`deny_merge`, `merge`…: its decision) refuses on `repo` (its policies on `ref`,
@@ -930,6 +1168,17 @@ export function createPolicies({
             ),
             ignored: true,
           });
+        } else if (layer === "repo" && OPERATOR_ALLOWS.has(decisionOf(rule))) {
+          if (rule.startsWith("allow_")) {
+            errors.push({
+              ...placed(
+                name,
+                lineOf(text, rule),
+                `\`${rule}\` is ignored: only the operator's policies give access; a repository's may only take some away (\`deny_access\`)`,
+              ),
+              ignored: true,
+            });
+          }
         } else if (layer === "repo" && rule.startsWith("allow_")) {
           const decision = decisionOf(rule);
           if (BUILT_IN_ONLY.has(decision)) {
@@ -1096,9 +1345,13 @@ export function createPolicies({
   }
 
   // `repo`'s default branch moved (a push, a merge: repos.mjs refreshFor()): its policies are
-  // listed again at the next decision.
+  // listed again at the next decision, and what GitHub says of it read again (access()).
   function forget(repo) {
-    listings.delete(repo.toLowerCase());
+    const key = repo.toLowerCase();
+    for (const name of [key, ...(renamed.get(key) ?? [])]) {
+      listings.delete(name);
+      repoInfos.delete(name);
+    }
   }
 
   return {
@@ -1107,6 +1360,8 @@ export function createPolicies({
     capabilityRules,
     evaluateCapabilities,
     grants,
+    access,
+    can,
     denied,
     evaluated,
     describe,

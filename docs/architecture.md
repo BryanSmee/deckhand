@@ -944,6 +944,9 @@ it sends with each call; the service reads Deckhand's policies (its image) and t
   inputs in one query (a run's, or each mode of a config page), the digest sent as for a
   decision: for each input and layer, the whole rules' allow and deny, and each file's own,
   which `listener/policies.mjs` turns into what was allowed and denied, and by which file;
+- `POST /access`: who may do what (#730), the orchestrator's alone: the access rules' sets
+  (`allow_access`, `deny_access`), evaluated as the capabilities' are, for a login on a
+  repository or server-wide (`listener/policies.mjs` `access()`);
 - `POST /check`: a layer's compile errors, the config checks'.
 
 Its engine (`policy-service/engine.mjs`) keeps a few long-lived `opa run --server`
