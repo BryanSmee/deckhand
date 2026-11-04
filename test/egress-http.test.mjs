@@ -7,6 +7,7 @@ import { once } from "node:events";
 import { test } from "node:test";
 import { createEgressHttp, taskWhere } from "../listener/egress-http.mjs";
 import { createBroker } from "../listener/broker.mjs";
+import { refused } from "../listener/egress.mjs";
 import { testConfig } from "./helpers.mjs";
 
 // Two running tasks, A and B, on networks net-a and net-b: A's sandbox and its engine, B's
@@ -178,8 +179,9 @@ test("egress: the runner's builder and installs answered by the images, an insta
   // The API can't tell: neither the run's own hosts for an installer, nor install hosts for
   // the sandbox, only those that are both, tunnelled; and it asks again.
   installing = null;
-  assert.equal((await ask("10.1.0.2", "pypi.org")).allowed, false);
-  assert.equal((await ask("10.1.0.2", "registry.npmjs.org")).allowed, false);
+  const notGranted = { ...refused("not_granted"), source: "install" };
+  assert.deepEqual(await ask("10.1.0.2", "pypi.org"), notGranted);
+  assert.deepEqual(await ask("10.1.0.2", "registry.npmjs.org"), notGranted);
   const { live } = ctx.tasks.get("org/a#1");
   live.hosts.push("registry.npmjs.org");
   assert.deepEqual(await ask("10.1.0.2", "registry.npmjs.org"), {
@@ -259,16 +261,19 @@ test("egress: the services' names only for a run's sandbox or engine the proxy f
         source: ip === "10.1.0.2" ? "sandbox" : "engine",
       });
     }
-    const build = await ask("10.9.9.9", host, "&forward=1");
-    assert.deepEqual(
-      [build.allowed, build.source, build.reason],
-      [false, "build", "not_forwarded"],
-    );
-    const nobody = await ask("10.7.7.7", host, "&forward=1");
-    assert.deepEqual([nobody.allowed, nobody.source, nobody.reason], [false, "none", "no_run"]);
+    assert.deepEqual(await ask("10.9.9.9", host, "&forward=1"), {
+      ...refused("not_forwarded"),
+      source: "build",
+    });
+    assert.deepEqual(await ask("10.7.7.7", host, "&forward=1"), {
+      ...refused("no_run"),
+      source: "none",
+    });
     // Asked as any other host (a CONNECT): refused, and said.
-    const tunnel = await ask("10.1.0.2", host);
-    assert.deepEqual([tunnel.allowed, tunnel.reason], [false, "not_forwarded"]);
+    assert.deepEqual(await ask("10.1.0.2", host), {
+      ...refused("not_forwarded"),
+      source: "sandbox",
+    });
   }
   assert.ok(logged.includes("Egress: refused broker for 10.1.0.2"));
 });
