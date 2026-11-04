@@ -603,25 +603,23 @@ export function createEngine({
   // each the rule's value in a list (empty when no file defines it); `files`, file name → the same
   // of that file's own rules (byFile(), the files defining one) } or { error, errorLayer }. What
   // the values mean, and their shape, are the caller's to check (listener/policies.mjs).
-  async function evaluateCapabilities(asked) {
-    const timing = { seconds: null };
-    const said = await capabilitiesOf(asked, timing);
-    metrics.decision("capabilities", said.error ? "error" : "allow", timing.seconds);
-    return said;
-  }
+  const evaluateCapabilities = setsEvaluator("capabilities");
 
   // The access rules (#730), as evaluateCapabilities() evaluates the capabilities': `allow_access`
   // and `deny_access` on each of `inputs` (a login's, on a repository or server-wide). What the
   // actions mean is the caller's (listener/policies.mjs access()).
-  async function evaluateAccess(asked) {
-    const timing = { seconds: null };
-    const said = await setsOf("access", asked, timing);
-    metrics.decision("access", said.error ? "error" : "allow", timing.seconds);
-    return said;
-  }
+  const evaluateAccess = setsEvaluator("access");
 
-  // evaluateCapabilities()'s, timed as decide() is.
-  const capabilitiesOf = (asked, timing) => setsOf("capabilities", asked, timing);
+  // The evaluation of `family`'s set rules (setsOf()), timed as decide() is, counted under the
+  // family's name.
+  function setsEvaluator(family) {
+    return async (asked) => {
+      const timing = { seconds: null };
+      const said = await setsOf(family, asked, timing);
+      metrics.decision(family, said.error ? "error" : "allow", timing.seconds);
+      return said;
+    };
+  }
 
   // The set rules of `family` (SET_FAMILIES: `allow_<family>`, `deny_<family>`) on `inputs`, as
   // evaluateCapabilities() says them.

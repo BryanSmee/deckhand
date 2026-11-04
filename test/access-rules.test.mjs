@@ -551,3 +551,44 @@ test("allows: a deny of the other scope's actions doesn't refuse a pattern", () 
   assert.ok(!allows(repoDeny, "*"));
   assert.ok(allows(repoDeny, "server:*", false));
 });
+
+test("allows: a deny of `*` refuses everything, server-wide too", () => {
+  const answer = {
+    actions: ["*"],
+    denied: [{ action: "*", reason: "no", file: null, layer: "operator" }],
+    files: {},
+    error: null,
+  };
+  for (const action of ["server:read", "server:sync", "server:*"]) {
+    assert.ok(!allows(answer, action, false), action);
+  }
+  for (const action of ["tasks:read", "runs:start:*", "*"]) assert.ok(!allows(answer, action));
+  // A prefix covering the server's actions refuses them too.
+  const s = { ...answer, denied: [{ ...answer.denied[0], action: "s*" }] };
+  assert.ok(!allows(s, "server:read", false));
+  assert.ok(allows(s, "tasks:read"));
+});
+
+test(
+  "the real opa: an operator's deny of `*` for one login takes every action away, server-wide too",
+  { skip: noOpa },
+  async (t) => {
+    const { policies } = realAccess(t, {
+      operator: {
+        "mallory.rego": [
+          "package deckhand",
+          "",
+          'deny_access contains {"action": "*", "reason": "not mallory"} if {',
+          '  input.user.login == "mallory"',
+          "}",
+        ].join("\n"),
+      },
+    });
+    for (const action of SERVER_ACTIONS) {
+      assert.ok(!(await policies.can("mallory", null, action)), action);
+      assert.ok(await policies.can("bob", null, action), action);
+    }
+    assert.ok(!(await policies.can("mallory", repo("acme/api"), "tasks:read")));
+    assert.ok(await policies.can("bob", repo("acme/api"), "tasks:read"));
+  },
+);

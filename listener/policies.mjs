@@ -114,16 +114,20 @@ export function actionMatches(pattern, action) {
 
 // Whether access()'s `answer` gives `action` (on a repository when `repo`, else server-wide):
 // an allowed pattern covers it, and no deny does. A deny always wins; an error gives nothing.
-// A pattern asked (`runs:start:*`) is all of what it covers: a deny of any of it
-// (`runs:start:work`) refuses it, a deny of the other scope's actions (`server:sync` on a
+// A deny that covers the action asked refuses it (`*` refuses everything, server-wide too). A
+// pattern asked (`runs:start:*`) is all of what it covers: a deny of any of it, in its scope
+// (`runs:start:work`), refuses it; one of the other scope's actions (`server:sync` on a
 // repository) doesn't.
 export function allows(answer, action, repo = true) {
   if (!answer || answer.error || typeof action !== "string") return false;
   if (action.startsWith(SERVER) === !!repo) return false;
-  const denied = answer.denied.filter((d) => d.action?.startsWith(SERVER) !== !!repo);
+  const inScope = (a) => typeof a === "string" && a.startsWith(SERVER) !== !!repo;
   return (
     answer.actions.some((p) => actionMatches(p, action)) &&
-    !denied.some((d) => actionMatches(d.action, action) || actionMatches(action, d.action))
+    !answer.denied.some(
+      (d) =>
+        actionMatches(d.action, action) || (inScope(d.action) && actionMatches(action, d.action)),
+    )
   );
 }
 
