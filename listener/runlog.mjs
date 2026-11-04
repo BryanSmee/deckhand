@@ -208,14 +208,16 @@ const MOVE_BATCH = 50;
 export const isRunState = (saved) => Boolean(saved?.id && saved.task && saved.record);
 
 // The logs a listener kept itself (logs/<run>.log), before the runner kept them (#503): each
-// summarized now when its run has no summary, in logs/ or in the store (`summarized`: the ids of
-// those there, as moveSummaries() removes logs/' copy: a log the runner didn't take would
-// otherwise be read again at every start, for a summary setIfAbsent() discards), a log from
-// before summaries or of a listener that died mid-run, and isn't live, so that loadRuns() lists it (moveSummaries() takes it to
+// summarized now when its run has no summary (a log from before summaries, or of a listener
+// that died mid-run) and isn't live, so that loadRuns() lists it (moveSummaries() takes it to
 // the store); then sent to the runner
 // (`logs`: ../runner/client.mjs's) and removed, while the listener goes on: a runner away
 // doesn't keep it from starting. A log whose summary can't be written stays here, as does one
 // the runner doesn't take, and is sent at the next start.
+//
+// A run's summary is in logs/ or in the store (`summarized`: the ids of those there): once
+// moveSummaries() moved it, logs/ has none, and a log the runner didn't take would be read
+// again at every start, for a summary setIfAbsent() discards (#697).
 //
 // A live run's log (its state in the store, `live`: their ids, or a .live.json of the release
 // before that is a run's state: one that isn't, which restart.mjs leaves where it is, is no live

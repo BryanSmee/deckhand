@@ -57,6 +57,7 @@ import { createModels, credentialNames, runnerOf } from "../models/server.mjs";
 import { APP_EVENTS, APP_PERMISSIONS } from "../listener/github-app.mjs";
 import { gitBlob } from "../listener/images.mjs";
 import { openStore, values } from "../lib/store.mjs";
+import { fileName } from "../lib/store-file.mjs";
 import { encode, replyParser } from "../lib/resp.mjs";
 import { pathToFileURL } from "node:url";
 import {
@@ -5042,6 +5043,43 @@ mounts:
     await listener.until("done (ok)");
     assert.deepEqual(await keys(), []);
     assert.equal((await get("/api/runs/org-repo-pr-3-1000/stream", session)).status, 404);
+  });
+
+  test("a log left in logs/ whose run the store summarized isn't summarized again (#697)", async (t) => {
+    const id = "org-repo-pr-4-1000";
+    const { dir, port, listener } = await listen(t, {}, (dir, github) => {
+      mkdirSync(join(dir, "logs"));
+      const meta = { type: "listener", key: "org/repo#pr-4", repo: "org/repo", startedAt: 1000 };
+      writeFileSync(join(dir, "logs", `${id}.log`), `${JSON.stringify(meta)}\n`);
+      // Its summary in the store already, as a start before moved it there (file backend).
+      mkdirSync(join(dir, "store", "keys"), { recursive: true });
+      const saved = {
+        id,
+        key: "org/repo#pr-4",
+        repo: "org/repo",
+        // Recent: older than the history's 90 days, it would be removed.
+        startedAt: Date.now() - 60_000,
+        finishedAt: Date.now(),
+        status: "ok",
+        summary: "Kept.",
+      };
+      writeFileSync(
+        join(dir, "store", "keys", fileName(`summaries/${id}`)),
+        JSON.stringify({ key: `summaries/${id}`, value: saved }),
+      );
+      return { GITHUB_URL: github.url };
+    });
+    await listener.until("Run logs: 1 of 1 sent to the runner");
+    // Listed: the start moved logs/' summaries to the store before.
+    const api = await dashboardApi(port);
+    assert.deepEqual(
+      (await api("/api/state")).tasks.map((task) => task.key),
+      ["org/repo#pr-4"],
+    );
+    // Not read again: a summary made from it would be moved (and discarded by setIfAbsent()).
+    assert.doesNotMatch(listener.own(), /Run summaries: \d+ moved/);
+    assert.equal(summary(dir)?.summary, "Kept.");
+    assert.deepEqual(readdirSync(join(dir, "logs")), []);
   });
 
   test("/status lists a signed-in user only the runs of the repos they may see", async (t) => {
