@@ -4,7 +4,7 @@
 # as a sandbox, in the sandboxes' namespace, every port of every service's pod must be out of
 # reach (their metrics port, 9464, the monitoring namespace's alone, included), and the egress
 # proxy's port the only one reached (its engines' port, 3129, too when its Service publishes it:
-# the engine component); the internet too stays out of reach.
+# the engine component); the internet and another sandbox's pod, listening, too stay out of reach.
 #
 #   sh deploy/kubernetes/check-isolation.sh [services' namespace] [sandboxes' namespace]
 #
@@ -16,6 +16,9 @@ set -eu
 services=${1:-deckhand}
 sandboxes=${2:-deckhand-sandboxes}
 pod=deckhand-isolation-check
+# A second sandbox, listening on $port: no sandbox reaches another.
+peer=deckhand-isolation-peer
+port=8080
 image=$(kubectl -n "$services" get deployment egress -o jsonpath='{.spec.template.spec.containers[0].image}')
 proxy=$(kubectl -n "$services" get service egress -o jsonpath='{.spec.clusterIP}')
 # The engines' port, when the proxy's Service publishes it (components/engine): the sandboxes
@@ -27,15 +30,18 @@ targets=$(kubectl -n "$services" get pods --field-selector=status.phase=Running 
   go-template='{{range .items}}{{$pod := .metadata.name}}{{$ip := .status.podIP}}{{range .spec.containers}}{{range .ports}}{{$pod}}@{{$ip}}:{{.containerPort}} {{end}}{{end}}{{end}}')
 [ -n "$targets" ] || { echo "No running pod with a port in $services: is Deckhand deployed?" >&2; exit 1; }
 
-cleanup() { kubectl -n "$sandboxes" delete pod "$pod" --ignore-not-found --wait=false >/dev/null; }
+cleanup() { kubectl -n "$sandboxes" delete pod "$pod" "$peer" --ignore-not-found --wait=false >/dev/null; }
 trap cleanup EXIT
 
-# A sandbox's labels and Pod Security `restricted`, as the runner's pods have them.
-kubectl -n "$sandboxes" apply -f - >/dev/null <<EOF
+# A pod with a sandbox's labels and Pod Security `restricted`, as the runner's pods have them:
+# name, its command (a YAML flow sequence), and what else its container has.
+sandbox_pod() {
+  cat <<EOF
+---
 apiVersion: v1
 kind: Pod
 metadata:
-  name: $pod
+  name: $1
   labels:
     deckhand.role: sandbox
 spec:
@@ -50,13 +56,30 @@ spec:
   containers:
     - name: check
       image: $image
-      command: [sleep, "300"]
+      command: $2
       securityContext:
         allowPrivilegeEscalation: false
         capabilities:
           drop: [ALL]
+${3:-}
 EOF
-kubectl -n "$sandboxes" wait --for=condition=Ready "pod/$pod" --timeout=120s >/dev/null
+}
+# The peer is ready once it listens, asked from inside it (an exec probe: a kubelet's TCP probe
+# comes from the node, which some plugins treat as any other address). A refusal from it is then
+# a policy's.
+{
+  sandbox_pod "$pod" '[sleep, "300"]'
+  sandbox_pod "$peer" "[node, -e, 'require(\"node:net\").createServer((s) => s.end()).listen($port)']" "\
+      readinessProbe:
+        exec:
+          command:
+            - node
+            - -e
+            - 'require(\"node:net\").connect($port, \"127.0.0.1\").on(\"connect\", () => process.exit(0)).on(\"error\", () => process.exit(1))'
+        periodSeconds: 2"
+} | kubectl -n "$sandboxes" apply -f - >/dev/null
+kubectl -n "$sandboxes" wait --for=condition=Ready "pod/$pod" "pod/$peer" --timeout=120s >/dev/null
+neighbour=$(kubectl -n "$sandboxes" get pod "$peer" -o jsonpath='{.status.podIP}'):$port
 
 # Each address, within 3 s: "reached", "refused" or "out of reach" (no answer, or unreachable).
 # A refusal is either a policy rejecting the connection (some plugins answer so) or a port
@@ -90,13 +113,18 @@ listens() {
 }
 
 addresses=$(for t in $targets; do printf '%s ' "${t#*@}"; done)
-results=$(kubectl -n "$sandboxes" exec "$pod" -- node -e "$TRY" "$proxy:3128" ${engines:+"$proxy:3129"} 1.1.1.1:443 $addresses)
+results=$(kubectl -n "$sandboxes" exec "$pod" -- node -e "$TRY" "$proxy:3128" ${engines:+"$proxy:3129"} 1.1.1.1:443 "$neighbour" $addresses)
 
 failed=0
 check() { # target, result, expected
   if [ "$2" = "$3" ]; then echo "ok    $1 $2"; else echo "FAIL  $1 $2 (expected: $3)"; failed=1; fi
 }
 while read -r address result; do
+  if [ "$address" = "$neighbour" ]; then
+    [ "$result" = refused ] && result=out-of-reach # it listens (its probe): a policy refused it
+    check "$address (another sandbox)" "$result" out-of-reach
+    continue
+  fi
   owner=""
   for t in $targets; do [ "${t#*@}" = "$address" ] && owner=${t%@*}; done
   case "$address" in
@@ -139,4 +167,4 @@ if [ "$failed" = 1 ]; then
   echo "The sandboxes are NOT isolated: does your network plugin enforce NetworkPolicies?" >&2
   exit 1
 fi
-echo "Isolated: a sandbox reaches the egress proxy alone."
+echo "Isolated: a sandbox reaches the egress proxy alone, and no other sandbox."

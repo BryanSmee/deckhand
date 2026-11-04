@@ -1455,7 +1455,7 @@ may. The runner checks that the policies are there before every run, and that th
 applies them with a probe pod labelled as a sandbox each time it takes its lease, refusing every
 run when the probe reaches anything but the egress proxy
 ([kubernetes.md](kubernetes.md#the-network-probe)); `deploy/kubernetes/check-isolation.sh`
-checks it by hand. Some plugins apply a new pod's policies a moment after it starts (kube-router):
+checks it by hand, another sandbox's pod among what it must not reach. Some plugins apply a new pod's policies a moment after it starts (kube-router):
 every pod of the sandboxes' namespace, the probe's included, first waits in an init container
 until the API server and the DNS are out of reach and the proxy answers, and fails past
 `KUBERNETES_PENDING_MINUTES` ([kubernetes.md](kubernetes.md#the-network-gate)). Each service's
