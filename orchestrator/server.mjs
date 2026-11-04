@@ -312,6 +312,12 @@ const servicesListening = listenWhenFree(services, config.servicesPort).then(() 
 // stop a run, nor post a reply. Losing it while acting, this copy exits: the restart makes it
 // the waiting one.
 let leaseLost = () => {};
+// Set on SIGTERM, from the first handler on (`ctx.stopping` says it to the modules): what is
+// tried again until the store answers (persist()) gives up then.
+let stopping = false;
+// What the github service's and the broker's clients try again, given up on a stop before the
+// orchestrator is up: set once both exist (below), a stop before that having nothing to give up.
+let stopClients = () => {};
 let sigterm = () => process.exit(0);
 process.on("SIGTERM", () => sigterm());
 const lease = await new Promise((resolve) => {
@@ -343,8 +349,13 @@ epoch = lease.epoch;
 acting = true;
 // Until it is lost, or released on SIGTERM: the maps' writes stop trying then (lib/store-map.mjs).
 let leaseHeld = true;
-// Stopped before it is up: its lease given back, for the other copy to take at once.
+// Stopped before it is up: its lease given back, for the other copy to take at once, what
+// persist() and the clients try again and the maps' writes given up first (it acts no more).
 sigterm = () => {
+  if (stopping) return;
+  stopping = true;
+  leaseHeld = false;
+  stopClients();
   leaseLost = () => {};
   lease.control.stop().finally(() => process.exit(0));
 };
@@ -384,6 +395,10 @@ const githubService = createGithubClient({
   fetch: calls.fetch("github"),
   log,
 });
+stopClients = () => {
+  githubService.stop();
+  brokerService.stop();
+};
 
 // What the listener's broker tells the github service of each run (broker.mjs `gateway`), with
 // whom its writes may assign (the repo's `users` as last read, else ALLOWED_USERS) and the label
@@ -449,7 +464,9 @@ const ctx = {
   running: 0,
   // Set on SIGTERM: no run starts any more, what waits is left to the next listener (saved
   // already, as it changed).
-  stopping: false,
+  get stopping() {
+    return stopping;
+  },
   // The listener's store (above): the operator's secrets are left out of what the queue writes
   // there (restart.mjs storable()).
   store,
@@ -490,9 +507,11 @@ async function refreshApp() {
   return true;
 }
 
-// `fn()` until it resolves, again every few seconds while it fails (`what` in the log).
+// `fn()` until it resolves, again every few seconds while it fails (`what` in the log). Once
+// the orchestrator stops, it resolves to undefined without asking again: a caller that reads
+// what it gave checks for that (#692).
 async function persist(what, fn) {
-  for (let said = false; !ctx.stopping; said = true) {
+  for (let said = false; !stopping; said = true) {
     try {
       return await fn();
     } catch (error) {
@@ -669,6 +688,10 @@ maps = await persist("Reading the orchestrator's maps from the store", () =>
     },
   ),
 );
+// Stopped while the store was away (persist() gave up): nothing past this point starts. The
+// early handler's process.exit(0), once the lease is given back, is what ends this wait (the
+// store's connection and the services' port keep the process alive until then).
+if (stopping) await new Promise(() => {});
 
 // The dashboard's titles and closed states: from webhooks, else fetched (titles.mjs).
 const titles = createTitles({
@@ -1320,8 +1343,8 @@ Promise.race([handedOver, new Promise((resolve) => setTimeout(resolve, 30_000).u
 // Then the lease is released, and the waiting copy takes it at once (a second, about). The
 // egress policy's port answers until it exits.
 sigterm = () => {
-  if (ctx.stopping) return;
-  ctx.stopping = true;
+  if (stopping) return;
+  stopping = true;
   // Edge's and the runner's calls are refused from now on (503): they ask the next copy.
   edgeReady = null;
   acting = false;
