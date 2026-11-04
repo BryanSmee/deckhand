@@ -29,3 +29,4 @@ review:
   model: opus
   effort: high
   fix: 3
+  follow_ups_auto_pickup: true
