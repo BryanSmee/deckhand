@@ -154,6 +154,10 @@ const comment = (login) => ({
 
 test("edge: a delivery taken once, read and acknowledged by the orchestrator; the API passed on with its user", async (t) => {
   const edge = await startEdge(t);
+  // In rotation once the broker has answered it: its keys and service tokens (#675).
+  while ((await fetch(`http://127.0.0.1:${edge.port}/ready`)).status !== 200) {
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
   assert.equal((await send(edge.port, comment("alice"), { id: "g-1" })).status, 202);
   assert.equal((await send(edge.port, comment("alice"), { id: "g-1" })).status, 202);
   await edge.until("Delivery g-1 again: already handled");

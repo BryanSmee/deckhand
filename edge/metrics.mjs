@@ -68,6 +68,7 @@ const REPO_ACTIONS = [
 const ROUTES = [
   ["/", "/"],
   ["/health", "/health"],
+  ["/ready", "/ready"],
   ["/webhook", "/webhook"],
   ["/status", "/status"],
   ["/setup", "/setup"],

@@ -12,7 +12,7 @@ the agents): this page is what differs on a cluster.
 
 | Service      | Copies                           | Readiness | Grace (s) | Volumes                                         | Secrets                                                              |
 | ------------ | -------------------------------- | --------- | --------- | ----------------------------------------------- | -------------------------------------------------------------------- |
-| edge         | 2, both active                   | `/health` | 40        | `edge-data` (its store)                         | `deckhand-edge`                                                      |
+| edge         | 2, both active                   | `/ready`  | 40        | `edge-data` (its store)                         | `deckhand-edge`                                                      |
 | orchestrator | 2, active/passive                | `/health` | 300       | `orchestrator-data`, `orchestrator-screenshots` | none                                                                 |
 | runner       | 2, active/passive                | `/health` | 300       | `runner-data` (its store, the runs' inboxes)    | none (its ServiceAccount's API token); `deckhand-blobs` with `blobs` |
 | broker       | 2, both active                   | `/ready`  | 45        | `broker-store`                                  | `deckhand-broker-key`; `deckhand-blobs` with `blobs`                 |
@@ -291,9 +291,9 @@ its grace period. The orchestrator's and the runner's copies hand their lease ov
 releases it on SIGTERM and the new one takes it at once. Running sandboxes go on.
 
 Every service has a liveness probe on `/health`: a process that stops answering is restarted
-after a minute. The github and models services and the egress proxy answer `/ready` only once
-the broker has answered them (the github and models services its keys and their service tokens,
-the proxy its service tokens): a new pod may not get out for a
+after a minute. Edge, the github and models services and the egress proxy answer `/ready` only
+once the broker has answered them (edge and the github and models services its keys and their
+service tokens, the proxy its service tokens): a new pod may not get out for a
 few seconds after it starts (k3s's kube-router applies its NetworkPolicies then), and the calls
 it took meanwhile would fail. The orchestrator's and the
 runner's readiness is `/health` too, not `/ready`, as Compose's health checks
