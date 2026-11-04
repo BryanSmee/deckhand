@@ -130,6 +130,8 @@ async function copy(
     refresh,
     logs = createLogs({ store }),
     metrics,
+    settings = config,
+    grantedTo = granted,
   } = {},
 ) {
   let service;
@@ -145,7 +147,7 @@ async function copy(
   const asked = [];
   const built = [];
   service = createRunnerService({
-    config,
+    config: settings,
     runner: backend.runner,
     images: {
       keepsCaches: true,
@@ -168,7 +170,7 @@ async function copy(
     lease,
     watchMs: 50,
     grants,
-    granted,
+    granted: grantedTo,
     blobOf:
       blobOf ?? (async (repo, path, ref) => `blob of ${path} at ${ref ?? "the default branch"}`),
     ...(log && { log }),
@@ -475,6 +477,43 @@ test("a run starts through the client, its first tokens from the broker; asked a
   assert.equal(backend.runs(), 1);
   assert.equal(await runner.state("dh-o-a-1"), "running");
   assert.deepEqual(await runner.list(), [{ name: "dh-o-a-1", run: "dh-o-a-1-1", running: true }]);
+});
+
+test("a start recovered after a crash keeps its sandbox's container engine", async (t) => {
+  const store = fileStore();
+  const backend = host();
+  const settings = { ...config, engine: "sysbox" };
+  const grantedTo = grantedOf(["docker"], "o/a");
+  const a = await copy(t, { store, backend, settings, grantedTo });
+  const runner = client(a.url).runner;
+  const spec = { ...SPEC, engine: { limits: SPEC.limits, cache: null } };
+  // A copy that crashed once Docker ran the sandbox and its Sysbox engine, before its record.
+  await store.set(`starts/${spec.run}`, { state: "starting" });
+  backend.containers.set(spec.name, { owner: "dh", run: spec.run, running: true, ip: "10.1.0.2" });
+  backend.containers.set(`${spec.name}-engine`, {
+    owner: "dh",
+    engine: spec.run,
+    runtime: "sysbox-runc",
+    volume: `${spec.run}-engine`,
+    running: true,
+    ip: "10.1.0.3",
+  });
+  const sysbox = { backend: "sysbox", volume: `${spec.run}-engine`, cached: false };
+  assert.deepEqual(await runner.start(spec), { engine: sysbox });
+  assert.equal(backend.runs(), 0);
+  assert.deepEqual(await store.get(`starts/${spec.run}`), {
+    state: "started",
+    result: { engine: sysbox },
+  });
+  // Asked again, the record answers.
+  assert.deepEqual(await runner.start(spec), { engine: sysbox });
+  // Counted under its engine, not as one without.
+  assert.deepEqual(await a.service.sandboxes(), [{ engine: "sysbox" }]);
+  // One whose engine is gone (or another run's): none, as before.
+  const other = { ...spec, run: "dh-o-a-1-2" };
+  await store.set(`starts/${other.run}`, { state: "starting" });
+  backend.containers.get(spec.name).run = other.run;
+  assert.deepEqual(await runner.start(other), { engine: null });
 });
 
 test("a start a copy left halfway is done again; a sandbox that started stands", async (t) => {

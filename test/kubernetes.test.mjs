@@ -1082,6 +1082,11 @@ test("start: an engine with Sysbox's RuntimeClass is a sidecar in the pod, root 
   });
   const pod = objects.pods.get("dh-org-repo-12-abc");
   const s = pod.spec;
+  // Read back from the pod as start() answered it (a start recovered after a crash), for its
+  // run alone.
+  const { name, run } = spec();
+  assert.deepEqual(await runner.engine(name, run), { backend: "sysbox", cached: false });
+  assert.equal(await runner.engine(name, `${run}-other`), null);
   // Every container under Sysbox, in the pod's own user namespace.
   assert.equal(s.runtimeClassName, "sysbox-runc");
   assert.equal(s.hostUsers, false);
@@ -1143,6 +1148,7 @@ test("start: an engine with Sysbox's RuntimeClass is a sidecar in the pod, root 
   objects.pods.clear();
   await runner.start(spec({ run: "dh-org-repo-12-abc-1730000999", volumes }));
   const plain = objects.pods.get("dh-org-repo-12-abc").spec;
+  assert.equal(await runner.engine(name, "dh-org-repo-12-abc-1730000999"), null);
   assert.equal(plain.runtimeClassName, undefined);
   assert.equal(plain.shareProcessNamespace, true);
   assert.ok(!plain.containers[0].env.some((e) => e.name === "SANDBOX_REAP"));
