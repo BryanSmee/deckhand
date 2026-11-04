@@ -2861,3 +2861,72 @@ test("access: a rerun, Stop and a plan need their start, refused before anything
   assert.equal(blockersOf(planned, 10), undefined);
   assert.equal((await post(planned, { action: "plan", number: 10 })).status, 200);
 });
+
+test("access: moving a queued task or a wait needs its start, and runs:manage for someone else's comment", async () => {
+  // QUEUED's comment is bob's, in brainstorm mode.
+  const permissions = permissionsOf({
+    alice: { "org/app": MEMBER },
+    bob: { "org/app": ["tasks:read", "runs:start:brainstorm"] },
+    carol: { "org/app": VIEWER },
+    dave: { "org/app": ["tasks:read", "runs:start:brainstorm"] },
+  });
+  const issues = { 5: open("Five"), 7: open("Seven"), 8: open("Eight") };
+  const env = { ALLOWED_USERS: "alice,bob,carol,dave" };
+  const w = setup({ env, issues, queued: QUEUED, permissions });
+  const move = (user, after = 7) => post(w, { action: "queue", number: 5, after }, { user });
+  const untouched = () => {
+    assert.deepEqual([w.unqueued, w.comments, w.accepted], [[], [], []]);
+    assert.equal(w.waits.get("org/app#5"), undefined);
+  };
+  let res = await move("carol");
+  assert.equal(res.status, 403);
+  assert.match(res.body.error, /`runs:start:brainstorm`/);
+  untouched();
+  // The start, but not bob's comment to move: as dequeueing, runs:manage.
+  res = await move("dave");
+  assert.equal(res.status, 403);
+  assert.match(res.body.error, /`runs:manage`/);
+  untouched();
+  // Its author moves it.
+  assert.equal((await move("bob")).status, 200);
+  assert.deepEqual(w.waits.get("org/app#5").blockers, [7]);
+  // A wait moved: its mode's start, before any comment.
+  const comments = w.comments.length;
+  res = await move("carol", 8);
+  assert.equal(res.status, 403);
+  assert.deepEqual(w.waits.get("org/app#5").blockers, [7]);
+  assert.equal(w.comments.length, comments);
+  assert.equal((await move("alice", 8)).status, 200);
+  assert.deepEqual(w.waits.get("org/app#5").blockers, [8]);
+});
+
+test("access: a comment queued while moving a task is decided is decided in turn, before it moves", async () => {
+  // bob may move a brainstorm, not work.
+  const inner = permissionsOf({
+    bob: { "org/app": ["tasks:read", "runs:start:brainstorm", "runs:manage"] },
+  });
+  let brainstorms = 0;
+  const permissions = {
+    ...inner,
+    decide: async (login, repo, action) => {
+      const said = await inner.decide(login, repo, action);
+      // The second decision of bob's comment (after GitHub said #7 is open): carol's work
+      // comment is queued meanwhile, the newest.
+      if (action === "runs:start:brainstorm" && ++brainstorms === 2) {
+        w.queued["org/app#5"] = {
+          ...QUEUED["org/app#5"],
+          modeLine: null,
+          author: "carol",
+          comment: { id: 43 },
+        };
+      }
+      return said;
+    },
+  };
+  const w = setup({ issues: { 5: open("Five"), 7: open("Seven") }, queued: QUEUED, permissions });
+  const res = await post(w, { action: "queue", number: 5, after: 7 }, { user: "bob" });
+  assert.equal(res.status, 403);
+  assert.match(res.body.error, /`runs:start:work`/);
+  assert.deepEqual([w.unqueued, w.comments], [[], []]);
+  assert.equal(w.waits.get("org/app#5"), undefined);
+});

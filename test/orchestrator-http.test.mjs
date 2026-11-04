@@ -85,7 +85,8 @@ test("access (#731): api/state, /status and the server's views follow the login'
     status: (shows = () => true) => ({
       reasons: runs.filter((r) => shows(r.repo)).map((r) => r.key),
     }),
-    permissions: permissionsOf(rules),
+    // dave's decisions fail.
+    permissions: permissionsOf(rules, { failing: ["dave"] }),
     // An empty log, its run going on: the stream stays open until access ends it.
     runLogs: { read: async () => ({ data: Buffer.alloc(0) }) },
   };
@@ -127,6 +128,10 @@ test("access (#731): api/state, /status and the server's views follow the login'
   assert.equal(mine.plans, undefined);
   assert.deepEqual((await get("/api/server", "bob"))[0], 403);
   assert.deepEqual(await get("/api/server", "alice"), [200, { grants: "all of them" }]);
+  // A decision that fails: said, not a refusal.
+  const [status, body] = await get("/api/server", "dave");
+  assert.equal(status, 503);
+  assert.match(body.error, /\(`server:read`\) can't be decided now/);
   // /status and the log streams.
   assert.deepEqual((await get("/status", "bob"))[1].reasons, ["org/app#1"]);
   const stream = await fetch(`${url}/api/runs/org-hidden-2-1/stream`, {

@@ -699,31 +699,39 @@ export function createWorkApi({
   // that starts a run waits for `after` instead (runs.mjs unqueue()), with the text of its
   // author's queued comments, its author and its mode unless another is picked; the others'
   // comments are dropped, which the App's comment says. `after` done already: it stays
-  // queued, as it would start now anyway.
+  // queued, as it would start now anyway. `user` needs the start of the mode it waits in, and
+  // `runs:manage` to move someone else's comment, as dequeueing needs (mayMove()).
   async function requeue(repo, user, { number, after, mode, settings, answers }) {
     const key = taskKey(repo, number);
     const modeOf = (item) => mode ?? item.modeLine ?? "work";
     const known = (wanted) => {
       if (!modeNames(settings).includes(wanted)) refuse(422, `${repo} has no mode \`${wanted}\`.`);
     };
-    known(modeOf(queuedTask(key).item));
-    await startable(repo, user, modeOf(queuedTask(key).item));
+    const mayMove = async (item) => {
+      known(modeOf(item));
+      await startable(repo, user, modeOf(item));
+      if (item.author?.toLowerCase() !== user.toLowerCase()) {
+        await mustDo(permissions, user, repo, MANAGE);
+      }
+    };
+    // Refused before GitHub is read; asked again of the comment held below.
+    await mayMove(queuedTask(key).item);
     if ((await waitable(repo, number, after)) !== "open") {
       return `#${after} is done already: #${number} stays queued.`;
     }
-    // The comment that waits, once its 👀 is known: out of the queue, it is saved as a wait at
-    // once, with nothing awaited between (an orchestrator stopping then would lose it). A newer
-    // one queued meanwhile is waited for in turn. Gone: started meanwhile (a slot freed).
+    // The comment that waits, once its 👀 is known and `user` may move it: out of the queue, it
+    // is saved as a wait at once, with nothing awaited between (an orchestrator stopping then
+    // would lose it). A newer one queued meanwhile is waited for, and decided, in turn. Gone:
+    // started meanwhile (a slot freed).
     let held = null;
     for (;;) {
       held = queuedTask(key)?.item;
       if (!held) refuse(409, `#${number} is running or queued: it can't be moved now.`);
       await held.eyes?.catch?.(() => null);
+      await mayMove(held);
       if (queuedTask(key)?.item === held) break;
     }
     const wanted = modeOf(held);
-    known(wanted);
-    await startable(repo, user, wanted);
     // No await from queuedTask() above: unqueue() holds that same comment. One pair: the wait in
     // the store first, then the queue without its comments (`saved`, restart.mjs park()), so an
     // orchestrator killed in between leaves them in both, to the wait (loadQueue()).

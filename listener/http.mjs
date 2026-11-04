@@ -32,7 +32,8 @@ import { publicRun, stream } from "./runlog.mjs";
 import { endPicks } from "./picks.mjs";
 import { closedAs } from "./titles.mjs";
 import { send, sendJson } from "../lib/http.mjs";
-import { apiRoute, needs } from "./web.mjs";
+import { apiRoute, needs, undecided } from "./web.mjs";
+import { refusal } from "./permissions.mjs";
 
 // The action that shows a repo's tasks (permissions.mjs).
 const TASKS = "tasks:read";
@@ -266,9 +267,15 @@ export function createHttp(ctx) {
     if (!user) return res.writeHead(401).end();
     res.setHeader("cache-control", "no-store");
     if (url.pathname === "/api/state") return sendJson(res, await state(user));
-    // Settings › Server and the services' health: server-wide.
+    // Settings › Server and the services' health: server-wide. A decision that failed says so
+    // (a 503), as apiRoute() does; the plans in api/state are just left out then.
     if (url.pathname === "/api/server" || (url.pathname === "/api/health" && ctx.health)) {
-      if (!(await serverWide(user, "server:read"))) {
+      const said = ctx.permissions
+        ? await ctx.permissions.decide(user, null, "server:read")
+        : { ok: true, error: null };
+      if (!said.ok) {
+        log(`${url.pathname}: refused: ${refusal(said, user, "server:read")}`);
+        if (said.error) return sendJson(res, undecided("server:read"), 503);
         return sendJson(res, needs("server:read", null), 403);
       }
     }

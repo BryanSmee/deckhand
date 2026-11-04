@@ -25,7 +25,7 @@ const hidden = (repo) => ({ error: `${repo} isn't one of this dashboard's reposi
 
 // A route whose action couldn't be decided (a policy error, a policy service away): refused,
 // saying so, once the repo is known to be visible (else it is hidden()).
-const undecided = (action) => ({
+export const undecided = (action) => ({
   error: `Whether you may do this (\`${action}\`) can't be decided now; try again later.`,
 });
 
