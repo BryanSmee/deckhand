@@ -13,7 +13,7 @@ import { after, test } from "node:test";
 import { encode, parseRedisUrl, RedisError, redisClient, replyParser } from "../lib/resp.mjs";
 import { openStore, values } from "../lib/store.mjs";
 import { redisStore } from "../lib/store-redis.mjs";
-import { asidePort, listening, until } from "./helpers.mjs";
+import { asidePort, freshRedisPrefix, listening, until } from "./helpers.mjs";
 import { storeContract } from "./store-contract.mjs";
 
 test("resp: commands encoded as bulk strings, bytes kept", () => {
@@ -325,20 +325,7 @@ const skip = redisUrl ? false : "no Redis: set TEST_REDIS_URL, or put redis-serv
 const storeUrl = redisUrl && (await setupUser(redisUrl));
 
 // Each test its own prefix, its keys deleted after it: a Redis shared with others keeps theirs.
-function freshPrefix(t) {
-  const prefix = `deckhand-test:${randomUUID()}:`;
-  t.after(async () => {
-    const client = redisClient(redisUrl);
-    let cursor = "0";
-    do {
-      const [next, keys] = await client.call("SCAN", cursor, "MATCH", `${prefix}*`, "COUNT", 1000);
-      cursor = String(next);
-      if (keys.length) await client.call("DEL", ...keys);
-    } while (cursor !== "0");
-    await client.close();
-  });
-  return prefix;
-}
+const freshPrefix = (t) => freshRedisPrefix(t, redisUrl);
 
 if (redisUrl) {
   storeContract("redis", (t, clock) =>

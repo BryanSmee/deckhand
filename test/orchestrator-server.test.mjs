@@ -57,12 +57,13 @@ import { createModels, credentialNames, runnerOf } from "../models/server.mjs";
 import { APP_EVENTS, APP_PERMISSIONS } from "../listener/github-app.mjs";
 import { gitBlob } from "../listener/images.mjs";
 import { openStore, values } from "../lib/store.mjs";
-import { encode, redisClient, replyParser } from "../lib/resp.mjs";
+import { encode, replyParser } from "../lib/resp.mjs";
 import { pathToFileURL } from "node:url";
 import {
   evalResult,
   fakeOpa,
   forwarder,
+  freshRedisPrefix,
   grantsPolicy,
   servePolicies,
   isRoot,
@@ -776,12 +777,13 @@ test(
   },
 );
 
-// A stop while the maps can't be read (#692): the store refuses them, the read is tried again,
-// and a SIGTERM meanwhile stops it cleanly, the lease given back at once, rather than crashing
-// on the maps it never got. A real Redis (TEST_REDIS_URL, CI's), reached through a relay that
-// refuses every command on a map's key: what the orchestrator does before them still works.
+// A stop while the maps can't be read (#692): the store refuses them, the read is tried again
+// every 5 s, and a SIGTERM meanwhile gives that up, stops at the maps it never got rather than
+// read them, and gives the lease back. A real Redis (TEST_REDIS_URL, CI's), reached through a
+// relay that refuses the maps' load (its first command, the stamp storeMap() writes before it
+// reads a map's items): what the orchestrator does before them still works.
 test(
-  "a stop during the maps' first load exits cleanly and gives the lease back",
+  "a stop during the maps' first load gives up the read, exits cleanly and gives the lease back",
   { skip: (!process.env.TEST_REDIS_URL && "no Redis: set TEST_REDIS_URL") || needsSignals },
   async (t) => {
     const dir = tempDir(t);
@@ -798,6 +800,13 @@ test(
         ),
       ),
     );
+    // The read's retry, 5 s after it failed, isn't the test's to move: it runs in the
+    // orchestrator's own process. So the SIGTERM goes 2 s after the first failure, and the
+    // lease's release is held until 5.8 s after it: past the retry, had the read gone on, and
+    // before the release's own 5 s timeout (resp.mjs), 1.2 s later.
+    let failedAt = null;
+    let stopping = false;
+    const late = [];
     const upstream = new URL(process.env.TEST_REDIS_URL);
     const relay = createNetServer((client) => {
       const redis = connect(Number(upstream.port || 6379), upstream.hostname);
@@ -805,12 +814,21 @@ test(
       redis.on("error", () => client.destroy());
       client.on("close", () => redis.destroy());
       redis.pipe(client);
-      // An unknown command in a refused one's place: its error reply comes back in order.
+      // In order: an unknown command in a refused one's place, whose error reply comes back
+      // where its own would have.
+      let sent = Promise.resolve();
       client.on(
         "data",
         replyParser((args) => {
-          const away = args.some((arg) => String(arg).includes(":k:store-maps/"));
-          redis.write(encode(away ? ["DECKHAND-STORE-AWAY"] : args));
+          const text = args.map(String);
+          const away = text.some((arg) => arg.includes(":k:store-maps/"));
+          if (away) failedAt ??= Date.now();
+          if (away && stopping) late.push(text);
+          const held = stopping && text.some((arg) => arg.endsWith(":l:orchestrator"));
+          const wait = held ? failedAt + 5800 - Date.now() : 0;
+          sent = sent
+            .then(() => wait > 0 && new Promise((resolve) => setTimeout(resolve, wait)))
+            .then(() => redis.write(encode(away ? ["DECKHAND-STORE-AWAY"] : args)));
         }),
       );
     });
@@ -818,24 +836,12 @@ test(
       await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
       t.after(() => (server.closeAllConnections?.(), server.close()));
     }
-    const prefix = `deckhand-test:${randomUUID()}:`;
     const direct = new URL(process.env.TEST_REDIS_URL);
-    direct.searchParams.set("prefix", prefix);
+    direct.searchParams.set("prefix", freshRedisPrefix(t, process.env.TEST_REDIS_URL));
     const relayed = new URL(direct);
     relayed.host = `127.0.0.1:${relay.address().port}`;
     const store = openStore(direct.href);
-    // Its keys removed after it: a Redis shared with other tests keeps theirs.
-    t.after(async () => {
-      await store.close();
-      const client = redisClient(process.env.TEST_REDIS_URL);
-      let cursor = "0";
-      do {
-        const [next, keys] = await client.call("SCAN", cursor, "MATCH", `${prefix}*`);
-        cursor = String(next);
-        if (keys.length) await client.call("DEL", ...keys);
-      } while (cursor !== "0");
-      await client.close();
-    });
+    t.after(() => store.close());
     const { child, until, output } = start({
       DATA_DIR: join(dir, "data"),
       STORE_URL: relayed.href,
@@ -847,10 +853,15 @@ test(
     });
     t.after(() => child.kill("SIGKILL"));
     await until(/Reading the orchestrator's maps from the store: .*trying again/);
+    await new Promise((resolve) => setTimeout(resolve, failedAt + 2000 - Date.now()));
     const exited = new Promise((resolve) => child.on("close", resolve));
+    stopping = true;
     child.kill("SIGTERM");
     assert.equal(await exited, 0, output());
     assert.doesNotMatch(output(), /TypeError/);
+    // Not read again once the stop began, though the lease's release took past the retry.
+    assert.deepEqual(late, []);
+    assert.match(output(), /orchestrator: lease released/);
     // Given back: the next copy takes it at once, rather than once it expires.
     assert.ok(await store.acquire("orchestrator", "test", { ttlMs: 1000 }), output());
   },

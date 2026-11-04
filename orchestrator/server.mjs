@@ -315,6 +315,9 @@ let leaseLost = () => {};
 // Set on SIGTERM, from the first handler on (`ctx.stopping` says it to the modules): what is
 // tried again until the store answers (persist()) gives up then.
 let stopping = false;
+// What the github service's and the broker's clients try again, given up on a stop before the
+// orchestrator is up: set once both exist (below), a stop before that having nothing to give up.
+let stopClients = () => {};
 let sigterm = () => process.exit(0);
 process.on("SIGTERM", () => sigterm());
 const lease = await new Promise((resolve) => {
@@ -347,11 +350,12 @@ acting = true;
 // Until it is lost, or released on SIGTERM: the maps' writes stop trying then (lib/store-map.mjs).
 let leaseHeld = true;
 // Stopped before it is up: its lease given back, for the other copy to take at once, what
-// persist() tries again and the maps' writes given up first (it acts no more).
+// persist() and the clients try again and the maps' writes given up first (it acts no more).
 sigterm = () => {
   if (stopping) return;
   stopping = true;
   leaseHeld = false;
+  stopClients();
   leaseLost = () => {};
   lease.control.stop().finally(() => process.exit(0));
 };
@@ -391,6 +395,10 @@ const githubService = createGithubClient({
   fetch: calls.fetch("github"),
   log,
 });
+stopClients = () => {
+  githubService.stop();
+  brokerService.stop();
+};
 
 // What the listener's broker tells the github service of each run (broker.mjs `gateway`), with
 // whom its writes may assign (the repo's `users` as last read, else ALLOWED_USERS) and the label
@@ -680,8 +688,9 @@ maps = await persist("Reading the orchestrator's maps from the store", () =>
     },
   ),
 );
-// Stopped while the store was away (persist() gave up): nothing past this point starts, the
-// stop gives the lease back and exits.
+// Stopped while the store was away (persist() gave up): nothing past this point starts. The
+// early handler's process.exit(0), once the lease is given back, is what ends this wait (the
+// store's connection and the services' port keep the process alive until then).
 if (stopping) await new Promise(() => {});
 
 // The dashboard's titles and closed states: from webhooks, else fetched (titles.mjs).
