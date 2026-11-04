@@ -28,6 +28,7 @@ import { grantFor, grantOf, grantsBy, loadGrants } from "../listener/grants.mjs"
 import { createPolicies } from "../listener/policies.mjs";
 import { policyClient } from "../listener/policy-client.mjs";
 import { createAppHolder } from "./app.mjs";
+import { githubMetrics } from "./metrics.mjs";
 import { createGithubService } from "./service.mjs";
 
 const env = process.env;
@@ -53,8 +54,15 @@ try {
   process.exit(1);
 }
 const { config, bound, graceMs } = started;
-// Its metrics, on their own port when METRICS_PORT is set.
-startMetrics({ service: "github", port: config.metricsPort, log });
+// Its metrics, on their own port when METRICS_PORT is set: GitHub's calls, its rate limit and
+// the git operations (metrics.mjs).
+const mirrorDir = join(config.dataDir, "git-mirrors");
+const metrics = githubMetrics(
+  startMetrics({ service: "github", port: config.metricsPort, log }).registry,
+  {
+    mirrorDir,
+  },
+);
 
 // The broker: its keys (run tokens and the callers' service tokens are checked with them,
 // offline) and this service's own tokens, for the policy service.
@@ -67,7 +75,12 @@ const brokerCaller = createBrokerCaller({
 });
 const broker = createBrokerService({ caller: brokerCaller, log });
 
-const app = createAppHolder({ dir: env.APP_DIR || "/app-key", api: config.githubApi, log });
+const app = createAppHolder({
+  dir: env.APP_DIR || "/app-key",
+  api: config.githubApi,
+  fetch: metrics.fetch,
+  log,
+});
 function appKey() {
   const pem = app.get()?.credentials.pem;
   return pem ? [pem.replace(/-----[A-Z ]+-----/g, "").replace(/\s+/g, "")] : [];
@@ -108,7 +121,8 @@ const { server } = createGithubService({
   policies,
   grants,
   // Granted repos' copies, their pushed workflow files checked against them: a cache.
-  mirrorDir: join(config.dataDir, "git-mirrors"),
+  mirrorDir,
+  metrics,
   log,
 });
 

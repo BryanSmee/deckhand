@@ -975,11 +975,15 @@ test(
       GIT_TERMINAL_PROMPT: "0",
       // No `git gc --auto` or `git maintenance` left running after a fetch: detached, it would
       // still write in the clones while the test's dir is removed, which then fails (#521).
-      GIT_CONFIG_COUNT: "2",
+      // Protocol v2 whatever git's default: a fetch is several pack requests there (ls-refs, then
+      // a fetch per negotiation round), counted as one fetch all the same.
+      GIT_CONFIG_COUNT: "3",
       GIT_CONFIG_KEY_0: "gc.auto",
       GIT_CONFIG_VALUE_0: "0",
       GIT_CONFIG_KEY_1: "maintenance.auto",
       GIT_CONFIG_VALUE_1: "false",
+      GIT_CONFIG_KEY_2: "protocol.version",
+      GIT_CONFIG_VALUE_2: "2",
       ...Object.fromEntries(
         ["AUTHOR", "COMMITTER"].flatMap((w) => [
           [`GIT_${w}_NAME`, "a"],
@@ -1060,7 +1064,11 @@ test(
     };
     const broker = createBroker({});
     let current = null;
+    // The git operations counted (the github service's metrics), and the pack requests sent.
+    const ops = [];
+    let packs = 0;
     const gw = createGithubGateway({
+      onGit: (op, result) => ops.push(`${op} ${result}`),
       broker,
       app: () => ({ repoToken: async () => ({ token: "repo-token-0123456789abcdef" }) }),
       api: `${github.url}/api/v3`,
@@ -1069,7 +1077,10 @@ test(
       // git's calls carry no token: the run whose sandbox sent them.
       runFrom: async () => current,
     });
-    const { url } = await serve(t, (req, res) => gw.handle(req, res));
+    const { url } = await serve(t, (req, res) => {
+      if (req.url.endsWith("/git-upload-pack")) packs++;
+      return gw.handle(req, res);
+    });
     const via = `${url}/relay/127.0.0.1/org/repo.git`;
     const as = (fork) => {
       const secret = broker.register("org/repo", { push: true, caps: ["pull"] });
@@ -1083,6 +1094,20 @@ test(
       "3",
     );
     assert.equal((await sh("git -C whole fetch -q origin refs/pull/8/head")).code, 0);
+    // The clone, once whatever number of pack requests it took; a fetch of what the clone has
+    // already, an up-to-date fetch and an ls-remote bring no pack: not counted.
+    assert.ok(packs > 2, String(packs));
+    assert.equal((await sh("git -C whole fetch -q origin")).code, 0);
+    assert.equal((await sh(`git ls-remote ${via} >/dev/null`)).code, 0);
+    assert.deepEqual(ops, ["fetch ok"]);
+    // A fetch of a new commit: one more.
+    const pushed = await sh(
+      `cd src && echo 4 > f && git commit -qam 4 && git push -q ${repo} main`,
+    );
+    assert.equal(pushed.code, 0, pushed.out);
+    assert.equal((await sh("git -C whole fetch -q origin")).code, 0);
+    assert.deepEqual(ops, ["fetch ok", "fetch ok"]);
+    ops.length = 0;
     for (const what of ["refs/pull/7/head", forkSha]) {
       const fetched = await sh(`git -C whole fetch -q origin ${what}`);
       assert.notEqual(fetched.code, 0, what);
@@ -1091,12 +1116,17 @@ test(
         /remote error: Deckhand: pull request #7 is from a fork \(evil\/repo\)/,
       );
     }
+    // Refused at their pack request: refused, not ok.
+    assert.deepEqual(ops, ["fetch refused", "fetch refused"]);
+    ops.length = 0;
     const blobless = await sh(`git clone -q --filter=blob:none ${via} blobless`);
     assert.match(
       blobless.out,
       /remote error: Deckhand: \w+ isn't a commit on org\/repo's default branch/,
     );
     assert.match(blobless.out, /checkout failed/);
+    // Its commits and trees came; the checkout's lone blobs were refused.
+    assert.deepEqual(ops, ["fetch ok", "fetch refused"]);
 
     as(true);
     assert.equal(
