@@ -32,6 +32,7 @@ import { LOOPING, loopState } from "./reviews.mjs";
 import { writeEvent } from "./runlog.mjs";
 import { sameTask, taskId } from "./spelling.mjs";
 import { createTaskModes } from "./task-modes.mjs";
+import { startAction } from "./permissions.mjs";
 
 // Why a queued comment may no longer run, or null: its repo left ALLOWED_REPOS, or its author
 // left ALLOWED_USERS or (`settings`, when known) the repo's `users`. Checked again when it was
@@ -137,6 +138,15 @@ export function createTasks(ctx) {
     // Never queued nor sent to the agent: a stuck run would never read it.
     if (item.trigger === "cancel") return cancelRun(item);
     if (item.after) {
+      // Waiting holds the task back, `/after none` drops its wait, either with a reply: the
+      // start it holds back is its author's (`runs:start:<mode>`), a wait dropped alone a
+      // manager's (`runs:manage`). Refused, nothing is said, as for a start (run-policy.mjs).
+      const starts = item.trigger === "work" || !!item.modeLine;
+      const needed = starts ? startAction(item.modeLine ?? "work") : "runs:manage";
+      if (ctx.permissions && !(await ctx.permissions.can(item.author, item.repo, needed))) {
+        log(`${taskKey(item.repo, item.id)}: /after refused: ${item.author} has no ${needed} here`);
+        return;
+      }
       // A mode it can't run is said now, not once what it waits for is done.
       if (item.modeLine && !modeNames(settings).includes(item.modeLine)) {
         return unknownMode(item, `Unknown mode \`${item.modeLine}\`.`);

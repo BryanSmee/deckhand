@@ -1624,3 +1624,40 @@ test("access (#731): queued work is checked again before its run, its author's r
     "org/repo#1: a queued comment dropped: carol may no longer start runs:start:work here",
   ]);
 });
+
+test("access (#731): a comment queued while the queued ones are decided again isn't dropped", async (t) => {
+  const dir = tempDir(t);
+  const said = [];
+  const settled = [];
+  const ctx = queueContext(t, dir, fileStore(), { log: (line) => said.push(line) });
+  ctx.settle = async (item, status) => settled.push([item.queueId, status]);
+  const inner = permissionsOf({ alice: { "org/repo": MEMBER } });
+  let release;
+  const gate = new Promise((resolve) => (release = resolve));
+  let asked = 0;
+  ctx.permissions = { can: async (...args) => (asked++, await gate, inner.can(...args)) };
+  Object.assign(ctx, {
+    shotsDir: dir,
+    titles: { get: () => null },
+    broker: { register: () => {}, revoke: () => {}, runOf: () => null, secretsOf: () => [] },
+    runner: { state: async () => null, remove: async () => {} },
+    repoSettings: async () => ({ settings: null, errors: [], warnings: [] }),
+    answer: async () => {},
+    schedule: () => {},
+  });
+  Object.assign(ctx, createRuns(ctx), { config: { ...ctx.config, agent: "nobody" } });
+  const task = newTask({ ...queued("1"), name: "deckhand-org-repo-1" });
+  task.pending.push(queued("1", { queueId: "q-0" }));
+  ctx.tasks.set("org/repo#1", task);
+  const running = ctx.run(task).catch(() => {});
+  await until(() => asked === 1, "the decision");
+  // alice's comment, checked as it came, queued meanwhile.
+  task.pending.push(queued("1", { queueId: "q-1" }));
+  release();
+  await running;
+  assert.deepEqual(
+    said.filter((l) => /dropped/.test(l)),
+    [],
+  );
+  assert.ok(!settled.some(([, status]) => status === "refused"));
+});

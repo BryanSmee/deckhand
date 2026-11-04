@@ -170,6 +170,12 @@ export function createTaskModes(ctx) {
   // nothing reviewed, fixed or merged; on an issue, a reply says where.
   async function policyDryRun(item) {
     const where = taskKey(item.repo, item.id);
+    // Its reply says what the policies refuse: for an author who sees the repo's tasks only,
+    // refused without a word otherwise, as a start is (permissions.mjs).
+    if (ctx.permissions && !(await ctx.permissions.can(item.author, item.repo, "tasks:read"))) {
+      log(`${where}: policy dry run refused: ${item.author} has no tasks:read here`);
+      return null;
+    }
     let text;
     let denials = null;
     if (!onPull(item)) {

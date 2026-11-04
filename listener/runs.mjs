@@ -129,27 +129,31 @@ export function createRuns(ctx) {
     } catch {
       // begin() reads them again, and fails the run with the error.
     }
-    const before = task.pending.length;
     // Their authors' access as it is now (permissions.mjs): `runs:start:<mode>`, the mode each
-    // was queued in.
-    const may = await Promise.all(
-      task.pending.map(
+    // was queued in. By item: a comment queued while it is decided was checked as it came.
+    const snapshot = [...task.pending];
+    const verdicts = await Promise.all(
+      snapshot.map(
         (item) =>
           !ctx.permissions ||
           !startedBy(item) ||
           ctx.permissions.can(startedBy(item), task.repo, startAction(item.mode)),
       ),
     );
-    task.pending = task.pending.filter((item, i) => {
+    const may = new Map(snapshot.map((item, i) => [item, verdicts[i]]));
+    let dropped = 0;
+    task.pending = task.pending.filter((item) => {
       const refused =
         noLongerAllowed(config, item, settings) ||
-        (!may[i] && `${item.author} may no longer start ${startAction(item.mode)} here`);
+        (may.get(item) === false &&
+          `${item.author} may no longer start ${startAction(item.mode)} here`);
       if (!refused) return true;
       log(`${taskKey(task.repo, task.id)}: a queued comment dropped: ${refused}`);
       ctx.track(ctx.settle(item, "refused"));
+      dropped++;
       return false;
     });
-    if (task.pending.length < before) ctx.saveQueue?.();
+    if (dropped) ctx.saveQueue?.();
   }
 
   // Where comments that arrive during the run go (deliver()), and what a listener that

@@ -410,12 +410,15 @@ export function createAutoPickup({
   }
 
   // Those of `logins` who may start an auto-picked run on `repo` (PICKED_ACTION), in lower case;
-  // null without permissions (nothing more is checked).
+  // null without permissions (nothing more is checked). A decision that fails throws: the issue
+  // is asked about again at the next sweep, not held (nor told) for a refusal it isn't.
   async function starters(repo, logins) {
     if (!permissions) return null;
     const names = [...new Set(logins.filter(Boolean).map(lower))];
-    const may = await Promise.all(names.map((l) => permissions.can(l, repo, PICKED_ACTION)));
-    return new Set(names.filter((_, i) => may[i]));
+    const said = await Promise.all(names.map((l) => permissions.decide(l, repo, PICKED_ACTION)));
+    const failed = said.find((d) => d.error);
+    if (failed) throw new Error(`who may start it can't be decided (${failed.error})`);
+    return new Set(names.filter((_, i) => said[i].ok));
   }
 
   // The App's comment, once per labelling, on an issue its labelling holds: the label stays on

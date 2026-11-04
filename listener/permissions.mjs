@@ -50,6 +50,18 @@ export function createPermissions({ policies = null, usersOf = () => null }) {
     return allows(await answerOf(login, repo), action, repo != null);
   }
 
+  // can()'s answer, telling a refusal from a decision that failed: { ok, error }, `error` why
+  // nothing could be decided (a policy error, a policy service away), for a caller that keeps a
+  // refusal (auto-pickup.mjs) and must not keep a failure.
+  async function decide(login, repo, action) {
+    if (typeof login !== "string" || !login) return { ok: false, error: null };
+    if (repo != null && outside(login, repo)) return { ok: false, error: null };
+    if (!policies) return { ok: true, error: null };
+    const answer = await policies.access(login, repo).catch((e) => ({ error: e?.message ?? e }));
+    if (!answer || answer.error) return { ok: false, error: String(answer?.error ?? "no answer") };
+    return { ok: allows(answer, action, repo != null), error: null };
+  }
+
   // Whether `login` sees `repo` at all: some action there.
   async function visible(login, repo) {
     if (repo == null) return false;
@@ -71,5 +83,5 @@ export function createPermissions({ policies = null, usersOf = () => null }) {
     return new Set(said.filter(Boolean));
   }
 
-  return { answerOf, can, visible, which };
+  return { answerOf, can, decide, visible, which };
 }

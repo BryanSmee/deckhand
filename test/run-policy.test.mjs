@@ -815,3 +815,61 @@ test("access: /cancel stops a run only for an author with runs:manage, and says 
   assert.deepEqual(cancelled, [["org/repo#12", "alice"]]);
   assert.deepEqual(settled, [["alice", "acknowledged"]]);
 });
+
+test("access: /after and /mode policy do nothing, and say nothing, for an author without the action", async () => {
+  const requested = [];
+  const replies = [];
+  const dryRuns = [];
+  const ctx = {
+    config: testConfig({ ALLOWED_USERS: "alice,bob,carol" }),
+    log: () => {},
+    skip: () => null,
+    tasks: new Map(),
+    runs: [],
+    issueModes: new Map(),
+    brainstorms: { get: () => null, end: () => {} },
+    permissions: permissionsOf({
+      alice: { "org/repo": MEMBER },
+      bob: { "org/repo": VIEWER },
+      carol: { "org/repo": ["tasks:read", "runs:manage"] },
+    }),
+    repoSettings: async () => parseRepoConfig("", testConfig({ ALLOWED_USERS: "alice,bob,carol" })),
+    // What waits.mjs request() would do: hold, or drop the wait, with a reply.
+    waits: {
+      request: async (item) => (requested.push([item.author, item.after]), true),
+      reserve: () => null,
+      release: async () => {},
+    },
+    reviews: { dryRun: async ({ by }) => (dryRuns.push(by), { text: "No denial.", denials: [] }) },
+    reply: async (repo, number, text) => (replies.push(text), null),
+  };
+  const { admit } = createTasks(ctx);
+  const say = (login, body, pr = false) => {
+    const payload = {
+      action: "created",
+      installation: { id: 7 },
+      repository: { full_name: "org/repo", default_branch: "main" },
+      issue: { number: 12, ...(pr && { pull_request: {} }) },
+      comment: { id: 99, body, user: { login, type: "User" } },
+      sender: { login },
+    };
+    const id = pr ? "pr-12" : "12";
+    return admit({ repo: "org/repo", id, base: "main" }, "issue_comment", payload);
+  };
+  // A viewer: no wait held, none dropped.
+  await say("bob", "Deckhand /after #7");
+  await say("bob", "/after none");
+  // A manager may drop a wait, not hold one back with a start.
+  await say("carol", "Deckhand /after #7");
+  await say("carol", "/after none");
+  await say("alice", "Deckhand /after #7");
+  assert.deepEqual(
+    requested.map(([who]) => who),
+    ["carol", "alice"],
+  );
+  // The dry run's reply says what the policies refuse: not for someone without tasks:read.
+  await say("dave", "/mode policy", true);
+  await say("bob", "/mode policy", true);
+  assert.deepEqual(dryRuns, ["bob"]);
+  assert.deepEqual(replies, ["No denial."]);
+});

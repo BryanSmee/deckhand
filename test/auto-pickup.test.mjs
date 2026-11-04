@@ -1244,3 +1244,15 @@ test("access: the labeller and whoever edited the issue since need runs:start:wo
     ["alice", "alice"],
   );
 });
+
+test("access: a decision that fails holds nothing and says nothing: the next sweep asks again", async () => {
+  const failing = ["alice"];
+  const permissions = permissionsOf({ alice: { "org/a": MEMBER } }, { failing });
+  const { pickup, p } = setup({ repos: { "org/a": { issues: [issue(1, 1)] } }, permissions });
+  assert.deepEqual(await pickup.sweep(), []);
+  assert.deepEqual([p.comments, p.removed, p.accepted], [[], [], []]);
+  assert.match(p.logs.join("\n"), /org\/a#1: who may start it can't be decided/);
+  failing.length = 0;
+  assert.deepEqual(await pickup.sweep(), ["org/a#1"]);
+  assert.equal(p.accepted[0].author, "alice");
+});
