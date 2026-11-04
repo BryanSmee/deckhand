@@ -494,10 +494,10 @@ const writesLanded = new Map();
 
 // Map `name` as the orchestrator keeps it in its store (lib/store-map.mjs): { key: value }, read
 // as another process on the store's folder would, once what the orchestrator changed so far
-// landed there (its writes are in the background).
+// landed there (its writes are in the background). Its items a file each (`apart`, #691).
 async function storedMap(dir, name) {
   await writesLanded.get(dir)?.();
-  const store = openStore(pathToFileURL(join(dir, "store")).href);
+  const store = openStore(pathToFileURL(join(dir, "store")).href, { apart: [`${name}/`] });
   const found = {};
   for await (const [key, value] of values(store, `${name}/`)) {
     found[key.slice(name.length + 1)] = value;
@@ -6079,6 +6079,13 @@ mounts:
       for (const [name, value] of Object.entries(legacy)) {
         writeFileSync(join(dir, `${name}.json`), JSON.stringify(value));
       }
+      // An item the release before #691 kept in the store's state file: moved to a file of its
+      // own once this copy holds the lease.
+      mkdirSync(join(dir, "store"));
+      writeFileSync(
+        join(dir, "store", "state.json"),
+        JSON.stringify({ keys: { "modes/org/repo#3": { value: "review", expiresAt: null } } }),
+      );
       mkdirSync(join(dir, "logs"));
       writeFileSync(
         join(dir, "logs", "org-repo-9-1000.log"),
@@ -6100,8 +6107,20 @@ mounts:
     const { dir, port, send } = ctx;
     for (const name of Object.keys(legacy)) {
       assert.equal(existsSync(join(dir, `${name}.json`)), false, name);
-      assert.deepEqual(await storedMap(dir, name), legacy[name], name);
+      const expected =
+        name === "modes" ? { ...legacy.modes, "org/repo#3": "review" } : legacy[name];
+      assert.deepEqual(await storedMap(dir, name), expected, name);
     }
+    // Each item a file of its own, out of the state file every lease renewal writes (#691).
+    const saved = JSON.parse(readFileSync(join(dir, "store", "state.json"), "utf8")).keys;
+    for (const name of Object.keys(legacy)) {
+      assert.deepEqual(
+        Object.keys(saved).filter((key) => key.startsWith(`${name}/`)),
+        [],
+        name,
+      );
+    }
+    assert.ok(existsSync(join(dir, "store", "keys", "titles%2Forg%2Frepo%235")));
     for (const [number, id] of [
       [5, 105],
       [6, 106],
