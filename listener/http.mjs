@@ -498,8 +498,8 @@ export function createHttp(ctx) {
     route: (pathname) => (pathname === "/api/sync" ? { what: "sync" } : null),
     // Read at each request: the permissions are set up after this.
     permissions: {
-      visible: async () => true,
-      can: (user, repo, action) => serverWide(user, action),
+      decide: async (user, repo, action) =>
+        ctx.permissions ? ctx.permissions.decide(user, null, action) : { ok: true, error: null },
     },
     action: () => "server:sync",
     posts: {
