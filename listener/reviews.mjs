@@ -105,6 +105,14 @@ const VERDICTS = { approve: "approve", comment: "comment", "request-changes": "r
 // A reviewed head commit is forgotten after this: the pull request is long merged or closed.
 const KEEP_MS = 90 * 24 * 3600_000;
 
+// When pull request entry `v` was last of use: its last review's step (`at`), or the latest
+// follow-up it labelled for auto-pickup, whose record (followUpPick()) must last KEEP_MS from
+// its own filing, however long before the merge the pull request was reviewed (#682).
+function lastAt(v) {
+  const picks = (v.pickups ?? []).map((p) => Date.parse(p.at)).filter(Number.isFinite);
+  return Math.max(v.at ?? 0, ...picks);
+}
+
 // The run's final message (prompts/review.md's format) → { summary, findings: [{ severity,
 // path, line, text }], followUps: [{ title, path, line, text }], comments: [{ blocking, path,
 // line, text }], rating, verdict, allowed }, or null when it lacks the rating or the verdict.
@@ -1919,7 +1927,7 @@ export function createReviews({
   function remember(key, head, fields = {}) {
     const cutoff = now() - KEEP_MS;
     // Not the one it updates: what it counted so far still holds.
-    for (const [k, v] of reviewed) if (v.at < cutoff && k !== key) reviewed.delete(k);
+    for (const [k, v] of reviewed) if (lastAt(v) < cutoff && k !== key) reviewed.delete(k);
     reviewed.set(key, { ...reviewed.get(key), head, at: now(), ...fields });
   }
 

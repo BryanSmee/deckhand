@@ -1964,8 +1964,8 @@ of **the person who merged the pull request**: they saw the follow-ups in its re
   still be in `users` when the issue is picked.
 - Only the issues filed in that pass: a follow-up an issue already had is linked, not
   labelled. A review recorded after the merge files its own the same way.
-- Deckhand keeps a record of each issue it labelled (who merged, the label's time), and the
-  App's `labeled` event counts only when it matches one. Any other labelling by the App's bot
+- Deckhand keeps a record of each issue it labelled (who merged, the label's time), for 90
+  days from that labelling, and the App's `labeled` event counts only when it matches one. Any other labelling by the App's bot
   is refused, with the usual "Not picked automatically" comment.
 - Everything else holds as for a person's label: an issue edited after it was filed by anyone
   but an allowed user waits for the label to be added again, and needs-input, "blocked by",
