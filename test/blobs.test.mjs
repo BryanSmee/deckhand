@@ -1,10 +1,12 @@
 // Blob storage (lib/blobs.mjs): BLOB_URL's three backends against the same interface tests
 // (s3:// through the fake S3 server, file:// in a temp dir, unset: the store), its credentials,
-// the check at start, the warning, and the secret key kept out of the store and the log.
+// the check at start, the warning, and the secret key kept out of the store and the log; then
+// the broker and the runner started for real, stopped by blob storage or warning on /health.
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { readdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { readdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
+import { createServer as createNetServer } from "node:net";
+import { delimiter, join } from "node:path";
 import { test } from "node:test";
 import { pathToFileURL } from "node:url";
 import {
@@ -18,7 +20,7 @@ import {
 } from "../lib/blobs.mjs";
 import { createLogger } from "../lib/log.mjs";
 import { openStore } from "../lib/store.mjs";
-import { fakeS3, tempDir } from "./helpers.mjs";
+import { assertHealth, closedPort, fakeS3, listening, needsBash, tempDir } from "./helpers.mjs";
 
 const root = join(import.meta.dirname, "..");
 
@@ -369,19 +371,11 @@ test("the secret key: refused in a store value, redacted from its blobs and its 
   for (const line of lines) assert.ok(!line.includes(credentials.secretAccessKey), line);
 });
 
-// The broker, started for real: a BLOB_URL that fails its check stops it with what failed,
+// A service, started for real: a BLOB_URL that fails its check stops it with what failed,
 // before it takes a call; one that passes lets it start.
-function startBroker(t, env) {
-  const child = spawn(process.execPath, [join(root, "broker", "server.mjs")], {
-    env: {
-      PATH: process.env.PATH,
-      PORT: "0",
-      LOG_FORMAT: "text",
-      KEY_DIR: tempDir(t),
-      STORE_URL: "memory:",
-      SERVICE_NETWORKS: "orchestrator=127.0.0.0/8",
-      ...env,
-    },
+function startService(t, script, env) {
+  const child = spawn(process.execPath, [join(root, script)], {
+    env: { PORT: "0", LOG_FORMAT: "text", STORE_URL: "memory:", ...env },
     stdio: ["ignore", "pipe", "pipe"],
   });
   t.after(() => child.kill("SIGKILL"));
@@ -389,16 +383,28 @@ function startBroker(t, env) {
   child.stdout.on("data", (chunk) => (out += chunk));
   child.stderr.on("data", (chunk) => (out += chunk));
   return {
-    exited: new Promise((resolve) => child.on("exit", (code) => resolve({ code, out }))),
+    out: () => out,
+    // "close", not "exit": its output read to the end, the line it logged before exiting too.
+    exited: new Promise((resolve) => child.on("close", (code) => resolve({ code, out }))),
+    // Its lines on either stream (lib/log.mjs writes them all to stdout, today).
     until: (pattern) =>
       new Promise((resolve, reject) => {
         const check = () => pattern.test(out) && resolve(out);
         child.stdout.on("data", check);
-        child.on("exit", () => reject(new Error(`exited: ${out}`)));
+        child.stderr.on("data", check);
+        child.on("close", () => reject(new Error(`exited: ${out}`)));
         check();
       }),
   };
 }
+
+const startBroker = (t, env) =>
+  startService(t, "broker/server.mjs", {
+    PATH: process.env.PATH,
+    KEY_DIR: tempDir(t),
+    SERVICE_NETWORKS: "orchestrator=127.0.0.0/8",
+    ...env,
+  });
 
 test("the broker stops at start on a wrong key, its message clear and the key not in it", async (t) => {
   const s3 = await fakeS3(t);
@@ -432,3 +438,111 @@ test("the broker starts with blob storage that passes its check", async (t) => {
   );
   assert.equal(s3.objects.size, 0);
 });
+
+// The runner, started for real beside the fake docker (fixtures/fake-docker.sh): the broker
+// it asks for its tokens is a port nothing listens on, which it only retries.
+async function startRunner(t, env) {
+  const dir = tempDir(t);
+  symlinkSync(join(import.meta.dirname, "fixtures", "fake-docker.sh"), join(dir, "docker"));
+  return startService(t, "runner/server.mjs", {
+    PATH: `${dir}${delimiter}${process.env.PATH}`,
+    DATA_DIR: dir,
+    SERVICE_KEYS_DIR: tempDir(t),
+    SERVICE_NETWORKS: "orchestrator=127.0.0.0/8",
+    BROKER_SERVICE_URL: `http://127.0.0.1:${await closedPort()}`,
+    ...env,
+  });
+}
+
+// Stopped by its own catch, before it listens: its error logged, not thrown (no stack).
+function assertClean(out) {
+  assert.doesNotMatch(out, /Deckhand runner/);
+  assert.doesNotMatch(out, /BlobError|^\s+at /m);
+}
+
+// Its /health, once it listens.
+async function runnerHealth(runner) {
+  const out = await runner.until(/Deckhand runner \(docker\) on :\d+/);
+  const [, port] = out.match(/Deckhand runner \(docker\) on :(\d+)/);
+  return (await fetch(`http://127.0.0.1:${port}/health`)).json();
+}
+
+test(
+  "the runner stops at start on a wrong key, its message clear and the key not in it",
+  { skip: needsBash },
+  async (t) => {
+    const s3 = await fakeS3(t);
+    const runner = await startRunner(t, {
+      BLOB_URL: s3Url(s3),
+      BLOB_ACCESS_KEY_ID: s3.accessKeyId,
+      BLOB_SECRET_ACCESS_KEY: "the-wrong-secret-key-0123456789abcdef",
+    });
+    const { code, out } = await runner.exited;
+    assert.equal(code, 1);
+    assert.match(
+      out,
+      /^\S+ ERROR BLOB_URL \(bucket deckhand at .*\): can't write an object: .*SignatureDoesNotMatch \(the secret key is wrong, or the region\)$/m,
+    );
+    assert.ok(!out.includes("the-wrong-secret-key-0123456789abcdef"));
+    assertClean(out);
+  },
+);
+
+test("the runner stops at start on half its credentials", { skip: needsBash }, async (t) => {
+  const runner = await startRunner(t, { BLOB_ACCESS_KEY_ID: "AKID" });
+  const { code, out } = await runner.exited;
+  assert.equal(code, 1);
+  assert.match(
+    out,
+    /^\S+ ERROR BLOB_ACCESS_KEY_ID and BLOB_SECRET_ACCESS_KEY: set both, or neither$/m,
+  );
+  assertClean(out);
+});
+
+test(
+  "the runner starts with blob storage that passes its check, no warning on /health",
+  { skip: needsBash },
+  async (t) => {
+    const s3 = await fakeS3(t);
+    const runner = await startRunner(t, {
+      BLOB_URL: s3Url(s3),
+      BLOB_ACCESS_KEY_ID: s3.accessKeyId,
+      BLOB_SECRET_ACCESS_KEY: s3.secretAccessKey,
+    });
+    // No warning: none in it. Active or not yet, as it listens before it takes its lease.
+    const health = await runnerHealth(runner);
+    assertHealth(health, { active: health.active });
+    assert.equal(typeof health.active, "boolean");
+    assert.match(await runner.until(/Blob storage: s3/), /Blob storage: s3, bucket deckhand at /);
+    // Its check's object written, then deleted.
+    assert.deepEqual(
+      s3.requests.map((r) => r.method),
+      ["PUT", "GET", "HEAD", "DELETE"],
+    );
+  },
+);
+
+test(
+  "the runner with Redis as its store and no BLOB_URL: the warning on /health",
+  { skip: needsBash },
+  async (t) => {
+    // A Redis that never answers: the warning comes from STORE_URL alone, and /health never
+    // waits on the store (nor the lease, which this copy doesn't get).
+    const sockets = new Set();
+    const redis = createNetServer((socket) => {
+      sockets.add(socket);
+      socket.resume();
+    });
+    const port = await listening(redis);
+    t.after(() => {
+      for (const socket of sockets) socket.destroy();
+      redis.close();
+    });
+    const runner = await startRunner(t, { STORE_URL: `redis://127.0.0.1:${port}` });
+    const health = await runnerHealth(runner);
+    assertHealth(health, { warnings: health.warnings, active: false });
+    assert.equal(health.warnings.length, 1);
+    assert.match(health.warnings[0], /^The runs' logs take Redis's memory: set BLOB_URL/);
+    assert.match(runner.out(), /WARN The runs' logs take Redis's memory/);
+  },
+);
