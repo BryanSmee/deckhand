@@ -474,6 +474,57 @@ test(
   },
 );
 
+test(
+  "the real opa: docs/setup.md's bindings give what its migration notes say",
+  { skip: noOpa },
+  async (t) => {
+    const docs = readFileSync(new URL("../docs/setup.md", import.meta.url), "utf8");
+    const marker = docs.indexOf("<!-- access.rego: test/access-rules.test.mjs");
+    assert.ok(marker > 0);
+    const [, text] = /```rego\n([\s\S]*?)```/.exec(docs.slice(marker));
+    const { policies } = realAccess(t, { operator: { "access.rego": text } });
+    const actions = async (login, where) => (await policies.access(login, where)).actions;
+    assert.ok((await actions("alice", repo("other/repo"))).includes("repo:config:read"));
+    assert.ok(await policies.can("alice", null, "server:read"));
+    assert.deepEqual(await actions("bob", repo("acme/api")), [
+      "logs:read",
+      "runs:manage",
+      "runs:start:*",
+      "tasks:read",
+    ]);
+    assert.deepEqual(await actions("bob", repo("other/repo")), []);
+    assert.deepEqual(await actions("bob", null), []);
+    assert.deepEqual(await actions("carol", repo("acme/web")), ["logs:read", "tasks:read"]);
+    assert.deepEqual(await actions("carol", repo("acme/api")), []);
+    assert.ok(await policies.can("dan", repo("acme/api"), "runs:start:review"));
+    assert.ok(!(await policies.can("dan", repo("acme/api"), "runs:start:work")));
+    assert.ok(!(await policies.can("dan", repo("acme/api"), "logs:read")));
+    // Nobody the bindings name: nothing.
+    assert.deepEqual(await actions("erin", repo("acme/api")), []);
+  },
+);
+
+test(
+  "the real opa: docs/repo-config.md's repository deny_access narrows what Deckhand's default gives",
+  { skip: noOpa },
+  async (t) => {
+    const docs = readFileSync(new URL("../docs/repo-config.md", import.meta.url), "utf8");
+    const marker = docs.indexOf("<!-- repository deny_access: test/access-rules.test.mjs");
+    assert.ok(marker > 0);
+    const [, text] = /```rego\n([\s\S]*?)```/.exec(docs.slice(marker));
+    const repos = { "acme/api": { policies: { "access.rego": text } } };
+    const { policies } = realAccess(t, { repos });
+    assert.ok(await policies.can("alice", repo("acme/api"), "runs:start:work"));
+    assert.ok(!(await policies.can("carol", repo("acme/api"), "runs:start:work")));
+    assert.ok(await policies.can("carol", repo("acme/api"), "runs:start:review"));
+    assert.ok(!(await policies.can("alice", repo("acme/api"), "logs:read")));
+    assert.ok(await policies.can("carol", repo("acme/api"), "tasks:read"));
+    // Another repository, and server-wide: untouched.
+    assert.ok(await policies.can("carol", repo("acme/web"), "logs:read"));
+    assert.ok(await policies.can("carol", null, "server:read"));
+  },
+);
+
 const denyManage =
   'package deckhand\n\ndeny_access contains {"action": "runs:manage", "reason": "no"} if true\n';
 

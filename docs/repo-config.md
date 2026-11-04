@@ -1717,6 +1717,38 @@ or in a repository's `.deckhand/policy/`, for its own (`deny_access contains {"a
 `allow_access` is ignored, a config check error, and its `.deckhand.yaml`'s `users` still
 narrows on its own.
 
+**What a repository may narrow**: only its own access, never give any. Its maintainers have two
+ways, both read from its default branch (so whoever may push there decides them):
+
+- **`users`** in `.deckhand.yaml`: a login outside them has no action on the repository at all,
+  which hides it from them, whatever the operator's bindings say;
+- **`deny_access`** in `.deckhand/policy/`: takes some actions away there, for some logins or
+  all, with a reason Settings › Access shows the operator. It sees the same input as the
+  operator's rules, and its deny wins as theirs does.
+
+<!-- repository deny_access: test/access-rules.test.mjs evaluates this block with the real opa -->
+
+```rego
+# .deckhand/policy/access.rego (a repository's)
+package deckhand
+
+# Only the release managers start work here; everyone else keeps what the operator gave them.
+deny_access contains {"action": "runs:start:work", "reason": "work runs are the release managers'"} if {
+  not input.user.login in {"alice", "bob"}
+}
+
+# Nobody reads this repository's live logs: its runs read customer data.
+deny_access contains {"action": "logs:read", "reason": "logs may hold customer data"}
+```
+
+It can't give a login an action the operator's rules don't (its `allow_access` is ignored), nor
+reach the server-wide actions (`input.repo` is its own, never null, when its rules are asked) or
+another repository's access. A file of its named `access.rego` replaces nothing: its packages are
+its own ([Policies](#policies)). Its deny applies from the push to its default branch on. A policy
+of its that errs takes every action away on the repository for every login (fail closed), which
+hides it from everyone until it is fixed: Deckhand's log says why, and the config check of a
+pull request's branch (onboarding's) reports its compile errors before it merges.
+
 ### The default policies
 
 Deckhand's default policies say what each kind of run gets and does. They ship in the policy

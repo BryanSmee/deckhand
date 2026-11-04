@@ -283,8 +283,13 @@ read your login, then revoked; the session is a signed cookie valid for 7 days, 
 against `ALLOWED_USERS` on every request (the key is `/data/session.key` in the `edge-data`
 volume). Signing out ends all your sessions, in every browser, on both of edge's copies. Edge
 serves the dashboard's files and passes its API on to the orchestrator, which answers it, with
-your login. A repository's tasks and logs show to the users in its
-own `users` (see [Security model](security.md#the-dashboard)). `/status` also answers calls
+your login. Each user sees and does what their access gives them, every action on every
+repository by default, a repository's own `users` narrowing it
+([Upgrading: access control](#upgrading-access-control-725) to narrow it, and the
+[Security model](security.md#access)): the controls they may not use aren't shown, a repository
+where they have no action not at all. **Settings › Access** (with `server:read`) shows each of
+`ALLOWED_USERS`' actions, server-wide and on each repository, with the files that gave or
+denied them. `/status` also answers calls
 from inside edge's container (`docker compose exec edge …`) without a session, but not
 those a reverse proxy forwarded.
 
@@ -445,8 +450,8 @@ what its runs get (each value from the repository, from the operator, or refused
 (each yes-or-no grant by name, `dockerfile`, `docker`…, with the policy files that have
 `allow_grant` rules) and the files of the grants folder it comes from (or the file to fix, when
 it has errors), its Capabilities tab (for each mode, what a run gets, the file that decided each
-capability and what stops it), and the raw file. Anyone signed in to the dashboard sees it, grants
-included. Its **Refresh** reads it again (at most every 5 seconds); changing it is a commit on
+capability and what stops it), and the raw file. Anyone signed in with `repo:config:read` on
+that repository sees it, grants included. Its **Refresh** reads it again (at most every 5 seconds); changing it is a commit on
 the default branch.
 
 ## The server folder
@@ -1734,6 +1739,55 @@ refused.
 The policy service reads your server folder as the `node` user (uid 1000): your grants folder and
 its `policy/` must be readable by that user (the usual `0644` files and `0755` folders are), or
 every policy decision is refused, and the orchestrator's log says why at start.
+
+### Upgrading: access control (#725)
+
+Nothing to do: Deckhand's `policy/access.rego` gives every login of `ALLOWED_USERS` every
+action, on every repository and server-wide, as before. `ALLOWED_USERS` still decides who signs
+in, uses MCP and comments, and a repository's `users` still narrows it. The policy service
+answers the dashboard now too ([Access](security.md#access)): with it away, the dashboard shows
+no repository after a minute, until it is back.
+
+To give some people some actions on some repositories only, write a `policy/access.rego` in the
+grants folder: it replaces Deckhand's, so each login then has the actions of its bindings alone,
+and a login of `ALLOWED_USERS` no binding names signs in to an empty dashboard. Bindings name
+logins, repository patterns (`owner/repo`, `owner/*`, `*/*`) and a role
+([Access](repo-config.md#access)):
+
+| Role       | May                                                                                       |
+| ---------- | ----------------------------------------------------------------------------------------- |
+| `viewer`   | see the repository's tasks and runs (`tasks:read`), not their live logs                   |
+| `member`   | a viewer's, the live logs, start runs in every mode, cancel, rerun and answer them        |
+| `admin`    | a member's, and read the repository's config, grants and policies (`repo:config:read`)    |
+| `operator` | Settings › Server and › Access, the services' health, the plans' usage, Sync (`server:*`) |
+
+<!-- access.rego: test/access-rules.test.mjs evaluates this block with the real opa -->
+
+```rego
+# server/grants/policy/access.rego
+package deckhand
+
+bindings := [
+  # You: everything, everywhere. `operator` is server-wide only: bind it beside another role.
+  {"users": ["alice"], "repos": ["*/*"], "role": "admin"},
+  {"users": ["alice"], "role": "operator"},
+  # A teammate who works on acme's repositories, without their configs.
+  {"users": ["bob"], "repos": ["acme/*"], "role": "member"},
+  # Someone who follows one project's progress, and its live logs.
+  {"users": ["carol"], "repos": ["acme/web"], "role": "viewer"},
+  {"users": ["carol"], "repos": ["acme/web"], "actions": ["logs:read"]},
+  # A contractor who may start reviews only, on one repository.
+  {"users": ["dan"], "repos": ["acme/api"], "role": "viewer"},
+  {"users": ["dan"], "repos": ["acme/api"], "actions": ["runs:start:review"]},
+]
+```
+
+Keep a binding for yourself: without `server:read`, nobody sees Settings › Access, nor the
+server's setup. Then open **Settings › Access** to check who has what: an edit of the folder's
+policies holds at the next request. Other rules of yours can give or deny actions besides the
+bindings (a `deny_access` for every repository), and a repository's maintainers can take
+actions away on theirs with `deny_access` in its `.deckhand/policy/`, never give any
+([Access](repo-config.md#access)).
 
 ### Upgrading: `+scan` for Redis's user (#614)
 
