@@ -6,7 +6,7 @@
 // error, or a policy service away, gives no action (fail closed), never what was said before:
 // policies.mjs keeps no failure.
 import { taskKey } from "./events.mjs";
-import { actionMatches, allows } from "./policies.mjs";
+import { actionMatches, allows, SERVER_ACTIONS } from "./policies.mjs";
 
 // The actions on a repository, one each, that anyAction() probes; `runs:start:*` stands for
 // "some mode", each mode a rule names being probed too.
@@ -45,6 +45,57 @@ export async function itemMay(permissions, log, item, action, what = "") {
 
 // The action a run in `mode` needs from whoever starts it.
 export const startAction = (mode) => `runs:start:${mode}`;
+
+// The actions on a repository the dashboard has controls for (#732), besides the starts.
+export const SHOWN_ACTIONS = ["tasks:read", "logs:read", "runs:manage", "repo:config:read"];
+const START = startAction("");
+
+// What an action's pattern, given or denied, says of the modes a run may start in: a mode's
+// name, a prefix ending in `*` ("*": every mode), or null for none (`tasks:read`, `server:*`).
+// `runs:*` and `*` cover every mode; `runs:start:re*` the modes starting with "re".
+export function modePattern(pattern) {
+  if (typeof pattern !== "string") return null;
+  if (!pattern.endsWith("*")) return pattern.startsWith(START) ? pattern.slice(START.length) : null;
+  const prefix = pattern.slice(0, -1);
+  if (START.startsWith(prefix)) return "*";
+  return prefix.startsWith(START) ? `${prefix.slice(START.length)}*` : null;
+}
+
+// access()'s answer on a repository as the dashboard reads it (api/state's `access.repos`):
+// `actions`, those of SHOWN_ACTIONS it gives; `starts`, the modes it may start runs in
+// (modePattern()'s), unless `startsDenied` covers them, as allows() decides a mode's start.
+// No answer (outside the repo's `users`), or one that failed: nothing.
+export function repoActions(answer) {
+  if (!answer || answer.error) return { actions: [], starts: [], startsDenied: [] };
+  const modes = (patterns) => [...new Set(patterns.map(modePattern).filter((m) => m !== null))];
+  return {
+    actions: SHOWN_ACTIONS.filter((a) => allows(answer, a, true)),
+    starts: modes(answer.actions),
+    startsDenied: modes(answer.denied.map((d) => d.action)),
+  };
+}
+
+// The server-wide actions access()'s server-wide `answer` gives (api/state's `access.server`).
+export const serverActions = (answer) => SERVER_ACTIONS.filter((a) => allows(answer, a, false));
+
+// access()'s answer as Settings › Access shows it (api/access): each action allowed, with the
+// operator's files whose rule gives it, and each deny, with its file and layer (its reason too:
+// the page is the operator's, server:read). `outside`: not in the repo's `users`, so nothing.
+function reported(answer, outside = false) {
+  if (outside) return { actions: [], denied: [], error: null, outside: true };
+  if (!answer) return { actions: [], denied: [], error: "no answer", outside: false };
+  return {
+    actions: answer.actions.map((action) => ({ action, files: [...(answer.files[action] ?? [])] })),
+    denied: answer.denied.map(({ action, reason = null, file = null, layer }) => ({
+      action,
+      reason,
+      file,
+      layer,
+    })),
+    error: answer.error ?? null,
+    outside: false,
+  };
+}
 
 // `policies`: policies.mjs createPolicies()'s (access()); none (some tests): every action, as
 // run-policy.mjs asks nothing without them. `usersOf(repo)`: the repository's `users` as last
@@ -105,5 +156,40 @@ export function createPermissions({ policies = null, usersOf = () => null }) {
     return new Set(said.filter(Boolean));
   }
 
-  return { answerOf, can, decide, visible, which };
+  // What the dashboard shows `login` (api/state's `access`, #732): their server-wide actions,
+  // and on each of `repos` (names) they see, the repo's actions and starts (repoActions()), by
+  // the repo's name in lower case. The repos they don't see aren't named.
+  async function dashboard(login, repos) {
+    const names = new Map();
+    for (const repo of repos) if (repo) names.set(repo.toLowerCase(), repo);
+    const [server, ...said] = await Promise.all([
+      answerOf(login, null),
+      ...[...names.values()].map((repo) => answerOf(login, repo)),
+    ]);
+    const shown = {};
+    [...names.keys()].forEach((key, i) => {
+      if (anyAction(said[i])) shown[key] = repoActions(said[i]);
+    });
+    return { server: serverActions(server), repos: shown };
+  }
+
+  // Who has what (Settings › Access, #732): for each of `logins`, their server-wide actions and
+  // those on each of `repos`, with the files that decided them (reported()).
+  async function report(logins, repos) {
+    const one = async (login, repo) => {
+      if (repo != null && outside(login, repo)) return reported(null, true);
+      return reported(await answerOf(login, repo));
+    };
+    return Promise.all(
+      logins.map(async (login) => ({
+        login,
+        server: await one(login, null),
+        repos: await Promise.all(
+          repos.map(async (repo) => ({ repo, ...(await one(login, repo)) })),
+        ),
+      })),
+    );
+  }
+
+  return { answerOf, can, decide, visible, which, dashboard, report };
 }

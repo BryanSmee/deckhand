@@ -33,7 +33,7 @@ import { endPicks } from "./picks.mjs";
 import { closedAs } from "./titles.mjs";
 import { send, sendJson } from "../lib/http.mjs";
 import { apiRoute, needs, undecided } from "./web.mjs";
-import { refusal } from "./permissions.mjs";
+import { createPermissions, refusal } from "./permissions.mjs";
 
 // The action that shows a repo's tasks (permissions.mjs).
 const TASKS = "tasks:read";
@@ -193,8 +193,16 @@ export function createHttp(ctx) {
     for (const [key, lane] of Object.entries(lanes)) {
       if (lane.source === "parent" && hiddenParent(key)) lanes[key] = { ...lane, name: HIDDEN };
     }
+    // What `user` may do (#732): server-wide, and on each repo they see that the dashboard may
+    // name, those in the state and those whose config was read (the boards'), so that it shows
+    // only the controls they may use. Without permissions (some tests): left out, everything.
+    const access =
+      ctx.permissions &&
+      (await ctx.permissions.dashboard(user, [...namedRepos(), ...(ctx.repoList?.known() ?? [])]));
     // How much of each plan the runs used: server-wide.
-    const plans = (await serverWide(user, "server:read")) ? (ctx.models?.plans?.() ?? []) : [];
+    const plans = (access ? access.server.includes("server:read") : true)
+      ? (ctx.models?.plans?.() ?? [])
+      : [];
     // Titles and parents the orchestrator doesn't have yet show on a later poll; a lane's parent's
     // title names it.
     if (ctx.app) {
@@ -256,8 +264,27 @@ export function createHttp(ctx) {
       ...(plans.length && { plans }),
       // The last catch-up with GitHub, at start or from a Sync (sync.mjs); null before one.
       lastSync: ctx.lastSync?.() ?? null,
+      ...(access && { access }),
       now: Date.now(),
     };
+  }
+
+  // Settings › Access (#732): each of ALLOWED_USERS's actions, server-wide and on each repo the
+  // App's installations list (ALLOWED_REPOS's), with the files that decided them. A listing
+  // that fails says so, the server-wide actions still shown.
+  async function accessReport() {
+    let repos = [];
+    let error = null;
+    try {
+      repos = ((await ctx.repoList?.names()) ?? []).toSorted((a, b) => a.localeCompare(b));
+    } catch (e) {
+      error = `the repositories can't be listed (${e.message ?? e})`;
+    }
+    const logins = [...config.users].sort();
+    // Without permissions (some tests): every action, the repos' `users` narrowing it.
+    const permissions = ctx.permissions ?? createPermissions({ usersOf: ctx.usersOf });
+    const users = await permissions.report(logins, repos);
+    return { users, repos, error };
   }
 
   // The dashboard's API that edge passes on (GET), for its signed-in `user`.
@@ -269,7 +296,11 @@ export function createHttp(ctx) {
     if (url.pathname === "/api/state") return sendJson(res, await state(user));
     // Settings › Server and the services' health: server-wide. A decision that failed says so
     // (a 503), as apiRoute() does; the plans in api/state are just left out then.
-    if (url.pathname === "/api/server" || (url.pathname === "/api/health" && ctx.health)) {
+    if (
+      url.pathname === "/api/server" ||
+      url.pathname === "/api/access" ||
+      (url.pathname === "/api/health" && ctx.health)
+    ) {
       const said = ctx.permissions
         ? await ctx.permissions.decide(user, null, "server:read")
         : { ok: true, error: null };
@@ -281,6 +312,8 @@ export function createHttp(ctx) {
     }
     // Read when Settings › Server opens, not at each poll: it scans the grants folder.
     if (url.pathname === "/api/server") return sendJson(res, ctx.serverSetup());
+    // Settings › Access (#732): who has what, each of ALLOWED_USERS on each listed repo.
+    if (url.pathname === "/api/access") return sendJson(res, await accessReport());
     // The services' health (health.mjs), probed at most every 10 s whoever asks: no URL in it.
     if (url.pathname === "/api/health" && ctx.health) {
       return ctx.health.check().then(

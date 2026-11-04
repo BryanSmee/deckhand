@@ -3,7 +3,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createHttp } from "../listener/http.mjs";
-import { VIEWER, permissionsOf, serve } from "./helpers.mjs";
+import { MEMBER, VIEWER, permissionsOf, serve } from "./helpers.mjs";
 
 test("an unexpected throw answers 500, and the orchestrator keeps serving", async (t) => {
   const logged = [];
@@ -151,4 +151,82 @@ test("access (#731): api/state, /status and the server's views follow the login'
   // Unknown to the decision: an empty dashboard.
   const [, nobody] = await get("/api/state", "dave");
   assert.deepEqual([nobody.tasks, nobody.inboxes], [[], {}]);
+  assert.deepEqual(nobody.access, { server: [], repos: {} });
+  // What each may do (#732): the repos they see, none of the others.
+  assert.deepEqual(all.access, {
+    server: ["server:read"],
+    repos: {
+      "org/app": { actions: ["tasks:read"], starts: [], startsDenied: [] },
+      "org/hidden": { actions: ["tasks:read"], starts: [], startsDenied: [] },
+    },
+  });
+  assert.deepEqual(Object.keys(mine.access.repos), ["org/app"]);
+});
+
+test("access (#732): api/state's actions name the boards' repos; Settings › Access for server:read", async (t) => {
+  const rules = {
+    alice: { "org/app": MEMBER, "org/board": VIEWER, "": ["server:read"] },
+    bob: { "org/app": VIEWER },
+  };
+  let listing = async () => ["org/board", "org/app"];
+  const ctx = {
+    config: { maxParallel: 1, users: ["bob", "alice"] },
+    log: () => {},
+    skip: () => {},
+    tasks: new Map(),
+    app: {},
+    runs: [],
+    runsById: new Map(),
+    running: 0,
+    brainstorms: { list: () => [] },
+    waits: { list: () => [] },
+    inputs: { list: () => [] },
+    titles: { get: () => null, closed: () => null, fill: () => {} },
+    pulls: { get: () => null, fill: () => {} },
+    // org/board's config was read (its board), though nothing of it is in the state.
+    repoList: { known: () => ["org/board"], names: () => listing() },
+    usersOf: () => null,
+    permissions: permissionsOf(rules),
+  };
+  const http = createHttp(ctx);
+  const { url } = await serve(t, (req, res) =>
+    http.handle(req, res, { user: req.headers["x-user"] ?? null }),
+  );
+  const get = async (path, user) => {
+    const res = await fetch(url + path, { headers: { "x-user": user } });
+    return [res.status, await res.json()];
+  };
+  const [, state] = await get("/api/state", "alice");
+  assert.deepEqual(state.access.repos, {
+    "org/board": { actions: ["tasks:read"], starts: [], startsDenied: [] },
+  });
+  assert.deepEqual(state.access.server, ["server:read"]);
+  // Settings › Access: server:read only.
+  assert.equal((await get("/api/access", "bob"))[0], 403);
+  const [status, report] = await get("/api/access", "alice");
+  assert.equal(status, 200);
+  assert.deepEqual(report.repos, ["org/app", "org/board"]);
+  assert.equal(report.error, null);
+  assert.deepEqual(
+    report.users.map((u) => u.login),
+    ["alice", "bob"],
+  );
+  const [alice, bob] = report.users;
+  assert.deepEqual(alice.server.actions, [{ action: "server:read", files: [] }]);
+  assert.deepEqual(
+    alice.repos.map((r) => [r.repo, r.actions.map((a) => a.action)]),
+    [
+      ["org/app", MEMBER],
+      ["org/board", VIEWER],
+    ],
+  );
+  assert.deepEqual(bob.repos[1].actions, []);
+  // A listing that fails says so; the server-wide actions are still there.
+  listing = async () => {
+    throw new Error("GitHub is down");
+  };
+  const [, down] = await get("/api/access", "alice");
+  assert.match(down.error, /GitHub is down/);
+  assert.deepEqual(down.repos, []);
+  assert.equal(down.users[0].server.actions.length, 1);
 });

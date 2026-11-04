@@ -3,7 +3,14 @@
 // ALLOWED_REPOS, a missing action 403.
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { anyAction, createPermissions, refusal } from "../listener/permissions.mjs";
+import {
+  anyAction,
+  createPermissions,
+  modePattern,
+  refusal,
+  repoActions,
+  serverActions,
+} from "../listener/permissions.mjs";
 import { apiRoute, mustDo } from "../listener/web.mjs";
 import { Refused, sendJson } from "../lib/http.mjs";
 import { MEMBER, VIEWER, permissionsOf, serve } from "./helpers.mjs";
@@ -26,6 +33,137 @@ test("anyAction: an action a pattern gives that no deny takes; an error or nothi
   assert.equal(anyAction(answer(["runs:start:work"], [{ action: "runs:start:work" }])), false);
   assert.equal(anyAction(answer(["*"], [{ action: "*" }])), false);
   assert.equal(anyAction(answer(VIEWER, [{ action: "tasks:read" }])), false);
+});
+
+test("modePattern: what a pattern says of the modes a run may start in (#732)", () => {
+  assert.equal(modePattern("runs:start:work"), "work");
+  assert.equal(modePattern("runs:start:*"), "*");
+  assert.equal(modePattern("runs:start:re*"), "re*");
+  assert.equal(modePattern("runs:*"), "*");
+  assert.equal(modePattern("ru*"), "*");
+  assert.equal(modePattern("*"), "*");
+  assert.equal(modePattern("tasks:read"), null);
+  assert.equal(modePattern("runs:manage"), null);
+  assert.equal(modePattern("runs:m*"), null);
+  assert.equal(modePattern("server:*"), null);
+  assert.equal(modePattern(null), null);
+});
+
+test("repoActions and serverActions: access()'s answer as the dashboard reads it (#732)", () => {
+  assert.deepEqual(repoActions(answer(VIEWER)), {
+    actions: ["tasks:read"],
+    starts: [],
+    startsDenied: [],
+  });
+  assert.deepEqual(repoActions(answer(MEMBER)), {
+    actions: ["tasks:read", "logs:read", "runs:manage"],
+    starts: ["*"],
+    startsDenied: [],
+  });
+  // `*` gives every action; a deny takes its own away, a mode's start or all of them.
+  assert.deepEqual(
+    repoActions(
+      answer(
+        ["*"],
+        [{ action: "repo:config:read" }, { action: "runs:start:work" }, { action: "server:*" }],
+      ),
+    ),
+    {
+      actions: ["tasks:read", "logs:read", "runs:manage"],
+      starts: ["*"],
+      startsDenied: ["work"],
+    },
+  );
+  assert.deepEqual(repoActions(answer(["*"], [{ action: "runs:*" }])).actions, [
+    "tasks:read",
+    "logs:read",
+    "repo:config:read",
+  ]);
+  assert.deepEqual(repoActions(answer(["*"], [{ action: "runs:*" }])).startsDenied, ["*"]);
+  // Nothing, or a failure: nothing.
+  const none = { actions: [], starts: [], startsDenied: [] };
+  assert.deepEqual(repoActions(null), none);
+  assert.deepEqual(repoActions({ ...answer(["*"]), error: "no policy" }), none);
+  assert.deepEqual(serverActions(answer(["*"])), ["server:read", "server:sync"]);
+  assert.deepEqual(serverActions(answer(["server:read"])), ["server:read"]);
+  assert.deepEqual(serverActions(answer(["*"], [{ action: "server:sync" }])), ["server:read"]);
+  assert.deepEqual(serverActions(answer(MEMBER)), []);
+  assert.deepEqual(serverActions(null), []);
+});
+
+test("permissions.dashboard: the server's actions, and those of each repo seen (#732)", async () => {
+  const permissions = permissionsOf(
+    {
+      alice: { "org/app": MEMBER, "org/other": VIEWER, "": ["server:*"] },
+      bob: { "org/app": VIEWER },
+    },
+    { usersOf: (repo) => (repo.toLowerCase() === "org/other" ? ["bob"] : null) },
+  );
+  assert.deepEqual(
+    await permissions.dashboard("alice", ["Org/App", "org/app", "org/other", null]),
+    {
+      server: ["server:read", "server:sync"],
+      // org/other's users leave alice out; the names are in lower case.
+      repos: {
+        "org/app": {
+          actions: ["tasks:read", "logs:read", "runs:manage"],
+          starts: ["*"],
+          startsDenied: [],
+        },
+      },
+    },
+  );
+  assert.deepEqual(await permissions.dashboard("bob", ["org/app", "org/hidden"]), {
+    server: [],
+    repos: { "org/app": { actions: ["tasks:read"], starts: [], startsDenied: [] } },
+  });
+});
+
+test("permissions.report: each login's actions and the files that decided them (#732)", async () => {
+  const policies = {
+    access: async (login, repo) => {
+      if (login === "carol") return { actions: [], denied: [], files: {}, error: "no policy" };
+      if (repo === null) return { actions: [], denied: [], files: {}, error: null };
+      return {
+        actions: ["runs:start:*", "tasks:read"],
+        denied: [
+          { action: "runs:start:work", reason: "not here", file: "audit.rego", layer: "repo" },
+        ],
+        files: { "runs:start:*": ["access.rego"], "tasks:read": ["access.rego"] },
+        error: null,
+      };
+    },
+  };
+  const permissions = createPermissions({
+    policies,
+    usersOf: (repo) => (repo === "org/other" ? ["alice"] : null),
+  });
+  const [alice, bob, carol] = await permissions.report(
+    ["alice", "bob", "carol"],
+    ["org/app", "org/other"],
+  );
+  assert.deepEqual(alice.server, { actions: [], denied: [], error: null, outside: false });
+  assert.deepEqual(alice.repos[0], {
+    repo: "org/app",
+    actions: [
+      { action: "runs:start:*", files: ["access.rego"] },
+      { action: "tasks:read", files: ["access.rego"] },
+    ],
+    denied: [{ action: "runs:start:work", reason: "not here", file: "audit.rego", layer: "repo" }],
+    error: null,
+    outside: false,
+  });
+  assert.equal(alice.repos[1].actions.length, 2);
+  // org/other's users leave bob out.
+  assert.deepEqual(bob.repos[1], {
+    repo: "org/other",
+    actions: [],
+    denied: [],
+    error: null,
+    outside: true,
+  });
+  assert.equal(carol.repos[0].error, "no policy");
+  assert.equal(carol.server.error, "no policy");
 });
 
 test("permissions: the decision, narrowed by the repo's users; a failure gives nothing", async () => {
