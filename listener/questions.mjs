@@ -15,8 +15,22 @@ import { Refused } from "../lib/http.mjs";
 // Starts the final message of a run that stopped to ask the maintainer (../prompts/sandbox.md).
 export const NEEDS_INPUT = "<!-- needs-input -->";
 
-const HEADING = /^ {0,3}(#{1,6})\s+(.*?)(?:\s+#+)?\s*$/;
+// No backtracking in these, nor in titleOf() and pickOf(): a body is anyone's edit
+// (editedInput()), and a regex that tries every length of a long run of spaces blocks the
+// orchestrator.
+const HEADING = /^ {0,3}(#{1,6})\s+([^]*)$/;
 const FENCE = /^ {0,3}(```|~~~)/;
+
+// A heading line → { level, text }, its closing #s off (`## Title ##`), or null.
+function headingOf(line) {
+  const heading = HEADING.exec(line);
+  if (!heading) return null;
+  let text = heading[2].trimEnd();
+  let end = text.length;
+  while (end > 0 && text[end - 1] === "#") end--;
+  if (end < text.length && end > 0 && /\s/.test(text[end - 1])) text = text.slice(0, end).trimEnd();
+  return { level: heading[1].length, text };
+}
 
 // The listener reads these words in English, as the prompt asks a run to keep them whatever
 // language it writes in (../prompts/sandbox.md), and in a few common translations too: a
@@ -39,15 +53,12 @@ export function questionsSection(body) {
   let fenced = false;
   for (const line of (body ?? "").split(/\r?\n/)) {
     if (FENCE.test(line)) fenced = !fenced;
-    const heading = fenced ? null : HEADING.exec(line);
+    const heading = fenced ? null : headingOf(line);
     if (lines) {
-      if (heading && heading[1].length <= level) break;
+      if (heading && heading.level <= level) break;
       lines.push(line);
-    } else if (
-      heading &&
-      OPEN_QUESTIONS.test(heading[2].replace(/[*_]/g, "").trim().normalize("NFC"))
-    ) {
-      level = heading[1].length;
+    } else if (heading && OPEN_QUESTIONS.test(heading.text.replace(/[*_]/g, "").normalize("NFC"))) {
+      level = heading.level;
       lines = [];
     }
   }
@@ -77,7 +88,7 @@ function asks(text) {
   let fenced = false;
   for (const line of section.split(/\r?\n/).slice(1)) {
     if (FENCE.test(line)) fenced = !fenced;
-    else if (!fenced && HEADING.test(line)) break;
+    else if (!fenced && headingOf(line)) break;
     else if (!fenced) after.push(line);
   }
   // Its options all unticked: one ticked is an answer, which a list of what was settled has.
@@ -94,14 +105,26 @@ const OPTION = /^\s+[-*+]\s+\[([ xX])\]\s+(.*)$/;
 const LIST = /^\s*(?:[-*+]|\d{1,9}[.)])(?:\s|$)/;
 const BULLET = /^\s+[-*+]\s+(\S.*)$/;
 const BOX = /^\[[^\]]{0,3}\](?!\()/;
-// A space may come before the colon, as French puts one (`**Titre** :`).
-const TITLE = /^\*\*([^*]+?)(?:\s*:\*\*|\*\*\s*:)\s*(.*)$/;
 // `(recommended)` ending an option, or with its reason: `(recommended: …)`, `(recommended, …)`,
 // `(recommended - …)`. The reason stays in the label, in parentheses.
-const RECOMMENDED = new RegExp(
-  `\\s*\\(\\s*(?:${PICK})\\s*(?:(?:[:,;]|\\s[-–—])\\s*(.*?))?\\s*\\)\\s*$`,
-  "iu",
-);
+const PICK_AT = new RegExp(`\\(\\s*(?:${PICK})`, "giu");
+
+// An option's `(recommended…)` at its end → { label, reason }, null without one. By index, not
+// one regex: a lazy reason before `\s*\)\s*$` tries every length of a long line.
+function pickOf(text) {
+  const line = text.trimEnd();
+  if (!line.endsWith(")")) return null;
+  for (const pick of line.matchAll(PICK_AT)) {
+    let at = pick.index + pick[0].length;
+    const spaced = /\s/.test(line[at] ?? "");
+    while (at < line.length && /\s/.test(line[at])) at++;
+    const label = line.slice(0, pick.index).trim();
+    if (at === line.length - 1) return { label, reason: null };
+    if (/[:,;]/.test(line[at]) || (spaced && /[-–—]/.test(line[at])))
+      return { label, reason: line.slice(at + 1, -1).trim() || null };
+  }
+  return null;
+}
 
 // An "Open questions" section (or a run's questions) → { items, raw }, null when it asks
 // nothing ("None"). `items`: [{ title, text, options: [{ label, recommended, checked }] }]
@@ -143,12 +166,12 @@ function parseList(raw) {
       if (option) {
         // NFC: an editor may write "é" as "e" and its accent, which the translations miss.
         const text = option[2].normalize("NFC");
-        const pick = RECOMMENDED.exec(text);
-        const label = text.replace(RECOMMENDED, "").trim();
+        const pick = pickOf(text);
+        const label = pick ? pick.label : text.trim();
         if (!label) return other;
         loose = false;
         item.options.push({
-          label: pick?.[1] ? `${label} (${pick[1]})` : label,
+          label: pick?.reason ? `${label} (${pick.reason})` : label,
           recommended: !!pick,
           checked: option[1] !== " ",
         });
@@ -189,11 +212,23 @@ export function stillAsks(body) {
 // A question that is all title (`**Which one?**:`, nothing after it), as agents write it too:
 // the title is its text. Only markup and nothing else (`**:**`) is no question.
 function question(line) {
-  const titled = TITLE.exec(line.trim());
+  const titled = titleOf(line.trim());
   const title = titled?.[1].trim() || null;
   const text = (titled ? titled[2].trim() || title : line.trim()) ?? "";
   if (!text.replace(/[*_:\s]/g, "")) return null;
   return { title: titled?.[2].trim() ? title : null, text, options: [] };
+}
+
+// `**Title**: text` → [, title, text], null without a title. A space may come before the colon,
+// as French puts one (`**Titre** :`, `**Titre :**`). By index, not a regex (HEADING).
+function titleOf(line) {
+  const end = line.indexOf("*", 2);
+  if (!line.startsWith("**") || end < 3 || !line.startsWith("**", end)) return null;
+  const name = line.slice(2, end).trimEnd();
+  const after = line.slice(end + 2).trimStart();
+  if (name.endsWith(":") && name.length > 1) return [, name.slice(0, -1), after];
+  if (after.startsWith(":")) return [, name, after.slice(1).trimStart()];
+  return null;
 }
 
 // Whether a run's reply stopped to ask: NEEDS_INPUT starts it, or is a line of its own before
@@ -223,12 +258,14 @@ function markerEnd(text) {
   return -1;
 }
 
-// The reply without the marker where asksInput() reads one: at its start, or a line of its own
-// (not one quoted in a sentence, which is the reply's text).
+// The reply without the marker asksInput() reads (markerEnd()): one quoted in a sentence or
+// shown in a code block is the reply's text.
 export function withoutMarker(text) {
-  return (text ?? "")
-    .replace(/^\s*<!-- needs-input -->/, "")
-    .replace(/^ {0,3}<!-- needs-input -->[ \t]*\r?$/gm, "");
+  const reply = text ?? "";
+  const end = markerEnd(reply);
+  if (end < 0) return reply;
+  const at = reply.lastIndexOf(NEEDS_INPUT, end);
+  return reply.slice(0, at) + reply.slice(end);
 }
 
 // The questions of a run's reply that asks (asksInput()): its "Open questions" section when it

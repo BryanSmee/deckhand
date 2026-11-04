@@ -1897,8 +1897,8 @@ marked `truncated`).
 
 An issue whose body has an `## Open questions` section (or `Questions ouvertes`,
 `Preguntas abiertas`, `Offene Fragen`, `Perguntas abertas`, `Domande aperte`) that asks
-something (it doesn't start with "None", or a translation of it, unless questions with options
-follow before the next heading) is labelled
+something (it doesn't start with "None", or a translation of it, unless unanswered questions
+with options, none ticked, follow before the next heading) is labelled
 `NEEDS_INPUT_LABEL` (default `needs-input`), and an allowed user's comment takes the label
 off: they answered. Ticking the boxes in the section answers too: once every question has an
 option ticked (`- [x]`), the label comes off as for a comment, and unticking them puts it

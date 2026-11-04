@@ -8,13 +8,23 @@ import type { Entry, Phase, StepStatus } from "./types";
 // Starts the reply of a run that stopped to ask: for the listener, not for reading.
 export const NEEDS_INPUT = "<!-- needs-input -->";
 
-// The reply without the marker where the listener reads one (questions.mjs withoutMarker()): at
-// its start or on a line of its own, not quoted in a sentence.
+// The reply without the marker the listener reads (questions.mjs markerEnd()): at its start, or
+// the first line that is the marker alone, outside code and before a numbered line. One quoted
+// in a sentence or shown in a code block is the reply's text.
 export function withoutMarker(text: string): string {
-  return text
-    .replace(/^\s*<!-- needs-input -->/, "")
-    .replace(/^ {0,3}<!-- needs-input -->[ \t]*\r?$/gm, "")
-    .trim();
+  const reply = text.trimStart();
+  if (reply.startsWith(NEEDS_INPUT)) return reply.slice(NEEDS_INPUT.length).trim();
+  const lines = reply.split("\n");
+  let fenced = false;
+  for (const [i, line] of lines.entries()) {
+    if (/^ {0,3}(```|~~~)/.test(line)) fenced = !fenced;
+    else if (fenced) continue;
+    else if (line.trimEnd().replace(/^ {0,3}/, "") === NEEDS_INPUT) {
+      lines.splice(i, 1);
+      break;
+    } else if (/^ ?\d{1,9}[.)]\s/.test(line)) break;
+  }
+  return lines.join("\n").trim();
 }
 
 export interface Step {

@@ -102,9 +102,15 @@ test("work: messages, tool calls with their output, the result without its marke
 
 test("withoutMarker: at the start or on a line of its own, never quoted in a sentence", () => {
   expect(withoutMarker("<!-- needs-input -->\nWhich?")).toBe("Which?");
-  expect(withoutMarker("## Avis\n\n<!-- needs-input -->\nLequel ?")).toBe("## Avis\n\n\nLequel ?");
+  expect(withoutMarker("## Avis\n\n<!-- needs-input -->\nLequel ?")).toBe("## Avis\n\nLequel ?");
+  // Shown in a code block, or after a numbered line: the reply's text, as the listener reads it.
+  const shown = "Done.\n```\n<!-- needs-input -->\n```";
+  expect(withoutMarker(shown)).toBe(shown);
+  expect(withoutMarker("Done.\n1. Fixed\n<!-- needs-input -->")).toBe(
+    "Done.\n1. Fixed\n<!-- needs-input -->",
+  );
   const quoted = "I start with `<!-- needs-input -->` to ask.";
-  expect(withoutMarker(`${quoted}\n<!-- needs-input -->\nWhich?`)).toBe(`${quoted}\n\nWhich?`);
+  expect(withoutMarker(`${quoted}\n<!-- needs-input -->\nWhich?`)).toBe(`${quoted}\nWhich?`);
 });
 
 test("a log from before phases is one work section; a live run's current section is its last", () => {

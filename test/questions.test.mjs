@@ -12,6 +12,7 @@ import {
   questionsSection,
   replyQuestions,
   stillAsks,
+  withoutMarker,
 } from "../listener/questions.mjs";
 import { outcome } from "../listener/runlog.mjs";
 import { Refused } from "../lib/http.mjs";
@@ -391,6 +392,33 @@ test("a body of None lines: read in one pass, as any other", () => {
   assert.equal(hasOpenQuestions(body), false);
   assert.equal(parseQuestions(questionsSection(body)), null);
   assert.equal(hasOpenQuestions(`## Open questions\n\n${"None\n\n".repeat(20000)}`), false);
+});
+
+test("long lines: an unclosed title, a pick or a heading read in one pass", () => {
+  // Anyone's edit is read (editedInput()): a regex that tries every length of a run of spaces
+  // blocked the orchestrator for seconds.
+  const spaces = " ".repeat(65000);
+  const title = parseQuestions(`1. **${spaces}x\n   - [ ] A`).items[0];
+  assert.deepEqual([title.title, title.text], [null, `**${spaces}x`]);
+  const pick = parseQuestions(`1. Q?\n   - [ ] A (recommended: ${spaces}x\n   - [ ] B`);
+  assert.deepEqual(pick.items[0].options[0], {
+    label: `A (recommended: ${spaces}x`,
+    recommended: false,
+    checked: false,
+  });
+  const option = parseQuestions(`1. Q?\n   - [ ] A${spaces}x`).items[0].options[0];
+  assert.equal(option.label, `A${spaces}x`);
+  assert.equal(hasOpenQuestions(`# a${spaces}x\n\n1. A?`), false);
+  assert.equal(questionsSection(`## Open questions${spaces}##\n\n1. A?`), "1. A?");
+});
+
+test("withoutMarker: the marker asksInput() reads, not one quoted or shown in code", () => {
+  assert.equal(withoutMarker("<!-- needs-input -->\nWhich?"), "\nWhich?");
+  assert.equal(withoutMarker("## Avis\n<!-- needs-input -->\n1. A ?"), "## Avis\n\n1. A ?");
+  const shown = "Done.\n```\n<!-- needs-input -->\n```";
+  assert.equal(withoutMarker(shown), shown);
+  const quoted = "Starts with `<!-- needs-input -->`.\n<!-- needs-input -->\nWhich?";
+  assert.equal(withoutMarker(quoted), "Starts with `<!-- needs-input -->`.\n\nWhich?");
 });
 
 test("a pick in other languages: each form of recommended", () => {
