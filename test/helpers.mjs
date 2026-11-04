@@ -3,7 +3,7 @@
 // (everything under test/ matches its patterns), where it finds no test.
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { createHash, generateKeyPairSync } from "node:crypto";
+import { createHash, generateKeyPairSync, randomUUID } from "node:crypto";
 import {
   existsSync,
   mkdirSync,
@@ -25,6 +25,7 @@ import { createRuns, runFields } from "../broker/runs.mjs";
 import { createBroker } from "../listener/broker.mjs";
 import { serviceGuard } from "../lib/service-token.mjs";
 import { openStore } from "../lib/store.mjs";
+import { redisClient } from "../lib/resp.mjs";
 import { storeMap } from "../lib/store-map.mjs";
 import { readJson, writeJsonAtomic } from "../lib/files.mjs";
 import {
@@ -175,6 +176,31 @@ export async function until(check, { ms = 5000, what = "the condition" } = {}) {
     if (Date.now() > end) throw new Error(`timed out waiting for ${what}`);
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
+}
+
+// Redis's keys matching `pattern`, given to `page` a page of them at a time.
+export async function scanRedis(client, pattern, page) {
+  let cursor = "0";
+  do {
+    const [next, keys] = await client.call("SCAN", cursor, "MATCH", pattern, "COUNT", 1000);
+    cursor = String(next);
+    if (keys.length) await page(keys);
+  } while (cursor !== "0");
+}
+
+// A key prefix of the test's own on the Redis at `url`, its keys deleted after it: a Redis
+// shared with others keeps theirs.
+export function freshRedisPrefix(t, url) {
+  const prefix = `deckhand-test:${randomUUID()}:`;
+  t.after(async () => {
+    const client = redisClient(url);
+    try {
+      await scanRedis(client, `${prefix}*`, (keys) => client.call("DEL", ...keys));
+    } finally {
+      await client.close();
+    }
+  });
+  return prefix;
 }
 
 // A signing key of the test's own: { privateKey, publicKey, kid }.

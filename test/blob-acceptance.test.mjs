@@ -22,6 +22,7 @@ import { keyId } from "../lib/tokens.mjs";
 import { createRunnerClient } from "../runner/client.mjs";
 import { createLogs } from "../runner/logs.mjs";
 import { createRunnerService } from "../runner/service.mjs";
+import { scanRedis } from "./helpers.mjs";
 
 const redisUrl = process.env.TEST_REDIS_URL ?? "";
 const blobUrl = process.env.TEST_BLOB_URL ?? "";
@@ -43,16 +44,6 @@ function prefixed(prefix) {
   const url = new URL(blobUrl);
   url.pathname = `${url.pathname.replace(/\/+$/, "")}/${prefix}`;
   return url.href;
-}
-
-// Redis's keys matching `pattern`, each given to `each`.
-async function scan(client, pattern, each) {
-  let cursor = "0";
-  do {
-    const [next, keys] = await client.call("SCAN", cursor, "MATCH", pattern, "COUNT", 1000);
-    cursor = String(next);
-    for (const key of keys) await each(key);
-  } while (cursor !== "0");
 }
 
 // The runner service, its logs on `store` and `blobs`, acting (its lease held), listening.
@@ -109,7 +100,7 @@ test(
     // Redis or a bucket shared with others keeps theirs.
     t.after(async () => {
       await runnerLogs?.remove(ID).catch(() => {});
-      await scan(redis, `${prefix}*`, (key) => redis.call("DEL", key));
+      await scanRedis(redis, `${prefix}*`, (keys) => redis.call("DEL", ...keys));
       await Promise.all([store.close(), redis.close(), blobs.close()]);
     });
     const started = await runner(t, { store, blobs });
@@ -124,8 +115,8 @@ test(
     // The bytes of this log's segments in Redis, as STRLEN counts them.
     const inRedis = async () => {
       let bytes = 0;
-      await scan(redis, `${prefix}b:logs/${ID}/*`, async (key) => {
-        bytes += Number(await redis.call("STRLEN", key));
+      await scanRedis(redis, `${prefix}b:logs/${ID}/*`, async (keys) => {
+        for (const key of keys) bytes += Number(await redis.call("STRLEN", key));
       });
       return bytes;
     };
