@@ -140,7 +140,8 @@ jobs:
   # deploy/kubernetes rendered by kustomize, alone and with each component, and every object
   # checked against Kubernetes' schemas (#396). test/kubernetes-manifests.test.mjs reads the files
   # as written; a broken generator or patch only shows here. The Helm chart (deploy/helm/deckhand,
-  # #570) too, and held to the base: test/helm-chart.test.mjs, which needs helm and kustomize.
+  # #570) too, and held to the base: test/helm-chart.test.mjs, which needs helm and kustomize. The
+  # end-to-end check's overlay as well (#676).
   # The tools pinned by version and sha256, as opa is: a self-hosted runner has no kubectl to lean
   # on.
   kubernetes:
@@ -189,6 +190,20 @@ jobs:
             echo "base${combination:+ with $combination}:"
             kustomize build --load-restrictor LoadRestrictionsNone "$overlay" | kubeconform -strict -summary
           done
+      # The end-to-end check's overlay (deploy/kubernetes-e2e, #676): a change to the base that
+      # breaks it shows here, not in the next run of run.sh. The test holds it to run.sh's guard
+      # and checks its patches landed, which kustomize skips without a word when their target
+      # is gone; it fails the job when it skips: kustomize is on the PATH here.
+      - name: End-to-end overlay
+        run: |
+          set -o pipefail
+          kustomize build deploy/kubernetes-e2e | kubeconform -strict -summary
+          node --test --test-reporter=spec --test-reporter-destination=stdout \
+            --test-reporter=tap --test-reporter-destination="$RUNNER_TEMP/e2e.tap" test/kubernetes-e2e-overlay.test.mjs
+          if grep "# SKIP" "$RUNNER_TEMP/e2e.tap"; then
+            echo "::error::e2e overlay tests skipped"
+            exit 1
+          fi
       # The chart: its default values and each component's, then every value set. The test fails
       # when it skips: helm and kustomize are on the PATH here.
       - name: Helm chart
