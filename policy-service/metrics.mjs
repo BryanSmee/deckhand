@@ -4,7 +4,8 @@
 // counts what it answered: add the copies up.
 
 // The decisions the callers ask (../listener/policies.mjs DECISIONS, which a test holds this
-// to: the listener isn't in this image), and `capabilities`, what a run gets as it starts.
+// to: the listener isn't in this image), `capabilities`, what a run gets as it starts, and
+// `access`, who may do what where (#730).
 export const POLICIES = [
   "run",
   "merge",
@@ -16,6 +17,7 @@ export const POLICIES = [
   "push",
   "grant",
   "capabilities",
+  "access",
 ];
 // What a decision gave:
 //   allow  its layers' allow rules true and no deny (capabilities: evaluated, the caller

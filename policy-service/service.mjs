@@ -21,15 +21,17 @@ import { createLogger, withRequest } from "../lib/log.mjs";
 import { METRICS_PORT_SETTING, startMetrics } from "../lib/metrics.mjs";
 
 // The services that decide (lib/services.mjs CALLS): the orchestrator (merges, reviews, fixes,
-// linked branches, reviewers, the config check, `/mode policy` and the Policies tab), the github
-// service (a run's writes) and the broker. Until they leave the listener, it calls as the
-// orchestrator. The runner asks the grants a repository gets (#498), the operator's alone: a
-// decision, not the capabilities nor a repository's files' check.
+// linked branches, reviewers, the config check, `/mode policy`, the Policies tab, and who may do
+// what: `/access`, its alone), the github service (a run's writes) and the broker. Until they
+// leave the listener, it calls as the orchestrator. The runner asks the grants a repository gets
+// (#498), the operator's alone: a decision, not the capabilities nor a repository's files' check.
 const DECIDERS = ["orchestrator", "github", "broker"];
 export const ROUTES = {
   "GET /policies": [...DECIDERS, "runner"],
   "POST /evaluate": [...DECIDERS, "runner"],
   "POST /capabilities": DECIDERS,
+  // Who may do what where (#730): the orchestrator's, for its dashboard, comments and queue.
+  "POST /access": ["orchestrator"],
   "POST /check": DECIDERS,
 };
 
@@ -94,6 +96,7 @@ export function createPolicyService({ engine, guard, log = () => {}, health = he
           if (path === "/capabilities") {
             return send(res, 200, await engine.evaluateCapabilities(body));
           }
+          if (path === "/access") return send(res, 200, await engine.evaluateAccess(body));
           if (path === "/check") return send(res, 200, await engine.compile(body));
           throw new Refused(404, "no such endpoint");
         } catch (error) {

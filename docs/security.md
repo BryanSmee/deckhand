@@ -905,8 +905,8 @@ and on `runner-models`, the models service's, for the Antigravity login's refres
 The policy service (#501), with Docker Compose, is on three others, internal (no way out):
 `policy`, shared with the orchestrator alone, `policy-github`, shared with the github service alone
 (the runs' writes and pushes), and `policy-runner`, shared with the runner alone, which asks
-it [the grants](#the-grants) (`GET /policies` and `POST /evaluate` only, never `/capabilities`
-or `/check`). Compose doesn't set its `SERVICE_NETWORKS`: its table still names what each
+it [the grants](#the-grants) (`GET /policies` and `POST /evaluate` only, never `/capabilities`,
+`/access` or `/check`). Compose doesn't set its `SERVICE_NETWORKS`: its table still names what each
 caller may call. The orchestrator's service tokens come
 from the broker service, as every other's, and the broker publishes the public key the
 policy service and the runner check them with (`SERVICE_KEYS_DIR`, the `service-keys` volume,

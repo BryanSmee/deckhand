@@ -571,6 +571,7 @@ export function localService(engine) {
     policies: async () => wire(engine.policies()),
     evaluate: async (body) => wire(await engine.evaluate(wire(body))),
     evaluateCapabilities: async (body) => wire(await engine.evaluateCapabilities(wire(body))),
+    evaluateAccess: async (body) => wire(await engine.evaluateAccess(wire(body))),
     compile: async (body) => wire(await engine.compile(wire(body))),
   };
 }
