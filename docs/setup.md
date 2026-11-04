@@ -1810,7 +1810,11 @@ The orchestrator keeps each running run's state in its store (`runs/<id>`), no l
 asks the broker for them (`POST /runs/:id/secrets`). At its first start, the orchestrator moves
 each `logs/<run>.live.json` left there to the store, tells the broker the tokens it held, and
 removes it; a `logs/<run>.queued.json` (a task's queue a run's end couldn't write to the store)
-is read with the queue and removed once the queue is written. Nothing to do, but:
+is read with the queue and removed once the queue is written. A `logs/<run>.live.json` that
+isn't a run's state (unreadable, or missing its `id`, `task` or `record`) is no live run's: it
+is left where it is, logged at each start (`<file>: not a run's state, left there`), and that
+run's log is summarized and sent to the runner as an ended run's. Look at it, then remove it.
+Nothing else to do, but:
 
 - **Update the broker with the orchestrator** (the same release, as compose and the manifests
   do). An older broker refuses that call: the orchestrator asks again until it answers, and the

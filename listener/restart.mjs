@@ -12,7 +12,7 @@ import { join } from "node:path";
 import { agentFor } from "./agents/index.mjs";
 import { parseKey, taskKey } from "./events.mjs";
 import { RESEARCH } from "./modes.mjs";
-import { addRun, writeEvent } from "./runlog.mjs";
+import { addRun, isRunState, writeEvent } from "./runlog.mjs";
 import { runLogContext } from "./runs.mjs";
 import { ambiguous, githubNames, respelled, spellings } from "./spelling.mjs";
 import { readJson } from "../lib/files.mjs";
@@ -57,10 +57,6 @@ export const QUEUE_KEY = "queue";
 // Where each live run's state is in the store: `runs/<id>` (saveLive()), listed at the takeover.
 export const LIVE_PREFIX = "runs/";
 const liveKey = (id) => `${LIVE_PREFIX}${id}`;
-
-// Whether what a file or the store holds is a run's state: one without its id, task or record
-// can't be restored (a write cut short, a hand edit).
-export const isRunState = (saved) => Boolean(saved?.id && saved.task && saved.record);
 
 // The ids of the runs whose states are in the store, read before restoreRuns() (server.mjs:
 // their logs aren't summarized as ended ones). A key that holds no run's state isn't one:
