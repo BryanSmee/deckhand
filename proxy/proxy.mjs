@@ -684,7 +684,7 @@ export function createProxy({
   // A service (`target`: "broker", "github", "models") that didn't answer: counted, and said.
   const serviceName = (target) => (target === "broker" ? "the broker" : `the ${target} service`);
   function unavailable(res, target) {
-    metrics.gateway(target, "unreachable");
+    metrics.gateway(target, null);
     unreachable(res, serviceName(target));
   }
 
@@ -720,7 +720,7 @@ export function createProxy({
       url,
       { method: req.method, headers, createConnection: () => socket },
       (answer) => {
-        metrics.gateway(target, String(answer.statusCode));
+        metrics.gateway(target, answer.statusCode);
         // That connection's, not the client's, which stays open for its next request.
         const { connection, "keep-alive": keepAlive, ...rest } = answer.headers;
         res.writeHead(answer.statusCode, rest);
