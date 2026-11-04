@@ -38,10 +38,13 @@ function headingOf(line) {
 // German, Portuguese and Italian.
 const OPEN_QUESTIONS =
   /^(?:open questions|questions ouvertes|questions en suspens|preguntas abiertas|preguntas pendientes|offene fragen|perguntas abertas|perguntas em aberto|quest[õo]es em aberto|domande aperte)\s*:?$/iu;
-// "None" first in the section: it asks nothing, unless questions follow (asks()). Many
-// sentences start with the word too ("Keine der beiden Varianten passt: welche?").
-const NONE =
-  /^(?:none|n\/a|no (?:open )?questions|aucune?|néant|rien|pas de questions?|ningun[oa]|ningún|nada|sin preguntas|keine?|nenhuma?|sem perguntas|não há|nessun[oa]?)(?![\p{L}\p{N}])/u;
+// "None" first in the section: it asks nothing. In English as it always was: the word starts
+// its first paragraph. A translation only alone on its line, or as that language's "no
+// questions": many sentences start with the word ("Keine Migration: soll ich eine
+// schreiben?"), and the prompt asks for English "None" anyway.
+const NONE = /^(none|n\/a|no (open )?questions)\b/;
+const NONE_TRANSLATED =
+  /^(?:aucune?|néant|rien|ningun[oa]|ningún|nada|keine?|nenhuma?|não há|nessun[oa]?|(?:aucune|pas de) questions?(?: ouvertes?)?|(?:sin|ninguna) preguntas?(?: abiertas?)?|keine (?:offenen )?fragen|(?:sem|nenhuma) perguntas?(?: em aberto| abertas?)?|nenhuma questão|não há perguntas?|nessuna domanda(?: aperta)?)\s*[.!…:;]*$/u;
 // The pick of an option.
 const PICK = "recommended|recommandée?|recomendad[oa]|empfohlen|raccomandat[oa]|consigliat[oa]";
 
@@ -65,9 +68,8 @@ export function questionsSection(body) {
   return lines && lines.join("\n").trim();
 }
 
-// Whether the section asks anything. Its first paragraph decides, unless it starts with "None"
-// and open questions follow it (asks()): inbox issues end with a line linking the inbox comment
-// they come from, which falls in the section, after "None".
+// Whether the section asks anything. Its first paragraph decides: inbox issues end with a
+// line linking the inbox comment they come from, which falls in the section, after "None".
 export function hasOpenQuestions(body) {
   return asks(questionsSection(body));
 }
@@ -81,21 +83,8 @@ function asks(text) {
     .replace(/[*_`>]/g, "")
     .trim()
     .toLowerCase();
-  if (!NONE.test(first.normalize("NFC"))) return true;
-  // The word only started a sentence when questions with options follow it, before a heading
-  // and outside code: a list of what was settled, or notes under a heading, ask nothing.
-  const after = [];
-  let fenced = false;
-  // The whole section: its first line may be the question itself (`1. **Keine Migration**: …`),
-  // and parseList() skips the paragraph that comes before a list.
-  for (const line of section.split(/\r?\n/)) {
-    if (FENCE.test(line)) fenced = !fenced;
-    else if (!fenced && headingOf(line)) break;
-    else if (!fenced) after.push(line);
-  }
-  // Its options all unticked: one ticked is an answer, which a list of what was settled has.
-  const open = (q) => q.options.length && !q.options.some((o) => o.checked);
-  return !!parseList(after.join("\n").trim()).items?.some(open);
+  if (NONE.test(first)) return false;
+  return !NONE_TRANSLATED.test(first.split(/\r?\n/)[0].trim().normalize("NFC"));
 }
 
 // At most one space before it: deeper, it is nested under a question.
@@ -139,8 +128,7 @@ export function parseQuestions(markdown) {
   return asks(raw) ? parseList(raw) : null;
 }
 
-// parseQuestions() without its "None" check, which asks() calls in turn: one pass, so a body
-// of "None" lines costs no more than another (the delivery is anyone's edit).
+// parseQuestions() without its "None" check.
 function parseList(raw) {
   const other = { items: null, raw };
   const items = [];

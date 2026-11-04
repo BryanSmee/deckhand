@@ -487,7 +487,7 @@ test("issue bodies: open questions and None in English and a few other languages
     "Nada.",
     "Não há.",
     "Kein.",
-    "Nessun dubbio.",
+    "Rien !",
     "Aucune question.",
     "Keine offenen Fragen",
     "Nessuna domanda",
@@ -502,22 +502,37 @@ test("issue bodies: open questions and None in English and a few other languages
   ]) {
     assert.equal(hasOpenQuestions(none("Open questions", text)), false, text);
   }
-  // A sentence that starts with the word, then the questions: they ask.
+  // A sentence that starts with a translated word asks, whatever follows it: only the word
+  // alone, or the "no questions" phrase alone, is "None".
   for (const text of [
-    "Keine der beiden Varianten passt: welche?",
-    "Aucune des deux options ne convient : laquelle ?",
+    "Keine der beiden Varianten passt: welche?\n\n1. A?\n   - [ ] Oui",
+    "Aucune des deux options ne convient : laquelle ?\n\n1. A?\n   - [ ] Oui",
     "Aucune question n'est tranchée : laquelle ?",
     "Nessuna delle due va bene: quale?",
-    "None of the options fits: which one?",
+    "Nessun dubbio.",
+    // Hand-written, not in the format.
+    "Keine Ahnung, welche Variante?\n\n- Variante A\n- Variante B",
+    "Kein Test deckt X ab. Soll ich einen schreiben?",
+    // Free-text questions, the first one starting with the word.
+    "1. **Keine Migration**: soll ich eine schreiben?",
+    "1. Rien ne couvre X : faut-il un test ?",
+    "1. **Keine Migration**: soll ich eine schreiben?\n2. **Name**: welcher?",
   ]) {
-    const section = none("Open questions", `${text}\n\n1. A?\n   - [ ] Oui`);
-    assert.equal(hasOpenQuestions(section), true, text);
+    assert.equal(hasOpenQuestions(none("Open questions", text)), true, text);
   }
+  // English as on main: the word starting the first paragraph is "None", whatever follows.
+  assert.equal(hasOpenQuestions(none("Open questions", "None of these: which?\n\n1. A?")), false);
   // A word that only starts like one asks.
   assert.equal(hasOpenQuestions(none("Open questions", "Nonexistent users: refuse them?")), true);
 });
 
 test("a first question that starts with a None word asks, in an issue and in a reply", () => {
+  // Free text: the run waits with its form.
+  const free1 = "1. **Keine Migration**: soll ich eine schreiben?";
+  assert.deepEqual(
+    replyQuestions(`<!-- needs-input -->\n## Brauche deine Eingabe\n\n${free1}`).items,
+    [free("soll ich eine schreiben?", "Keine Migration")],
+  );
   // The question is the section's first line: what follows "None" is read from it on.
   const questions = [
     "1. **Keine Migration**: soll ich eine schreiben?\n   - [ ] Ja\n   - [ ] Nein",
