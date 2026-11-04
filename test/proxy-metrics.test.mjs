@@ -6,11 +6,11 @@ import { request } from "node:http";
 import { connect } from "node:net";
 import { test } from "node:test";
 import { connect as tlsConnect } from "node:tls";
-import { createRegistry } from "../lib/metrics.mjs";
+import { createRegistry, STATUS_LABELS } from "../lib/metrics.mjs";
 import { SANDBOX_URLS } from "../lib/services.mjs";
 import { createCache } from "../proxy/cache.mjs";
 import { createAuthority } from "../proxy/authority.mjs";
-import { egressMetrics } from "../proxy/metrics.mjs";
+import { egressMetrics, TARGETS } from "../proxy/metrics.mjs";
 import { createProxy } from "../proxy/proxy.mjs";
 import { closedPort, listening, serve, tempDir, until } from "./helpers.mjs";
 
@@ -319,4 +319,18 @@ test("a relayed host's calls inside a decrypted tunnel: counted by service and s
   assert.equal(await calls('{target="github",status="201"}'), 1);
   const allowed = '{source="sandbox",decision="allowed",reason="granted"}';
   assert.equal(await sample(registry, CONNECTIONS, allowed), 1);
+});
+
+test("the runs' calls: every service and status a series of its own, none folded", async () => {
+  const warned = [];
+  const registry = createRegistry({ log: (line) => warned.push(line) });
+  const metrics = egressMetrics(registry);
+  const statuses = [...Array.from({ length: 500 }, (_, i) => 100 + i), null, 999];
+  for (const target of TARGETS) for (const status of statuses) metrics.gateway(target, status);
+  const page = await registry.render();
+  const series = page
+    .split("\n")
+    .filter((l) => l.startsWith("deckhand_egress_gateway_calls_total{"));
+  assert.equal(series.length, TARGETS.length * STATUS_LABELS.length);
+  assert.deepEqual(warned, []);
 });

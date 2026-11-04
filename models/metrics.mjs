@@ -187,7 +187,7 @@ export function modelMetrics(registry, { readUsage = async () => [], now = Date.
     {
       labels: ["provider", "agent", "status"],
       values: { provider: PROVIDERS, agent: AGENTS, status: STATUSES },
-      maxSeries: (PROVIDERS.length + 1) * (AGENTS.length + 1) * (STATUSES.length + 1),
+      maxSeries: (PROVIDERS.length + 1) * (AGENTS.length + 1) * STATUSES.length,
     },
   );
   // At 0 from the start: a rate needs its first sample, or the first 429 of a provider never

@@ -2,10 +2,11 @@
 // the deliveries, and its calls to the other services.
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { createRegistry } from "../lib/metrics.mjs";
+import { createRegistry, STATUS_LABELS } from "../lib/metrics.mjs";
 import { AGENTS } from "../listener/agents/index.mjs";
 import { createHttp } from "../listener/http.mjs";
 import {
+  CALLEES,
   deliveryResult,
   KINDS,
   OUTCOMES,
@@ -329,4 +330,16 @@ test("deliveries: refused by the operator's checks, taken as a work item, ignore
     "issue_comment refused",
     "pull_request refused",
   ]);
+});
+
+test("serviceCallMetrics: every callee and status a series of its own, none folded", async () => {
+  const warned = [];
+  const registry = createRegistry({ log: (line) => warned.push(line) });
+  const calls = serviceCallMetrics(registry);
+  const statuses = [...Array.from({ length: 500 }, (_, i) => 100 + i), null, 999];
+  for (const callee of CALLEES) for (const status of statuses) calls.observe(callee, status);
+  const text = await registry.render();
+  const series = samples(text).filter((l) => l.startsWith("deckhand_service_calls_total{"));
+  assert.equal(series.length, CALLEES.length * STATUS_LABELS.length);
+  assert.deepEqual(warned, []);
 });

@@ -14,6 +14,7 @@ import {
   MAX_READ,
   modelMetrics,
   PROVIDERS,
+  STATUSES,
   statusOf,
   usageReader,
 } from "../models/metrics.mjs";
@@ -426,4 +427,18 @@ test("a call's length on the clock's time: in its bucket", async (t) => {
     sample(text, 'deckhand_model_call_duration_seconds_sum{provider="anthropic"}'),
     "45",
   );
+});
+
+test("every provider, agent and status has a series of its own: none folded into other", async () => {
+  const warned = [];
+  const registry = createRegistry({ log: (line) => warned.push(line) });
+  const metrics = modelMetrics(registry);
+  for (const provider of PROVIDERS)
+    for (const agent of AGENTS)
+      for (const status of STATUSES) metrics.called({ provider, agent, status, seconds: 1 });
+  const text = await registry.render();
+  const series = text.split("\n").filter((l) => l.startsWith("deckhand_model_calls_total{"));
+  assert.equal(series.length, PROVIDERS.length * AGENTS.length * STATUSES.length);
+  assert.ok(series.every((line) => line.endsWith(" 1")));
+  assert.deepEqual(warned, []);
 });

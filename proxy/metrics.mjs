@@ -120,7 +120,7 @@ export function egressMetrics(registry = createRegistry(), { cache = null } = {}
     {
       labels: ["target", "status"],
       values: { target: TARGETS, status: STATUS_LABELS },
-      maxSeries: (TARGETS.length + 1) * (STATUS_LABELS.length + 1),
+      maxSeries: (TARGETS.length + 1) * STATUS_LABELS.length,
     },
   );
 

@@ -68,11 +68,12 @@ const longPoll = (url) => /[?&]wait=/.test(String(url));
 export function serviceCallMetrics(registry, { now = () => performance.now() } = {}) {
   const calls = registry.counter(
     "deckhand_service_calls_total",
-    "The orchestrator's calls to the other services, each try, by its answer's status (unreachable: none).",
+    "The orchestrator's calls to the other services, each try, by its answer's status " +
+      "(unreachable: none).",
     {
       labels: ["callee", "status"],
       values: { callee: CALLEES, status: STATUS_LABELS },
-      maxSeries: (CALLEES.length + 1) * (STATUS_LABELS.length + 1),
+      maxSeries: (CALLEES.length + 1) * STATUS_LABELS.length,
     },
   );
   const durations = registry.histogram(

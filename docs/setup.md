@@ -1337,13 +1337,15 @@ VictoriaMetrics to scrape. Off by default: set the port and each service listens
   providers. The statuses worth telling apart as they are (`200`, `201`, `202`, `204`, `206`,
   `301`, `302`, `304`, `307`, `308`, `400`, `401`, `402`, `403`, `404`, `409`, `410`, `413`,
   `422`, `429`, `500`, `502`, `503`, `504`, `529`), any other by its class (`1xx` to `5xx`),
-  `unreachable` for no answer (refused, reset, timed out, lost): `status=~"5.*|unreachable"`
-  is a failure wherever it is asked.
+  `unreachable` for no answer (refused, reset, timed out, lost), `other` for what isn't an
+  HTTP status: `status=~"5.*|unreachable"` is a failure wherever it is asked.
 - **The models service's**: the agents' API calls that go through it with your credentials.
   - `deckhand_model_calls_total{provider, agent, status}`: `provider` anthropic, openrouter,
     openai or google; `agent` claude, codex or antigravity; `status` as every service's calls
     (above: `429` a rate or plan limit, `529` Anthropic overloaded, `unreachable` no answer), or
-    `credential` (not sent: a plan's login that can't be used or refreshed).
+    `credential` (not sent: a plan's login that can't be used or refreshed). Only `200`, `429`
+    and `529` are at 0 from the start, for each provider and agent: another status's first call
+    shows in an `increase()` from its second on.
     `deckhand_model_call_duration_seconds{provider}` is a call's length, its answer streamed
     whole; `deckhand_model_streams_interrupted_total{provider}` counts the answers the
     provider cut short (its connection lost, or no byte for 10 minutes), not those the agent gave

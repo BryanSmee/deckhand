@@ -4,8 +4,8 @@ import assert from "node:assert/strict";
 import { mkdirSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
-import { githubMetrics } from "../github/metrics.mjs";
-import { createRegistry } from "../lib/metrics.mjs";
+import { CALLERS, githubMetrics } from "../github/metrics.mjs";
+import { createRegistry, STATUS_LABELS } from "../lib/metrics.mjs";
 import { isWindows, tempDir } from "./helpers.mjs";
 
 // A sample's value in `text`, or undefined when it has none.
@@ -175,3 +175,15 @@ test(
     assert.ok(bytes >= 3 && bytes < 4096, String(bytes));
   },
 );
+
+test("API calls: every caller and status a series of its own, none folded", async () => {
+  const { metrics, render, warned } = setup();
+  const statuses = [...Array.from({ length: 500 }, (_, i) => 100 + i), null, 999];
+  for (const caller of CALLERS)
+    for (const status of statuses) metrics.api({ caller, status, seconds: 0 });
+  const series = (await render())
+    .split("\n")
+    .filter((l) => l.startsWith("deckhand_github_api_calls_total{"));
+  assert.equal(series.length, CALLERS.length * STATUS_LABELS.length);
+  assert.deepEqual(warned, []);
+});

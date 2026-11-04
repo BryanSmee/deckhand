@@ -107,7 +107,7 @@ export function githubMetrics(
     {
       labels: ["caller", "status"],
       values: { caller: CALLERS, status: STATUS_LABELS },
-      maxSeries: (CALLERS.length + 1) * (STATUS_LABELS.length + 1),
+      maxSeries: (CALLERS.length + 1) * STATUS_LABELS.length,
     },
   );
   const durations = registry.histogram(
