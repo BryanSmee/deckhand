@@ -402,7 +402,7 @@ export const isRoot = process.getuid?.() === 0;
 // elsewhere. Not a check that `bash` runs: from PowerShell that is WSL's launcher, which gets
 // Windows paths it can't open.
 export const isWindows = process.platform === "win32";
-// Deckhand's shell scripts, the fakes written in sh (fake-docker.sh, fake-opa.sh), jq, mkfifo.
+// Deckhand's shell scripts, the fakes written in sh (fake-docker.sh, fake-opa.sh, fake-kubectl.sh), jq, mkfifo.
 export const needsBash =
   isWindows && "needs bash and POSIX tools, which Deckhand's Linux images have";
 // File modes (0o600) and unreadable folders: NTFS keeps neither.

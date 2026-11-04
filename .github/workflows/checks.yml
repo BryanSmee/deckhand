@@ -160,7 +160,8 @@ jobs:
             sandbox/agents/antigravity/refresh sandbox/agents/npm-install \
             sandbox/agents/release-install sandbox/deckhand-token sandbox/gh \
             sandbox/git-credential-deckhand sandbox/pre-push engine/entrypoint.sh \
-            test/fixtures/fake-docker.sh test/fixtures/fake-opa.sh deploy/kubernetes-e2e/run.sh; do
+            test/fixtures/fake-docker.sh test/fixtures/fake-opa.sh test/fixtures/fake-kubectl.sh \
+            deploy/kubernetes-e2e/run.sh; do
             bash -n "$f" || exit 1
           done
 
