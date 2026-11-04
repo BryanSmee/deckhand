@@ -446,6 +446,30 @@ test("a wait released into the queue: deleted from the store after the queue, a 
   assert.equal((await maps.again("waits")).size, 0);
 });
 
+test('a release ending in "answers": the wait is kept before its delete may be written, a copy killed between finds it', async () => {
+  const maps = mapStore();
+  const waits = await maps.map("waits");
+  // When a release's delete may be written (its gate opens), whether the wait is back: if not,
+  // that delete reaches the store and keep()'s set comes after it, and a copy killed in between
+  // has the comment neither waiting nor queued.
+  const back = [];
+  const remove = waits.delete.bind(waits);
+  waits.delete = (key, { after } = {}) => {
+    after?.then(() => back.push(waits.has(key)));
+    return remove(key, { after });
+  };
+  const w = setup({ waits, allowed: "answers" });
+  await w.waits.request(item({ numbers: [77] }));
+  await w.waits.closed("org/repo", 77, "done");
+  // Checked again, still unanswered: released and kept once more.
+  await w.waits.answered("org/repo", 78);
+  await maps.settled();
+  assert.equal(w.resumed.length, 2);
+  assert.deepEqual(back, [true, true]);
+  const kept = (await maps.again("waits")).get("org/repo#78");
+  assert.deepEqual([kept.blockers, kept.answers], [[], true]);
+});
+
 test("a queued comment moved to a wait: its queueIds kept with it, for the next copy to leave to the wait", async () => {
   const w = setup({ waits: await mapStore().map("waits") });
   const { after: _, ...moved } = item(null);
