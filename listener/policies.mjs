@@ -798,14 +798,35 @@ export function createPolicies({
   // is asked again at once. ACCESS_MS bounds a rule reading the time; a failure isn't kept.
   const accessKept = new Map();
 
-  // A repository as access() takes it, its name or what GitHub says of it (GET /repos/{repo}: its
-  // `full_name`, `private`, `default_branch`), read when only its name is given → { name,
-  // private, ref }. Not known to be public: private (fail closed). GitHub can't say: throws.
+  // What GitHub said of a repository access() was given by name (GET /repos/{repo}), by its name
+  // in lower case → { at, info }: kept ACCESS_MS, as the answers are, and forgotten on its push
+  // (forget()), so that a kept answer costs no call and a GitHub hiccup doesn't refuse it.
+  const repoInfos = new Map();
+
+  // A repository as access() takes it, its name or what GitHub says of it (its `full_name`,
+  // `private`, `default_branch`) → { name, private, ref }. Without its default branch, read
+  // (repoInfos), never guessed: another branch's listing would drop its deny rules. Not known to
+  // be public: private (fail closed). GitHub can't say: throws.
   async function repoOf(repo) {
-    const info = typeof repo === "string" ? await getJson(github, repo, `/repos/${repo}`) : repo;
+    let info = repo;
+    if (typeof repo === "string" || !info?.default_branch) {
+      const name = typeof repo === "string" ? repo : (info?.full_name ?? info?.name);
+      if (typeof name !== "string" || !name.includes("/")) throw new Error("no repository's name");
+      const key = name.toLowerCase();
+      const kept = repoInfos.get(key);
+      if (kept && now() - kept.at < ACCESS_MS) info = kept.info;
+      else {
+        info = await getJson(github, name, `/repos/${name}`);
+        if (typeof info?.default_branch !== "string" || !info.default_branch) {
+          throw new Error(`GitHub gave no default branch for ${name}`);
+        }
+        if (repoInfos.size >= MAX_ACCESS) repoInfos.delete(repoInfos.keys().next().value);
+        repoInfos.set(key, { at: now(), info });
+      }
+    }
     const name = info?.full_name ?? info?.name;
     if (typeof name !== "string" || !name.includes("/")) throw new Error("no repository's name");
-    return { name, private: info.private !== false, ref: info.default_branch || "main" };
+    return { name, private: info.private !== false, ref: info.default_branch };
   }
 
   // Deckhand's own policies alone, unchanged (DEFAULTS_MS), none denying access and one giving
@@ -1281,9 +1302,10 @@ export function createPolicies({
   }
 
   // `repo`'s default branch moved (a push, a merge: repos.mjs refreshFor()): its policies are
-  // listed again at the next decision.
+  // listed again at the next decision, and what GitHub says of it read again (access()).
   function forget(repo) {
     listings.delete(repo.toLowerCase());
+    repoInfos.delete(repo.toLowerCase());
   }
 
   return {

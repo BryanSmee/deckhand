@@ -282,8 +282,8 @@ The policy decisions' service (#501): long-lived `opa` servers behind a small HT
 a repository's policy files with each decision (it can't read GitHub); it reads the operator's
 from the grants folder, mounted read-only. With Docker Compose, the orchestrator and the runner each
 reach it on an internal network of their own (`policy`, `policy-runner`); the runner may only ask
-decisions (`GET /policies`, `POST /evaluate`: the operator's grants), never `/capabilities` or
-`/check`. Any copy answers any decision the same way, so two copies
+decisions (`GET /policies`, `POST /evaluate`: the operator's grants), never `/capabilities`,
+`/access` (the orchestrator's alone) or `/check`. Any copy answers any decision the same way, so two copies
 on Kubernetes are a Deployment with a readiness probe on `/ready` and `maxUnavailable: 0`: the new
 copy starts, the old one drains (25 s) with its decisions in flight
 (`test/policy-service.test.mjs`). With Docker Compose it is one copy, and the orchestrator waits up

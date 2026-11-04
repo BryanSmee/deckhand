@@ -21,25 +21,29 @@ const noOpa = !hasOpa() && "no opa on the PATH";
 // A grants folder's access.rego, with `bindings` only.
 const bindings = (list) => `package deckhand\n\nbindings := ${JSON.stringify(list, null, 2)}\n`;
 
-// The repositories GitHub knows: name → { private, policies: name → text }, their default branch
-// `main`; `calls`, the paths asked.
+// The repositories GitHub knows: name → { private, policies: name → text, branch, down }, their
+// policies on their default branch (`branch`, `main` by default) alone; `calls`, the paths asked.
 function fakeGithub(repos) {
   const calls = [];
   // sha → text, a blob per file listed.
   const blobs = new Map();
   const github = async (_repo, _method, url) => {
-    const path = url.split("?")[0];
+    const [path, query = ""] = url.split("?");
     calls.push(path);
     const at = /^\/repos\/([^/]+\/[^/]+)(.*)$/.exec(path);
     const repo = at && repos[at[1].toLowerCase()];
     if (!repo) return new Response("{}", { status: 404 });
     if (repo.down) return new Response("{}", { status: 502 });
     if (!at[2]) {
-      return Response.json({ full_name: at[1], private: repo.private, default_branch: "main" });
+      const branch = repo.branch ?? "main";
+      return Response.json({ full_name: at[1], private: repo.private, default_branch: branch });
     }
     const files = Object.entries(repo.policies ?? {});
     if (at[2] === "/contents/.deckhand/policy") {
-      if (!files.length) return new Response("{}", { status: 404 });
+      const ref = new URLSearchParams(query).get("ref");
+      if (!files.length || ref !== (repo.branch ?? "main")) {
+        return new Response("{}", { status: 404 });
+      }
       return Response.json(
         files.map(([name, text]) => {
           const sha = `sha-${blobs.size}`;
@@ -437,5 +441,43 @@ test(
     assert.deepEqual(await actions("carol", null), ["server:*"]);
     assert.deepEqual(await actions("dan", repo("acme/api")), ["logs:read"]);
     assert.deepEqual(await actions("dan", null), []);
+  },
+);
+
+const denyManage =
+  'package deckhand\n\ndeny_access contains {"action": "runs:manage", "reason": "no"} if true\n';
+
+test(
+  "the real opa: a repository's default branch is read, never guessed, and what GitHub says of it kept",
+  { skip: noOpa },
+  async (t) => {
+    const clock = { now: 1_000 };
+    const repos = { "acme/api": { branch: "master", policies: { "deny.rego": denyManage } } };
+    const { policies, calls } = realAccess(t, { repos, now: () => clock.now });
+    const infos = () => calls.filter((p) => p === "/repos/acme/api").length;
+    // Without its default branch: read, so its deny rules on `master` apply.
+    assert.ok(
+      !(await policies.can("bob", { full_name: "acme/api", private: true }, "runs:manage")),
+    );
+    assert.ok(await policies.can("bob", { full_name: "acme/api" }, "tasks:read"));
+    assert.equal(infos(), 1);
+    // By name: the same, read once while kept, the login in another case too.
+    assert.ok(!(await policies.can("bob", "acme/api", "runs:manage")));
+    assert.ok(await policies.can("Bob", "Acme/API", "tasks:read"));
+    assert.equal(infos(), 1);
+    // A GitHub hiccup meanwhile: the kept answer still holds.
+    repos["acme/api"].down = true;
+    assert.ok(await policies.can("bob", "acme/api", "tasks:read"));
+    // Its push: read again, and GitHub down now gives nothing.
+    policies.forget("acme/api");
+    assert.match((await policies.access("bob", "acme/api")).error, /can't be read/);
+    assert.equal(infos(), 2);
+    repos["acme/api"].down = false;
+    assert.ok(await policies.can("bob", "acme/api", "tasks:read"));
+    assert.equal(infos(), 3);
+    // Past ACCESS_MS, read again.
+    clock.now += ACCESS_MS;
+    await policies.access("bob", "acme/api");
+    assert.equal(infos(), 4);
   },
 );
