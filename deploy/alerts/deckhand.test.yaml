@@ -210,6 +210,27 @@ tests:
         alertname: DeckhandQueueStuck
         exp_alerts: []
 
+  # AUTO_PICKUP_SLOTS=1, free: an auto-picked task that doesn't start waits as a `slot`
+  # (listener/metrics.mjs queuedReasons()), with nothing going: stuck.
+  - interval: 1m
+    input_series:
+      - series: deckhand_runs_queued{reason="slot"}
+        values: 1x40
+      - series: deckhand_runs_queued{reason="pickup"}
+        values: 0x40
+      - series: deckhand_runs_running
+        values: 0x40
+      - series: deckhand_max_parallel
+        values: 3x40
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: DeckhandQueueStuck
+        exp_alerts:
+          - exp_labels: { severity: warning }
+            exp_annotations:
+              summary: "1 Deckhand task(s) wait for a slot while slots are free"
+              description: "Tasks have waited for a free slot for 15 minutes with fewer runs going than MAX_PARALLEL. The orchestrator's log says why its runs don't start: the runner, the policy service or the broker away (deckhand_service_calls_total), or its store."
+
   - interval: 1m
     input_series:
       - series: deckhand_sandboxes_failed_to_start_total{reason="unschedulable"}

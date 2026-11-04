@@ -65,8 +65,10 @@ test("queuedReasons: a slot, the repo's own cap, the pause, the waits", () => {
     task("org/other", { pending: [] }),
     // A repo's cap at MAX_PARALLEL holds nothing back of its own: it waits for a slot.
     task("org/capped", { settings: { maxParallel: 3 } }),
-    // Auto-picked: waits for one of AUTO_PICKUP_SLOTS, whatever other slot is free.
-    task("org/other", { pending: [{ autoPickup: true }] }),
+    // Auto-picked: waits for one of AUTO_PICKUP_SLOTS, the one a picked run holds, whatever
+    // other slot is free.
+    task("org/picked", { pending: [{ autoPickup: true }] }),
+    task("org/picked", { running: true, pending: [], live: { record: { autoPickup: true } } }),
   ];
   const waits = [{ blockers: [12] }, { blockers: [], answers: true }, { blockers: [3, 4] }];
   assert.deepEqual(
@@ -80,8 +82,15 @@ test("queuedReasons: a slot, the repo's own cap, the pause, the waits", () => {
       answers: 1,
     },
   );
+  const reasons = (list, reserved) =>
+    Object.fromEntries(queuedReasons(list, [], 3, reserved).map(([l, n]) => [l.reason, n]));
   // Without reserved slots an auto-picked task is one like the others (startable()).
-  assert.equal(queuedReasons(tasks, [], 3, 0).find(([l]) => l.reason === "slot")[1], 3);
+  assert.equal(reasons(tasks, 0).slot, 3);
+  // Its reserved slot free (no picked run): it would start, so it waits as a `slot`, which
+  // DeckhandQueueStuck watches; two reserved, one held: the same.
+  const free = tasks.filter((t) => !t.live);
+  assert.deepEqual([reasons(free, 1).slot, reasons(free, 1).pickup], [3, 0]);
+  assert.deepEqual([reasons(tasks, 2).slot, reasons(tasks, 2).pickup], [3, 0]);
 });
 
 test("pickupSlots: used by picked tasks, lent to the others past their share, the rest free", () => {

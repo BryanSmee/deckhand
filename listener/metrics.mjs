@@ -19,9 +19,9 @@ export const OUTCOMES = ["ok", "needs-input", "error", "cancelled"];
 export const KINDS = ["work", "light", "review", "fix", "ci-fix", "conflict", "auto-pickup"];
 
 // Why a comment waits rather than runs (queuedReasons()): a free slot, its repo's own
-// max_parallel, one of AUTO_PICKUP_SLOTS (an auto-picked task, which takes no other slot), the
-// pause that makes a burst one run, other issues ("/after"), the answers to its issue's open
-// questions once they are done.
+// max_parallel, one of AUTO_PICKUP_SLOTS while picked runs hold them all (an auto-picked task
+// takes no other slot), the pause that makes a burst one run, other issues ("/after"), the
+// answers to its issue's open questions once they are done.
 export const QUEUED = ["slot", "repo", "pickup", "pause", "after", "answers"];
 
 // What became of a delivery (deliveryResult()).
@@ -152,6 +152,10 @@ export function queuedReasons(tasks, waits, maxParallel, reserved = 0) {
   const add = (reason) => counts.set(reason, counts.get(reason) + 1);
   const runningIn = new Map();
   for (const t of tasks) if (t.running) runningIn.set(t.repo, (runningIn.get(t.repo) ?? 0) + 1);
+  // AUTO_PICKUP_SLOTS held by auto-picked runs: once they all are, a picked task waits for one
+  // of them to end; with one free, it would start (startable()), so waiting is a `slot`'s.
+  const reservedFull =
+    reserved > 0 && tasks.filter((t) => t.running && pickedTask(t)).length >= reserved;
   for (const t of tasks) {
     if (t.running || !t.pending.length) continue;
     if (!t.ready) add("pause");
@@ -160,7 +164,7 @@ export function queuedReasons(tasks, waits, maxParallel, reserved = 0) {
       const cap = t.settings?.maxParallel ?? maxParallel;
       if (cap < maxParallel && (runningIn.get(t.repo) ?? 0) >= cap) add("repo");
       // Its reserved slots alone (repo-config.mjs startable()): free ones elsewhere aren't its.
-      else add(reserved > 0 && pickedTask(t) ? "pickup" : "slot");
+      else add(reservedFull && pickedTask(t) ? "pickup" : "slot");
     }
   }
   for (const w of waits) add(w.answers ? "answers" : "after");

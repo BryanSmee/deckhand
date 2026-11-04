@@ -1,6 +1,6 @@
 {{- /*
 The Grafana dashboard and the alert rules, from files/: copies of deploy/grafana/deckhand.json and
-deploy/alerts/deckhand.yaml, which a chart can't read outside its folder (test/helm-chart.test.mjs
+deploy/alerts/deckhand.yaml, which a chart can't read outside its folder (test/metrics-deploy.test.mjs
 holds them the same).
 */}}
 {{- $m := .Values.metrics }}
