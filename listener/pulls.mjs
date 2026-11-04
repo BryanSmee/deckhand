@@ -1,10 +1,11 @@
 // Each task's pull request for the dashboard, by task key ("org/repo#12", "org/repo#pr-3"):
 // { number, url, state, readyAt, autoMerged?, additions?, deletions?, changedFiles?, commits?,
-// head?, ci? }, its size and commit count as the last pull request object that had them said
+// head?, ci?, conflict? }, its size and commit count as the last pull request object that had them said
 // (events.mjs pullSize()). `ci`: what CI says of its `head` commit, { sha, state, runs } (ci.mjs
 // ciSummary(), #436), kept up to date from CI's deliveries (ciChanged()) while it is open; a new
 // head resets it to `none` until something reports; the last one known stays once it is merged or
-// closed. `pull_request` webhooks keep it current (events.mjs pullRequest()), and the listener's
+// closed. `conflict`: whether its head conflicts with its base, as GitHub last computed it (absent
+// while unknown; a new head forgets it). `pull_request` webhooks keep it current (events.mjs pullRequest()), and the listener's
 // own record of the runs' changes (github-pulls.mjs); tasks older than that are looked up once per
 // listener start, from the repo's recent pull requests. Kept in the store (lib/store-map.mjs:
 // `pulls`), so a restart neither
@@ -12,6 +13,7 @@
 // Sync (resync()): a lost delivery would leave one a draft forever.
 import {
   linkedIssue,
+  mergeConflict,
   parseKey,
   prState,
   PULL_SIZE,
@@ -84,10 +86,16 @@ export function createPulls({
       : before?.ci?.sha === head
         ? before.ci
         : { sha: head, state: "none", runs: [] };
+    // Whether it conflicts with its base, as GitHub last said for this head: a delivery that
+    // doesn't say (`mergeable: null`) keeps the one known, a new head forgets it.
+    const { conflict: said, ...fields } = pr;
+    const conflict =
+      said !== undefined && !older ? said : head === before?.head ? before?.conflict : undefined;
     pulls.set(key, {
       ...size,
-      ...pr,
+      ...fields,
       readyAt,
+      ...(conflict !== undefined && { conflict }),
       ...(autoMerged && { autoMerged: true }),
       ...(head && { head }),
       ...(updatedAt && { updatedAt }),
@@ -161,8 +169,9 @@ export function createPulls({
         const size = pullSize(found);
         // Recorded meanwhile by a delivery: that one is newer.
         const now = pulls.get(key);
-        if (!Object.keys(size).length || !sameBesidesCi(now, pr)) continue;
-        pulls.set(key, { ...now, ...size });
+        const merge = found?.head?.sha === now?.head ? mergeConflict(found) : {};
+        if (!Object.keys({ ...size, ...merge }).length || !sameBesidesCi(now, pr)) continue;
+        pulls.set(key, { ...now, ...size, ...merge });
       }
       if (opened.length) catchUp(opened);
     })()
@@ -218,11 +227,18 @@ export function createPulls({
           const resized = Object.entries(size).some(([k, v]) => pr[k] !== v);
           // A head that moved without its delivery: its CI starts again (ciStale()).
           const head = found.head?.sha ?? pr.head;
-          if (state === pr.state && !resized && head === pr.head) continue;
+          // Only getPull() says whether it conflicts; a new head forgets what was known.
+          const merge = mergeConflict(found);
+          const conflict =
+            "conflict" in merge ? merge.conflict : head === pr.head ? pr.conflict : undefined;
+          if (state === pr.state && !resized && head === pr.head && conflict === pr.conflict)
+            continue;
           const moved = head && head !== pr.head && now.ci?.sha !== head;
+          const { conflict: _, ...rest } = now;
           pulls.set(key, {
-            ...now,
+            ...rest,
             ...size,
+            ...(conflict !== undefined && { conflict }),
             state,
             url: found.html_url ?? pr.url,
             ...(head && { head }),
@@ -332,6 +348,16 @@ export function createPulls({
     return entry.done;
   }
 
+  // A pull request GitHub returned for task `key` (the conflict watcher's read): whether it
+  // conflicts with its base recorded, if it is still the task's, at the head recorded.
+  function sawMerge(key, found) {
+    const pr = pulls.get(key);
+    const { conflict } = mergeConflict(found);
+    if (conflict === undefined || pr?.number !== found.number || pr.head !== found.head?.sha)
+      return;
+    if (pr.conflict !== conflict) pulls.set(key, { ...pr, conflict });
+  }
+
   // Rekeyed with spelled() (restart.mjs unifySpellings()): the conflict watcher would start
   // runs under a key the rest of the state no longer has. Both spellings of one task: merged.
   function respell(spelled) {
@@ -344,6 +370,7 @@ export function createPulls({
     fill,
     resync,
     ciChanged,
+    sawMerge,
     // The CI reads resync() started, for tests.
     caughtUp: () => catching,
     open: openPulls,

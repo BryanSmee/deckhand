@@ -62,6 +62,7 @@ function setup({
   const replies = [];
   const decided = [];
   const logged = [];
+  const seen = [];
   const routes = {
     "/repos/org/repo/pulls/31/files?per_page=100&page=1": () => w.files,
     "/repos/org/repo": { default_branch: "main" },
@@ -80,12 +81,13 @@ function setup({
     replies,
     decided,
     logged,
+    seen,
     advance: (ms) => (time += ms),
   };
   w.conflicts = createConflicts({
     attempts,
     config: c,
-    pulls: { open: () => open },
+    pulls: { open: () => open, sawMerge: (key, pr) => seen.push([key, pr.mergeable]) },
     github: async (repo, method, url) => {
       calls.push(url);
       const pr = /\/pulls\/(\d+)$/.exec(url);
@@ -165,6 +167,23 @@ test("clean, unstable, blocked, behind and not yet computed don't start a run", 
     await w.conflicts.tick();
     assert.deepEqual(w.accepted, [], JSON.stringify(fields));
   }
+});
+
+test("what each check read is passed to pulls.mjs, for the dashboard (#638)", async () => {
+  const w = setup({
+    open: [31, 41, 51].map((n) => [`org/repo#${n - 1}`, { number: n, state: "ready" }]),
+    prs: {
+      31: pull(31),
+      41: pull(41, { mergeable: true, mergeable_state: "clean" }),
+      51: pull(51, { mergeable: null, mergeable_state: "unknown" }),
+    },
+  });
+  await w.conflicts.tick();
+  assert.deepEqual(w.seen, [
+    ["org/repo#30", false],
+    ["org/repo#40", true],
+    ["org/repo#50", null],
+  ]);
 });
 
 test("each pull request's check counted by its result (deckhand_conflict_checks_total)", async () => {

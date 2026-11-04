@@ -912,3 +912,73 @@ test("pulls: the head resync found keeps GitHub's time: an older synchronize han
   pulls.record("org/repo#30", { ...pr(31, "ready"), head: "b2", updatedAt: b2 });
   assert.equal(pulls.get("org/repo#30").head, "c3");
 });
+
+test("pull_request deliveries: whether it conflicts with its base, once GitHub computed it (#638)", () => {
+  assert.equal(map("edited", { mergeable: false, mergeable_state: "dirty" }).pr.conflict, true);
+  assert.equal(map("edited", { mergeable: true, mergeable_state: "clean" }).pr.conflict, false);
+  // Behind its base, or blocked by a required check: it merges, no conflict.
+  assert.equal(map("edited", { mergeable: true, mergeable_state: "behind" }).pr.conflict, false);
+  // Not computed yet, as webhooks often send it: nothing said, the one known stays.
+  assert.equal("conflict" in map("opened", { mergeable: null }).pr, false);
+  assert.equal(
+    "conflict" in map("edited", { mergeable: true, mergeable_state: "unknown" }).pr,
+    false,
+  );
+  assert.equal("conflict" in map("opened").pr, false);
+});
+
+test("pulls: a conflict kept through a delivery that doesn't say, forgotten on a new head (#638)", async (t) => {
+  const { pulls } = ciPulls(t);
+  pulls.record("org/repo#30", { ...pr(31, "ready"), head: "a1", conflict: true, updatedAt: 2000 });
+  // `mergeable: null` (pullEntry() leaves `conflict` out): the last known value stays.
+  pulls.record("org/repo#30", { ...pr(31, "ready"), head: "a1", updatedAt: 2500 });
+  assert.equal(pulls.get("org/repo#30").conflict, true);
+  // An older delivery handled late doesn't change it.
+  pulls.record("org/repo#30", { ...pr(31, "ready"), head: "a1", conflict: false, updatedAt: 1000 });
+  assert.equal(pulls.get("org/repo#30").conflict, true);
+  pulls.record("org/repo#30", { ...pr(31, "ready"), head: "a1", conflict: false, updatedAt: 3000 });
+  assert.equal(pulls.get("org/repo#30").conflict, false);
+  pulls.record("org/repo#30", { ...pr(31, "ready"), head: "a1", conflict: true, updatedAt: 3500 });
+  // A push: unknown again until GitHub says.
+  pulls.record("org/repo#30", { ...pr(31, "ready"), head: "b2", updatedAt: 4000 });
+  assert.equal("conflict" in pulls.get("org/repo#30"), false);
+  await settled();
+});
+
+test("pulls: the conflict watcher's read and resync's say whether it conflicts (#638)", async (t) => {
+  let found = { mergeable: false, mergeable_state: "dirty" };
+  const pulls = createPulls({
+    listPulls: async () => [],
+    getPull: async (repo, number) => ({
+      number,
+      html_url: `u${number}`,
+      state: "open",
+      draft: false,
+      head: { sha: "a1" },
+      additions: 1,
+      deletions: 0,
+      changed_files: 1,
+      commits: 1,
+      ...found,
+    }),
+  });
+  pulls.record("org/repo#30", { ...pr(31, "ready"), head: "a1" });
+  await pulls.resync();
+  assert.equal(pulls.get("org/repo#30").conflict, true);
+  // Not computed this time: kept.
+  found = { mergeable: null };
+  await pulls.resync();
+  assert.equal(pulls.get("org/repo#30").conflict, true);
+  // The watcher's read, at the head recorded; another head's or another pull request's isn't.
+  pulls.sawMerge("org/repo#30", { number: 31, head: { sha: "zz" }, mergeable: true });
+  pulls.sawMerge("org/repo#30", { number: 32, head: { sha: "a1" }, mergeable: true });
+  pulls.sawMerge("org/repo#30", { number: 31, head: { sha: "a1" }, mergeable: null });
+  assert.equal(pulls.get("org/repo#30").conflict, true);
+  pulls.sawMerge("org/repo#30", { number: 31, head: { sha: "a1" }, mergeable: true });
+  assert.equal(pulls.get("org/repo#30").conflict, false);
+  // A head resync found moved: forgotten, unless GitHub said for the new one.
+  found = { mergeable: null, head: { sha: "b2" } };
+  await pulls.resync();
+  assert.equal("conflict" in pulls.get("org/repo#30"), false);
+  await pulls.caughtUp();
+});

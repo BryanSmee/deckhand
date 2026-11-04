@@ -209,6 +209,8 @@ export function createConflicts({
     if (busy(key)) return "skipped";
     const pr = await json(repo, `/repos/${repo}/pulls/${number}`, [404]);
     if (!pr || pr.state !== "open" || !headInRepo(pr, repo)) return "skipped";
+    // What it found, for the dashboard (pulls.mjs): read here anyway.
+    pulls.sawMerge?.(key, pr);
     if (pr.mergeable === null || pr.mergeable === undefined || pr.mergeable_state === "unknown") {
       return "pending";
     }
