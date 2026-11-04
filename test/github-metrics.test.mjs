@@ -4,8 +4,8 @@ import assert from "node:assert/strict";
 import { mkdirSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
-import { githubMetrics } from "../github/metrics.mjs";
-import { createRegistry } from "../lib/metrics.mjs";
+import { CALLERS, githubMetrics } from "../github/metrics.mjs";
+import { createRegistry, STATUS_LABELS } from "../lib/metrics.mjs";
 import { isWindows, tempDir } from "./helpers.mjs";
 
 // A sample's value in `text`, or undefined when it has none.
@@ -28,7 +28,7 @@ const limit = (resource, remaining, reset, size = 5000) => ({
   "x-ratelimit-reset": String(reset),
 });
 
-test("API calls by caller and status; an unknown status or caller is `other`, no answer `error`", async () => {
+test("API calls by caller and status; a rare status by class, an unknown caller `other`, no answer `unreachable`", async () => {
   const { metrics, render, warned } = setup();
   metrics.api({ caller: "edge", status: 200, seconds: 0.02 });
   metrics.api({ caller: "edge", status: 200, seconds: 0.2 });
@@ -37,8 +37,11 @@ test("API calls by caller and status; an unknown status or caller is `other`, no
   metrics.api({ caller: "someone", status: 404, seconds: 0 });
   const text = await render();
   assert.equal(sample(text, 'deckhand_github_api_calls_total{caller="edge",status="200"}'), 2);
-  assert.equal(sample(text, 'deckhand_github_api_calls_total{caller="proxy",status="other"}'), 1);
-  assert.equal(sample(text, 'deckhand_github_api_calls_total{caller="proxy",status="error"}'), 1);
+  assert.equal(sample(text, 'deckhand_github_api_calls_total{caller="proxy",status="4xx"}'), 1);
+  assert.equal(
+    sample(text, 'deckhand_github_api_calls_total{caller="proxy",status="unreachable"}'),
+    1,
+  );
   assert.equal(sample(text, 'deckhand_github_api_calls_total{caller="other",status="404"}'), 1);
   assert.equal(sample(text, 'deckhand_github_api_call_duration_seconds_count{caller="edge"}'), 2);
   assert.equal(
@@ -114,7 +117,7 @@ test("the App's fetch: each call the caller's in flight (`github` outside one), 
   assert.equal(sample(text, 'deckhand_github_api_calls_total{caller="runner",status="404"}'), 1);
   assert.equal(sample(text, 'deckhand_github_api_calls_total{caller="github",status="200"}'), 1);
   assert.equal(
-    sample(text, 'deckhand_github_api_calls_total{caller="orchestrator",status="error"}'),
+    sample(text, 'deckhand_github_api_calls_total{caller="orchestrator",status="unreachable"}'),
     1,
   );
   assert.equal(sample(text, 'deckhand_github_rate_limit_remaining{resource="core"}'), 42);
@@ -172,3 +175,15 @@ test(
     assert.ok(bytes >= 3 && bytes < 4096, String(bytes));
   },
 );
+
+test("API calls: every caller and status a series of its own, none folded", async () => {
+  const { metrics, render, warned } = setup();
+  const statuses = [...Array.from({ length: 500 }, (_, i) => 100 + i), null, 999];
+  for (const caller of CALLERS)
+    for (const status of statuses) metrics.api({ caller, status, seconds: 0 });
+  const series = (await render())
+    .split("\n")
+    .filter((l) => l.startsWith("deckhand_github_api_calls_total{"));
+  assert.equal(series.length, CALLERS.length * STATUS_LABELS.length);
+  assert.deepEqual(warned, []);
+});

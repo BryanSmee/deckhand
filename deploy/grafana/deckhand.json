@@ -2694,7 +2694,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "sum by (callee) (rate(deckhand_service_calls_total{status=~\"5.*|error\"}[$__rate_interval])) * 60",
+          "expr": "sum by (callee) (rate(deckhand_service_calls_total{status=~\"5.*|unreachable\"}[$__rate_interval])) * 60",
           "legendFormat": "failed: {{callee}}",
           "refId": "B",
           "range": true

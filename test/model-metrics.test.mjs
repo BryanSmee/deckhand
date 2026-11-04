@@ -39,11 +39,11 @@ function read(contentType, answer, size = 7) {
 
 const sse = (...events) => events.map((e) => `event: x\ndata: ${JSON.stringify(e)}\n\n`).join("");
 
-test("statusOf(): the status's class, 429 and 529 apart, unreachable when no answer came", () => {
-  assert.equal(statusOf(200), "2xx");
-  assert.equal(statusOf(404), "4xx");
+test("statusOf(): statusLabel()'s, unreachable when no answer came", () => {
+  assert.equal(statusOf(200), "200");
+  assert.equal(statusOf(418), "4xx");
   assert.equal(statusOf(429), "429");
-  assert.equal(statusOf(503), "5xx");
+  assert.equal(statusOf(505), "5xx");
   assert.equal(statusOf(529), "529");
   assert.equal(statusOf(502, { lost: true }), "unreachable");
   assert.equal(statusOf(999), "other");
@@ -211,7 +211,7 @@ test("a call is counted by its status, its length observed, the tokens its strea
   status = 429;
   await (await call()).text();
   const text = await counting(4);
-  assert.equal(sample(text, series("2xx")), "2");
+  assert.equal(sample(text, series("200")), "2");
   assert.equal(sample(text, series("529")), "1");
   assert.equal(sample(text, series("429")), "1");
   assert.equal(
@@ -246,7 +246,7 @@ test("a stream the provider cuts short is counted as such, with the tokens it sa
   // Counted once the proxy saw the cut, a moment after the client did.
   for (;;) {
     text = await render();
-    if (sample(text, series("2xx"))) break;
+    if (sample(text, series("200"))) break;
     await new Promise((resolve) => setTimeout(resolve, 5));
   }
   assert.equal(sample(text, 'deckhand_model_streams_interrupted_total{provider="anthropic"}'), "1");
@@ -336,7 +336,7 @@ test("a login's refreshes, by result: once each, in the copy that did it", async
   assert.equal(refreshes("refused"), "1");
 });
 
-test("the calls' counter at 0 before any call, every series: an increase() counts the first 429", async () => {
+test("the calls' counter at 0 before any call, 200, 429 and 529: an increase() counts the first 429", async () => {
   const registry = createRegistry();
   modelMetrics(registry);
   const text = await registry.render();
@@ -349,12 +349,12 @@ test("the calls' counter at 0 before any call, every series: an increase() count
     "0",
   );
   const series = text.split("\n").filter((l) => l.startsWith("deckhand_model_calls_total{"));
-  assert.equal(series.length, PROVIDERS.length * AGENTS.length * STATUSES.length);
+  assert.equal(series.length, PROVIDERS.length * AGENTS.length * 3);
 });
 
 test("without a registry, nothing is counted and nothing throws", () => {
   const metrics = modelMetrics(null);
-  metrics.called({ provider: "anthropic", agent: "claude", status: "2xx", seconds: 1 });
+  metrics.called({ provider: "anthropic", agent: "claude", status: "200", seconds: 1 });
   metrics.refreshed("codex")(null);
 });
 
@@ -397,7 +397,7 @@ test("an agent giving up mid-stream isn't a stream cut short; its call is counte
   await reader.read();
   await reader.cancel();
   const text = await counting(1);
-  assert.equal(sample(text, series("2xx")), "1");
+  assert.equal(sample(text, series("200")), "1");
   assert.equal(
     sample(text, 'deckhand_model_streams_interrupted_total{provider="anthropic"}'),
     undefined,
@@ -427,4 +427,18 @@ test("a call's length on the clock's time: in its bucket", async (t) => {
     sample(text, 'deckhand_model_call_duration_seconds_sum{provider="anthropic"}'),
     "45",
   );
+});
+
+test("every provider, agent and status has a series of its own: none folded into other", async () => {
+  const warned = [];
+  const registry = createRegistry({ log: (line) => warned.push(line) });
+  const metrics = modelMetrics(registry);
+  for (const provider of PROVIDERS)
+    for (const agent of AGENTS)
+      for (const status of STATUSES) metrics.called({ provider, agent, status, seconds: 1 });
+  const text = await registry.render();
+  const series = text.split("\n").filter((l) => l.startsWith("deckhand_model_calls_total{"));
+  assert.equal(series.length, PROVIDERS.length * AGENTS.length * STATUSES.length);
+  assert.ok(series.every((line) => line.endsWith(" 1")));
+  assert.deepEqual(warned, []);
 });

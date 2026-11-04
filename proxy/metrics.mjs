@@ -4,7 +4,7 @@
 // why it was refused, as the policy says (../listener/egress-http.mjs), never by host or run:
 // those stay in the log lines.
 import { performance } from "node:perf_hooks";
-import { createRegistry } from "../lib/metrics.mjs";
+import { createRegistry, STATUS_LABELS, statusLabel } from "../lib/metrics.mjs";
 
 // Who made a connection: the policy's answer says (`source`); "unknown" when it didn't answer.
 export const SOURCES = ["sandbox", "engine", "build", "install", "none", "unknown"];
@@ -34,9 +34,6 @@ export const CACHE_RESULTS = ["hit", "revalidated", "miss", "stored", "bypassed"
 // The services the runs' calls go to: the broker (their own run's), the github service (GitHub's
 // hosts, the pushes), the models service (the agents').
 export const TARGETS = ["broker", "github", "models"];
-
-// An answer's status, or "unreachable" when the service didn't answer.
-const STATUSES = [...Array.from({ length: 500 }, (_, i) => String(100 + i)), "unreachable"];
 
 // The registry's egress metrics, shared by both ports' proxies (the sandboxes' and the engines').
 // `cache`: createCache()'s, whose size and limit are read at each scrape.
@@ -119,8 +116,12 @@ export function egressMetrics(registry = createRegistry(), { cache = null } = {}
 
   const gateway = registry.counter(
     "deckhand_egress_gateway_calls_total",
-    "The runs' calls passed on to a service, by service and its answer's status.",
-    { labels: ["target", "status"], values: { target: TARGETS, status: STATUSES } },
+    "The runs' calls passed on to a service, by service and its answer's status (unreachable: none).",
+    {
+      labels: ["target", "status"],
+      values: { target: TARGETS, status: STATUS_LABELS },
+      maxSeries: (TARGETS.length + 1) * STATUS_LABELS.length,
+    },
   );
 
   return {
@@ -141,6 +142,6 @@ export function egressMetrics(registry = createRegistry(), { cache = null } = {}
         );
     },
     cache: (result) => cacheRequests.inc({ result }),
-    gateway: (target, status) => gateway.inc({ target, status }),
+    gateway: (target, status) => gateway.inc({ target, status: statusLabel(status) }),
   };
 }

@@ -9,6 +9,8 @@ import {
   metricsServer,
   processMetrics,
   startMetrics,
+  STATUS_LABELS,
+  statusLabel,
 } from "../lib/metrics.mjs";
 import { ConfigError } from "../lib/settings.mjs";
 import { listening } from "./helpers.mjs";
@@ -22,6 +24,22 @@ function recorded(options = {}) {
 
 // The sample lines of a rendering, without HELP and TYPE.
 const samples = (text) => text.split("\n").filter((line) => line && !line.startsWith("#"));
+
+test("statusLabel: the usual statuses as they are, the others by class, none as unreachable", () => {
+  assert.equal(statusLabel(200), "200");
+  assert.equal(statusLabel(429), "429");
+  assert.equal(statusLabel(503), "503");
+  assert.equal(statusLabel(529), "529");
+  assert.equal(statusLabel(418), "4xx");
+  assert.equal(statusLabel(505), "5xx");
+  assert.equal(statusLabel(101), "1xx");
+  assert.equal(statusLabel(null), "unreachable");
+  assert.equal(statusLabel(undefined), "unreachable");
+  assert.equal(statusLabel(999), "other");
+  assert.equal(statusLabel("200"), "other");
+  // Every label it gives an HTTP status is one of the declared values.
+  for (let code = 100; code < 600; code++) assert.ok(STATUS_LABELS.includes(statusLabel(code)));
+});
 
 test("a counter renders its help, type and series, and only grows", async () => {
   const { registry, lines } = recorded();

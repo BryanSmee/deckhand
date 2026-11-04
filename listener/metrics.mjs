@@ -8,6 +8,7 @@ import { repoAllowed } from "./config.mjs";
 import { APP_EVENTS } from "./github-app.mjs";
 import { BUILT_IN } from "./modes.mjs";
 import { pickedTask } from "./tasks.mjs";
+import { STATUS_LABELS, statusLabel } from "../lib/metrics.mjs";
 
 // A run's length, in seconds: from under a minute to hours.
 export const RUN_BUCKETS = [30, 60, 120, 300, 600, 900, 1800, 2700, 3600, 5400, 7200, 14400, 28800];
@@ -57,14 +58,6 @@ export function runKind(record) {
   return record.light ? "light" : "work";
 }
 
-// A call's answer as a label: the usual statuses as they are, the others by class (5xx), and
-// "error" for no answer at all (refused, reset, timed out).
-const STATUSES = new Set([200, 201, 202, 204, 400, 401, 403, 404, 409, 413, 429, 500, 502, 503]);
-export function statusLabel(status) {
-  if (typeof status !== "number") return "error";
-  return STATUSES.has(status) ? String(status) : `${Math.floor(status / 100)}xx`;
-}
-
 // Whether a call is a long poll (`?wait=`, the broker's and the models service's event
 // streams): counted, but its duration is the wait's, not the service's.
 const longPoll = (url) => /[?&]wait=/.test(String(url));
@@ -75,8 +68,13 @@ const longPoll = (url) => /[?&]wait=/.test(String(url));
 export function serviceCallMetrics(registry, { now = () => performance.now() } = {}) {
   const calls = registry.counter(
     "deckhand_service_calls_total",
-    "The orchestrator's calls to the other services, each try, by its answer's status (error: none).",
-    { labels: ["callee", "status"], values: { callee: CALLEES } },
+    "The orchestrator's calls to the other services, each try, by its answer's status " +
+      "(unreachable: none).",
+    {
+      labels: ["callee", "status"],
+      values: { callee: CALLEES, status: STATUS_LABELS },
+      maxSeries: (CALLEES.length + 1) * STATUS_LABELS.length,
+    },
   );
   const durations = registry.histogram(
     "deckhand_service_call_duration_seconds",
