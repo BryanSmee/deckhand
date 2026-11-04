@@ -579,10 +579,26 @@ test("issue bodies: open questions and None in English and a few other languages
   assert.equal(hasOpenQuestions(none("Open questions", "None of these: which?\n\n1. A?")), false);
   // A word that only starts like one asks.
   assert.equal(hasOpenQuestions(none("Open questions", "Nonexistent users: refuse them?")), true);
+  // A numbered first line is a question unless it is the word alone (issue #737).
+  for (const text of ["1. None", "1. **None.**", "1) N/A", "1. No open questions."]) {
+    assert.equal(hasOpenQuestions(none("Open questions", text)), false, text);
+  }
+  for (const text of [
+    "1. **None of the CI jobs run on Windows**: add one?\n   - [ ] Yes\n   - [ ] No",
+    "1. No questions file exists: create one?",
+    "1. N/A values in the export: drop them?",
+  ]) {
+    assert.equal(hasOpenQuestions(none("Open questions", text)), true, text);
+  }
 });
 
 test("a first question that starts with a None word asks, in an issue and in a reply", () => {
   // Free text: the run waits with its form.
+  assert.equal(
+    replyQuestions("<!-- needs-input -->\n## Needs your input\n\n1. None of X is tested: why?")
+      .items.length,
+    1,
+  );
   const free1 = "1. **Keine Migration**: soll ich eine schreiben?";
   assert.deepEqual(
     replyQuestions(`<!-- needs-input -->\n## Brauche deine Eingabe\n\n${free1}`).items,
@@ -590,6 +606,7 @@ test("a first question that starts with a None word asks, in an issue and in a r
   );
   // The question is the section's first line: what follows "None" is read from it on.
   const questions = [
+    "1. **None of the CI jobs run on Windows**: add one?\n   - [ ] Yes\n   - [ ] No",
     "1. **Keine Migration**: soll ich eine schreiben?\n   - [ ] Ja\n   - [ ] Nein",
     "1. **Aucun test** : faut-il en ajouter ?\n   - [ ] Oui\n   - [ ] Non",
     "1. Ningún test cubre X: ¿añado uno?\n   - [ ] Sí\n   - [ ] No",

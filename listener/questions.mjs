@@ -59,10 +59,12 @@ function* linesOf(text) {
 const OPEN_QUESTIONS =
   /^(?:open questions|questions ouvertes|questions en suspens|preguntas abiertas|preguntas pendientes|offene fragen|perguntas abertas|perguntas em aberto|quest[õo]es em aberto|domande aperte)\s*:?$/iu;
 // "None" first in the section: it asks nothing. In English as it always was: the word starts
-// its first paragraph. A translation only alone on its line, or as that language's "no
-// questions": many sentences start with the word ("Keine Migration: soll ich eine
-// schreiben?"), and the prompt asks for English "None" anyway.
+// its first paragraph, unless that is a numbered question (issue #737: "1. None of the CI
+// jobs run on Windows: add one?"), then only alone on its line. A translation only alone on
+// its line, or as that language's "no questions": many sentences start with the word ("Keine
+// Migration: soll ich eine schreiben?"), and the prompt asks for English "None" anyway.
 const NONE = /^(none|n\/a|no (open )?questions)\b/;
+const NONE_ALONE = /^(?:none|n\/a|no (?:open )?questions)\s*[.!…:;]*$/;
 const NONE_TRANSLATED =
   /^(?:aucune?|néant|rien|ningun[oa]|ningún|nada|keine?|nenhuma?|não há|nessun[oa]?|(?:aucune|pas de) questions?(?: ouvertes?)?|(?:sin|ninguna) preguntas?(?: abiertas?)?|keine (?:offenen )?fragen|(?:sem|nenhuma) perguntas?(?: em aberto| abertas?)?|nenhuma questão|não há perguntas?|nessuna domanda(?: aperta)?)\s*[.!…:;]*$/u;
 // The pick of an option.
@@ -108,14 +110,15 @@ function withoutComments(text) {
 function asks(text) {
   const section = text == null ? text : withoutComments(text).trim();
   if (!section) return false;
-  const first = section
-    .split(/\n\s*\n/)[0]
+  const paragraph = section.split(/\n\s*\n/)[0];
+  const first = paragraph
     .replace(/^\s*(?:[-*+]|\d+[.)])\s+/, "")
     .replace(/[*_`>]/g, "")
     .trim()
     .toLowerCase();
-  if (NONE.test(first)) return false;
-  return !NONE_TRANSLATED.test(first.split(/\r?\n/)[0].trim().normalize("NFC"));
+  const line = first.split(/\r?\n/)[0].trim().normalize("NFC");
+  if (/^\s*\d+[.)]\s/.test(paragraph) ? NONE_ALONE.test(line) : NONE.test(first)) return false;
+  return !NONE_TRANSLATED.test(line);
 }
 
 // At most one space before it: deeper, it is nested under a question.
