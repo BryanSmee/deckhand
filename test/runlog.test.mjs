@@ -547,6 +547,28 @@ test("runs: a log the runner doesn't take stays here, summarized, and goes at th
   assert.equal(existsSync(join(dir, `${id}.log`)), false);
 });
 
+// moveSummaries() removed its summary from logs/ (#697): the store's key says it has one, and
+// the log isn't read again for a summary setIfAbsent() would discard.
+test("runs: a log the runner doesn't take, its run summarized in the store, isn't read again", async (t) => {
+  const dir = tempDir(t);
+  const id = "deckhand-org-repo-15-1000";
+  const meta = { type: "listener", key: "org/repo#15", repo: "org/repo", startedAt: 1000 };
+  writeFileSync(
+    join(dir, `${id}.log`),
+    [line(meta), line({ type: "result", result: "Ok." })].join("\n"),
+  );
+  const [first] = await started(dir, { runner: fakeRunner([id]), log: () => {} });
+  assert.equal(existsSync(join(dir, `${id}.json`)), false);
+  const summarized = new Set([id]);
+  await moveLogs(dir, fakeRunner([id]), { log: () => {}, summarized }).done;
+  assert.equal(existsSync(join(dir, `${id}.json`)), false);
+  assert.equal(existsSync(join(dir, `${id}.log`)), true);
+  // Without the store's say, it is summarized again, as before.
+  await moveLogs(dir, fakeRunner([id]), { log: () => {} }).done;
+  assert.equal(existsSync(join(dir, `${id}.json`)), true);
+  assert.deepEqual(await listed(dir), [first]);
+});
+
 test("runs: a log whose summary can't be written stays here, unsent: its run is never lost", async (t) => {
   const dir = tempDir(t);
   const id = "deckhand-org-repo-12-1000";
