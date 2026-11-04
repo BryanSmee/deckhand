@@ -1084,6 +1084,7 @@ export function fakeDocker({
           run: label("deckhand.run"),
           engine,
           volume,
+          runtime: args.includes("--runtime") ? args[args.indexOf("--runtime") + 1] : "runc",
           running: true,
           ip,
         });
@@ -1162,6 +1163,9 @@ export function fakeDocker({
         const c = containers.get(last);
         if (!c) return missing;
         const format = args[2];
+        if (format.includes("HostConfig.Runtime")) {
+          return ok(`${c.owner ?? ""}|${c.engine ?? ""}|${c.runtime ?? ""}|${c.volume ?? ""} `);
+        }
         if (format.includes("deckhand.owner")) {
           return ok(`${c.owner ?? ""}|${c.run ?? ""}|${c.engine ?? ""}`);
         }

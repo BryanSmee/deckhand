@@ -858,6 +858,16 @@ export function createKubernetesRunner({
     return pod ? (running(pod) ? "running" : "exited") : null;
   }
 
+  // The engine the run's pod `name` has, as start() answered it, read back from its sidecar (a
+  // start recovered after a crash, ../../runner/service.mjs): Sysbox's, with storage of its own.
+  // Null without one, or when the pod is another run's.
+  async function engine(name, run) {
+    const pod = await look(name);
+    if (!pod || pod.metadata.annotations?.["deckhand.run"] !== run) return null;
+    const sidecar = (pod.spec?.initContainers ?? []).some((c) => c.name === ENGINE_CONTAINER);
+    return sidecar ? { backend: "sysbox", cached: false } : null;
+  }
+
   // The sandbox container's exit code once it ended, or null (running, gone): the runner's run
   // events.
   async function exitCode(name) {
@@ -1305,6 +1315,7 @@ export function createKubernetesRunner({
     list,
     state,
     exitCode,
+    engine,
     follow,
     send: inbox.send,
     close: inbox.close,

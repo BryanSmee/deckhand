@@ -1221,7 +1221,9 @@ a network of its own (`broker-runner`), and checks its callers' with the broker'
 (`SERVICE_KEYS_DIR`, read-only, as the policy service does).
 
 - **A run's start** is keyed by its id: asked again (a lost answer, a handover), it finds the
-  sandbox and starts nothing; one a copy left halfway (its network, no sandbox) is done again.
+  sandbox and starts nothing; one a copy left halfway (its network, no sandbox) is done again,
+  and one whose sandbox already runs is recorded as started, with the container engine read back
+  from its sidecar (the backend's `engine()`), as the metrics count it.
   The run's first tokens come from the orchestrator once its network or pod exists (`POST
 /runs/<run>/tokens` on the orchestrator's services port, only for a run being started), which has
   the broker service sign them with the claims it decided (`sandbox-spec.mjs` `tokenEnv()`): the

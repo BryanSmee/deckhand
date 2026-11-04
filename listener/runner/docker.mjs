@@ -332,6 +332,8 @@ export function createDockerRunner({
     kill,
     remove,
     hasSession,
+    // The engine of a sandbox that runs, as start() answered it, or null (volumes.mjs).
+    engine: (name, run, engine) => engines.engineOf(name, run, engine),
     relink: createRelink({ config, docker, log, list, starting, networks, engines }),
     proxyAddresses: networks.proxyAddresses,
     locate: networks.locate,
