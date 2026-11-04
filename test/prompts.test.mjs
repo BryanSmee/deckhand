@@ -209,7 +209,7 @@ test("prompts: the sandbox's rules ask about a blocker left after the work, the 
   const review = readFileSync(new URL("../prompts/review.md", import.meta.url), "utf8");
   assert.match(
     review,
-    /that a run already asked them about \(a reply starting with `<!-- needs-input -->` in the\n {3}thread\) stays a finding while it blocks the merge, but say it waits on the maintainer/,
+    /that a run already asked them about \(a reply in the thread with `<!-- needs-input -->`\n {3}first, or on a line of its own after a heading or a sentence\) stays a finding while it\n {3}blocks the merge, but say it waits on the maintainer/,
   );
   const work = promptFor(issue, { mode: "work", settings, grant });
   assert.match(
