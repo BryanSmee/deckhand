@@ -3,7 +3,14 @@
 // network as `engine`, labelled deckhand.engine rather than deckhand.run so it is never taken
 // for a sandbox, and removed with its run.
 import { checked, containerLabels, labelArgs, removeVolume, volumeLabels } from "../docker.mjs";
-import { ENGINE_HOST, engineArgs, engineBackend, engineName, engineVolume } from "./engine.mjs";
+import {
+  ENGINE_HOST,
+  SYSBOX_RUNTIME,
+  engineArgs,
+  engineBackend,
+  engineName,
+  engineVolume,
+} from "./engine.mjs";
 
 export function createEngines({ config, docker }) {
   // Which engine this host runs (engine.mjs engineBackend()), asked once; again after a
@@ -112,5 +119,28 @@ export function createEngines({ config, docker }) {
   // The run's cache volume is free again: its engine is gone (relink()).
   const release = (run) => caches.delete(run);
 
-  return { start, remove, release };
+  // The engine the run's sandbox `name` has, as start() answered it, read back from its sidecar
+  // (a start recovered after a crash, ../../runner/service.mjs): its runtime says the backend,
+  // its mounts whether it has the repo's cache volume (`cache`, its base name). Null without one
+  // of this deployment's for that run.
+  async function engineOf(name, run, { cache } = {}) {
+    const { code, out } = await docker([
+      "inspect",
+      "--format",
+      '{{index .Config.Labels "deckhand.owner"}}|{{index .Config.Labels "deckhand.engine"}}|{{.HostConfig.Runtime}}|{{range .Mounts}}{{.Name}} {{end}}',
+      engineName(name),
+    ]);
+    if (code !== 0) return null;
+    const [owner, engine, runtime = "", mounts = ""] = out.trim().split("|");
+    if (owner !== config.prefix || engine !== run) return null;
+    // start() runs Sysbox's sidecar under SYSBOX_RUNTIME (engine.mjs engineArgs()) and Podman's
+    // under Docker's default: any other runtime is Podman's.
+    const kind = runtime === SYSBOX_RUNTIME ? "sysbox" : "podman";
+    const shared = cache ? `${cache}-${kind}` : null;
+    const cached = !!shared && mounts.split(" ").includes(shared);
+    if (cached) caches.set(run, shared);
+    return { backend: kind, volume: cached ? shared : engineVolume(run), cached };
+  }
+
+  return { start, remove, release, engineOf };
 }

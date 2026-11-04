@@ -815,6 +815,27 @@ test("start: SANDBOX_ENGINE=sysbox without its runtime starts nothing and leaves
   assert.ok(!podman.calls.some((c) => c.args[0] === "info"));
 });
 
+test("engine: a sandbox's engine read back as start() answered it, null without one of its run's", async () => {
+  const sysbox = runner({ runtimes: ["sysbox-runc"] });
+  const { engine } = await sysbox.r.start(withEngine());
+  assert.equal(engine.backend, "sysbox");
+  assert.deepEqual(await sysbox.r.engine("dh-a", "dh-a-1", { limits, cache: null }), engine);
+  // Another run's sandbox of that name, or none.
+  assert.equal(await sysbox.r.engine("dh-a", "dh-a-2", { limits, cache: null }), null);
+  assert.equal(await sysbox.r.engine("dh-b", "dh-b-1", { limits, cache: null }), null);
+  // Not this deployment's.
+  sysbox.containers.get("dh-a-engine").owner = "other";
+  assert.equal(await sysbox.r.engine("dh-a", "dh-a-1", { limits, cache: null }), null);
+
+  // Podman's, with the repo's cache, and the next run's with fresh storage.
+  const podman = runner();
+  const cache = "dh-engine-cache-org-repo-abc";
+  const first = await podman.r.start(withEngine({ cache }));
+  const second = await podman.r.start({ ...withEngine({ cache }), run: "dh-b-1", name: "dh-b" });
+  assert.deepEqual(await podman.r.engine("dh-a", "dh-a-1", { limits, cache }), first.engine);
+  assert.deepEqual(await podman.r.engine("dh-b", "dh-b-1", { limits, cache }), second.engine);
+});
+
 test("start: a sandbox that doesn't start takes its engine and volume with it", async () => {
   const { r, nets, containers, volumes } = runner({
     answers: {

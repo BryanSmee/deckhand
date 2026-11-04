@@ -300,13 +300,14 @@ export function createRunnerService({
       const found = await ours(name);
       const state = found?.run === run ? await runner.state(name) : null;
       if (["running", "exited"].includes(state)) {
-        await store.set(
-          key,
-          { state: "started", result: { engine: null } },
-          { ttlMs: START_TTL_MS },
-        );
+        // Its engine, as the start would have answered it, read back from the backend: the
+        // record is what the metrics (engineOf()) and a start asked again read.
+        const engine = spec.engine ? await recovered(name, run, spec.engine) : null;
+        if (engine) engines.set(run, engine.backend);
+        const result = { engine };
+        await store.set(key, { state: "started", result }, { ttlMs: START_TTL_MS });
         await events.started(run, name);
-        return { engine: null, existing: true };
+        return { ...result, existing: true };
       }
       log(`${name}: a start cut short by another copy, started again`);
       await runner.remove(name, run).catch((error) => log(`${name}: ${error.message}`));
@@ -336,6 +337,17 @@ export function createRunnerService({
     await store.set(key, { state: "started", result }, { ttlMs: START_TTL_MS });
     await events.started(run, name);
     return { ...result, existing: false };
+  }
+
+  // The engine of the run's sandbox that runs, or null: not knowing it (the backend's error)
+  // leaves it unknown rather than failing a start whose sandbox stands.
+  async function recovered(name, run, engine) {
+    try {
+      return (await runner.engine(name, run, engine)) ?? null;
+    } catch (error) {
+      log(`${name}: its container engine unknown: ${error.message}`);
+      return null;
+    }
   }
 
   // NDJSON, one object a line, as it comes: a sandbox's output, an image's build.
