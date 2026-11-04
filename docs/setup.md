@@ -2083,8 +2083,10 @@ The runner moves each closed segment of a run's log there (a log closes one at e
 its run, at `LOG_SEGMENT_MB` and at its end), while the run goes on: once they have
 moved, the store keeps only the segment still being written and each log's index. Nothing slows
 a run's log down while its segments move: closed segments wait in the store for as long as blob
-storage takes them slower than the log is written, as when it fails (below). Logs written before `BLOB_URL` was set stay in
-the store until retention removes them, and so do logs from before segments. Retention
+storage takes them slower than the log is written, as when it fails (below). Segments closed
+before `BLOB_URL` was set move too: the runner finds them in the logs' indexes the first time it
+acts with blob storage. Logs from before segments stay in the store until retention removes
+them. Retention
 (`LOG_RETENTION_DAYS`) deletes the segments in blob storage too. Don't unset `BLOB_URL` once
 segments are there: their logs no longer read. The broker keeps the runs' screenshots there
 ([#609](https://github.com/BryanSmee/deckhand/issues/609)), written once as they come; retention

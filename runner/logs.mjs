@@ -25,6 +25,13 @@
 // few minutes, and with a growing delay while blob storage fails. A move cut short (a crash, a
 // handover) is done again from the start, which does no harm, and the note acknowledged only once
 // it is done. A log of the old shape stays in the store, until retention.
+//
+// Some closed segments have no note (#671): those closed while BLOB_URL was unset, and those a
+// release before the notes closed as it handed over. The first copy acting with blob storage
+// notes them, from the logs' indexes (sweep()), once: SWEPT says it was done, and a copy acting
+// without blob storage deletes it, so that setting BLOB_URL again sweeps again.
+
+import { values } from "../lib/store.mjs";
 
 // A run's id: what runs.mjs names logs after ("<sandbox>-<ms>"). Nothing that climbs out.
 const ID = /^\w[\w.-]{0,199}$/;
@@ -61,6 +68,10 @@ const COUNTED = 100_000;
 // What a pass that failed counted ({ segments, bytes }), for either copy's /health: the one acting
 // writes it, the next pass that moves them all deletes it.
 const WAITING = "log-moves/waiting";
+// When the logs' indexes were swept for the closed segments no note names (sweep()).
+export const SWEPT = "log-moves/swept";
+// A log's index, as keys() lists it: the only values under `logs/`.
+const INDEX = /^logs\/(.+)\/index$/;
 // How old what /health says of it may be on a copy that isn't acting (moves.waiting()).
 export const WAITING_READ_MS = 10_000;
 
@@ -392,6 +403,8 @@ function createMoves({ store, enabled, moveOne, timers, now, log }) {
   let running = null;
   let again = false;
   let failures = 0;
+  // Whether this copy found the indexes swept, or swept them, since it got the lease.
+  let swept = false;
   // What waits ({ segments, bytes } or null), as this copy last knew it, and when: /health
   // answers from it without waiting on the store (a probe's second, Redis stalling).
   let known = null;
@@ -424,6 +437,8 @@ function createMoves({ store, enabled, moveOne, timers, now, log }) {
   // → whether every note was done: false when the lease went meanwhile (`leased`: a pass of the
   // lease's, not one by hand).
   async function once(leased) {
+    if (!swept && !(await sweep(leased))) return false;
+    swept = true;
     for (;;) {
       const notes = await store.read(MOVES, MOVER, { count: BATCH });
       if (!notes.length) return true;
@@ -436,6 +451,27 @@ function createMoves({ store, enabled, moveOne, timers, now, log }) {
         await store.ack(MOVES, MOVER, [note], { drop: true });
       }
     }
+  }
+
+  // A note for each closed segment still in the store, from every log's index, unless SWEPT says
+  // it was done: a segment noted twice moves once (moveOne()). → false when the lease went
+  // meanwhile, the sweep left for the next holder to do again.
+  async function sweep(leased) {
+    if (await store.get(SWEPT)) return true;
+    let noted = 0;
+    for await (const [key, index] of values(store, "logs/", { count: BATCH })) {
+      if (leased && !active) return false;
+      const id = INDEX.exec(key)?.[1];
+      if (!validLogId(id) || !Array.isArray(index?.segments)) continue;
+      for (const [n, segment] of index.segments.entries()) {
+        if (segment?.where === "blobs") continue;
+        await store.append(MOVES, { id, n, size: segment?.size });
+        noted++;
+      }
+    }
+    await store.set(SWEPT, now());
+    if (noted) log(`Log segments: ${noted} closed before their moves were noted, noted to move`);
+    return true;
   }
 
   // Every note left, and the segments they say, counted for /health: a segment once, however
@@ -492,14 +528,20 @@ function createMoves({ store, enabled, moveOne, timers, now, log }) {
 
   return {
     // The copy holding the lease: a pass now, for what a copy before it left.
+    // Without blob storage, what closes has no note: the indexes are swept again once it is set.
     start() {
-      if (!enabled || active) return;
+      if (!enabled) {
+        store.delete(SWEPT).catch((error) => log(`Log segments: ${error.message}`));
+        return;
+      }
+      if (active) return;
       active = true;
       schedule(0);
     },
     // Its lease gone: the pass in flight stops at its next note, which the next holder takes up.
     stop() {
       active = false;
+      swept = false;
       failures = 0;
       again = false;
       timers.clearTimeout(timer);
