@@ -150,6 +150,31 @@ metrics:
     labels: {}
     # 30s, say; empty: the scraper's own.
     interval: ""
+  # The Grafana dashboard (deploy/grafana/deckhand.json) as a ConfigMap for Grafana's sidecar
+  # (kube-prometheus-stack's, grafana's chart's), which loads the ConfigMaps carrying its label.
+  # Its datasource is a variable of its own: any Prometheus or VictoriaMetrics one.
+  dashboard:
+    enabled: false
+    # Its namespace: one the sidecar searches; empty: the services'.
+    namespace: ""
+    # The label the sidecar looks for (its `sidecar.dashboards.label` and `labelValue`).
+    labels:
+      grafana_dashboard: "1"
+    # A folder, say, with the sidecar's `folderAnnotation` (grafana_folder: Deckhand).
+    annotations: {}
+  # The alert rules (deploy/alerts/deckhand.yaml, docs/setup.md#alerts) as a PrometheusRule (the
+  # Prometheus Operator's) or a VMRule (VictoriaMetrics' operator's), once its CRD is in the
+  # cluster.
+  rules:
+    enabled: false
+    # PrometheusRule or VMRule.
+    kind: PrometheusRule
+    # What your operator's rule selector picks (`release: kube-prometheus-stack`, say).
+    labels: {}
+    # The job Deckhand's targets are scraped as, which DeckhandServiceDown selects: with
+    # metrics.serviceMonitor, `deckhand` (its jobLabel), the default; without it, your scrape
+    # job's (an annotation-based `kubernetes-pods`, say), required.
+    job: ""
 
 # Your ingress, to edge's port 8080 alone: GitHub's webhooks and the dashboard, over HTTPS.
 ingress:

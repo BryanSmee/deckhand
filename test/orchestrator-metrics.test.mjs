@@ -3,9 +3,12 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createRegistry } from "../lib/metrics.mjs";
+import { AGENTS } from "../listener/agents/index.mjs";
 import { createHttp } from "../listener/http.mjs";
 import {
   deliveryResult,
+  KINDS,
+  OUTCOMES,
   modeLabel,
   orchestratorMetrics,
   pickupSlots,
@@ -14,6 +17,7 @@ import {
   serviceCallMetrics,
   statusLabel,
 } from "../listener/metrics.mjs";
+import { BUILT_IN } from "../listener/modes.mjs";
 import { testConfig } from "./helpers.mjs";
 
 // The samples of `text` (no comments), each line as it is.
@@ -65,18 +69,32 @@ test("queuedReasons: a slot, the repo's own cap, the pause, the waits", () => {
     task("org/other", { pending: [] }),
     // A repo's cap at MAX_PARALLEL holds nothing back of its own: it waits for a slot.
     task("org/capped", { settings: { maxParallel: 3 } }),
+    // Auto-picked: waits for one of AUTO_PICKUP_SLOTS, the one a picked run holds, whatever
+    // other slot is free.
+    task("org/picked", { pending: [{ autoPickup: true }] }),
+    task("org/picked", { running: true, pending: [], live: { record: { autoPickup: true } } }),
   ];
   const waits = [{ blockers: [12] }, { blockers: [], answers: true }, { blockers: [3, 4] }];
   assert.deepEqual(
-    Object.fromEntries(queuedReasons(tasks, waits, 3).map(([l, n]) => [l.reason, n])),
+    Object.fromEntries(queuedReasons(tasks, waits, 3, 1).map(([l, n]) => [l.reason, n])),
     {
       slot: 2,
       repo: 1,
+      pickup: 1,
       pause: 1,
       after: 2,
       answers: 1,
     },
   );
+  const reasons = (list, reserved) =>
+    Object.fromEntries(queuedReasons(list, [], 3, reserved).map(([l, n]) => [l.reason, n]));
+  // Without reserved slots an auto-picked task is one like the others (startable()).
+  assert.equal(reasons(tasks, 0).slot, 3);
+  // Its reserved slot free (no picked run): it would start, so it waits as a `slot`, which
+  // DeckhandQueueStuck watches; two reserved, one held: the same.
+  const free = tasks.filter((t) => !t.live);
+  assert.deepEqual([reasons(free, 1).slot, reasons(free, 1).pickup], [3, 0]);
+  assert.deepEqual([reasons(tasks, 2).slot, reasons(tasks, 2).pickup], [3, 0]);
 });
 
 test("pickupSlots: used by picked tasks, lent to the others past their share, the rest free", () => {
@@ -116,6 +134,36 @@ test("orchestratorMetrics: the runs' lives counted, the queue's gauges from the 
   assert.match(waiting, /# TYPE deckhand_runs_queued gauge/);
   assert.equal(sample(waiting, "deckhand_runs_running"), undefined);
   assert.equal(sample(waiting, "deckhand_max_parallel"), undefined);
+  // The runs' counters at 0 before any run, every series: an increase() counts the first one.
+  assert.equal(
+    sample(waiting, 'deckhand_runs_finished_total{mode="work",outcome="error"}'),
+    'deckhand_runs_finished_total{mode="work",outcome="error"} 0',
+  );
+  assert.equal(
+    sample(
+      waiting,
+      'deckhand_runs_started_total{mode="custom",agent="antigravity",kind="auto-pickup"}',
+    ),
+    'deckhand_runs_started_total{mode="custom",agent="antigravity",kind="auto-pickup"} 0',
+  );
+  const series = (name) => samples(waiting).filter((line) => line.startsWith(`${name}{`)).length;
+  const modes = BUILT_IN.size + 1;
+  assert.equal(series("deckhand_runs_finished_total"), modes * OUTCOMES.length);
+  assert.equal(
+    series("deckhand_runs_started_total"),
+    modes * Object.keys(AGENTS).length * KINDS.length,
+  );
+  // An agent outside AGENTS folds into its own label alone, the series' cap leaving room.
+  const other = createRegistry({ log: () => {} });
+  orchestratorMetrics(other, { ctx: () => null }).runStarted({
+    mode: "work",
+    record: { agent: "someone", light: false },
+  });
+  assert.match(
+    await other.render(),
+    /deckhand_runs_started_total\{mode="work",agent="other",kind="work"\} 1/,
+  );
+  assert.doesNotMatch(waiting, /="other"/);
 
   const record = { agent: "claude", startedAt: 1_000_000, light: false, reason: "review-fix" };
   const live = { mode: "work", record };

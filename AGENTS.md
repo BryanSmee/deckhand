@@ -132,7 +132,10 @@ deploy/       kubernetes/: the manifests for a cluster (#396), a kustomize base 
               check-isolation.sh; test/kubernetes-manifests.test.mjs holds them to CALLS (docs/kubernetes.md);
               helm/deckhand/: the same as a Helm chart (#570), whose default values render the
               base's objects (test/helm-chart.test.mjs); kubernetes-e2e/: a run from start to end on a
-              cluster, every service updated mid-run (run.sh, its fakes; docs/kubernetes.md)
+              cluster, every service updated mid-run (run.sh, its fakes; docs/kubernetes.md);
+              grafana/deckhand.json: the Grafana dashboard, alerts/: the alert rules and their
+              promtool tests (#661; docs/setup.md, Metrics), the chart carrying copies of both in
+              helm/deckhand/files/, held the same by test/metrics-deploy.test.mjs
 docs/         setup, per-repo config reference, security model, architecture
 ```
 

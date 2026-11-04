@@ -9,7 +9,15 @@ import { test } from "node:test";
 import { createRegistry } from "../lib/metrics.mjs";
 import { openStore } from "../lib/store.mjs";
 import { loginSeal, LoginError, planLogin } from "../models/logins.mjs";
-import { MAX_READ, modelMetrics, statusOf, usageReader } from "../models/metrics.mjs";
+import {
+  AGENTS,
+  MAX_READ,
+  modelMetrics,
+  PROVIDERS,
+  STATUSES,
+  statusOf,
+  usageReader,
+} from "../models/metrics.mjs";
 import { baseOf, createApiProxy } from "../models/upstream.mjs";
 import { createUsage } from "../models/usage.mjs";
 import { serve, tempDir, tokenBroker } from "./helpers.mjs";
@@ -326,6 +334,22 @@ test("a login's refreshes, by result: once each, in the copy that did it", async
   assert.equal(refreshes("ok"), "1");
   assert.equal(refreshes("failed"), "1");
   assert.equal(refreshes("refused"), "1");
+});
+
+test("the calls' counter at 0 before any call, every series: an increase() counts the first 429", async () => {
+  const registry = createRegistry();
+  modelMetrics(registry);
+  const text = await registry.render();
+  assert.equal(
+    sample(text, 'deckhand_model_calls_total{provider="anthropic",agent="claude",status="529"}'),
+    "0",
+  );
+  assert.equal(
+    sample(text, 'deckhand_model_calls_total{provider="openai",agent="codex",status="429"}'),
+    "0",
+  );
+  const series = text.split("\n").filter((l) => l.startsWith("deckhand_model_calls_total{"));
+  assert.equal(series.length, PROVIDERS.length * AGENTS.length * STATUSES.length);
 });
 
 test("without a registry, nothing is counted and nothing throws", () => {
