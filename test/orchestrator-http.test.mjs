@@ -448,26 +448,30 @@ test("api/state (#639): each seen repo's run slots, against its own max_parallel
     permissions: permissionsOf({ alice: { "org/capped": ["*"], "org/shared": ["*"] } }),
     deliverable: () => 0,
   });
-  const task = (repo, id, running, settings, more = {}, queuedAt = 1000) =>
+  // `at`: when its settings were read (tasks.mjs accept(), runs.mjs begin()).
+  const task = (repo, id, state, settings, at, more = {}) =>
     ctx.tasks.set(`${repo}#${id}`, {
-      ...{ repo, id, kind: "issue", running, settings },
-      pending: running ? [] : [{ mode: "work", replyTo: 9, text: "Go.", queuedAt }],
+      ...{ repo, id, kind: "issue", running: state === "running", settings, settingsAt: at },
+      pending: state === "queued" ? [{ mode: "work", replyTo: 9, text: "Go.", queuedAt: at }] : [],
       ...more,
     });
-  // org/capped's max_parallel lowered to 2 while a run read 3: the queue holds its tasks to the
-  // settings read with their comments, the most recent's shown (not the first created's).
-  task("org/capped", 1, true, { maxParallel: 3 });
-  task("org/capped", 2, false, { maxParallel: 2 }, {}, 2000);
-  task("org/capped", 4, false, { maxParallel: 3 }, {}, 1000);
-  // Nor a chat's, in a pool of its own, nor a task that is the owner's alone.
-  task("org/capped", "chat-1", true, { maxParallel: 2 }, { pool: "chats" });
-  task("org/capped", 3, true, { maxParallel: 2 }, { owner: "bob" });
-  // org/shared sets none: MAX_PARALLEL, shared; one equal to it holds nothing back either.
-  task("org/shared", 1, true, {});
-  task("org/shared", 2, false, undefined);
-  task("org/equal", 1, true, { maxParallel: 4 });
+  // org/capped's max_parallel lowered from 3 to 2: a done task and a run read 3 before the comment
+  // queued on #2 read 2, which the queue holds it to; #4's, queued earlier, read 3 too. The
+  // settings read last are shown, not the first created task's.
+  task("org/capped", 0, "done", { maxParallel: 3 }, 100);
+  task("org/capped", 1, "running", { maxParallel: 3 }, 500);
+  task("org/capped", 2, "queued", { maxParallel: 2 }, 2000);
+  task("org/capped", 4, "queued", { maxParallel: 3 }, 1000);
+  // Nor a chat's, in a pool of its own.
+  task("org/capped", "chat-1", "running", { maxParallel: 1 }, 5000, { pool: "chats" });
+  // org/shared sets none: MAX_PARALLEL, shared; one equal to it holds nothing back either. A task
+  // from an older listener, its settings' time unknown, counts as read first.
+  task("org/shared", 1, "running", {}, 500);
+  task("org/shared", 2, "queued", undefined, 600);
+  task("org/shared", 3, "done", { maxParallel: 1 }, undefined);
+  task("org/equal", 1, "running", { maxParallel: 4 }, 500);
   // A repo alice doesn't see: left out.
-  task("org/hidden", 1, true, { maxParallel: 1 });
+  task("org/hidden", 1, "running", { maxParallel: 1 }, 500);
   const url = await serveHttp(t, ctx);
   const state = async () =>
     (await fetch(`${url}/api/state`, { headers: { "x-user": "alice" } })).json();
@@ -475,11 +479,12 @@ test("api/state (#639): each seen repo's run slots, against its own max_parallel
     "org/capped": { running: 1, queued: 2, max: 2, own: true },
     "org/shared": { running: 1, queued: 1, max: 4, own: false },
   });
-  // Nothing queued: the running task's.
-  ctx.tasks.delete("org/capped#2");
+  // #2's run begins, reading 2 again, and #4's comment is dropped: nothing queued, still 2, not
+  // the done task's 3 (created first).
+  task("org/capped", 2, "running", { maxParallel: 2 }, 3000);
   ctx.tasks.delete("org/capped#4");
-  const idle = (await state()).repoSlots["org/capped"];
-  assert.deepEqual(idle, { running: 1, queued: 0, max: 3, own: true });
+  const started = (await state()).repoSlots["org/capped"];
+  assert.deepEqual(started, { running: 2, queued: 0, max: 2, own: true });
   ctx.permissions = permissionsOf({ alice: { "org/equal": ["*"] } });
   const http = createHttp(ctx);
   const { url: other } = await serve(t, (req, res) => http.handle(req, res, { user: "alice" }));

@@ -163,6 +163,12 @@ test("a repo's page shows its run slots, in the header or atop the list on a pho
   expect(screen.getByText("1 of 2 running · 3 queued")).toBeTruthy();
   expect(meter()).toBeTruthy();
   phone.unmount();
+  // And atop its board.
+  history.replaceState(null, "", "#/acme/api/board");
+  const phoneBoard = render(<Dashboard state={makeState({ repoSlots })} error={null} />);
+  expect(screen.getByText("1 of 2 running · 3 queued")).toBeTruthy();
+  expect(meter()).toBeTruthy();
+  phoneBoard.unmount();
   wide = true;
   // All's tasks: none; nor from a listener from before repoSlots.
   history.replaceState(null, "", "#/tasks");
