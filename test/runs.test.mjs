@@ -224,7 +224,8 @@ test("a run's end: the CI step told of any run, a review's fix run's outcome to 
 });
 
 // A review run's end (cleanUp()): its posted review to settle(), for its fix run or merge.
-// `reason`: the item it answered ("review", the listener's own, may merge); `line`, its result.
+// `reason`: the answered item's ("review": the listener's own, which may merge; none: a comment's);
+// `line`, its result.
 const CHANGES = `A redelivery starts a second run.
 
 ## Findings
@@ -239,6 +240,7 @@ async function endReview(t, reason, line = result(CHANGES)) {
   const { ctx, runner, task, following } = setup(t, { mode: "review" });
   const heard = [];
   const pr = { number: 13, head: { sha: "sha-2" }, base: { repo: { html_url: "https://x" } } };
+  // Every write accepted: postReview()'s 422 fallbacks are reviews.test.mjs's.
   ctx.github = async (repo, method, path, body) => {
     heard.push([method, path, body?.commit_id]);
     return method === "GET" ? Response.json(pr) : Response.json({ id: 1 });
@@ -251,7 +253,7 @@ async function endReview(t, reason, line = result(CHANGES)) {
   task.base = "trunk";
   task.live.replyTo = 13;
   task.live.reviewFrom = "sha-1";
-  task.live.handled = [{ reason, replyTo: 13 }];
+  task.live.handled = [{ ...(reason && { reason }), replyTo: 13 }];
   runner.out(line);
   await runner.kill();
   await following;
@@ -261,7 +263,8 @@ async function endReview(t, reason, line = result(CHANGES)) {
 test("a review run's end: settle() gets the review it posted, its own only for a fix or merge", async (t) => {
   for (const [reason, auto] of [
     ["review", true],
-    ["comment", false],
+    // A "/mode review" comment's item, which has no reason.
+    [undefined, false],
   ]) {
     const heard = await endReview(t, reason);
     const [get, post, settle, ended] = heard;
@@ -287,10 +290,9 @@ test("a review run's end: settle() gets the review it posted, its own only for a
     assert.deepEqual(ended, ["runEnded", "org/repo"]);
     assert.equal(heard.length, 4);
   }
-  // A review run that failed posts no review: nothing to settle.
+  // A review run that failed posts no review, and its end (reached) has nothing to settle.
   const failed = JSON.stringify({ type: "result", is_error: true, result: "Overloaded." });
-  const heard = await endReview(t, "review", failed);
-  assert.ok(!heard.some(([what]) => what === "settle"));
+  assert.deepEqual(await endReview(t, "review", failed), [["runEnded", "org/repo"]]);
 });
 
 test("any run's end asks for the next pick at once: an auto-picked one's slot, or its repo's", async (t) => {
