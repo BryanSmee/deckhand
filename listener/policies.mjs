@@ -770,8 +770,9 @@ export function createPolicies({
   // The actions the access rules of the layers `read()` gives ({ operator, repo }: policiesFor()'s)
   // name that Deckhand doesn't have (knownAction()), for the config checks (#765): a misspelled
   // deny takes nothing away, unseen otherwise. Only evaluating the rules says them: on each
-  // allowed login (or one nobody has, with none), on `repo` (its name: private and public) and
-  // server-wide (the operator's layer alone: a repository's rules count only on it). A
+  // allowed login (or one nobody has, with none), on `repo` (its name: private and public, both
+  // layers) and server-wide (the operator's layer alone: a repository's rules count only on it,
+  // access() never asks them there). A
   // repository's allow rules are ignored (compile() says so): not read. Without `operator`, its
   // rules aren't asked, only the repository's. Each name said once; the policies failing,
   // nothing (the compile check says why). The service's operator layer not the one read:
@@ -782,21 +783,29 @@ export function createPolicies({
       MAX_CHECKED_LOGINS,
     );
     if (!logins.length) logins.push("deckhand-config-check");
+    // Server-wide, the operator's layer alone, as access() asks it; on `repo`, both.
     const where = [
       ...(operator ? [null] : []),
       ...(repo ? [true, false].map((p) => ({ name: repo.toLowerCase(), private: p })) : []),
     ];
-    const inputs = {};
-    for (const login of logins) {
-      for (const at of where) {
-        inputs[`${login}@${at ? `${at.name}:${at.private}` : "server"}`] = {
-          decision: "access",
-          user: { login },
-          repo: at,
-        };
+    const inputsAt = (server) => {
+      const inputs = {};
+      for (const login of logins) {
+        for (const at of where.filter((w) => (w === null) === server)) {
+          inputs[`${login}@${at ? `${at.name}:${at.private}` : "server"}`] = {
+            decision: "access",
+            user: { login },
+            repo: at,
+          };
+        }
       }
-    }
-    if (!Object.keys(inputs).length) return [];
+      return inputs;
+    };
+    const groups = [
+      { inputs: inputsAt(true), server: true },
+      { inputs: inputsAt(false), server: false },
+    ].filter((g) => Object.keys(g.inputs).length);
+    if (!groups.length) return [];
     for (let attempt = 0; ; attempt++) {
       let layers;
       try {
@@ -815,14 +824,21 @@ export function createPolicies({
       ]);
       const kept = actionsKept.get(key);
       if (kept && now() - kept.at < ACCESS_MS) return [...kept.said];
-      const said = await evaluateSets("access", layers, inputs, { operator });
+      const results = [];
+      let said = {};
+      for (const { inputs, server } of groups) {
+        const asked = server ? { ...layers, repo: new Map() } : layers;
+        said = await evaluateSets("access", asked, inputs, { operator });
+        if (said.error) break;
+        results.push(...Object.values(said.results));
+      }
       if (said.mismatch && attempt === 0) {
         knownOwn = null;
         continue;
       }
       if (said.error) return [];
       const warnings = new Set();
-      for (const result of Object.values(said.results)) {
+      for (const result of results) {
         for (const layer of ["operator", "repo"]) {
           const rules = result[layer];
           if (!rules) continue;

@@ -1667,11 +1667,11 @@ any action it covers (`runs:start:work`) refuses it; `*` asked server-wide is `s
 
 An action no rule should name (`run:start:work`, `task:read`: neither one of the table's nor a
 prefix of theirs) gives nothing, and a deny of it takes nothing away. The checks say it, as
-probably misspelled: Deckhand's log at start for the operator's rules (asked of each
-`ALLOWED_USERS` login (the first 100), server-wide), a repository's config panel for both layers' on it, and
-the config check of a pull request's branch (onboarding's) for the repository's own. Only
-evaluating the rules says what they name, so a rule that holds for none of those inputs (a
-binding of a repository not checked, a login outside `ALLOWED_USERS`) isn't said.
+probably misspelled: Deckhand's log at start for the operator's rules, server-wide; a
+repository's config panel for both layers' rules on it; and the config check of a pull request's
+branch (onboarding's) for the repository's own. Each is asked of the first 100 `ALLOWED_USERS`
+logins. Only evaluating the rules says what they name, so a rule that holds for none of those
+inputs (a binding of a repository not checked, a login outside `ALLOWED_USERS`) isn't said.
 
 **Roles and bindings**: Deckhand's `access-roles.rego` defines four roles as action sets, and
 gives each login the actions of the `bindings` that match it:
