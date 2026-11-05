@@ -10,20 +10,13 @@ import { join, relative } from "node:path";
 import { test } from "node:test";
 import { parseYaml } from "../lib/yaml.mjs";
 import { isolationProblem } from "../listener/runner/kubernetes.mjs";
-import { posix, tempDir } from "./helpers.mjs";
+import { documents, onPath, posix, tempDir } from "./helpers.mjs";
 
 const repo = join(import.meta.dirname, "..");
 const base = join(repo, "deploy", "kubernetes");
 const chart = join(repo, "deploy", "helm", "deckhand");
 
-const runs = (tool) => !spawnSync(tool, ["version"], { stdio: "ignore" }).error;
-const skip = (!runs("helm") || !runs("kustomize")) && "no helm or kustomize on the PATH";
-
-const documents = (text) =>
-  text
-    .split(/^---$/m)
-    .map((part) => parseYaml(part))
-    .filter(Boolean);
+const skip = (!onPath("helm") || !onPath("kustomize")) && "no helm or kustomize on the PATH";
 
 // The base with these components, through an overlay of its own, as an operator's would be:
 // relative paths, as kustomize refuses absolute ones.
