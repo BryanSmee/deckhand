@@ -110,6 +110,9 @@ export function ownIssueId(path, run) {
   if (!match || !Number.isInteger(run.issue) || Number(match[2]) !== run.issue) return null;
   return Number(match[1]);
 }
+// What a chat is told of a write: its permissions profile's GitHub level is read only.
+export const CHAT_READS =
+  "a chat only reads GitHub: its permissions profile's level is read only, and its answers stay in the conversation";
 // What a run is told when it reads issues beyond its own without `read:issues`.
 export const ownIssueOnly = (run) =>
   `this run's capabilities don't give \`read:issues\`: it reads ${Number.isInteger(run.issue) ? `its own issue (#${run.issue}) only` : "no issue"}`;
@@ -759,6 +762,12 @@ export function createGithubGateway({
         writing = !refused && !classified?.read;
         permissions = writePermissions(classified);
       }
+      // A chat's GitHub level (profiles.mjs LEVELS) is read only, whatever the policies allow
+      // it: no write of a chat's goes on, a REST one or a GraphQL mutation (`push` is never
+      // among its capabilities, so the git gateway refuses its pushes). A level above read would
+      // travel in the run's claims, as its capabilities do.
+      if (!refused && writing && run.mode === "chat")
+        refused = { status: 403, message: CHAT_READS };
       // The write's own permissions: its path's were checked above.
       if (!refused && writing) refused = await unaccepted(github, run, needed("", permissions));
       // CI's results beyond Actions: the policies' answer, once per run (a REST read's

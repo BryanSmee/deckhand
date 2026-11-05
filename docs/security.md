@@ -2429,7 +2429,7 @@ gateway refuses them all), and its answers stay in its log. Its volumes are its 
 task's sandbox name, `<repo>#chat-<id>`'s), never an issue's, and it gets none of the
 repository's caches: nothing a chat leaves behind runs in a work run, with a work run's token.
 Its prompt and its messages are the user's own words, read by the agent as an allowed user's
-comment would be.
+comment would be. Its owner narrows what it gets with its permissions profile ([Chats](#chats)).
 
 An inbox entry sent from the dashboard (`POST /api/repos/<owner>/<repo>/inbox`) passes the
 repository's half of these checks (same origin, the user in `ALLOWED_USERS` and the repo's
@@ -3038,6 +3038,46 @@ a run writes to GitHub and where it pushes are the same files' (`allow_github`, 
 [The GitHub gateway](#the-github-gateway)), and what its token reads follows its capabilities.
 A mode keeps only where its runs' volumes are (its own, or the issue's) and whose agent and model
 they default to, never what they may do.
+
+## Chats
+
+A chat's sandbox gets what the policies give a `chat` run (`policy/mode-chat.rego`, and the
+repository's `.deckhand/policy/` deny rules, which see `mode: "chat"`), with the repository's
+config and your grants, as any run ([Capabilities](#capabilities)); see
+[The dashboard's actions](#the-dashboards-actions) for who reaches one. Its owner may narrow
+that, never widen it, with the chat's **permissions profile** (`listener/profiles.mjs`, #478),
+edited as toggles in the chat's panel (never as policy text: policies stay files of your grants
+folder and of the repository's default branch):
+
+- **GitHub**: one level, read only for now. A chat writes nothing to GitHub whatever the
+  policies allow it: a profile asking for comments or pushes is refused, and so is `push`; the
+  GitHub gateway refuses every write of a chat's run (a REST write, a GraphQL mutation), even
+  one an `allow_github` rule of yours allows, and `deny_github` still sees `mode: "chat"`.
+- **Capabilities**: those a `chat` run gets, each on or off (`docker`, the container engine, is
+  one, offered only when the repository is granted one and asks for it). `pull` stays on: a
+  chat works in its clone. One turned off takes what needs it along.
+- **Network**: which of the hosts you grant the repository it reaches, all of them by default.
+  The hosts every run needs (the agent's API, GitHub) aren't the profile's; a host your grants
+  don't list can't be added.
+- **Mounts**: which of the repository's granted mounts it gets, read-only (a chat doesn't push;
+  a read-write one is refused, from a read-only grant all the more).
+
+`POST /api/chats/<id>/permissions` saves a profile only within its **ceiling**: what a `chat`
+run of the repository would get now (the policies on its default branch, its `.deckhand.yaml`,
+your grants). What goes beyond it (an unknown host, the engine without its grant, a read-write
+mount, a level above read) is refused with a `422` listing each, never dropped quietly. At every
+start (`preparation.mjs`), the saved profile is narrowed again to the ceiling of that day: a
+grant or a policy removed since narrows it silently, and nothing it says ever adds to what the
+policies and grants give. A sandbox going keeps what it started with; the panel says so and
+offers "Restart now", which stops it once its agent has answered, its session kept.
+
+**Enforced in a sandbox, advisory on a machine.** In a sandbox, what the profile leaves out isn't
+in the run: its capabilities are its tokens' `caps` claim, which the GitHub gateway holds its
+reads to (no `read:issues`, no issue at all); its hosts are the egress proxy's for the run; its
+mounts and engine aren't in the spec the runner runs (which the runner still checks against your
+grants). On a user's own machine (a chat there is #601), Deckhand enforces nothing: the same
+profile would only narrow the Claude Code settings the driver suggests, and the panel would say
+it is advisory there.
 
 ## Research runs
 

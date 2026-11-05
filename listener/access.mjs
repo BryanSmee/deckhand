@@ -50,8 +50,15 @@ function refusedMounts(refused, name) {
 // without their grant, stop the run, and the reply lists them. `task`: the run's (tasks.mjs),
 // `agent` its agent, `note(text)` a line in its log.
 // `fs`: the file system the mounts are resolved on (grants.mjs resolveMounts()), for tests;
-// `granted(repo)`: what the operator's policies grant it (policies.mjs grants(), grantsBy()).
-export async function grantedAccess(config, task, settings, { agent, note, log, fs, granted }) {
+// `granted(repo)`: what the operator's policies grant it (policies.mjs grants(), grantsBy());
+// `kept`: a chat's mounts as its permissions profile keeps them ([{ target, readOnly }]:
+// profiles.mjs narrowProfile()), null for every other run's.
+export async function grantedAccess(
+  config,
+  task,
+  settings,
+  { agent, note, log, fs, granted, kept = null },
+) {
   const { repo } = task;
   const check = await grantCheck(config, repo, settings, { fs, granted });
   if (check.error) {
@@ -68,8 +75,15 @@ export async function grantedAccess(config, task, settings, { agent, note, log, 
       `${configErrors(task.base, missing, agent.displayName)}\n\nThe operator can grant these to the repository with \`allow_grant\` rules in the grants folder's policies (see Deckhand's docs/security.md#the-grants), or the repository can remove them from \`${CONFIG_FILE}\`.`,
     );
   }
-  const { mounts, refused, notes } = check.mounts;
+  const { refused, notes } = check.mounts;
   if (refused.length) throw new RunError(refusedMounts(refused, agent.displayName));
+  // Before they are logged: a mount the profile turned off isn't said as the run's.
+  const mounts = !kept
+    ? check.mounts.mounts
+    : check.mounts.mounts.flatMap((m) => {
+        const keep = kept.find((k) => k.target === m.target);
+        return keep ? [{ ...m, readOnly: m.readOnly || keep.readOnly }] : [];
+      });
   for (const text of notes) note(text);
   // Read-only for a run without `push` and a fork's (sandbox-spec.mjs).
   const { fork } = task.live;
