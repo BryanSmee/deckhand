@@ -6,6 +6,7 @@
 // the findings left are what it was merged with. Everything the review says is a model's text,
 // shown as text: only the links Deckhand builds itself (a place at the reviewed commit, an
 // issue) are links.
+import { useEffect } from "preact/hooks";
 import { useReview } from "./api";
 import { dayTime, reviewOutdated, shortSha } from "./format";
 import type { ReviewFindings, ReviewItem, Severity, Task } from "./types";
@@ -30,18 +31,38 @@ const VERDICTS: Record<ReviewFindings["verdict"], string> = {
   approve: "Approve",
 };
 
+// Merged with follow-ups still being filed: read again after this.
+const FILING_AGAIN_MS = 10_000;
+
 // What a task's Review tab reads again on: its rounds and its pull request's state.
 export const reviewVersion = (t: Task) =>
   `${t.review?.history.length ?? 0}-${t.review?.history.at(-1)?.at ?? 0}-${t.pr?.state ?? ""}`;
 
 export function ReviewTab({ task: t, now }: { task: Task; now: number }) {
-  const { review, error, loading, reload } = useReview(t.repo, t.pr!.number, reviewVersion(t));
+  const { review, error, missing, loading, reload } = useReview(
+    t.repo,
+    t.pr!.number,
+    reviewVersion(t),
+  );
+  // Merged, its follow-ups' filing on its way: read again in a moment, as nothing in api/state
+  // says when it is done.
+  const filing = !!review?.merged && review.followUps.some((f) => f.filing === "after-merge");
+  useEffect(() => {
+    if (!filing) return;
+    const again = setTimeout(reload, FILING_AGAIN_MS);
+    return () => clearTimeout(again);
+  }, [review]);
   if (!review) {
     return (
       <div class={styles.page}>
-        {error ? (
+        {missing ? (
+          <p class={styles.none}>
+            No review of Deckhand's to show here: GitHub refused the last one, posted as a comment
+            on the pull request instead, or it isn't in Deckhand's format.
+          </p>
+        ) : error ? (
           <Notice tone="err">
-            Couldn't read the last review: {error}.{" "}
+            Couldn't read the last review: {sentence(error)}{" "}
             <Button size="small" variant="ghost" onClick={reload}>
               Try again
             </Button>
@@ -76,7 +97,7 @@ export function ReviewTab({ task: t, now }: { task: Task; now: number }) {
       <Head task={t} review={review} now={now} />
       {error && (
         <Notice tone="err">
-          Couldn't read it again: {error}.{" "}
+          Couldn't read it again: {sentence(error)}{" "}
           <Button size="small" variant="ghost" onClick={reload}>
             Try again
           </Button>
@@ -95,19 +116,18 @@ function Head({ task: t, review, now }: { task: Task; review: ReviewFindings; no
   return (
     <header class={styles.head}>
       <span class={blocks ? styles.changes : styles.verdict}>{VERDICTS[review.verdict]}</span>
-      {review.round !== null && (
-        <span
-          class={styles.round}
-          title={
-            review.manual
-              ? "A maintainer's review"
-              : review.round
-                ? `Review after fix round ${review.round}`
-                : "First review"
-          }
-        >
-          R{review.round}
-        </span>
+      {/* A maintainer's review counts no fix round: no R<n>, as the review loop's list. */}
+      {review.manual ? (
+        <span class={styles.fact}>A maintainer's review</span>
+      ) : (
+        review.round !== null && (
+          <span
+            class={styles.round}
+            title={review.round ? `Review after fix round ${review.round}` : "First review"}
+          >
+            R{review.round}
+          </span>
+        )
       )}
       <span class={styles.fact}>{review.rating}/10</span>
       {review.head && (
@@ -191,6 +211,8 @@ const FILINGS: Record<Exclude<ReviewFindings["followUps"][number]["filing"], "is
   failed: "filing failed: GitHub refused the issue",
   left: "not filed: past the follow-ups Deckhand files per pull request",
   off: "not filed: left to you (review.follow_ups: false)",
+  unread: "not known: the repo's config can't be read",
+  "not-filed": "not filed: nothing filed it at the merge",
   unknown: "filed before Deckhand kept which issue",
 };
 
@@ -228,7 +250,11 @@ function FollowUps({ review, merged }: { review: ReviewFindings; merged: boolean
                   )}
                 </span>
               ) : (
-                <span class={f.filing === "failed" ? styles.failed : styles.mark}>
+                <span
+                  class={
+                    f.filing === "failed" || f.filing === "not-filed" ? styles.failed : styles.mark
+                  }
+                >
                   {FILINGS[f.filing as keyof typeof FILINGS] ?? f.filing}
                 </span>
               )}
@@ -272,7 +298,12 @@ function Place({ item, blob }: { item: ReviewItem; blob: string | null }) {
   if (!item.path) return null;
   const label = item.line ? `${item.path}:${item.line}` : item.path;
   if (!blob) return <code class={styles.place}>{label}</code>;
-  const path = item.path.split("/").map(encodeURIComponent).join("/");
+  // "." and ".." dropped: the link stays in the tree at the reviewed commit.
+  const path = item.path
+    .split("/")
+    .filter((p) => p && p !== "." && p !== "..")
+    .map(encodeURIComponent)
+    .join("/");
   return (
     <a
       class={styles.place}
@@ -284,6 +315,9 @@ function Place({ item, blob }: { item: ReviewItem; blob: string | null }) {
     </a>
   );
 }
+
+// A message as one sentence: its own period, or one added.
+const sentence = (text: string) => (/[.!?]$/.test(text) ? text : `${text}.`);
 
 // A model's text, as it wrote it: HTML and markdown links stay literal.
 function Text({ text }: { text: string }) {

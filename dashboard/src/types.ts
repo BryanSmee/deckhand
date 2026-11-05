@@ -339,9 +339,12 @@ export interface ReviewFindings {
   followUps: (ReviewItem & {
     title: string;
     // issue: filed (or found) as `issue`; failed: GitHub refused it; left: past the cap per
-    // pull request; off: `review.follow_ups: false`; after-merge: not yet; unknown: filed before
+    // pull request; off: the repo's config files none (`review.follow_ups: false`); unread: that
+    // config can't be read now; after-merge: not merged yet, or its filing is on its way;
+    // not-filed: merged and nothing filed it (skipped, or stopped midway); unknown: filed before
     // the listener kept which issue each became.
-    filing: "issue" | "failed" | "left" | "off" | "after-merge" | "unknown";
+    filing:
+      "issue" | "failed" | "left" | "off" | "unread" | "after-merge" | "not-filed" | "unknown";
     issue?: { number: number; state: "open" | "closed" | null; url: string | null };
   })[];
   comments: (ReviewItem & { blocking: boolean })[];

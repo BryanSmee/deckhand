@@ -2,7 +2,7 @@
 // last review's sections read from api/review, its text shown literally, its places linked at
 // the reviewed commit, the follow-ups' filing, the merge's banner, and [ / ] going through it.
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/preact";
-import { beforeEach, expect, test } from "vitest";
+import { beforeEach, expect, test, vi } from "vitest";
 import { Dashboard } from "./App";
 import { makeState, mockApi } from "./testUtils";
 import type { PolicyDecision, PullRequest, ReviewFindings, ReviewLoop, State, Task } from "./types";
@@ -224,4 +224,71 @@ test("GitHub failing: said, and tried again on asking", async () => {
   answer = () => REVIEW;
   fireEvent.click(screen.getByRole("button", { name: "Try again" }));
   expect(await screen.findByRole("region", { name: "Must fix" })).toBeTruthy();
+});
+
+test("GitHub failing: one period, and a re-read that fails keeps the review shown", async () => {
+  answer = () => Response.json({ error: "GitHub couldn't be read: try again." }, { status: 502 });
+  const { rerender } = render(<Dashboard state={withTask({})} error={null} />);
+  openReview();
+  expect(
+    await screen.findByText("Couldn't read the last review: GitHub couldn't be read: try again."),
+  ).toBeTruthy();
+  answer = () => REVIEW;
+  fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+  await screen.findByRole("region", { name: "Must fix" });
+  // A new round, read again, and GitHub failing: the review stays, the error beside it.
+  answer = () => new Response("{}", { status: 502 });
+  const next = { ...loop, history: [...loop.history, { ...loop.history[0], round: 2, at: 9 }] };
+  rerender(<Dashboard state={withTask({ review: next })} error={null} />);
+  expect(await screen.findByText("Couldn't read it again: 502.")).toBeTruthy();
+  expect(screen.getByRole("region", { name: "Must fix" })).toBeTruthy();
+});
+
+test("no review in Deckhand's format (a 404): said, nothing to try again", async () => {
+  answer = () => Response.json({ error: "No review of Deckhand's on it." }, { status: 404 });
+  render(<Dashboard state={withTask({})} error={null} />);
+  openReview();
+  expect(await screen.findByText(/No review of Deckhand's to show here/)).toBeTruthy();
+  expect(screen.queryByRole("button", { name: "Try again" })).toBeNull();
+  expect(screen.queryByRole("alert")).toBeNull();
+});
+
+test("a maintainer's review: no R0; a place with .. stays at the reviewed commit", async () => {
+  answer = () => ({
+    ...REVIEW,
+    round: 0,
+    manual: true,
+    findings: [{ ...REVIEW.findings[0], path: "../../../settings/x.ts", line: 3 }],
+  });
+  render(<Dashboard state={withTask({})} error={null} />);
+  openReview();
+  const must = await screen.findByRole("region", { name: "Must fix" });
+  expect(screen.queryByText("R0")).toBeNull();
+  expect(screen.getByText("A maintainer's review")).toBeTruthy();
+  expect(
+    within(must).getByRole("link", { name: "../../../settings/x.ts:3" }).getAttribute("href"),
+  ).toBe(`${BLOB}/settings/x.ts#L3`);
+});
+
+test("merged, a follow-up's filing on its way: read again until it is done", async () => {
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+  try {
+    const merged = { at: state.now, by: "alice", deckhand: false };
+    answer = () => ({ ...REVIEW, merged });
+    render(<Dashboard state={withTask({ pr: pr({ state: "merged" }) })} error={null} />);
+    openReview();
+    await screen.findByRole("region", { name: "Follow-ups" });
+    answer = () => ({
+      ...REVIEW,
+      merged,
+      followUps: REVIEW.followUps.map((f) => ({ ...f, filing: "not-filed" })),
+    });
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(await screen.findAllByText("not filed: nothing filed it at the merge")).toHaveLength(2);
+    const reads = asked.length;
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(asked).toHaveLength(reads);
+  } finally {
+    vi.useRealTimers();
+  }
 });

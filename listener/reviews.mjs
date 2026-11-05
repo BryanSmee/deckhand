@@ -2668,7 +2668,12 @@ export function createReviews({
     // nothing is filed twice. Asked again here, with no wait before the mark: a redelivery that
     // came during the reads above may have marked it since.
     if (!late && reviewed.get(key)?.followUpsAt) return null;
-    keep(key, { followUpsAt: now() });
+    // `followUpIssues` with it, empty: an entry with the mark and without the list was filed
+    // before the listener kept which issue each follow-up became (followUpsOf()).
+    keep(key, {
+      followUpsAt: now(),
+      followUpIssues: reviewed.get(key)?.followUpIssues ?? [],
+    });
     // Its colour and description, should the repo not have it yet.
     await ensureLabel(
       github,
@@ -3512,7 +3517,7 @@ export function createReviews({
         severity: f.severity,
         tolerated: BLOCKING.has(f.severity) && !blocking.includes(f.severity),
       })),
-      followUps: await followUpsOf(repo, review.followUps, { entry, merged, settings, site }),
+      followUps: await followUpsOf(repo, key, review.followUps, { entry, merged, settings, site }),
       // An unclear comment is posted only when it blocked (commentSection()).
       comments: review.comments.map((c) => ({
         ...placed(c),
@@ -3524,14 +3529,25 @@ export function createReviews({
 
   // A follow-up's filing, for findings(): "issue" (with `issue`: { number, state, url }, its
   // state null when it couldn't be read), "failed" (GitHub refused it), "left" (past
-  // FOLLOW_UPS_MAX), "off" (`review.follow_ups: false`: the maintainer's), "after-merge" (not
-  // yet: the pull request isn't merged, or its filing hasn't come), "unknown" (filed before
-  // the filings were kept).
-  async function followUpsOf(repo, list, { entry, merged, settings, site }) {
+  // FOLLOW_UPS_MAX), "off" (the repo's config, read now, files none: `review.follow_ups:
+  // false` or no `review`), "unread" (that config can't be read now), "after-merge" (not
+  // merged yet, or its filing is on its way), "not-filed" (merged, and nothing filed it: the
+  // filing was skipped at the merge, its config failing then, or stopped midway), "unknown"
+  // (filed before the listener kept which issue each one became). `key`: the pull request's.
+  async function followUpsOf(repo, key, list, { entry, merged, settings, site }) {
     const issues = new Map((entry?.followUpIssues ?? []).map((x) => [x.title, x.issue]));
     const refused = new Set(entry?.followUpsRefused ?? []);
     const left = new Set(entry?.followUpsLeft ?? []);
-    const off = !settings?.review || settings.review.followUps === false;
+    const off = settings && (!settings.review || settings.review.followUps === false);
+    // Its merge's (or a late review's) filing still going, in this orchestrator.
+    const going = filing.has(key);
+    const unfiled = () => {
+      if (going) return "after-merge";
+      if (entry?.followUpsAt) return entry.followUpIssues ? "not-filed" : "unknown";
+      // Never started: skipped at the merge, which the config now may say why.
+      return off ? "off" : settings ? "not-filed" : "unread";
+    };
+    const waiting = () => (off ? "off" : settings ? "after-merge" : "unread");
     const numbers = [...new Set(list.map((f) => issues.get(titleKey(f.title))).filter(Boolean))];
     const states = new Map(
       await Promise.all(
@@ -3549,23 +3565,21 @@ export function createReviews({
     return list.map((f) => {
       const id = titleKey(f.title);
       const n = issues.get(id);
-      const filing = n
+      const how = n
         ? "issue"
         : refused.has(id)
           ? "failed"
           : left.has(id)
             ? "left"
-            : merged && entry?.followUpsAt
-              ? "unknown"
-              : off
-                ? "off"
-                : "after-merge";
+            : merged
+              ? unfiled()
+              : waiting();
       const issue = n && {
         number: n,
         state: states.get(n),
         url: site ? `${site}/issues/${n}` : null,
       };
-      return { ...placed(f), title: f.title, filing, ...(issue && { issue }) };
+      return { ...placed(f), title: f.title, filing: how, ...(issue && { issue }) };
     });
   }
 

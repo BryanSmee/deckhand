@@ -541,16 +541,21 @@ export const startDiscussion = (repo: string, start: DiscussionStart) =>
 export interface ReviewView {
   review: ReviewFindings | null;
   error: string | null;
+  // No review of Deckhand's to show (a 404): none in its format, one GitHub refused and the
+  // listener posted as a plain comment, say. Not a failure: trying again changes nothing.
+  missing: boolean;
   loading: boolean;
   reload: () => void;
 }
 
 // The last review Deckhand posted on pull request `number` (GET /api/review), read when the
 // Review tab opens and again whenever `version` changes (a new round, the pull request merged).
+// A read that fails keeps the review already shown, with the error beside it.
 export function useReview(repo: string, number: number, version: string): ReviewView {
   const [view, setView] = useState<Omit<ReviewView, "reload">>({
     review: null,
     error: null,
+    missing: false,
     loading: true,
   });
   const [asked, setAsked] = useState(0);
@@ -558,12 +563,21 @@ export function useReview(repo: string, number: number, version: string): Review
     let live = true;
     setView((v) => ({ ...v, loading: true }));
     const query = new URLSearchParams({ repo, number: String(number) });
-    void getJson<ReviewFindings>(`api/review?${query}`).then((got) => {
+    // The review, none to show, or why it couldn't be read.
+    const read = async (): Promise<{ review?: ReviewFindings; missing?: true; error?: string }> => {
+      try {
+        const res = await fetch(`api/review?${query}`, { cache: "no-store" });
+        if (res.status === 404) return { missing: true };
+        const { error, ...review } = await answer<ReviewFindings>(res);
+        return error ? { error } : { review };
+      } catch (e) {
+        return { error: message(e) };
+      }
+    };
+    void read().then((got) => {
       if (!live) return;
-      const { error, ...review } = got;
-      setView(
-        error ? { review: null, error, loading: false } : { review, error: null, loading: false },
-      );
+      if (got.error) return setView((v) => ({ ...v, error: got.error!, loading: false }));
+      setView({ review: got.review ?? null, error: null, missing: !!got.missing, loading: false });
     });
     return () => {
       live = false;

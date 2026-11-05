@@ -2867,6 +2867,8 @@ function followUpSetup(
     comments = [],
     existing = [],
     refuse = [],
+    // Titles whose issue's POST throws (the connection lost).
+    throws = [],
     failReads = 0,
     later = null,
     label = 422,
@@ -2916,6 +2918,7 @@ function followUpSetup(
       return new Response("{}", { status: label });
     if (method === "POST" && path === "/repos/org/repo/issues") {
       if (refuse.includes(body.title)) return new Response("{}", { status: 410 });
+      if (throws.includes(body.title)) throw new Error("socket hang up");
       // Listed with the label from then on, as GitHub would.
       existing.push({ number: next, title: body.title });
       return Response.json({ number: next++, created_at: created }, { status: 201 });
@@ -3139,6 +3142,46 @@ test("findings: a refused filing, Deckhand's merge, the repo's tolerance, follow
   const none = followUpSetup(t, { pull: openPull().pull });
   assert.equal(await none.reviews.findings("org/repo", 5), null);
   assert.equal(await none.reviews.findings("org/repo", 6), null);
+});
+
+test("findings: a filing stopped midway, one skipped at the merge, a config that can't be read", async (t) => {
+  // The second issue's POST throws: the first one stays filed, the other wasn't.
+  const midway = openPull();
+  const s = followUpSetup(t, {
+    posted: [postedBody(SECTIONS)],
+    throws: ["Docs: the cache's limits"],
+    pull: midway.pull,
+  });
+  await s.record(SECTIONS);
+  midway.merge({ login: "alice" });
+  await assert.rejects(s.merged(), /socket hang up/);
+  const filings = async (setup) =>
+    (await setup.reviews.findings("org/repo", 5)).followUps.map((f) => f.filing);
+  assert.deepEqual(await filings(s), ["issue", "not-filed"]);
+  // Reviews off at the merge: nothing filed it, and nothing will.
+  let read = parseRepoConfig("other: 1\n", config);
+  const skip = openPull();
+  const skipped = followUpSetup(t, {
+    posted: [postedBody(SECTIONS)],
+    pull: skip.pull,
+    later: () => read,
+  });
+  await skipped.record(SECTIONS);
+  skip.merge({ login: "alice" });
+  assert.equal(await skipped.merged(), null);
+  // Its config as read now: still no review block, off; reviews on again, not filed.
+  assert.deepEqual(await filings(skipped), ["off", "off"]);
+  read = parseRepoConfig("review:\n  on: manual\n", config);
+  assert.deepEqual(await filings(skipped), ["not-filed", "not-filed"]);
+  // Unreadable now: said so, never "off", merged or not.
+  read = { settings: config, errors: ["line 1: what is this"] };
+  assert.deepEqual(await filings(skipped), ["unread", "unread"]);
+  const open = followUpSetup(t, {
+    posted: [postedBody(SECTIONS)],
+    pull: openPull().pull,
+    later: () => read,
+  });
+  assert.deepEqual(await filings(open), ["unread", "unread"]);
 });
 
 test("follow-ups: none counted, nothing read; a refused issue is left out", async (t) => {
