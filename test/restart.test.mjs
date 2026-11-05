@@ -224,6 +224,33 @@ test("a logs/<run>.live.json that holds no run's state is set aside, logged once
   );
 });
 
+test("a logs/<run>.live.json set aside beside one the operator hasn't removed yet keeps that one (#776)", async (t) => {
+  const dir = tempDir(t);
+  writeFileSync(join(dir, "a-1.live.json"), "{}");
+  writeFileSync(join(dir, "a-1.live.json.bad"), "older");
+  const lines = [];
+  await createRestart(runContext(dir, { log: (line) => lines.push(line) })).restoreRuns();
+  assert.deepEqual(readdirSync(dir).sort(), ["a-1.live.json.bad", "a-1.live.json.bad.2"]);
+  assert.equal(readFileSync(join(dir, "a-1.live.json.bad"), "utf8"), "older");
+  assert.ok(lines.includes("a-1.live.json: not a run's state, set aside as a-1.live.json.bad.2"));
+});
+
+test("a logs/<run>.live.json that can't be set aside stays there, logged, the next start trying again (#776)", async (t) => {
+  const dir = tempDir(t);
+  // A name NAME_MAX allows (255) whose .bad it doesn't: the rename fails, as root too.
+  const file = `${"a".repeat(255 - ".live.json".length)}.live.json`;
+  writeFileSync(join(dir, file), "{}");
+  for (let start = 0; start < 2; start++) {
+    const lines = [];
+    await createRestart(runContext(dir, { log: (line) => lines.push(line) })).restoreRuns();
+    assert.deepEqual(readdirSync(dir), [file]);
+    assert.ok(
+      lines.some((line) => line.startsWith(`${file}: not a run's state, left there: `)),
+      lines.join("\n"),
+    );
+  }
+});
+
 test("a restored run keeps the network its tokens are bound to, and saves it again", async (t) => {
   const dir = tempDir(t);
   const broker = createBroker({});

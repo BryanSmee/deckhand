@@ -58,9 +58,15 @@ export const QUEUE_KEY = "queue";
 export const LIVE_PREFIX = "runs/";
 const liveKey = (id) => `${LIVE_PREFIX}${id}`;
 
-// What a logs/<run>.live.json that holds no run's state is renamed with (moveLive()): no move
-// reads it again.
-const SET_ASIDE = ".bad";
+// Where moveLive() sets aside a logs/<run>.live.json that holds no run's state, no move reading
+// it again: <file>.bad, or <file>.bad.<n> beside one the operator hasn't removed yet, which a
+// rename would overwrite.
+function asideName(dir, file) {
+  const taken = new Set(listDir(dir));
+  let name = `${file}.bad`;
+  for (let n = 2; taken.has(name); n++) name = `${file}.bad.${n}`;
+  return name;
+}
 
 // What tells a queued comment apart, given when it is accepted (tasks.mjs accept()): a comment
 // both in the queue and in a run's saved state (a listener killed between the two writes) is the
@@ -155,8 +161,9 @@ export function createRestart(ctx) {
       const saved = readJson(path);
       if (!isRunState(saved)) {
         try {
-          renameSync(path, `${path}${SET_ASIDE}`);
-          log(`${file}: not a run's state, set aside as ${file}${SET_ASIDE}`);
+          const aside = asideName(ctx.logDir, file);
+          renameSync(path, join(ctx.logDir, aside));
+          log(`${file}: not a run's state, set aside as ${aside}`);
         } catch (err) {
           log(`${file}: not a run's state, left there: ${err.message}`);
         }
