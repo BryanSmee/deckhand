@@ -1,14 +1,16 @@
 // A machine task on its page (listener/claims.mjs, #596): whose machines take it and whether one
 // does now (MachineFact, among the task's facts), and the comments other people left on it, held
 // until its owner delivers or drops them (HeldComments): only the owner gets the buttons, and the
-// orchestrator refuses anyone else.
+// orchestrator refuses anyone else. And its run's agent's tool calls waiting for the owner's
+// answer (ToolRequests, #600).
 import { useState } from "preact/hooks";
-import { postJson } from "./api";
+import { answerToolRequest, postJson } from "./api";
 import { ago, machineName } from "./format";
 // `tr`: t() where the task is called `t`.
-import { t as tr } from "./i18n";
-import type { Task } from "./types";
+import { t as tr, tx as txr } from "./i18n";
+import type { Task, ToolAnswer, ToolRequest } from "./types";
 import { Button } from "./ui/Button";
+import * as Icon from "./ui/icons";
 import styles from "./MachineTask.module.css";
 
 // "Runs on @alice's machines labelled unreal: waiting for one of them to claim it", "Claimed by
@@ -113,5 +115,86 @@ export function HeldComments({ task: t, user, now, refresh }: Props) {
         </div>
       )}
     </section>
+  );
+}
+
+// Its machine run's agent's tool calls waiting for the owner (listener/requests.mjs, #600): the
+// tool and its input as text, never markup, and how long until no answer denies it. Shown to
+// everyone who sees the task; the owner alone gets Allow once, Allow for this run and Deny, and
+// the orchestrator refuses anyone else's.
+export function ToolRequests({ task: t, user, now, refresh }: Props) {
+  const requests = t.permissions ?? [];
+  if (!requests.length || t.number === null) return null;
+  return (
+    <section class={styles.tools} aria-label={tr("tools.label")}>
+      {requests.map((r) => (
+        <ToolRequestCard key={r.id} task={t} request={r} user={user} now={now} refresh={refresh} />
+      ))}
+    </section>
+  );
+}
+
+function ToolRequestCard({
+  task: t,
+  request: r,
+  user,
+  now,
+  refresh,
+}: Props & { request: ToolRequest }) {
+  const [busy, setBusy] = useState<ToolAnswer | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const mine = !!user && user.toLowerCase() === r.owner.toLowerCase();
+  const minutes = Math.max(1, Math.ceil((r.expiresAt - now) / 60_000));
+
+  async function answer(choice: ToolAnswer) {
+    setBusy(choice);
+    setError(null);
+    const said = await answerToolRequest(t, r.id, choice);
+    if (said.error) setError(said.error);
+    await refresh?.();
+    setBusy(null);
+  }
+
+  const button = (choice: ToolAnswer, label: string, variant?: "primary" | "danger") => (
+    <Button
+      size="small"
+      variant={variant}
+      pending={busy === choice}
+      disabled={!!busy && busy !== choice}
+      title={choice === "run" ? tr("tools.runHelp") : undefined}
+      onClick={() => void answer(choice)}
+    >
+      {label}
+    </Button>
+  );
+
+  return (
+    <div class={styles.tool}>
+      <p class={styles.toolTitle}>
+        <Icon.Alert size={16} />
+        <span>
+          {txr("tools.asks", {
+            machine: r.machine,
+            tool: <span class={styles.mono}>{r.tool}</span>,
+          })}
+        </span>
+      </p>
+      {r.input && <p class={styles.input}>{r.input}</p>}
+      <p class={styles.note}>
+        {tr("tools.note", { owner: r.owner })} {tr("tools.deniedIn", { count: minutes })}
+      </p>
+      {error && (
+        <p class={styles.error} role="alert">
+          {error}
+        </p>
+      )}
+      {mine && (
+        <div class={styles.actions}>
+          {button("once", tr("tools.once"), "primary")}
+          {button("run", tr("tools.run"))}
+          {button("deny", tr("tools.deny"), "danger")}
+        </div>
+      )}
+    </div>
   );
 }

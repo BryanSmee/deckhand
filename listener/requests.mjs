@@ -15,12 +15,23 @@
 // applies at once (the proxy reads the run's hosts on each connection), the rest at the
 // sandbox's next start, which the answer tells the agent. What the requests are about, and how
 // an approval applies, is their subject's: a chat's (chats.mjs decideRequest(), grantRequest()).
-// Not chat-only: the store, the answers and the timeout are any owned run's (a machine's, #600,
-// would add its requests from edge's /mcp, and /allow, /deny on the issue as answers).
+// Not chat-only: the store, the answers and the timeout are any owned run's. A machine's run
+// (#600) asks too, from edge's /mcp: its agent's (Claude Code's `--permission-prompt-tool`) tool
+// calls, through its driver's approve_permission (claims.mjs approve()). Deckhand has no ceiling
+// for those (the machine's is its own): each one waits for the run's owner, shown on the
+// dashboard and in a comment on the issue (askTool()), answered with Allow once, Allow for this
+// run (that tool's calls in the run, from then on) or Deny, on the dashboard or with `/allow` or
+// `/deny` on the issue (fromComment()), from the owner alone; the same timeout denies it. Its
+// driver reads the answer (settled()), no broker between them.
 //
 // Kept in the orchestrator's store (REQUESTS_KEY), which its two copies share: the next copy
 // takes them up (load()), their timeouts and the answers the broker hasn't heard.
+import { randomBytes } from "node:crypto";
+
+import { SHORT_ID } from "./events.mjs";
+import { writeEvent } from "./runlog.mjs";
 import { redact, operatorSecrets } from "./secrets.mjs";
+import { taskId } from "./spelling.mjs";
 
 export const REQUESTS_KEY = "permission-requests";
 
@@ -40,7 +51,18 @@ const RETRY_MS = 5_000;
 // only then), approved for the chat (saved in its profile), or denied.
 export const ANSWERS = ["once", "chat", "deny"];
 
+// And a machine run's owner (#600): this call alone, the tool's calls for the rest of the run,
+// or denied.
+export const TOOL_ANSWERS = ["once", "run", "deny"];
+
 const ID = /^[0-9a-f]{16}$/;
+// A tool's name at most: Claude Code's are short, an MCP server's `mcp__<server>__<tool>` longer.
+const TOOL_MAX = 100;
+// The input field that says the most of a tool call alone, for those that have one (Claude
+// Code's Bash, Read, Write, Edit, WebFetch, Grep…): shown rather than the whole input's JSON.
+const LEADS = ["command", "file_path", "notebook_path", "path", "url", "pattern"];
+
+const lower = (s) => String(s ?? "").toLowerCase();
 
 // A reason as the dashboard shows it: one line, redacted, cut.
 export function reasonLine(text, secrets = []) {
@@ -50,18 +72,45 @@ export function reasonLine(text, secrets = []) {
   return one.length > REASON_MAX ? `${one.slice(0, REASON_MAX - 1)}…` : one;
 }
 
+// What the owner reads of a tool call's input: its lead field, or its JSON, as a reason is
+// (reasonLine()).
+export function inputLine(input, secrets = []) {
+  const lead =
+    input && typeof input === "object" ? LEADS.find((k) => typeof input[k] === "string") : null;
+  return reasonLine(lead ? input[lead] : JSON.stringify(input ?? null), secrets);
+}
+
+// `text` in a fenced block GitHub shows as it is: no markdown, no HTML, no mention. The fence is
+// longer than any run of backticks in it, so none ends it.
+export function fenced(text) {
+  const longest = Math.max(0, ...(String(text).match(/`+/g) ?? []).map((r) => r.length));
+  const fence = "`".repeat(Math.max(3, longest + 1));
+  return `${fence}text\n${text}\n${fence}`;
+}
+
 // `ctx` (../orchestrator/server.mjs): the orchestrator's state and services, read at call time:
-// `ctx.chats` decides and applies a chat's requests, `ctx.brokerService` takes the answers.
+// `ctx.chats` decides and applies a chat's requests, `ctx.brokerService` takes the answers;
+// `ctx.reply` posts a machine run's on its issue, `ctx.settle` reacts to an answer's comment.
 export function createRequests(
   ctx,
-  { now = Date.now, setTimer = setTimeout, clearTimer = clearTimeout, retryMs = RETRY_MS } = {},
+  {
+    now = Date.now,
+    setTimer = setTimeout,
+    clearTimer = clearTimeout,
+    retryMs = RETRY_MS,
+    newId = () => randomBytes(8).toString("hex"),
+  } = {},
 ) {
   const { config, log } = ctx;
   // id → { id, run, key, chat, owner, kind, value, reason, what, adds, live, state, scope,
   // message, at, expiresAt, answeredAt, by, told }. `state`: pending, granted, denied or
-  // refused; `told`: whether the broker has its answer.
+  // refused; `told`: whether the broker has its answer. A machine run's (#600) has `machine`
+  // (its name) and `toolUseId`, its `kind` "tool", `what` the tool, `reason` its input's line;
+  // nothing to tell the broker.
   const requests = new Map();
   const timers = new Map();
+  // A machine run's requests' calls waiting for their answer (settled()): id → their wake-ups.
+  const waiters = new Map();
   // The requests being decided (received()) or answered (answer()): a second answer is refused
   // meanwhile, and their timeout waits for the answer under way.
   const busy = new Set();
@@ -89,7 +138,15 @@ export function createRequests(
   // The task whose run is `run` (its id, the tokens' `jti`), or null once it ended.
   const taskOfRun = (run) =>
     [...ctx.tasks.values()].find((t) => t.live?.id === run && !t.live.finishing) ?? null;
-  const note = (run, message) => ctx.broker?.runOf(run)?.note?.(message);
+  // In the run's log: a sandbox's through the broker, a machine's (no sandbox) here.
+  const note = (run, message) => {
+    const sandbox = ctx.broker?.runOf(run);
+    if (sandbox) return sandbox.note?.(message);
+    const live = taskOfRun(run)?.live;
+    if (live?.external && live.logFile) writeEvent(live.logFile, "note", { message });
+  };
+  const endedText = (record) =>
+    record.machine ? "Denied: this run has ended." : "Denied: this sandbox's run has ended.";
 
   // A request said on the broker's stream: { run, id, kind, value, reason }. received() resolves
   // once it is decided (the tests'); take() once it is kept, deciding it after (the stream's:
@@ -244,6 +301,8 @@ export function createRequests(
   // The answer to the broker, again a little later until it takes it, or says the request is
   // gone (its run ended long ago).
   function tell(record) {
+    // A machine run's call reads it here (settled()).
+    if (record.machine) return wakeUp(record.id);
     if (stopped) return;
     ctx.brokerService
       .answerPermission(record.run, record.id, { state: record.state, message: record.message })
@@ -271,7 +330,7 @@ export function createRequests(
     if (stopped || record.state !== "pending") return;
     // An answer under way settles it: its owner answered in time.
     if (busy.has(record.id)) return;
-    const minutes = Math.round(config.chatPermissionMs / 60_000);
+    const minutes = minutesOf(config.chatPermissionMs);
     close(record, "denied", `Denied: ${record.owner} didn't answer within ${minutes} min.`).catch(
       (error) => log(`Permission requests: ${error.stack ?? error}`),
     );
@@ -338,7 +397,7 @@ export function createRequests(
   function ended(run) {
     for (const record of requests.values()) {
       if (record.run !== run || record.state !== "pending" || busy.has(record.id)) continue;
-      close(record, "denied", "Denied: this sandbox's run has ended.").catch((error) =>
+      close(record, "denied", endedText(record)).catch((error) =>
         log(`Permission requests: ${error.stack ?? error}`),
       );
     }
@@ -397,7 +456,211 @@ export function createRequests(
     stopped = true;
     for (const timer of timers.values()) clearTimer(timer);
     timers.clear();
+    // The calls waiting answer "still waiting": their driver asks the next copy.
+    for (const id of [...waiters.keys()]) wakeUp(id);
   }
+
+  // --- A machine run's tool calls (#600) ---------------------------------------------------
+
+  // Its agent asks to use a tool (claims.mjs approve(), `task` its claim's): `tool` its name,
+  // `input` its input, `toolUseId` the call's id, which a call asked again (its driver waiting on)
+  // finds. Allowed at once when its owner allowed that tool for the run; else kept, armed, in the
+  // run's log and in a comment on its issue for its owner. → the record.
+  async function askTool(task, { tool, input, toolUseId }) {
+    const live = task.live;
+    const run = live.id;
+    const known = [...requests.values()].find((r) => r.run === run && r.toolUseId === toolUseId);
+    if (known) return known;
+    const name = reasonLine(tool).slice(0, TOOL_MAX);
+    const owner = lower(live.external.owner);
+    const record = {
+      id: newId(),
+      run,
+      key: live.key,
+      chat: null,
+      machine: live.external.name,
+      toolUseId: String(toolUseId).slice(0, 200),
+      owner,
+      kind: "tool",
+      value: name,
+      reason: inputLine(input, operatorSecrets(ctx)),
+      what: name,
+      adds: null,
+      live: false,
+      state: "pending",
+      scope: null,
+      message: null,
+      at: now(),
+      expiresAt: now() + config.chatPermissionMs,
+      answeredAt: null,
+      by: null,
+      told: true,
+    };
+    const forRun = [...requests.values()].find(
+      (r) => r.run === run && r.scope === "run" && r.state === "granted" && r.what === name,
+    );
+    const waiting = [...requests.values()].filter((r) => r.run === run && r.state === "pending");
+    requests.set(record.id, record);
+    if (forRun) {
+      await close(record, "granted", `Allowed: ${forRun.by} allowed ${name} for this run.`, {
+        scope: "run",
+        by: forRun.by,
+      });
+      return record;
+    }
+    if (waiting.length >= WAITING_MAX) {
+      await close(
+        record,
+        "refused",
+        `Refused: ${WAITING_MAX} requests of this run wait for ${owner}'s answer already; ask again once they have one.`,
+      );
+      return record;
+    }
+    arm(record);
+    await save();
+    note(run, `Permission asked: ${name} ${record.reason} (waiting for ${owner})`);
+    log(`${record.key}: ${record.machine} asks ${owner} for ${name}`);
+    if (task.kind === "issue") {
+      await Promise.resolve(ctx.reply(task.repo, task.number, askText(record))).catch((error) =>
+        log(`${record.key}: the request's comment: ${error.message ?? error}`),
+      );
+    }
+    return record;
+  }
+
+  // The comment that asks the owner, on the issue: the tool and its input in a block shown as
+  // text, how to answer.
+  function askText(r) {
+    const short = r.id.slice(0, SHORT_ID);
+    return [
+      `@${r.owner}, the agent on your machine ${r.machine} asks to use a tool (request \`${short}\`):`,
+      "",
+      fenced(`${r.what}: ${r.reason}`),
+      "",
+      `Answer with \`/allow\` (this call), \`/allow run\` (that tool's calls for the rest of this run) or \`/deny\`, here or on the dashboard; while other requests wait too, add its id: \`/allow ${short}\`. Without an answer within ${minutesOf(config.chatPermissionMs)} min, it is denied. Only @${r.owner}'s answer counts.`,
+    ].join("\n");
+  }
+
+  // Request `id`, once answered, or `ms` on: → its record (null once forgotten).
+  function settled(id, ms) {
+    const record = requests.get(id);
+    if (!record || record.state !== "pending" || stopped || ms <= 0) {
+      return Promise.resolve(record ?? null);
+    }
+    return new Promise((resolve) => {
+      const done = () => {
+        clearTimer(timer);
+        waiters.get(id)?.delete(done);
+        if (!waiters.get(id)?.size) waiters.delete(id);
+        resolve(requests.get(id) ?? null);
+      };
+      const timer = setTimer(done, ms);
+      timer?.unref?.();
+      if (!waiters.has(id)) waiters.set(id, new Set());
+      waiters.get(id).add(done);
+    });
+  }
+
+  function wakeUp(id) {
+    for (const done of [...(waiters.get(id) ?? [])]) done();
+  }
+
+  // The owner's answer (`choice`: TOOL_ANSWERS) to request `id` of task `key`, from the dashboard
+  // or a comment: anyone else's refused (403). `run` allows that tool's later calls in the run,
+  // and those of its calls that wait already. → { request } or { error, message }.
+  async function answerTool(user, key, id, choice) {
+    const record = ID.test(id ?? "") ? requests.get(id) : null;
+    if (!record?.machine || taskId(record.key) !== taskId(key)) {
+      return { error: 404, message: "No such request." };
+    }
+    const by = lower(user);
+    if (by !== record.owner) {
+      return { error: 403, message: `Only ${record.owner}, whose machine runs it, answers it.` };
+    }
+    if (!TOOL_ANSWERS.includes(choice)) {
+      return { error: 400, message: `An answer is one of ${TOOL_ANSWERS.join(", ")}.` };
+    }
+    if (record.state !== "pending") {
+      return { error: 409, message: "This request has its answer already." };
+    }
+    if (!taskOfRun(record.run)) {
+      await close(record, "denied", endedText(record));
+      return { error: 409, message: "Its run has ended: the request is closed." };
+    }
+    if (choice === "deny") {
+      await close(record, "denied", `Denied by ${by}.`, { by });
+      return { request: shownTool(record) };
+    }
+    const scope = choice === "run" ? "for this run" : "once";
+    await close(record, "granted", `Allowed by ${by} ${scope}.`, { scope: choice, by });
+    if (choice === "run") {
+      const same = [...requests.values()].filter(
+        (r) => r.run === record.run && r.state === "pending" && r.what === record.what,
+      );
+      for (const r of same) {
+        await close(r, "granted", `Allowed: ${by} allowed ${r.what} for this run.`, {
+          scope: "run",
+          by,
+        });
+      }
+    }
+    return { request: shownTool(record) };
+  }
+
+  // A `/allow` or `/deny` comment (`item.permission`: events.mjs parseAnswer()'s) on a task: its owner's
+  // answers the request it names, or the only one waiting, with a 👍; anyone else's is ignored,
+  // and so is one on a task with nothing waiting. Never queued, never its agent's.
+  async function fromComment(item) {
+    const key = `${item.repo}#${item.id}`;
+    const author = lower(item.author);
+    const waiting = [...requests.values()].filter(
+      (r) => r.machine && r.state === "pending" && taskId(r.key) === taskId(key),
+    );
+    const say = (text) =>
+      Promise.resolve(ctx.reply(item.repo, item.replyTo, text)).catch((error) =>
+        log(`${key}: ${error.message ?? error}`),
+      );
+    const owner = waiting[0]?.owner;
+    if (!waiting.length || author !== owner) {
+      log(
+        `${key}: ${item.author}'s /allow or /deny ignored: ${waiting.length ? `only ${owner} answers` : "nothing waits"}`,
+      );
+      return;
+    }
+    const asked = item.permission;
+    if (asked.error) return say(asked.error);
+    const named = asked.id ? waiting.filter((r) => r.id.startsWith(asked.id)) : waiting;
+    if (named.length !== 1) {
+      const ids = waiting.map((r) => `\`${r.id.slice(0, SHORT_ID)}\` (${r.what})`).join(", ");
+      return say(
+        named.length
+          ? `Several requests wait: ${ids}. Name the one you answer: \`/allow ${waiting[0].id.slice(0, SHORT_ID)}\`.`
+          : `No request waiting here starts with \`${asked.id}\`: ${ids}.`,
+      );
+    }
+    const said = await answerTool(author, key, named[0].id, asked.choice);
+    if (said.error) return say(said.message);
+    await ctx.settle?.(item, "acknowledged");
+  }
+
+  // A machine task's requests waiting for its owner, oldest first, as the dashboard shows them.
+  const toolRequests = (key) =>
+    [...requests.values()]
+      .filter((r) => r.machine && r.state === "pending" && taskId(r.key) === taskId(key))
+      .sort((a, b) => a.at - b.at)
+      .map(shownTool);
+
+  const shownTool = (r) => ({
+    id: r.id,
+    tool: r.what,
+    input: r.reason,
+    machine: r.machine,
+    owner: r.owner,
+    state: r.state,
+    message: r.message,
+    at: r.at,
+    expiresAt: r.expiresAt,
+  });
 
   return {
     load,
@@ -409,6 +672,13 @@ export function createRequests(
     ended,
     forget,
     waitingFor,
+    askTool,
+    settled,
+    answerTool,
+    fromComment,
+    toolRequests,
     get: (id) => requests.get(id) ?? null,
   };
 }
+
+const minutesOf = (ms) => Math.round(ms / 60_000);

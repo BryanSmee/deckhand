@@ -35,7 +35,10 @@ import type {
   Repos,
   ReviewFindings,
   State,
+  Task,
   Thread,
+  ToolAnswer,
+  ToolRequest,
   WorkAction,
   WorkResult,
 } from "./types";
@@ -652,6 +655,12 @@ export const sendChatMessage = (id: string, text: string) =>
 export const resetChat = (id: string) => postJson<{ chat: Chat }>(chatUrl(id, "/reset"));
 export const deleteChat = (id: string) => deleteJson<{ message: string }>(chatUrl(id));
 // The owner's answer to its agent's request for more permissions (#479).
+// A machine run's tool request (listener/http.mjs, #600), answered by its owner.
+export const answerToolRequest = (task: Task, request: string, answer: ToolAnswer) =>
+  postJson<{ request: ToolRequest }>(
+    `api/permissions/${task.repo}/${task.number}/${encodeURIComponent(request)}/${answer}`,
+  );
+
 export const answerRequest = (id: string, request: string, answer: PermissionAnswer) =>
   postJson<{ request: PermissionRequest; chat: Chat }>(
     chatUrl(id, `/requests/${encodeURIComponent(request)}`),

@@ -230,6 +230,8 @@ export function createTasks(ctx) {
     item.settings = settings;
     // Never queued nor sent to the agent: a stuck run would never read it.
     if (item.trigger === "cancel") return cancelRun(item);
+    // A machine run's owner answering its request for a tool (requests.mjs): nor these.
+    if (item.permission) return ctx.requests?.fromComment(item);
     // A `/machine` line routes the task (claims.mjs) before anything of it is queued: alone, it
     // queues nothing.
     if (item.machine && ctx.claims && !(await ctx.claims.command(item))) return;

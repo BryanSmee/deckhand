@@ -236,6 +236,7 @@ test("MCP: a token without deckhand:read lists no read tool, and calls none", as
       "next_message",
       "ask",
       "finish",
+      "approve_permission",
       "release",
       "unregister_machine",
     ],
@@ -1069,6 +1070,64 @@ test("MCP: a claim's run tools (#597): its output, messages, question and end, u
     body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "ping", pad: line }),
   }).catch((error) => error);
   assert.ok(large instanceof Error || large.status >= 400);
+});
+
+test("MCP: approve_permission (#600) waits on the owner's answer, then says it as Claude Code's permission prompt reads it", async (t) => {
+  const { ctx } = orchestrator();
+  withMachines(ctx);
+  const asked = [];
+  // Pending at the first call, allowed at the second, denied for another tool.
+  ctx.claims = {
+    approve: async (user, id, run, ask) => {
+      asked.push([user, run, ask]);
+      if (ask.tool === "WebFetch") {
+        return { request: "r-2", state: "denied", message: "Denied by alice." };
+      }
+      return asked.length === 1
+        ? { request: "r-1", state: "pending", message: null }
+        : { request: "r-1", state: "granted", message: "Allowed by alice once." };
+    },
+  };
+  const { tool } = await serveMcp(t, ctx);
+  const desk = await tool("register_machine", { name: "desk", repos: ["org/repo"] }, MACHINE);
+  const machine = desk.structuredContent.machine.id;
+  const call = {
+    machine,
+    run: "r1",
+    tool_name: "Bash",
+    input: { command: "npm test" },
+    tool_use_id: "toolu_1",
+  };
+  const waiting = await tool("approve_permission", call, MACHINE);
+  assert.deepEqual(waiting.structuredContent, { request: "r-1", state: "pending" });
+  assert.match(waiting.content[0].text, /call again with the same tool_use_id/);
+  const allowed = await tool("approve_permission", call, MACHINE);
+  assert.deepEqual(JSON.parse(allowed.content[0].text), {
+    behavior: "allow",
+    updatedInput: { command: "npm test" },
+  });
+  assert.equal(allowed.structuredContent.state, "granted");
+  const denied = await tool(
+    "approve_permission",
+    { ...call, tool_name: "WebFetch", tool_use_id: "toolu_2" },
+    MACHINE,
+  );
+  assert.deepEqual(JSON.parse(denied.content[0].text), {
+    behavior: "deny",
+    message: "Denied by alice.",
+  });
+  // Its input is an object; its tool_use_id required.
+  assert.equal((await tool("approve_permission", { ...call, input: "ls" }, MACHINE)).isError, true);
+  const { tool_use_id: _, ...anonymous } = call;
+  assert.equal((await tool("approve_permission", anonymous, MACHINE)).isError, true);
+  assert.deepEqual(
+    asked.map(([user, run, ask]) => [user, run, ask.tool, ask.toolUseId]),
+    [
+      ["alice", "r1", "Bash", "toolu_1"],
+      ["alice", "r1", "Bash", "toolu_1"],
+      ["alice", "r1", "WebFetch", "toolu_2"],
+    ],
+  );
 });
 
 test("MCP: a machine is listed and reached by its owner alone", async (t) => {

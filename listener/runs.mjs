@@ -1345,6 +1345,8 @@ export function createRuns(ctx) {
     if (!live?.external || live.finishing) return;
     live.open = false;
     live.finishing = true;
+    // Its agent's requests still waiting: denied, as a sandbox run's that ends (#600).
+    ctx.requests?.ended(live.id);
     const { key, record } = live;
     record.status = "interrupted";
     record.summary = `Interrupted: ${why}`;

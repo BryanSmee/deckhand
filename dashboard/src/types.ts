@@ -236,6 +236,25 @@ export interface HeldComment {
   url: string | null;
 }
 
+// A machine run's agent's tool call, waiting for the run's owner (listener/requests.mjs
+// toolRequests(), #600).
+export interface ToolRequest {
+  id: string;
+  // The tool, as the agent names it.
+  tool: string;
+  // Its input, one line, redacted, 200 characters at most: shown as text.
+  input: string;
+  // The machine it runs on, and its owner, who alone answers.
+  machine: string;
+  owner: string;
+  state: "pending" | "granted" | "denied" | "refused";
+  message: string | null;
+  at: number;
+  // Past it, no answer denies it.
+  expiresAt: number;
+}
+export type ToolAnswer = "once" | "run" | "deny";
+
 export interface Task {
   key: string;
   repo: string;
@@ -272,6 +291,8 @@ export interface Task {
   machine?: TaskMachine;
   // Other people's comments on it, held until its machine's owner delivers or drops them.
   held?: HeldComment[];
+  // Its machine run's tool calls waiting for its owner's answer.
+  permissions?: ToolRequest[];
   // Its issue or pull request closed: as completed (merged), not planned (closed without
   // merging), or null while open or not known yet (listener/titles.mjs).
   closed: Closed;
