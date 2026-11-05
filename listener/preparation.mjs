@@ -214,20 +214,24 @@ export function createPreparation(ctx) {
   // would be a way out for what it serves.
   const openHosts = (agent) => ({ hosts: ["*"], trusted: mandatoryHosts(config, agent) });
 
-  // A review's thread (reviews.mjs reviewThread()): only what allowed users and the App
-  // wrote, redacted like any output. Not read: no review, rather than one on the whole thread.
+  // A review's thread (reviews.mjs reviewThread()): only what the App and the allowed users
+  // who may start a work run (`runs:start:work`) wrote, redacted like any output. Not read: no review, rather than one on the whole thread.
   async function reviewDigest(task, settings, note) {
     const { repo } = task;
     const number = task.live.replyTo;
     let text;
     try {
-      text = await reviewThread({ github: ctx.github, config, settings }, repo, number);
+      text = await reviewThread(
+        { github: ctx.github, config, settings, permissions: ctx.permissions },
+        repo,
+        number,
+      );
     } catch (error) {
       throw new RunError(
         `${cantRun(agentOf(task))}: #${number}'s thread couldn't be read (${error.message ?? error}). Comment again to retry.`,
       );
     }
-    note(`Thread: #${number}, allowed users' and Deckhand's comments only`);
+    note(`Thread: #${number}, Deckhand's comments and those of users who may start work runs only`);
     return redact(text, operatorSecrets(ctx));
   }
 

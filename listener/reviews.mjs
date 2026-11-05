@@ -50,6 +50,7 @@ import { autoMergeProblems } from "./grants.mjs";
 import { pushInput } from "./git-gateway.mjs";
 import { RERUN_CONCLUSIONS, RERUN_EVENTS } from "./github-writes.mjs";
 import { getJson, paginate } from "./github.mjs";
+import { startAction } from "./permissions.mjs";
 import {
   DECISIONS,
   OPERATOR_ONLY,
@@ -695,17 +696,19 @@ const THREAD_COMMENTS = 50;
 const THREAD_TEXT = 20_000;
 
 // Pull request `number`'s thread as the review reads it (TASK_DIGEST): its description,
-// comments and reviews, then the issue it closes, with only what the repository's allowed
-// users (ALLOWED_USERS and the repo's `users`) and the App wrote. What anyone else wrote is
-// left out, and said so: a review's findings can become a fix run's message (`review.fix`),
-// so an outsider's comment must not get to steer the reviewer. An allowed user who wants it
-// read quotes it. `github`: the App's calls; `settings`: the repo's.
-export async function reviewThread({ github, config, settings }, repo, number) {
+// comments and reviews, then the issue it closes, with only what the App and the repository's
+// allowed users (ALLOWED_USERS and the repo's `users`) who may start a work run there (the
+// access decision's `runs:start:work`, permissions.mjs, #782) wrote. What anyone else wrote is
+// left out, and said so: a review's findings can become a fix run's message (`review.fix`), a
+// work run, so a login that couldn't start one (an outsider, a viewer) must not get to steer it
+// through the reviewer. A decision that fails leaves the author out too (fail closed). An
+// allowed user who wants it read quotes it. `github`: the App's calls; `settings`: the repo's;
+// `permissions`: permissions.mjs's (none, as in some tests: `users` alone).
+export async function reviewThread({ github, config, settings, permissions = null }, repo, number) {
   const get = (path) => github(repo, "GET", path);
   const bot = config.bot?.toLowerCase();
-  const allowed = (user) => {
+  const listed = (user) => {
     const login = user?.login?.toLowerCase() ?? "";
-    if (bot && login === bot) return true;
     return user?.type !== "Bot" && config.users.includes(login) && settings.users.includes(login);
   };
   const pr = await getJson(github, repo, `/repos/${repo}/pulls/${number}`);
@@ -717,17 +720,37 @@ export async function reviewThread({ github, config, settings }, repo, number) {
       .filter((r) => r.body?.trim())
       .map((r) => ({ user: r.user, at: r.submitted_at, body: r.body, what: reviewState(r) })),
   ].sort((a, b) => String(a.at).localeCompare(String(b.at)));
+  const issue = linkedIssue(pr, repo, config.bot);
+  let found = null;
+  let notes = [];
+  if (issue) {
+    found = await getJson(github, repo, `/repos/${repo}/issues/${issue}`);
+    const its = await paginate(get, `/repos/${repo}/issues/${issue}/comments`);
+    notes = its.map((c) => ({ user: c.user, at: c.created_at, body: c.body, what: "" }));
+  }
+  // One decision per listed author, asked together; the others aren't asked about.
+  const authors = [pr, ...said, ...(found ? [found, ...notes] : [])].map((c) => c.user);
+  const logins = [...new Set(authors.filter(listed).map((u) => u.login.toLowerCase()))];
+  const may = new Set(
+    (
+      await Promise.all(
+        logins.map(async (login) => {
+          if (!permissions) return login;
+          const { ok } = await permissions.decide(login, repo, startAction("work"));
+          return ok && login;
+        }),
+      )
+    ).filter(Boolean),
+  );
+  const allowed = (user) => {
+    const login = user?.login?.toLowerCase() ?? "";
+    return (!!bot && login === bot) || (listed(user) && may.has(login));
+  };
   const parts = [
-    "Only what the repository's allowed users and Deckhand wrote is here: what anyone else wrote is left out on purpose, and its place says so.",
+    "Only what Deckhand and the repository's users who may start its work runs wrote is here: what anyone else wrote is left out on purpose, and its place says so.",
     ...thread(`Pull request #${number}`, pr, said, allowed),
   ];
-  const issue = linkedIssue(pr, repo, config.bot);
-  if (issue) {
-    const found = await getJson(github, repo, `/repos/${repo}/issues/${issue}`);
-    const its = await paginate(get, `/repos/${repo}/issues/${issue}/comments`);
-    const notes = its.map((c) => ({ user: c.user, at: c.created_at, body: c.body, what: "" }));
-    parts.push(...thread(`Issue #${issue}, which it closes`, found, notes, allowed));
-  }
+  if (found) parts.push(...thread(`Issue #${issue}, which it closes`, found, notes, allowed));
   return `${parts.join("\n\n")}\n`;
 }
 
@@ -744,7 +767,8 @@ function thread(heading, item, comments, allowed) {
     `${String(at ?? "?")
       .slice(0, 16)
       .replace("T", " ")} UTC`;
-  const left = (user) => `(Left out: @${user?.login ?? "?"} isn't an allowed user.)`;
+  const left = (user) =>
+    `(Left out: @${user?.login ?? "?"} isn't a user who may start work runs here.)`;
   const body = (c) => (allowed(c.user) ? clip(c.body) : left(c.user));
   const kept = comments.slice(-THREAD_COMMENTS);
   const out = comments.filter((c) => !allowed(c.user)).length;
