@@ -11,6 +11,7 @@ import {
   createPolicies,
   REPO_ACTIONS,
   SERVER_ACTIONS,
+  STALE_LISTING_MS,
 } from "../listener/policies.mjs";
 import { validRepo } from "../listener/repo-config.mjs";
 import { builtInPolicies } from "../policy-service/engine.mjs";
@@ -559,6 +560,17 @@ test(
     clock.now += ACCESS_MS;
     await policies.access("bob", "acme/api");
     assert.equal(infos(), 4);
+    // Past the listing's 10 minutes too, GitHub down: what it last said of the repository and
+    // its listing hold, its deny rules on `master` with them (#785).
+    clock.now += 11 * 60_000;
+    repos["acme/api"].down = true;
+    assert.ok(await policies.can("bob", "acme/api", "tasks:read"));
+    assert.ok(!(await policies.can("bob", "acme/api", "runs:manage")));
+    // Each asked GitHub again: a failure isn't kept.
+    assert.equal(infos(), 6);
+    // Up to STALE_LISTING_MS: past it, nothing.
+    clock.now += STALE_LISTING_MS;
+    assert.match((await policies.access("bob", "acme/api")).error, /can't be read/);
   },
 );
 

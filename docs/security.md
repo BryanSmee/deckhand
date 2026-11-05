@@ -2142,7 +2142,12 @@ writes do: every decision first reads the operator's layer, which the orchestrat
 service for again once 30 seconds have passed (`DEFAULTS_MS`), whatever answer is kept, so a
 policy service away hides every repository within about 30 seconds, until it is back. Deckhand's default
 `access.rego` alone, with no repository policy, is decided without evaluating `opa`, but still
-needs the service's listing of its policies.
+needs the service's listing of its policies. GitHub isn't needed the same way: a decision on a
+repository reads what GitHub says of it (its default branch, whether it is private; kept 60
+seconds) and lists its policy folder, and when GitHub can't answer, it takes what it last said
+and the last listing, up to an hour old, as run decisions do (the log says when; a push forgets
+both): a short GitHub error refuses nothing. An orchestrator that hasn't read them in that hour,
+since its start or since a push, gives no action.
 
 **When a change holds.** An edit of your policy files holds at the next decision (the answers
 are kept per digest of your files); a repository's own at the push to its default branch, which

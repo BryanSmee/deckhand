@@ -441,8 +441,8 @@ export function createPolicies({
   }
 
   // `stale`: when GitHub can't list it, the last listing of `ref` up to STALE_LISTING_MS old (a
-  // push forgot it: forget()), rather than a failure; run-policy.mjs's, so that a GitHub hiccup
-  // doesn't refuse the comments of a repo that had no policy.
+  // push forgot it: forget()), rather than a failure; run-policy.mjs's and access()'s, so that a
+  // GitHub hiccup doesn't refuse the comments of a repo that had no policy.
   async function listing(repo, ref, cached, stale = false) {
     const key = repo.toLowerCase();
     const kept = listings.get(key);
@@ -835,7 +835,8 @@ export function createPolicies({
 
   // What GitHub said of a repository access() was given by name (GET /repos/{repo}), by its name
   // in lower case → { at, info }: kept ACCESS_MS, as the answers are, and forgotten on its push
-  // (forget()), so that a kept answer costs no call and a GitHub hiccup doesn't refuse it.
+  // (forget()), so that a kept answer costs no call; a GitHub hiccup past it gives the last one
+  // (repoOf()).
   const repoInfos = new Map();
   // A renamed or transferred repository's current name (lower case) → the names it was asked by
   // (repoOf()): its push's webhook says the current one, and forget() clears them too.
@@ -844,7 +845,8 @@ export function createPolicies({
   // A repository as access() takes it, its name or what GitHub says of it (its `full_name`,
   // `private`, `default_branch`) → { name, private, ref }. Without its default branch, read
   // (repoInfos), never guessed: another branch's listing would drop its deny rules. Not known to
-  // be public: private (fail closed). GitHub can't say: throws.
+  // be public: private (fail closed). GitHub can't say, and said nothing up to STALE_LISTING_MS
+  // ago: throws.
   async function repoOf(repo) {
     let info = repo;
     if (typeof repo === "string" || !info?.default_branch) {
@@ -854,9 +856,20 @@ export function createPolicies({
       const kept = repoInfos.get(key);
       if (kept && now() - kept.at < ACCESS_MS) info = kept.info;
       else {
-        info = await getJson(github, name, `/repos/${name}`);
-        if (typeof info?.default_branch !== "string" || !info.default_branch) {
-          throw new Error(`GitHub gave no default branch for ${name}`);
+        try {
+          info = await getJson(github, name, `/repos/${name}`);
+          if (typeof info?.default_branch !== "string" || !info.default_branch) {
+            throw new Error(`GitHub gave no default branch for ${name}`);
+          }
+        } catch (error) {
+          // A GitHub hiccup: what it last said, up to STALE_LISTING_MS old, as listing()'s
+          // `stale` keeps the listing, so that it refuses nothing (#785). Not kept, or forgotten
+          // by a push: fails closed.
+          if (!kept || now() - kept.at > STALE_LISTING_MS) throw error;
+          log(
+            `${name}: reading the repository: ${error.message ?? error}; what GitHub last said kept`,
+          );
+          return shape(kept.info);
         }
         // A repository renamed or transferred answers with another name entirely: the name
         // asked for stays (as repo-check.mjs keeps it), so that the bindings, its listing and
@@ -871,6 +884,11 @@ export function createPolicies({
         repoInfos.set(key, { at: now(), info });
       }
     }
+    return shape(info);
+  }
+
+  // GitHub's info about a repository → repoOf()'s answer.
+  function shape(info) {
     const name = info?.full_name ?? info?.name;
     if (!validRepo(name)) throw new Error("no repository's name");
     return { name, private: info.private !== false, ref: info.default_branch };
@@ -908,7 +926,10 @@ export function createPolicies({
         if (repo != null) where = await repoOf(repo);
         layers = {
           operator: await defaults(),
-          repo: where ? await repoPolicies(where.name, where.ref, { cached: true }) : new Map(),
+          // Its last listing when GitHub can't list it now, as run decisions take it (#785).
+          repo: where
+            ? await repoPolicies(where.name, where.ref, { cached: true, stale: true })
+            : new Map(),
         };
       } catch (error) {
         const what =
