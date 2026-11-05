@@ -185,6 +185,10 @@ export function createRunnerClient({
         `/sessions/${path(name)}${agent ? `?agent=${encodeURIComponent(agent.name)}` : ""}`,
       )
     ).exists;
+  // A chat's volumes (`task`: its key), once its sandbox is gone: its reset, its deletion.
+  const removeSessions = async (name, task) =>
+    (await orchestrator.json("DELETE", `/sessions/${path(name)}?task=${encodeURIComponent(task)}`))
+      .removed;
   const relink = () => orchestrator.json("POST", "/relink");
 
   // --- The broker's questions ----------------------------------------------------------------
@@ -521,6 +525,7 @@ export function createRunnerClient({
       kill,
       remove,
       hasSession,
+      removeSessions,
       relink,
       proxyAddresses,
       locate,

@@ -23,6 +23,7 @@ export const ROUTES = {
   "POST /runs/:run/tokens": ["runner"],
   "GET /edge/*": ["edge"],
   "POST /edge/*": ["edge"],
+  "DELETE /edge/*": ["edge"],
 };
 
 // What edge says of each request (../edge/forward.mjs, the same names).

@@ -414,6 +414,9 @@ Also take this into account: $TASK_MESSAGE"
       prompt="New comment on the issue: $TASK_MESSAGE
 
 (Still a brainstorm: no code, branch, commit or pull request, and new issues only for kept follow-ups.)"
+    elif [ "$mode" = chat ]; then
+      # The user's next message, as the conversation goes on: the chat's prompt came first.
+      prompt=$TASK_MESSAGE
     elif [ "$mode" = discussion ]; then
       prompt="New comment in the discussion: $TASK_MESSAGE
 

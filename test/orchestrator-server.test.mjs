@@ -5462,6 +5462,105 @@ mounts:
     writeFileSync(join(dir, "go"), "");
   });
 
+  test("a chat (#476): from the dashboard, a chat's sandbox, its messages to its inbox, nothing on GitHub, deleted", async (t) => {
+    // Sign-in goes to GITHUB_URL, the fake GitHub.
+    const listened = await listen(t, {}, (dir, github) => ({
+      GITHUB_URL: github.url,
+      MAX_RUNNING_CHATS: "1",
+    }));
+    const { dir, github, port, restart } = listened;
+    const base = `http://127.0.0.1:${port}`;
+    const get = (path, cookie) =>
+      fetch(base + path, { redirect: "manual", headers: cookie ? { cookie } : {} });
+    const login = await get("/auth/login");
+    const to = new URL(login.headers.get("location"));
+    const state = login.headers.getSetCookie()[0].split(";")[0];
+    const back = await get(`/auth/callback?code=c&state=${to.searchParams.get("state")}`, state);
+    const session = back.headers
+      .getSetCookie()
+      .find((c) => c.startsWith("deckhand_session="))
+      .split(";")[0];
+    const api = (method, path, body) =>
+      fetch(base + path, {
+        method,
+        headers: {
+          cookie: session,
+          origin: "https://hooks.example.com",
+          "content-type": "application/json",
+        },
+        body: body && JSON.stringify(body),
+      });
+    const created = await api("POST", "/api/chats", {
+      repo: "org/repo",
+      message: "What does run() do?",
+    });
+    assert.equal(created.status, 201);
+    const { id } = (await created.json()).chat;
+    // run-args last (fixtures/fake-docker.sh): the others are there once it is.
+    await until(() => exists(join(dir, "run-args")), "the chat's sandbox");
+    const env = readFileSync(join(dir, "run-env"), "utf8");
+    assert.match(env, /^TASK_MODE=chat$/m);
+    assert.match(env, /^TASK_ISSUE=$/m);
+    assert.match(env, /^SANDBOX_LIGHT=1$/m);
+    assert.match(env, /^TASK_MESSAGE=What does run\(\) do\?$/m);
+    assert.match(env, /^TASK_PROMPT=Chat with a user of Deckhand about org\/repo/m);
+    // Its volumes are the chat's own, never the issues'.
+    const args = readFileSync(join(dir, "run-args"), "utf8");
+    const [, workspace] = args.match(
+      new RegExp(
+        `^(deckhand-org-repo-chat-${id}-[0-9a-f]{10}-light[\\w-]*-workspace):/workspace$`,
+        "m",
+      ),
+    );
+    const chat = async () => (await (await api("GET", `/api/chats/${id}`)).json()).chat;
+    let now = await chat();
+    for (let i = 0; i < 200 && now.status !== "idle"; i++) {
+      await new Promise((resolve) => setTimeout(resolve, 25));
+      now = await chat();
+    }
+    assert.equal(now.status, "idle");
+    assert.equal(now.runs.length, 1);
+    // A restart keeps it, and its sandbox, which waits for the user's next message.
+    await restart();
+    assert.equal((await chat()).status, "idle");
+    // The next message goes to its inbox, the same sandbox.
+    assert.equal(
+      (await api("POST", `/api/chats/${id}/messages`, { text: "And follow()?" })).status,
+      202,
+    );
+    await until(() => exists(join(dir, "delivered"))?.includes("And follow()?"), "the message");
+    // A handover too: the next copy reads the chats from the store once it holds the lease.
+    await listened.handOver();
+    assert.equal((await chat()).status, "idle");
+    assert.equal(
+      (await api("POST", `/api/chats/${id}/messages`, { text: "And end()?" })).status,
+      202,
+    );
+    await until(() => exists(join(dir, "delivered"))?.includes("And end()?"), "the next message");
+    // The board doesn't show it, and nothing went to GitHub.
+    const board = await (await get("/api/state", session)).json();
+    assert.deepEqual(board.tasks, []);
+    assert.ok(
+      !github.requests.some((r) => r.method !== "GET" && /comments|reactions/.test(r.path)),
+    );
+    // Deleted: its sandbox stopped, its volumes removed (those the fake docker has), the chat
+    // gone.
+    writeFileSync(join(dir, "volumes"), `${workspace}\n`);
+    const deleted = await api("DELETE", `/api/chats/${id}`);
+    assert.equal(deleted.status, 200);
+    assert.match(
+      readFileSync(join(dir, "docker-calls"), "utf8"),
+      new RegExp(`^stop .*-chat-${id}-`, "m"),
+    );
+    assert.match(
+      readFileSync(join(dir, "docker-calls"), "utf8"),
+      new RegExp(`^volume rm ${workspace}$`, "m"),
+    );
+    assert.deepEqual((await (await api("GET", "/api/chats")).json()).chats, []);
+    await listened.listener.until(`org/repo#chat-${id}: chat deleted`);
+    assert.equal(readdirSync(join(dir, "containers")).length, 0);
+  });
+
   test("Analyze: a new issue, and a light run that reads a digest of the repo's runs only", async (t) => {
     const secret = "sk-ant-api03-0123456789abcdef";
     const { dir, github, port, listener } = await listen(t, {}, (dir, github) => {

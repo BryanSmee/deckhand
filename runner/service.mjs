@@ -30,7 +30,14 @@ import { antigravity } from "../listener/agents/antigravity.mjs";
 import { agentFor } from "../listener/agents/index.mjs";
 import { SANDBOX_USER } from "../listener/sandbox-spec.mjs";
 import { createEvents } from "./events.mjs";
-import { ownImage, plainPath, runOf, specProblems } from "./spec-check.mjs";
+import {
+  chatSandbox,
+  ownImage,
+  plainPath,
+  runOf,
+  sessionVolumes,
+  specProblems,
+} from "./spec-check.mjs";
 import { buildPlan, buildProblem, validRepo } from "./builds.mjs";
 import { cacheProblem } from "../listener/repo-config.mjs";
 import { LogConflict, validLogId, waitingWarning } from "./logs.mjs";
@@ -48,6 +55,7 @@ export const ROUTES = {
   "DELETE /sandboxes/:name": ["orchestrator"],
   "GET /sandboxes/:name/installing": ["orchestrator"],
   "GET /sessions/:name": ["orchestrator"],
+  "DELETE /sessions/:name": ["orchestrator"],
   "POST /runs/:run/messages": ["orchestrator"],
   "POST /runs/:run/close": ["orchestrator"],
   "GET /runs/:run/closed": ["orchestrator"],
@@ -446,6 +454,19 @@ export function createRunnerService({
         agentFor(url.searchParams.get("agent") ?? undefined),
       ),
     }),
+    // A chat's volumes, at its reset or deletion (../listener/chats.mjs): only a chat's sandbox
+    // (`task`, its key, names it), and only once it has none, never an issue's, whose sessions
+    // its runs keep.
+    "DELETE /sessions/:name": async ({ params, url }) => {
+      const name = named(params.name, "name");
+      const task = url.searchParams.get("task");
+      if (chatSandbox(config, task) !== name) throw new Refused(400, `${name} isn't a chat's`);
+      if ((await ours(name)) || (await runner.state(name))) {
+        throw new Refused(409, `${name} still has its sandbox`);
+      }
+      const removed = await runner.removeSessions([...sessionVolumes(name)]);
+      return { removed };
+    },
     "POST /runs/:run/messages": async ({ params, req }) => {
       const run = named(params.run, "run");
       const { text, agent, id } = await readJsonBody(req, MAX_JSON);

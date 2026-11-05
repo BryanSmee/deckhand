@@ -43,35 +43,41 @@ export async function pruneRuns({
   }
   const removed = [];
   for (const run of gone) {
-    try {
-      await removeLog(run.id);
-    } catch (error) {
-      log(`${run.key}: removing the log of ${run.id}: ${error.message}`);
-      kept.push(run);
-      continue;
-    }
-    try {
-      if (SHOT_FOLDER.test(run.shots ?? "")) await removeShots(run.shots);
-    } catch (error) {
-      log(`${run.key}: removing the screenshots of ${run.id}: ${error.message}`);
-      kept.push(run);
-      continue;
-    }
-    try {
-      await store.delete(summaryKey(run.id));
-    } catch (error) {
-      log(`${run.key}: removing the summary of ${run.id}: ${error.message}`);
-      kept.push(run);
-      continue;
-    }
-    byId.delete(run.id);
-    removed.push(run);
+    if (await removeRun(run, { byId, store, removeLog, removeShots, log })) removed.push(run);
+    else kept.push(run);
   }
   // In their order, with those added meanwhile (the removals took a while).
   const out = new Set(removed);
   runs.splice(0, runs.length, ...runs.filter((run) => !out.has(run)));
   if (removed.length) log(`Run history: ${removed.length} run(s) older than ${days} days removed`);
   return removed;
+}
+
+// A run's log (the runner's: `removeLog(id)`), its screenshots (the broker's: `removeShots`),
+// then its summary in `store`, and the run out of `byId` (its caller takes it out of the list):
+// false when one of them stays, and the run with it. The run history's, and a chat's deletion
+// (chats.mjs).
+export async function removeRun(run, { byId, store, removeLog, removeShots, log = () => {} }) {
+  try {
+    await removeLog(run.id);
+  } catch (error) {
+    log(`${run.key}: removing the log of ${run.id}: ${error.message}`);
+    return false;
+  }
+  try {
+    if (SHOT_FOLDER.test(run.shots ?? "")) await removeShots(run.shots);
+  } catch (error) {
+    log(`${run.key}: removing the screenshots of ${run.id}: ${error.message}`);
+    return false;
+  }
+  try {
+    await store.delete(summaryKey(run.id));
+  } catch (error) {
+    log(`${run.key}: removing the summary of ${run.id}: ${error.message}`);
+    return false;
+  }
+  byId.delete(run.id);
+  return true;
 }
 
 // Whether a screenshots' folder an older release kept in the orchestrator's shots/ is one retention
@@ -134,10 +140,12 @@ export function createHistory(
 ) {
   let timer = null;
 
-  // What a task's latest run is still needed for (board.mjs shows the same states).
+  // What a task's latest run is still needed for (board.mjs shows the same states); a chat's,
+  // while the chat is kept.
   function needed(key) {
     const task = ctx.tasks.get(key);
     if (task && (task.running || task.pending.length)) return true;
+    if (ctx.chats?.has(key)) return true;
     if (ctx.brainstorms?.get(key)) return true;
     if (ctx.waits?.get(key)) return true;
     return !!ctx.inputs?.has(key);

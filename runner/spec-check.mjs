@@ -73,13 +73,21 @@ export const runOf = (name, run) =>
 // volume a run of the task may get (sandbox-spec.mjs sessionNames(), sessionOf()'s names: its
 // work's, its light runs', by their capabilities) and its research's (modes.mjs sessionName()).
 // The same list as the listener's, so that no run the listener names is refused here.
-function sessionVolumes(name) {
+export function sessionVolumes(name) {
   const out = new Set();
   for (const base of [...sessionNames(name), `${name}-research`]) {
     out.add(`${base}-workspace`).add(`${base}-fork-workspace`);
     for (const agent of Object.values(AGENTS)) out.add(`${base}-${agent.session.volume}`);
   }
   return out;
+}
+
+// A chat's task key (../listener/chats.mjs: `<repo>#chat-<16 hex digits>`) → the name of its
+// sandbox, whose volumes its reset and deletion remove (service.mjs); null for any other key,
+// an issue's above all: their volumes stay.
+export function chatSandbox(config, key) {
+  const m = typeof key === "string" && /^([^/#\s]+\/[^/#\s]+)#(chat-[0-9a-f]{16})$/.exec(key);
+  return m ? sandboxName(config, m[1], m[2]) : null;
 }
 
 // [why] for each rule `spec` breaks, [] when none. `grants()`: the grants folder, read now;

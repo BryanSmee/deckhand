@@ -193,6 +193,19 @@ function pinned(instructions, reviewed) {
   );
 }
 
+// A chat (chats.mjs): the user's messages are its input, its answers stay in the conversation.
+// Without `pull` (the operator's policies), no clone and no GitHub access: told so.
+function chatPrompt(task, caps) {
+  const none =
+    caps && !caps.has("pull")
+      ? "\n\nThis chat has no clone of the repository and no GitHub access: it doesn't have the `pull`\ncapability (the operator's policies decide it). Say so when a question needs them."
+      : "";
+  return `Chat with a user of Deckhand about ${task.repo}, its default branch \`${task.base}\` cloned in
+/workspace.
+
+${modeInstructions.chat}${none}`;
+}
+
 function brainstormPrompt(task) {
   return `Brainstorm GitHub issue #${task.number} of ${task.repo} with the maintainer. Read it with
 \`gh issue view ${task.number} --comments\`.
@@ -461,6 +474,8 @@ export function promptFor(
     own && instructions
       ? `\n\nThe ${own.name} mode's instructions, from the repository:\n\n${instructions.trim()}`
       : "";
+  // A chat has no issue: its prompt says what it has (chatPrompt()).
+  if (mode === "chat") return chatPrompt(task, caps);
   // A review and a discussion without it don't start (capabilities.mjs NEED_PULL).
   const ownInput = ["analyze", "research", "review", "discussion"];
   if (caps && !caps.has("pull") && !ownInput.includes(mode)) {
@@ -496,8 +511,14 @@ export function promptFor(
 const NEW_CONTAINER =
   "This run is a new container: your session is kept, and so are /workspace's commits and branches, but its uncommitted files were stashed (`git stash list`) or removed, its ignored files removed, and /tmp and the rest of the container's own files are new (the repository's caches and mounts aside). A run started from a fork's pull request keeps a clone of its own, apart from the other runs': what one did in /workspace (commits, branches, a stash) isn't in the other's. Recreate what you need (worktrees, screenshots, servers, files) instead of reading paths from earlier runs.";
 
+// A chat that goes on after its sandbox stopped (chats.mjs): the clone was reset the same way.
+const CHAT_CONTAINER =
+  "The sandbox stopped while the user was away: this is a new container. The conversation is kept, and so are /workspace's commits and branches, but its uncommitted and untracked files were removed, and /tmp and the rest of the container's own files are new.";
+
 // The run's first message, after its prompt: the comments. `started`: the session goes on.
 export function firstMessage({ mode, text, restored, started }) {
+  // A chat's answer stays in the conversation: nothing is posted.
+  if (mode === "chat") return started ? `${text || "Continue."}\n\n(${CHAT_CONTAINER})` : text;
   const talk = mode === "brainstorm" || mode === "stop";
   const body = talk ? brainstormMessage(mode, text, restored) : text;
   // An empty follow-up (only "/model …", say) would open an interactive session instead.
@@ -560,6 +581,8 @@ export function openingMessages(mode, text, chosen, { restored, started, previou
 // What the agent reads for comments delivered mid-run (Claude Code adds that the user sent it
 // while it was working).
 export function liveMessage(mode, text) {
+  // The user's next message in the conversation, as they wrote it.
+  if (mode === "chat") return text;
   const reply =
     "Your final message is still posted as the single reply for this run: make it cover this comment too. (Don't post comments on GitHub yourself.)";
   if (mode === "brainstorm") {

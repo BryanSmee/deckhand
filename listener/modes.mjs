@@ -87,6 +87,9 @@ export const MODES = {
   // A dry run of the repo's policies on a pull request: no run, the listener evaluates them
   // and replies (task-modes.mjs, reviews.mjs dryRun()).
   policy: { picked: true },
+  // A user's chat from the dashboard (chats.mjs): no issue, its session kept like a brainstorm's
+  // in volumes of its own (its task is the chat's, never an issue's), its answers in its log.
+  chat: { volumes: "apart", defaults: "brainstorm", kind: "chat", prompt: "chat.md" },
 };
 
 const builtIn = (mode) => (Object.hasOwn(MODES, mode) ? MODES[mode] : null);

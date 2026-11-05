@@ -155,7 +155,8 @@ projects:
 | `brainstorm_model`, `brainstorm_effort` | `BRAINSTORM_MODEL`, `BRAINSTORM_EFFORT` | the same for brainstorms, inbox entries and discussions                                                                                         |
 | `fast_mode`                             | `SANDBOX_FAST_MODE`                     | `false`: `/speed fast` and a mode's `speed: fast` run at normal speed here; `true` can't turn it on when the operator hasn't                    |
 | `max_parallel`                          | `MAX_PARALLEL`                          | runs of this repo at once; capped by `MAX_PARALLEL`                                                                                             |
-| `setup`                                 | none                                    | shell command run in `/workspace` before the agent, on work runs                                                                                |
+| `chats.per_user`                        | `CHATS_PER_USER`                        | chats a user may keep when they create one here, counted across the repositories; lowers `CHATS_PER_USER`, never raises it (see Chats)          |
+| `setup`                                 | none                                    | shell command run in `/workspace` before the agent, on work runs and chats                                                                      |
 | `instructions`                          | none                                    | Markdown file of the repo, appended to the agent's instructions                                                                                 |
 | `dockerfile`                            | none: the base image                    | Dockerfile of the repo for its runs' image; needs the operator's `dockerfile` grant                                                             |
 | `docker`                                | none                                    | a container engine for work runs (`true`, or `cache: true`); needs the `docker` grant                                                           |
@@ -1768,7 +1769,8 @@ operator's layer, under the operator's files:
   `mode-work.rego`; brainstorms and `/stop` `mode-brainstorm.rego`; then
   `mode-idea.rego`, `mode-bug.rego`, `mode-discussion.rego`, `mode-onboarding.rego`,
   `mode-analyze.rego`, `mode-review.rego`, `mode-research.rego` (research gets no GitHub token,
-  so it never reaches the gateway). The repository's own `modes:` get nothing until it allows
+  so it never reaches the gateway), `mode-chat.rego` (the dashboard's chats: the code, its setup
+  and its reads, no GitHub write and no push). The repository's own `modes:` get nothing until it allows
   them, then at most what work runs get.
 - **One file per feature that isn't a mode's**: `gh-checks.rego` allows `read_checks` in
   every mode, `gh-linked-branch.rego` [the linked branch](#the-linked-branch-input),
@@ -2066,6 +2068,21 @@ to ask, pull requests, inbox issues and discussions aren't affected. With
 `wait_for_answers: false`, trigger comments, waits and the dashboard start the issue as they
 would without questions (the dashboard's form is still there to answer from the task's
 panel).
+
+## Chats
+
+Deckhand's users may chat with the agent about this repository from the dashboard, without an
+issue ([setup.md](setup.md#chats)): a chat runs in this repository's image, with its grants and
+its setup (not its caches), in volumes of its own, and writes nothing to GitHub. The users in
+`users` may chat here; `chats` lowers how many chats each may keep:
+
+```yaml
+chats:
+  per_user: 1 # at most CHATS_PER_USER; 0: no new chat here
+```
+
+It counts a user's chats on every repository, when they create one here: with `per_user: 1`, a
+user who has a chat elsewhere already can't create one here. Chats already created stay.
 
 ## Auto-pickup
 

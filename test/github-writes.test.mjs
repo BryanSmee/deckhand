@@ -2731,6 +2731,52 @@ test(
 );
 
 test(
+  "the real opa: mode-chat.rego allows a chat no GitHub write and no push (#476)",
+  withOpa,
+  async (t) => {
+    const policies = defaultPolicies(t);
+    // Every write a work run may make, by the target's kind (mode-work.rego), and the rest.
+    const writes = {
+      own_issue: ["edit", "comment", "label", "link", "react", "project", "assign", "milestone"],
+      own_pr: ["edit", "comment", "label", "ready", "draft", "update_branch", "reply", "rerun"],
+      sub_issue: ["edit", "comment", "link"],
+      created_issue: ["edit", "comment", "link"],
+      created_comment: ["edit"],
+      other_issue: ["comment", "edit"],
+      new_issue: ["create"],
+      new_pr: ["create"],
+      label: ["create"],
+    };
+    for (const [kind, actions] of Object.entries(writes)) {
+      for (const action of actions) {
+        const refused = await policies.deny("deny_github", "org/repo", "main", () =>
+          writeInput("chat", {}, [action], kind),
+        );
+        assert.ok(refused.length, `${action} on ${kind}`);
+      }
+    }
+    const projects = await policies.deny("deny_github", "org/repo", "main", () => ({
+      ...writeInput("chat", {}, ["read_projects"], "label"),
+    }));
+    assert.ok(projects.length, "read_projects");
+    const push = await policies.deny("deny_push", "org/repo", "main", () => ({
+      repo: "org/repo",
+      mode: "chat",
+      custom_mode: false,
+      reason: null,
+      issue: null,
+      action: "push",
+      branch: "chat-1",
+      ref: "refs/heads/chat-1",
+      created: true,
+      deleted: false,
+      default_branch: "main",
+    }));
+    assert.ok(push.length, "push");
+  },
+);
+
+test(
   "the real opa: mode-work.rego allows a first rerun of a work run's own pull request, and the modes a repository allows",
   withOpa,
   async (t) => {

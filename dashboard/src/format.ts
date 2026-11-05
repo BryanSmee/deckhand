@@ -334,6 +334,7 @@ export const BUILT_IN_MODES = [
   "analyze",
   "review",
   "policy",
+  "chat",
 ];
 
 export function kindName(t: Pick<Task, "kind">): string {

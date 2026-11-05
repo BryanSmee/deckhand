@@ -338,6 +338,19 @@ function parseConflicts(value, { key, settings, config, fail, warn }) {
   if (ok) settings.conflicts = { checkMinutes: Math.max(minutes, floor) };
 }
 
+// `chats: { per_user: n }`: how many chats a user keeps, counted across the repositories, when
+// one is created here. Only lowers the operator's CHATS_PER_USER, as `users` narrows its users.
+function parseChats(value, { key, settings, config, fail }) {
+  if (!isMap(value)) return fail(key, "expected per_user");
+  for (const other of Object.keys(value)) {
+    if (other !== "per_user") fail(`chats.${other}`, "unknown key (expected per_user)");
+  }
+  const n = value.per_user;
+  if (n === undefined || n === null) return;
+  if (!Number.isInteger(n) || n < 0) return fail("chats.per_user", "expected a whole number");
+  settings.chatsPerUser = Math.min(n, config.chatsPerUser);
+}
+
 // The projects (v2) the listener puts the repo's issues on, and the option of their field (by
 // default Status) it sets at each step (projects.mjs): [{ project, field, start, ready, merged }],
 // each step's value null when it isn't moved then. Only a project the operator grants the repo
@@ -646,6 +659,15 @@ export const KEYS = {
     },
     display: ({ value, row, changed, config }) =>
       row(String(value), changed ? `MAX_PARALLEL is ${config.maxParallel}` : null),
+  },
+  // The chats a user keeps (chats.mjs): the operator's CHATS_PER_USER stays the ceiling.
+  chats: {
+    field: "chatsPerUser",
+    default: operator,
+    effective: true,
+    parse: parseChats,
+    display: ({ value, row, changed, config }) =>
+      row(`${value} per user`, changed ? `CHATS_PER_USER is ${config.chatsPerUser}` : null),
   },
   setup: {
     field: "setup",
@@ -1087,13 +1109,42 @@ export async function loadRepoSettings(request, config, repo, ref) {
 // `waiting` the queued ones (ready or still in their pause). The others borrow the reserved
 // slots while no auto-picked task waits; while one does, they keep to MAX_PARALLEL - reserved,
 // so it starts as soon as a slot frees. One its own repo's max_parallel holds doesn't wait for
-// a slot: it would keep the others from one it can't take.
+// a slot: it would keep the others from one it can't take. All of that is the `shared` pool's
+// (tasks.mjs): `pools` { of(task), caps: pool → cap, running(pool) } puts any other pool's task
+// in its own pool's slots alone (a chat's in MAX_RUNNING_CHATS), whatever the shared slots,
+// reserved or not, and the repos' max_parallel say. A pool without a cap starts nothing.
 export function startable(
   ready,
   running,
   total,
   maxParallel,
-  { reserved = 0, auto = 0, waiting = [], picked: isPicked = () => false } = {},
+  { reserved = 0, auto = 0, waiting = [], picked: isPicked = () => false, pools = null } = {},
+) {
+  const poolOf = pools?.of ?? (() => "shared");
+  const own = new Map();
+  const others = [];
+  for (const task of ready) {
+    const pool = poolOf(task);
+    if (pool === "shared") continue;
+    const now = own.get(pool) ?? pools.running(pool);
+    if (now >= (pools.caps.get(pool) ?? 0)) continue;
+    own.set(pool, now + 1);
+    others.push(task);
+  }
+  ready = ready.filter((task) => poolOf(task) === "shared");
+  return [
+    ...sharedStartable(ready, running, total, maxParallel, { reserved, auto, waiting, isPicked }),
+    ...others,
+  ];
+}
+
+// startable()'s for the shared pool.
+function sharedStartable(
+  ready,
+  running,
+  total,
+  maxParallel,
+  { reserved, auto, waiting, isPicked },
 ) {
   // Without reserved slots (turned off while one was queued, a restart in between), an
   // auto-picked task is one like the others: it would wait forever for a slot.

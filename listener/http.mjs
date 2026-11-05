@@ -126,13 +126,16 @@ export function createHttp(ctx) {
   }
 
   // The dashboard's tasks: each issue and pull request with its state (board.mjs). `shows(repo)`:
-  // only the repos it says (a signed-in user's: seeing()); all of them without one.
+  // only the repos it says (a signed-in user's: seeing()); all of them without one. Never a task
+  // with an owner (a chat: chats.mjs), nor its runs: its owner's alone.
   function shownTasks(shows = null) {
     const mine = (list) => (shows ? list.filter((x) => shows(repoOf(x.key))) : list);
+    const runs = ctx.runs.filter((r) => !r.owner);
     const places = runPlaces(ctx.queueOrder?.() ?? [], (repo) => !shows || shows(repo));
     // A running task's comments are queued only when they wait for a follow-up run: the others
     // are on their way to the live session.
     const queued = [...tasks.values()]
+      .filter((t) => !t.owner)
       .filter((t) => t.pending.length > (t.running ? ctx.deliverable(t) : 0))
       .filter((t) => !shows || shows(t.repo))
       .map((t) => ({
@@ -156,7 +159,7 @@ export function createHttp(ctx) {
         ...(!t.running && pickedTask(t) && { autoPickup: true }),
       }));
     const shown = board({
-      runs: mine(ctx.runs),
+      runs: mine(runs),
       queued,
       brainstorms: mine(ctx.brainstorms.list()),
       waits: mine(ctx.waits.list()),
@@ -323,8 +326,10 @@ export function createHttp(ctx) {
     }
     const match = /^\/api\/runs\/([\w.-]+)\/stream$/.exec(url.pathname);
     const run = match && ctx.runsById.get(match[1]);
-    // Asked again each second while it streams: an access taken away ends it.
+    // Asked again each second while it streams: an access taken away ends it. A run with an
+    // owner (a chat's): its owner's alone.
     const visible = async () => {
+      if (run.owner && run.owner !== user) return false;
       const repo = run.repo ?? repoOf(run.key);
       return (await seeing(user, [repo].filter(Boolean), "logs:read"))(repo);
     };
@@ -588,6 +593,10 @@ export function createHttp(ctx) {
     if (req.url.startsWith("/api/sync")) {
       if (!ctx.app) return res.writeHead(503).end();
       if (syncApi(req, res, user)) return;
+    }
+    if (req.url.startsWith("/api/chats")) {
+      if (!ctx.app) return res.writeHead(503).end();
+      if (ctx.chats?.handle(req, res, user)) return;
     }
     if (req.url.startsWith("/api/repos")) {
       if (!ctx.app) return res.writeHead(503).end();
