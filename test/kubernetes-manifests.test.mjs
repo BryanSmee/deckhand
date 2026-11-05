@@ -7,7 +7,7 @@
 // the files are read as written, with the components' patches.
 import assert from "node:assert/strict";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { test } from "node:test";
 import { DRAIN_MS as BROKER_DRAIN_MS } from "../broker/server.mjs";
 import { DRAIN_MS as EDGE_DRAIN_MS } from "../edge/http.mjs";
@@ -162,9 +162,64 @@ function storeCommands() {
 const allows = (acl, command) =>
   acl.includes(` +${command} `) || acl.includes(` +${command.split("|")[0]} `);
 
+// The functions of lib/store.mjs that list keys: keys() itself, and those calling it or another
+// of them (values(), countKeys(), freshKeys()).
+function listingFunctions() {
+  const text = readFileSync(join(import.meta.dirname, "..", "lib", "store.mjs"), "utf8");
+  const bodies = [...text.matchAll(/^export (?:async )?function\*? (\w+)\(.*?^}$/gms)];
+  const names = new Set(["keys"]);
+  for (let grew = true; grew;) {
+    grew = false;
+    for (const [body, name] of bodies) {
+      if (names.has(name)) continue;
+      if (![...names].some((n) => new RegExp(`\\b${n}\\(`).test(body))) continue;
+      names.add(name);
+      grew = true;
+    }
+  }
+  names.delete("keys");
+  return [...names];
+}
+
+// The files a service runs: its server.mjs and what it imports (relative imports, dynamic ones
+// too), transitively.
+function serviceFiles(service) {
+  const files = new Set();
+  const todo = [join(import.meta.dirname, "..", service, "server.mjs")];
+  while (todo.length) {
+    const file = todo.pop();
+    if (files.has(file)) continue;
+    files.add(file);
+    const text = readFileSync(file, "utf8");
+    for (const [, spec] of text.matchAll(/(?:\bfrom|\bimport\(?)\s*["'](\.{1,2}\/[^"']+)["']/g)) {
+      todo.push(join(dirname(file), spec));
+    }
+  }
+  return [...files];
+}
+
 // The services whose stores list their keys (keys(): SCAN, which Redis doesn't hold to a user's
-// key pattern): the others' users go without it.
-const SCANS = ["orchestrator", "runner"];
+// key pattern), from their code: a file they run calling store.keys() or one of lib/store.mjs's
+// functions listing them on a store (values(store, …), not a Map's values()). The others' users
+// go without +scan.
+function scanning(services) {
+  const lists = new RegExp(
+    `\\b(?:${listingFunctions().join("|")})\\(\\s*[\\w.]*store\\b|\\bstore\\.keys\\(`,
+    "i",
+  );
+  const store = join(import.meta.dirname, "..", "lib", "store.mjs");
+  return services.filter((service) =>
+    serviceFiles(service).some((f) => f !== store && lists.test(readFileSync(f, "utf8"))),
+  );
+}
+
+// Not a list kept by hand again: the known callers, so that the match can't silently find none.
+test("scanning(): the store's functions listing keys, and the services calling them found", () => {
+  assert.deepEqual(listingFunctions().sort(), ["countKeys", "freshKeys", "values"]);
+  // The orchestrator's restart and maps, the runner's log moves (#762), edge's sessions gauge.
+  const found = scanning(["edge", "orchestrator", "runner", "broker", "github", "models"]);
+  for (const service of ["edge", "orchestrator", "runner"]) assert.ok(found.includes(service));
+});
 
 test("components/redis and setup.md: each user's ACL allows every command the store sends", () => {
   const commands = storeCommands();
@@ -178,11 +233,12 @@ test("components/redis and setup.md: each user's ACL allows every command the st
   const scans = /case \$service in ([a-z|]+)\) scan=" \+scan" ;; \*\) scan="" ;; esac/
     .exec(script)[1]
     .split("|");
-  assert.deepEqual(scans, SCANS);
+  const listing = scanning(services);
+  assert.deepEqual(scans.sort(), listing.toSorted());
   // Each service's user, as the script writes it.
   const acls = services.map((service) => [
     service,
-    line.replace("$scan", SCANS.includes(service) ? " +scan" : ""),
+    line.replace("$scan", listing.includes(service) ? " +scan" : ""),
   ]);
   // setup.md's users, one per service as here, each on its own prefix (#777).
   const setup = [
@@ -199,7 +255,7 @@ test("components/redis and setup.md: each user's ACL allows every command the st
     acls.push([`setup.md: ${service}`, acl]);
   }
   for (const [who, acl] of acls) {
-    const scan = SCANS.includes(who.replace("setup.md: ", ""));
+    const scan = listing.includes(who.replace("setup.md: ", ""));
     assert.deepEqual(
       commands.filter((c) => (scan || c !== "scan") && !allows(`${acl} `, c)),
       [],

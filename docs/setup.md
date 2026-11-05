@@ -1976,7 +1976,11 @@ redis-cli --user <admin> --askpass ACL SAVE   # only with an aclfile: it writes 
 
 `ACL SETUSER` alone is lost when Redis restarts on a `redis.conf` without it: change the file
 too. On Kubernetes, the `redis` component and the Helm chart write their users again each time
-Redis starts, the orchestrator's and the runner's with `+scan`: nothing to do there.
+Redis starts, edge's, the orchestrator's and the runner's with `+scan`: nothing to do there.
+
+Edge lists its keys too, to count the signed-in users of `deckhand_sessions_active` (#822): with a
+user per service, give edge's `+scan` the same way (`ACL SETUSER edge +scan`). Without it, only
+that gauge is left out of edge's metrics, with `NOPERM … 'scan'` in its log.
 
 ### Upgrading: the orchestrator's state in its store (#615, #616)
 
@@ -2437,7 +2441,7 @@ maxmemory-policy noeviction
 # Each service's STORE_URL is redis://<service>@redis:6379?prefix=deckhand:<service>:, its
 # password in REDIS_PASSWORD.
 user default off
-user edge on ><edge's password> ~deckhand:edge:* resetchannels -@all +evalsha +eval +time +exists +hmget +hset +del +pexpireat +incr +xadd +xgroup|create +xreadgroup +xack +xdel +xinfo|groups +getrange +strlen +set +append +select +ping +quit
+user edge on ><edge's password> ~deckhand:edge:* resetchannels -@all +evalsha +eval +time +exists +scan +hmget +hset +del +pexpireat +incr +xadd +xgroup|create +xreadgroup +xack +xdel +xinfo|groups +getrange +strlen +set +append +select +ping +quit
 user orchestrator on ><orchestrator's password> ~deckhand:orchestrator:* resetchannels -@all +evalsha +eval +time +exists +scan +hmget +hset +del +pexpireat +incr +xadd +xgroup|create +xreadgroup +xack +xdel +xinfo|groups +getrange +strlen +set +append +select +ping +quit
 user runner on ><runner's password> ~deckhand:runner:* resetchannels -@all +evalsha +eval +time +exists +scan +hmget +hset +del +pexpireat +incr +xadd +xgroup|create +xreadgroup +xack +xdel +xinfo|groups +getrange +strlen +set +append +select +ping +quit
 user broker on ><broker's password> ~deckhand:broker:* resetchannels -@all +evalsha +eval +time +exists +hmget +hset +del +pexpireat +incr +xadd +xgroup|create +xreadgroup +xack +xdel +xinfo|groups +getrange +strlen +set +append +select +ping +quit
@@ -2458,8 +2462,8 @@ the services stopped: they start with an empty store, as when they first moved t
 A user's key pattern follows its service's prefix: with `?prefix=team-a:orchestrator:`, it is
 `~team-a:orchestrator:*`, else every call is refused with `NOPERM`. A user per service also
 keeps each from reading or writing another's store. `+scan` lists a prefix's keys (a map kept
-one key per item, read back whole when a copy takes over), and only the orchestrator and the
-runner list theirs: Redis's ACL doesn't hold `SCAN` to the key pattern, so a user with it can
+one key per item, read back whole when a copy takes over; the signed-in users edge counts), and
+only edge, the orchestrator and the runner list theirs: Redis's ACL doesn't hold `SCAN` to the key pattern, so a user with it can
 list the names of other users' keys (never read their values). Give a deployment that mustn't
 see another's key names a Redis of its own. `requirepass <a long random password>` (the
 `default` user) works too, but leaves every service every command and key, `FLUSHALL` and
