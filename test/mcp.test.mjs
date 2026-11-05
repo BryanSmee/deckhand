@@ -5,7 +5,13 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createHttp } from "../listener/http.mjs";
 import { Refused } from "../lib/http.mjs";
-import { MAX_PAGE_BYTES, PAGE_BYTES, PROTOCOL_VERSIONS } from "../listener/mcp.mjs";
+import {
+  MAX_PAGE_BYTES,
+  MAX_TASKS_PAGE,
+  PAGE_BYTES,
+  PROTOCOL_VERSIONS,
+  TASKS_PAGE,
+} from "../listener/mcp.mjs";
 import { createRepoApi } from "../listener/repos.mjs";
 import { MEMBER, permissionsOf, serve, testConfig } from "./helpers.mjs";
 
@@ -248,7 +254,16 @@ test("MCP: each tool shows only the repos the login sees, as the dashboard does"
     tasks.structuredContent.tasks.map((x) => [x.key, x.state, x.runs, x.lastRun.status]),
     [["org/repo#1", "done", 2, "ok"]],
   );
-  assert.equal(tasks.structuredContent.tasks[0].url, "https://github.com/org/repo/issues/1");
+  assert.deepEqual(tasks.structuredContent.tasks[0], {
+    key: "org/repo#1",
+    number: 1,
+    kind: "issue",
+    state: "done",
+    title: "Title of org/repo#1",
+    pr: null,
+    runs: 2,
+    lastRun: { id: "org-repo-1-1000", status: "ok" },
+  });
   assert.deepEqual((await tool("list_tasks", { repo: "org/secret" })).structuredContent.tasks, []);
   assert.deepEqual((await tool("list_tasks", { state: "error" })).structuredContent.tasks, []);
   assert.equal((await tool("list_tasks", { state: "bogus" })).isError, true);
@@ -340,6 +355,33 @@ test("MCP: list_runs lists every run of a task, past the board's 20 newest", asy
   assert.equal(task.runs, 26);
 });
 
+test("MCP: list_tasks gives a page of tasks at a time, and where the next starts", async (t) => {
+  const runs = Array.from({ length: 30 }, (_, i) =>
+    runOf(`org/repo#${i + 1}`, `org-repo-${i + 1}-1000`, { startedAt: 1000 + i }),
+  );
+  const { ctx } = orchestrator({ runs });
+  const { tool } = await serveMcp(t, ctx);
+  const first = await tool("list_tasks");
+  assert.equal(first.structuredContent.tasks.length, TASKS_PAGE);
+  assert.equal(first.structuredContent.total, 30);
+  assert.equal(first.structuredContent.next, TASKS_PAGE);
+  assert.match(first.content[0].text, /^30 tasks, 1–25 here\. More: offset=25\./);
+  const rest = (await tool("list_tasks", { offset: TASKS_PAGE })).structuredContent;
+  assert.equal(rest.tasks.length, 30 - TASKS_PAGE);
+  assert.equal(rest.next, null);
+  const keys = [...first.structuredContent.tasks, ...rest.tasks].map((x) => x.key);
+  assert.equal(new Set(keys).size, 30);
+  const small = (await tool("list_tasks", { limit: 2, offset: 1 })).structuredContent;
+  assert.deepEqual(
+    small.tasks.map((x) => x.key),
+    keys.slice(1, 3),
+  );
+  assert.equal(small.next, 3);
+  assert.deepEqual((await tool("list_tasks", { offset: 99 })).structuredContent.tasks, []);
+  assert.equal((await tool("list_tasks", { limit: MAX_TASKS_PAGE + 1 })).isError, true);
+  assert.equal((await tool("list_tasks", { offset: -1 })).isError, true);
+});
+
 test("MCP: a chat's run is its owner's alone, as on the dashboard", async (t) => {
   const run = runOf("org/repo#chat-1", "chat-1-1000", { owner: "bob" });
   const { ctx } = orchestrator({ runs: [run], logs: { [run.id]: text("mine") } });
@@ -362,13 +404,15 @@ test("MCP: get_run_log pages through a long log, its newest page first, never re
   assert.equal(newest.to, size);
   assert.equal(newest.next, null);
   assert.deepEqual(newest.entries.at(-1), { kind: "text", text: "line 2999" });
-  // Whole lines only: the page starts at one.
+  // Whole lines only: the page starts at one, that of the line it would have cut.
   assert.equal(log[newest.from - 1], "\n");
-  assert.ok(size - newest.from <= PAGE_BYTES);
+  assert.ok(size - newest.from > PAGE_BYTES);
+  assert.ok(size - newest.from < PAGE_BYTES + Buffer.byteLength(lines[0]));
   // Far less than the log was read, and never more than a page at once.
   const bytes = reads.reduce((sum, r) => sum + r.got, 0);
   assert.ok(bytes < 2 * PAGE_BYTES, `${bytes} bytes read`);
-  assert.ok(reads.every((r) => r.length <= PAGE_BYTES + 1));
+  // (The newest page's, a page and the start of the line it would have cut.)
+  assert.ok(reads.every((r) => r.length <= PAGE_BYTES + Buffer.byteLength(lines[0]) + 1));
 
   // Back to the start, page by page, then forward again: every line once, in order.
   const pages = [newest];
@@ -402,6 +446,31 @@ test("MCP: get_run_log pages through a long log, its newest page first, never re
   assert.equal((await tool("get_run_log", { runId: id, limit: MAX_PAGE_BYTES + 1 })).isError, true);
   assert.equal((await tool("get_run_log", { runId: id, from: -1 })).isError, true);
   assert.equal((await tool("get_run_log", { runId: id, page: 2 })).isError, true);
+});
+
+test("MCP: the newest page of a log takes in the line it would cut, when it is near", async (t) => {
+  const entry = (n) => text(`${n}`.repeat(40));
+  const log = line({ type: "listener", key: "org/repo#1" }) + entry(1) + entry(2) + text("end");
+  const [two, end] = [Buffer.byteLength(entry(2)), Buffer.byteLength(text("end"))];
+  const runs = [runOf("org/repo#1", "org-repo-1-1000")];
+  const { ctx } = orchestrator({ runs, logs: { "org-repo-1-1000": log } });
+  const { tool } = await serveMcp(t, ctx);
+  // `limit` bytes from the end falls inside entry 2's line, which starts less than `limit`
+  // before it: the page starts at it, not after it.
+  const limit = end + two - 10;
+  const page = (await tool("get_run_log", { runId: "org-repo-1-1000", limit })).structuredContent;
+  assert.deepEqual(
+    page.entries.map((e) => e.text),
+    ["2".repeat(40), "end"],
+  );
+  // Further back than `limit`: the page starts at the next line, as before.
+  const tight = (await tool("get_run_log", { runId: "org-repo-1-1000", limit: end + 5 }))
+    .structuredContent;
+  assert.deepEqual(
+    tight.entries.map((e) => e.text),
+    ["end"],
+  );
+  assert.equal(tight.previous.from + tight.previous.limit, tight.from);
 });
 
 // Every page of a run's log, from its newest back to its start (`previous`), oldest first: each

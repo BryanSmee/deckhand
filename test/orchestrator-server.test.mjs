@@ -4298,7 +4298,7 @@ allow_capabilities contains "read:pulls"
     // The failed task, as the client sees it before it reruns it.
     const listed = await call("list_tasks", {});
     assert.deepEqual(
-      listed.structuredContent.tasks.map((task) => [task.key, task.state, task.rerunnable]),
+      listed.structuredContent.tasks.map((task) => [task.key, task.state, !!task.rerunnable]),
       [
         ["org/repo#12", "error", true],
         ["org/repo#pr-3", "done", false],
