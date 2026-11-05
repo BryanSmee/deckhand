@@ -131,6 +131,13 @@ export const fr = {
     other: "{count} retenus entre deux exécutions",
   },
   "slots.queued": "{count} en file",
+  "slots.shared": {
+    one: "{running} en cours · sur {count} emplacement partagé",
+    other: "{running} en cours · sur {count} emplacements partagés",
+  },
+  "slots.repoLabel": "{repo} : {running} sur {max} emplacements d’exécution utilisés",
+  "slots.repoSharedLabel":
+    "{repo} : {running} sur {max} emplacements d’exécution partagés utilisés",
 
   "review.ciFailed": "CI en échec, pas de revue",
   "review.findings": { one: "{count} remarque ({what})", other: "{count} remarques ({what})" },
