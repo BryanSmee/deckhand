@@ -10,6 +10,7 @@ import {
   allows,
   createPolicies,
   knownAction,
+  knownMode,
   REPO_ACTIONS,
   SERVER_ACTIONS,
 } from "../listener/policies.mjs";
@@ -824,6 +825,77 @@ test(
       both.warnings.filter((w) => w.includes("isn't an action")).map((w) => w.split(",")[0]),
       ["`deny_access` of the repository's policies names `logz:read`"],
     );
+  },
+);
+
+test("knownMode: a `runs:start:` action names Deckhand's modes or the repository's, the others aren't asked", () => {
+  const modes = ["deploy"];
+  for (const action of [
+    "runs:start:work",
+    "runs:start:review",
+    "runs:start:deploy",
+    "runs:start:*",
+    "runs:start:re*",
+    "runs:start:dep*",
+    "runs:*",
+    "*",
+    "tasks:read",
+  ]) {
+    assert.ok(knownMode(action, modes), action);
+  }
+  for (const action of ["runs:start:wrok", "runs:start:Work", "runs:start:x*", "runs:start:"]) {
+    assert.ok(!knownMode(action, modes), action);
+  }
+  // A repository's own mode, only where it has it; without its modes, nothing is said.
+  assert.ok(!knownMode("runs:start:deploy", []));
+  assert.ok(knownMode("runs:start:wrok", null));
+});
+
+test(
+  "the real opa: a repository's deny of a mode it doesn't have is said, the operator's never (#837)",
+  { skip: noOpa },
+  async (t) => {
+    const deny = (action) => `deny_access contains {"action": "${action}", "reason": "x"}`;
+    const { policies } = realAccess(t, {
+      operator: { "modes.rego": `package deckhand\n\n${deny("runs:start:elsewhere")}\n` },
+      repos: {
+        "acme/api": {
+          policies: {
+            "deny.rego": [
+              "package deckhand",
+              ...["runs:start:wrok", "runs:start:deploy", "runs:start:work", "runs:start:x*"].map(
+                deny,
+              ),
+            ].join("\n\n"),
+          },
+        },
+      },
+      config: { users: ["alice"] },
+    });
+    const modesSaid = (warnings) =>
+      warnings
+        .filter((w) => w.includes("which starts no mode it has"))
+        .map((w) => w.split(",")[0])
+        .sort();
+    const at = (action) => `\`deny_access\` of the repository's policies names \`${action}\``;
+    // The onboarding check, with the branch's modes: `deploy` is one of them.
+    const checked = await policies.checkRepo("acme/api", "main", { modes: ["deploy"] });
+    assert.deepEqual(checked.errors, []);
+    assert.deepEqual(modesSaid(checked.warnings), [at("runs:start:wrok"), at("runs:start:x*")]);
+    assert.match(
+      checked.warnings.find((w) => w.includes("runs:start:wrok")),
+      /\(`work`, .*`deploy`\): it takes nothing away$/,
+    );
+    // The config panel: the repository without `deploy`, the operator's rule left alone (it may
+    // name another repository's mode).
+    const panel = await policies.accessNameWarnings("acme/api", "main", []);
+    assert.deepEqual(modesSaid(panel), [
+      at("runs:start:deploy"),
+      at("runs:start:wrok"),
+      at("runs:start:x*"),
+    ]);
+    // Without the modes, as before.
+    assert.deepEqual(modesSaid((await policies.checkRepo("acme/api", "main")).warnings), []);
   },
 );
 

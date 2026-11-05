@@ -562,11 +562,12 @@ export function createRepoApi({
               settings,
               decide: (inputs) => policies.capabilityRules(repo, base, inputs),
             });
-      // And the access actions its rules and the operator's name that nobody knows (#765).
+      // And the access actions its rules and the operator's name that nobody knows (#765), and
+      // the modes its own rules name that it doesn't have (#837).
       const actions =
         errors.some((e) => !e.ignored) || !policies.accessNameWarnings
           ? []
-          : await policies.accessNameWarnings(repo, base);
+          : await policies.accessNameWarnings(repo, base, Object.keys(settings?.modes ?? {}));
       const warnings = [...said, ...names, ...actions];
       // Written for GitHub replies; the panel shows text.
       const plain = (text) => text.replaceAll("`", "");
