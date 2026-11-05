@@ -223,6 +223,19 @@ test("settings: projects, and those the grant doesn't list said as not moved", (
   });
 });
 
+test("settings: language has its row, English without it", () => {
+  const view = (yaml) => {
+    const { settings: parsed } = parseRepoConfig(yaml, config);
+    const grant = grantFor(grantsFrom({}, config), config, "org/app");
+    return byKey(effectiveView(config, "org/app", parsed, grant).settings, "language");
+  };
+  assert.deepEqual([view("").value, view("").source], ["none: English", "operator"]);
+  assert.deepEqual(
+    [view("language: French\n").value, view("language: French\n").source],
+    ["French", "repo"],
+  );
+});
+
 test("settings: agent, brainstorm_agent and wait_for_answers have their rows", () => {
   const withCodex = testConfig({ OPENAI_API_KEY: "sk-test" });
   const yaml = "brainstorm_agent: codex\nwait_for_answers: false\n";

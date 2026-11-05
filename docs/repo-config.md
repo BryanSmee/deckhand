@@ -58,6 +58,9 @@ fast_mode: false
 # Runs of this repo at once, within the operator's MAX_PARALLEL.
 max_parallel: 1
 
+# Replies, issues and pull requests in French; English without it (see Language below).
+language: French
+
 # Run in the clone before Claude starts, on every work run (not for brainstorms).
 setup: |
   npm ci
@@ -158,6 +161,7 @@ projects:
 | `chats.per_user`                        | `CHATS_PER_USER`                        | chats a user may keep when they create one here, counted across the repositories; lowers `CHATS_PER_USER`, never raises it (see Chats)          |
 | `setup`                                 | none                                    | shell command run in `/workspace` before the agent, on work runs and chats                                                                      |
 | `instructions`                          | none                                    | Markdown file of the repo, appended to the agent's instructions                                                                                 |
+| `language`                              | none: English                           | the language runs write replies, issues and pull requests in (`French`, `fr`), one line (see Language)                                          |
 | `dockerfile`                            | none: the base image                    | Dockerfile of the repo for its runs' image; needs the operator's `dockerfile` grant                                                             |
 | `docker`                                | none                                    | a container engine for work runs (`true`, or `cache: true`); needs the `docker` grant                                                           |
 | `caches`                                | none                                    | absolute paths in the sandbox kept in a volume per repo and path                                                                                |
@@ -413,6 +417,24 @@ The file named by `instructions` is read from the default branch and appended to
 generic sandbox instructions (`prompts/sandbox.md`) under "This project". Put there what
 the generic rules can't know: language of the product, services and how to start them,
 checks to run.
+
+## Language
+
+Runs write in English. `language` (a name or code on one line, up to 40 characters) names
+the language they write in for people instead:
+
+```yaml
+language: French
+```
+
+Every run's prompt then ends with a line asking for it, whatever its mode. The sandbox adds it
+again after what it puts past the prompt (a continued session's notes, an agent taking over,
+each message resuming a [chat](#chats)), so it stays the last thing the agent reads. It covers
+replies, the issues and pull requests a run files, and comments. Code, code comments and
+commits stay in English unless the [instructions](#instructions) say otherwise, and so does
+what Deckhand reads: the [open questions](#open-questions) markers, and a [review](#reviews)'s
+headings, severities, labels and `Rating:` and `Verdict:` lines. Without the key, nothing is
+added: the issue's language doesn't count. It needs no grant.
 
 ## Modes
 

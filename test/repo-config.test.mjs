@@ -153,6 +153,29 @@ inbox: { ideas: three, discussions: 5 }
   assert.match(parseRepoConfig("- a", config).errors[0], /top level/);
 });
 
+test("language: none by default; a name or code on one line, else an error (#919)", () => {
+  assert.equal(defaultSettings(config).language, null);
+  assert.equal(parseRepoConfig("language: French\n", config).settings.language, "French");
+  assert.equal(parseRepoConfig("language: ' pt-BR '\n", config).settings.language, "pt-BR");
+  for (const bad of [
+    "language: 3",
+    "language: [fr]",
+    "language: ''",
+    `language: ${"x".repeat(41)}`,
+    'language: "fr\\nen"',
+    'language: "fr\ten"',
+    'language: "fr\u2028en"',
+  ]) {
+    const { settings, errors } = parseRepoConfig(`${bad}\n`, config);
+    assert.equal(settings.language, null, bad);
+    assert.match(
+      errors.join("\n"),
+      /^language: expected a language's name or code on one line/,
+      bad,
+    );
+  }
+});
+
 test("`preview`, removed (#574): ignored with its own warning, whatever its value", () => {
   for (const value of [
     "./x.sh",
