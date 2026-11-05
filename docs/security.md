@@ -641,7 +641,9 @@ labels say it is that run's (a start removes only the one it made). Session volu
 a chat's reset or deletion (`DELETE /sessions/<name>?task=<key>`): the key must be a chat's
 (`<repo>#chat-<16 hex digits>`), the name its sandbox's (`runner/spec-check.mjs`
 `chatSandbox()`), with no sandbox of that name left, and only that sandbox's session volumes
-(on Kubernetes, claims labelled as this deployment's sessions): an issue's are never removed. None can name a container's
+labelled as this deployment's sessions (`deckhand.owner`, `deckhand.role=session`; on Docker,
+one without labels, made before session volumes had them, goes by its name alone): an issue's
+are never removed. None can name a container's
 image, mounts or capabilities beyond a sandbox spec
 (`listener/sandbox-spec.mjs`), which the runner turns into Docker's options: `--cap-drop ALL`, `no-new-privileges`, the operator's limits and a user. And it
 checks the spec again first, against the grants folder it reads itself and the operator's
