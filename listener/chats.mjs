@@ -22,7 +22,8 @@
 // What its runs may do is the policies' (../policy/mode-chat.rego): no GitHub write, no push. Its
 // owner narrows that with its permissions profile (#478, profiles.mjs), kept with the chat and
 // checked against what the policies and the grants give on every save and at every start
-// (preparation.mjs).
+// (preparation.mjs). Its agent asks for more within that ceiling (#479, requests.mjs): what its
+// owner approves goes to its sandbox (a host) or its profile, or to its next start alone.
 import { randomBytes } from "node:crypto";
 import { runOutcome } from "./capabilities.mjs";
 import { MODEL_TIERS, repoAllowed } from "./config.mjs";
@@ -30,7 +31,14 @@ import { EFFORTS, MODEL_NAME, taskKey } from "./events.mjs";
 import { removeRun } from "./history.mjs";
 import { refusal as accessRefusal, startAction } from "./permissions.mjs";
 import { entryLabel, pickable, pickProblem } from "./agents/select.mjs";
-import { ceilingOf, checkProfile, DEFAULT_PROFILE, narrowProfile } from "./profiles.mjs";
+import {
+  ceilingOf,
+  checkProfile,
+  DEFAULT_PROFILE,
+  narrowProfile,
+  requestVerdict,
+  widened,
+} from "./profiles.mjs";
 import { sandboxName } from "./repo-config.mjs";
 import { queueId } from "./restart.mjs";
 import { publicRun } from "./runlog.mjs";
@@ -83,8 +91,10 @@ export function createChats(
 ) {
   const { config, log } = ctx;
   // id → { id, owner, repo, base, agent, model, effort, title, createdAt, lastActiveAt,
-  // resetAt, profile }: the owner's login in lower case, as edge signs users in; `profile`, its
-  // permissions profile (profiles.mjs), null for the default (everything its ceiling allows).
+  // resetAt, profile, once }: the owner's login in lower case, as edge signs users in; `profile`,
+  // its permissions profile (profiles.mjs), null for the default (everything its ceiling
+  // allows); `once`, what its owner approved once that applies at a start (#479: the engine, a
+  // mount), for its next start alone (startProfile()).
   const chats = new Map();
   // id → its idle timer, and when its run last answered (in memory: after a restart, its idle
   // time counts from its last message); the chats being reset or deleted, which take no message
@@ -180,6 +190,8 @@ export function createChats(
       // Its messages not delivered yet (a sandbox starting or resuming, a slot to wait for): the
       // conversation shows them until its run's log has them (runlog.mjs, "message").
       pending: task ? task.pending.map((i) => ({ text: i.text, queuedAt: i.queuedAt })) : [],
+      // Its agent's requests for more permissions, waiting for its owner (requests.mjs).
+      requests: open ? (ctx.requests?.waitingFor(chat.id) ?? []) : [],
       reachable: open,
       runs: open ? ctx.runs.filter((r) => r.chat === chat.id).map(publicRun) : [],
     };
@@ -511,6 +523,7 @@ export function createChats(
       timers.delete(id);
       chats.delete(id);
       answered.delete(id);
+      ctx.requests?.forget(id);
       await save();
       ctx.saveQueue?.();
       log(`${key}: chat deleted`);
@@ -603,6 +616,90 @@ export function createChats(
     return "rested";
   }
 
+  // --- Its agent's requests for more permissions (#479, requests.mjs) ----------------------
+
+  // The chat a run is of, as the subject of its requests: null for any other run.
+  const subjectOf = (task) =>
+    task.kind === "chat" ? (chats.get(task.id.slice("chat-".length)) ?? null) : null;
+
+  // A request ({ kind, value }) of the chat's run, against its ceiling now (ceiling(), which
+  // refuses when it can't be decided), its profile and what its sandbox has (preparation.mjs:
+  // its hosts, mounts and engine) → profiles.mjs requestVerdict()'s, with that ceiling.
+  async function decideRequest(task, request) {
+    const chat = subjectOf(task);
+    if (!chat) refuse(404, "No such chat.");
+    const { ceiling: limit } = await ceiling(chat, chat.owner);
+    const { live } = task;
+    const verdict = requestVerdict(request, {
+      ceiling: limit,
+      profile: chat.profile,
+      live: {
+        hosts: live?.hosts ?? null,
+        mounts: live?.mounts ?? [],
+        engine: !!live?.engine,
+        // No SANDBOX_ENGINE: no run gets one (access.mjs engineFor()).
+        engines: !!config.engine,
+        // With the open internet, no host mount (preparation.mjs).
+        internet: !!live?.capabilities?.includes("internet"),
+      },
+    });
+    return { ...verdict, ceiling: limit };
+  }
+
+  // Request `record` approved (decideRequest()'s `adds` and `live` on it): a host goes to the
+  // sandbox going at once (the egress proxy reads `live.hosts` on each connection), and
+  // `scope` "chat" saves it in the profile (within `limit`, the ceiling it was decided with),
+  // "once" keeps what applies only at a start for the next one; null (its profile had it): the
+  // host alone. → what the agent is told of when it applies.
+  async function grantRequest(task, record, scope, limit) {
+    const chat = subjectOf(task);
+    if (!chat) refuse(404, "No such chat.");
+    // The profile checked first: a refusal changes nothing, the sandbox's hosts included.
+    const kept = scope === "chat" && checkProfile(widened(chat.profile, record.adds), limit);
+    if (kept && kept.errors.length) {
+      refuse(409, `It no longer fits this chat's ceiling: ${kept.errors.join("; ")}`);
+    }
+    const live = task.live;
+    if (record.live && live?.hosts) {
+      for (const host of record.adds.hosts ?? []) {
+        if (!live.hosts.includes(host)) live.hosts = [...live.hosts, host];
+        if (live.trusted && !live.trusted.includes(host)) live.trusted = [...live.trusted, host];
+      }
+      ctx.saveLive?.(task);
+    }
+    if (kept) chat.profile = kept.profile;
+    else if (scope === "once" && !record.live) {
+      chat.once = widened(chat.once ?? { capabilities: [], hosts: [], mounts: [] }, record.adds);
+    }
+    if (scope) {
+      await save();
+      log(`${chatKey(chat)}: ${record.kind} ${record.what} approved (${scope}) by ${chat.owner}`);
+    }
+    return record.live ? APPLIES.now : APPLIES.next;
+  }
+
+  // The profile a chat's next start gets (preparation.mjs): its saved one, with what its owner
+  // approved once for it, which this start uses up once its preparation is through
+  // (spentOnce()): a start that fails before keeps it for the next one.
+  function startProfile(task) {
+    const chat = subjectOf(task);
+    if (!chat) return null;
+    if (task.live) task.live.once = chat.once ?? null;
+    if (!chat.once) return chat.profile ?? null;
+    return widened(chat.profile, chat.once);
+  }
+
+  // The start that read it (startProfile()) is prepared: what was approved once is used up,
+  // unless the owner approved more once since (a new value).
+  function spentOnce(task) {
+    const chat = subjectOf(task);
+    const used = task.live?.once;
+    // By value: after a handover, each comes from a store of its own.
+    if (!chat || !used || JSON.stringify(chat.once) !== JSON.stringify(used)) return;
+    chat.once = null;
+    save();
+  }
+
   // The chats going whose owner may no longer run the agent on their repository: stopped. Every
   // CHECK_MS, from what the orchestrator read of the repos' `users` last (ctx.usersOf()) and the
   // access decision (a decision that failed stops nothing, as runs.mjs keeps a queued comment
@@ -661,11 +758,14 @@ export function createChats(
 
   // The API: GET /api/chats (the caller's), POST /api/chats (a new one), POST
   // /api/chats/<id>/messages, POST /api/chats/<id>/reset, DELETE /api/chats/<id>; GET and POST
-  // /api/chats/<id>/permissions (its profile), POST /api/chats/<id>/restart.
+  // /api/chats/<id>/permissions (its profile), POST /api/chats/<id>/restart, POST
+  // /api/chats/<id>/requests/<request> (an answer to its agent's request).
   const handle = apiRoute({
     name: "Chats",
     route: (pathname) => {
       if (pathname === "/api/chats") return { what: "chats" };
+      const asked = /^\/api\/chats\/([^/]+)\/requests\/([^/]+)$/.exec(pathname);
+      if (asked) return { what: "request", id: asked[1], request: asked[2] };
       const m = /^\/api\/chats\/([^/]+)(?:\/(messages|reset|permissions|restart))?$/.exec(pathname);
       return m && { what: m[2] ?? "chat", id: m[1] };
     },
@@ -695,6 +795,15 @@ export function createChats(
         }
         send(res, 200, said);
       },
+      // The owner's answer to its agent's request (requests.mjs): { answer: once, chat, deny }.
+      request: async (req, res, user, _, { id, request }) => {
+        const chat = mine(user, id);
+        const { answer: choice } = (await readJsonBody(req, MAX_BODY)) ?? {};
+        if (!ctx.requests) refuse(503, "No requests here.");
+        const said = await ctx.requests.answer(user, chat.id, request, choice);
+        if (said.error) refuse(said.error, said.message);
+        send(res, 200, { request: said.request, chat: await view(chat) });
+      },
       restart: async (req, res, user, _, { id }) => {
         const said = restart(user, id);
         send(res, 200, {
@@ -722,6 +831,11 @@ export function createChats(
     respell,
     options,
     profileOf: (task) => chats.get(task.id.slice("chat-".length))?.profile ?? null,
+    startProfile,
+    spentOnce,
+    subjectOf,
+    decideRequest,
+    grantRequest,
     list,
     listed,
     create,
@@ -744,6 +858,12 @@ const RESTARTED = {
   stopping:
     "Its sandbox is already stopping: your next message starts it again with these permissions, in the same session.",
   none: "No sandbox is going: your next message starts one with these permissions.",
+};
+
+// What an approved request tells the agent of when it applies (grantRequest()).
+const APPLIES = {
+  now: "It applies to this sandbox now: no restart needed.",
+  next: "It applies when this chat's sandbox starts again: this one doesn't have it. Tell the user, who restarts it from the chat's permissions panel (Restart now) once you have answered; the conversation goes on in the same session.",
 };
 
 // A chat's title, for the dashboard: its first message's first line, clipped.

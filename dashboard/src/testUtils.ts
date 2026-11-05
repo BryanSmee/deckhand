@@ -146,6 +146,7 @@ export const makeChat = (partial: Partial<Chat> = {}): Chat => ({
   queued: false,
   reachable: true,
   pending: [],
+  requests: [],
   runs: [],
   ...partial,
 });

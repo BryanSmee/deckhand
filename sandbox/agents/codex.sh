@@ -79,6 +79,10 @@ agent_mcp() {
   for arg in "$@"; do args+=("$(codex_toml "$arg")"); done
   printf '\n[mcp_servers.%s]\ncommand = %s\nargs = [%s]\n' \
     "$name" "$(codex_toml "$command")" "$(IFS=,; echo "${args[*]}")" >> "$CODEX_HOME/config.toml"
+  # A tool call that waits for a person (deckhand-permissions): Codex cuts one off after 60 s.
+  if [ -n "${DECKHAND_MCP_TIMEOUT:-}" ]; then
+    printf 'tool_timeout_sec = %s\n' "$DECKHAND_MCP_TIMEOUT" >> "$CODEX_HOME/config.toml"
+  fi
 }
 
 agent_has_session() {

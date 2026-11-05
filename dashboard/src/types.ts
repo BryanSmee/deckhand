@@ -1100,6 +1100,25 @@ export interface ChatPermissions {
   running: boolean;
 }
 
+// A chat's agent's request for more permissions, waiting for its owner (listener/requests.mjs,
+// #479): `what` names it ("a container engine", "registry.npmjs.org"); `reason` is the agent's,
+// one line, cut and redacted, shown as text; `live`: an approval applies to the sandbox going
+// (a host), else at its next start; denied at `expiresAt` without an answer.
+export type PermissionKind = "host" | "github" | "engine" | "mount";
+export type PermissionAnswer = "once" | "chat" | "deny";
+
+export interface PermissionRequest {
+  id: string;
+  kind: PermissionKind;
+  what: string;
+  reason: string;
+  live: boolean;
+  state: "pending" | "granted" | "denied" | "refused";
+  message: string | null;
+  at: number;
+  expiresAt: number;
+}
+
 // A user's chat with the agent on one of the repositories (listener/chats.mjs view()), its
 // owner's alone. `status`: "running" while its agent works on a message (or its sandbox starts,
 // or a message waits for a slot: `queued`), "idle" while its sandbox waits for the next one,
@@ -1126,6 +1145,8 @@ export interface Chat {
   reachable: boolean;
   // Its messages not delivered yet: shown until a run's log has them.
   pending: { text: string; queuedAt: number }[];
+  // Its agent's requests for more permissions, waiting for an answer, oldest first.
+  requests: PermissionRequest[];
   // Its runs, newest first: their logs are the conversation.
   runs: Run[];
 }
