@@ -12,6 +12,7 @@ import type {
   AppLinks,
   Health,
   Inboxes,
+  Machines,
   McpClient,
   Repo,
   RepoConfig,
@@ -147,6 +148,7 @@ const CONFIG: RepoConfig = {
       allowWorkflows: false,
       allowWorkflowSecrets: false,
       allowAutoMerge: false,
+      allowMachines: false,
       hosts: ["pypi.org"],
       cachedHosts: [],
       mounts: [],
@@ -198,6 +200,34 @@ const CLIENTS: { resource: string; clients: McpClient[] } = {
       scopes: ["deckhand:read", "deckhand:work"],
       created: Date.now() - 3 * 3600_000,
       used: Date.now() - 120_000,
+    },
+  ],
+};
+
+// Settings › MCP clients' machines: one online, one offline with no labels.
+const MACHINES: Machines = {
+  machines: [
+    {
+      id: "m1",
+      name: "studio",
+      labels: ["gpu"],
+      capacity: 2,
+      repos: ["acme/app"],
+      version: "0.1.0",
+      createdAt: Date.now() - 86_400_000,
+      seenAt: Date.now() - 10_000,
+      online: true,
+    },
+    {
+      id: "m2",
+      name: "laptop",
+      labels: [],
+      capacity: 1,
+      repos: ["acme/api"],
+      version: null,
+      createdAt: Date.now() - 86_400_000,
+      seenAt: Date.now() - 3_600_000,
+      online: false,
     },
   ],
 };
@@ -290,13 +320,25 @@ beforeEach(() => {
     "api/server": () => SETUP,
     "api/mcp/clients": () => CLIENTS,
     "api/access": () => ACCESS,
+    "api/machines": () => MACHINES,
     "api/health": () => HEALTH,
     "api/repos/acme/app/analyze": () => PREVIEW,
     "api/chats": () => makeChats([makeChat()]),
   };
   mockApi(routes);
   prose = [];
-  given = [REPOS, APP, config, SETUP, CLIENTS, ACCESS, HEALTH, PREVIEW, makeChats([makeChat()])];
+  given = [
+    REPOS,
+    APP,
+    config,
+    SETUP,
+    CLIENTS,
+    ACCESS,
+    MACHINES,
+    HEALTH,
+    PREVIEW,
+    makeChats([makeChat()]),
+  ];
 });
 
 const show = (hash: string) => {
@@ -360,7 +402,7 @@ test.each([
   ],
   ["its capabilities", "#/settings/repositories/acme/app/capabilities", "work"],
   ["Settings › Preferences", "#/settings/preferences", null],
-  ["Settings › MCP clients", "#/settings/clients", "Claude Code"],
+  ["Settings › MCP clients", "#/settings/clients", "laptop"],
   ["Settings › Server", "#/settings/server", /alice/],
   ["Settings › Access", "#/settings/access", "@carol"],
   ["Chats", "#/chats", null],

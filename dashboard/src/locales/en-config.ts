@@ -220,4 +220,21 @@ export const config = {
   "config.accessDeniedByWhy": "denied by {files}: {reasons}",
   "config.accessBoth": "Allowed by {allowed} · denied by {denied}",
   "config.accessBothWhy": "Allowed by {allowed} · denied by {denied}: {reasons}",
+
+  // Settings › MCP clients: your machines (Machines.tsx)
+  "machines.title": "Your machines",
+  "machines.warning":
+    "An agent runs on these machines on its own, with your files, credentials and network. Deckhand suggests settings for it and enforces none: what it may do there is up to you.",
+  "machines.unreadable": "Can't read the machines: {error}",
+  "machines.none": "No machine is registered: a machine's driver registers it, signed in as you.",
+  "machines.reading": "Reading…",
+  "machines.online": "Online",
+  "machines.offline": "Offline",
+  "machines.noLabels": "No labels",
+  "machines.capacity": { one: "{count} run at once", other: "{count} runs at once" },
+  "machines.seen": "last seen {ago}",
+  "machines.driver": "driver {version}",
+  "machines.repos": "The repositories it takes",
+  "machines.remove": "Remove",
+  "machines.removeOne": "Remove {name}",
 } as const;
