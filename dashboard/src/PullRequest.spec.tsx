@@ -69,6 +69,19 @@ test("the Ready chip lists the pull requests waiting for a review", () => {
   expect(titles).toEqual(["Offline sync for the reading list", "Dark mode for the settings page"]);
 });
 
+test("a pull request from #1000 up: its number as GitHub writes it, not grouped", () => {
+  const { rerender } = render(<Dashboard state={state} error={null} />);
+  rerender(
+    <Dashboard
+      state={withPr(state, { state: "ready", readyAt: state.now + 1000, number: 1234 })}
+      error={null}
+    />,
+  );
+  expect(FakeNotification.shown.map((n) => n.options.body)).toEqual([
+    "acme/app · pull request #1234",
+  ]);
+});
+
 test("the tab's title counts the pull requests ready for review", () => {
   const { rerender } = render(<Dashboard state={state} error={null} />);
   expect(document.title).toBe("(2) Deckhand");

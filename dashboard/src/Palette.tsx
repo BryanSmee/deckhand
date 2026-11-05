@@ -15,8 +15,10 @@ import {
 } from "./format";
 import { useCan } from "./access";
 import { graphOf } from "./graphModel";
+import { t, tx } from "./i18n";
 import { isMac, keyHint, type ShortcutId } from "./keys";
 import { laneName, lanesOf } from "./lanes";
+import type { Plain } from "./locales";
 import { requestKinds } from "./NewRequest";
 import type { Request } from "./Shell";
 import type { State, Task } from "./types";
@@ -27,8 +29,15 @@ import { StatusDot, toneClass } from "./ui/Status";
 import { THEMES, type Theme } from "./prefs";
 import styles from "./Palette.module.css";
 
+// Ids, named at render (GROUP_NAMES).
 export type Group = "Tasks" | "Repositories" | "Board" | "Actions";
 const GROUPS: Group[] = ["Tasks", "Repositories", "Board", "Actions"];
+const GROUP_NAMES: Record<Group, Plain> = {
+  Tasks: "app.paletteTasks",
+  Repositories: "app.paletteRepositories",
+  Board: "app.paletteBoard",
+  Actions: "app.paletteActions",
+};
 
 // What a pick does: the dashboard's (App.tsx).
 export interface Jumps {
@@ -81,7 +90,11 @@ function Marked({ text, words }: { text: string; words: string[] }) {
   return <>{parts.map((p, i) => (i % 2 ? <mark key={i}>{p}</mark> : p))}</>;
 }
 
-const THEME_NAMES: Record<Theme, string> = { system: "system", light: "light", dark: "dark" };
+const THEME_NAMES: Record<Theme, Plain> = {
+  system: "app.paletteThemeSystem",
+  light: "app.paletteThemeLight",
+  dark: "app.paletteThemeDark",
+};
 
 export function Palette({ state, repos = [], showClosed = false, jumps, onClose }: Props) {
   const [query, setQuery] = useState("");
@@ -164,11 +177,10 @@ export function Palette({ state, repos = [], showClosed = false, jumps, onClose 
         id: `lane:${lane.keys[0]}`,
         group: "Board",
         text: lane.name,
-        view: (
-          <>
-            Show the <Marked text={lane.name} words={words} /> lane on {lane.repo}'s board
-          </>
-        ),
+        view: tx("app.paletteLane", {
+          lane: <Marked text={lane.name} words={words} />,
+          repo: lane.repo,
+        }),
         icon: <Icon.Board size={16} />,
         open: () => jumps.lane(lane.repo, lane.keys),
       });
@@ -178,32 +190,32 @@ export function Palette({ state, repos = [], showClosed = false, jumps, onClose 
   const offered: Omit<Item, "group">[] = [
     {
       id: "idea",
-      text: typed ? `New idea: “${typed}”` : "New idea",
+      text: typed ? t("app.paletteIdeaTitled", { title: typed }) : t("app.paletteIdea"),
       icon: <Icon.Idea size={16} />,
       aside: shortcut("request"),
       open: () => jumps.request("idea", typed || undefined),
     },
     {
       id: "bug",
-      text: typed ? `New bug report: “${typed}”` : "New bug report",
+      text: typed ? t("app.paletteBugTitled", { title: typed }) : t("app.paletteBug"),
       icon: <Icon.Bug size={16} />,
       open: () => jumps.request("bug", typed || undefined),
     },
     {
       id: "analyze",
-      text: "Analyze runs",
+      text: t("app.paletteAnalyze"),
       icon: <Icon.Chart size={16} />,
       open: () => jumps.request("analyze"),
     },
     {
       id: "sync",
-      text: "Sync with GitHub",
+      text: t("app.paletteSync"),
       icon: <Icon.Sync size={16} />,
       open: jumps.sync,
     },
     ...THEMES.map((theme) => ({
       id: `theme:${theme}`,
-      text: `Theme: ${THEME_NAMES[theme]}`,
+      text: t(THEME_NAMES[theme]),
       icon:
         theme === "dark" ? (
           <Icon.Moon size={16} />
@@ -258,15 +270,21 @@ export function Palette({ state, repos = [], showClosed = false, jumps, onClose 
         if (e.target === e.currentTarget) onClose();
       }}
     >
-      <div ref={box} class={styles.palette} role="dialog" aria-modal="true" aria-label="Jump to">
+      <div
+        ref={box}
+        class={styles.palette}
+        role="dialog"
+        aria-modal="true"
+        aria-label={t("app.paletteLabel")}
+      >
         <label class={styles.search}>
           <Icon.Search size={18} class={styles.lead} />
           <input
             ref={input}
             class={styles.input}
             value={query}
-            placeholder="Jump to a task, a repository or an action"
-            aria-label="Jump to a repository, task or action"
+            placeholder={t("app.palettePlaceholder")}
+            aria-label={t("app.paletteInput")}
             role="combobox"
             aria-expanded="true"
             aria-controls={listId}
@@ -282,15 +300,15 @@ export function Palette({ state, repos = [], showClosed = false, jumps, onClose 
           />
           <Kbd>Esc</Kbd>
         </label>
-        <div id={listId} class={styles.list} role="listbox" aria-label="Results">
-          {!shown.length && <p class={styles.empty}>Nothing matches “{typed}”.</p>}
+        <div id={listId} class={styles.list} role="listbox" aria-label={t("app.paletteResults")}>
+          {!shown.length && <p class={styles.empty}>{t("app.paletteNothing", { query: typed })}</p>}
           {GROUPS.map((g) => {
             const inGroup = shown.filter((i) => i.group === g);
             if (!inGroup.length) return null;
             return (
               <div key={g} role="group" aria-labelledby={`${listId}-${g}`}>
                 <h3 id={`${listId}-${g}`} class={styles.group}>
-                  {g}
+                  {t(GROUP_NAMES[g])}
                 </h3>
                 {inGroup.map((item) => {
                   const i = shown.indexOf(item);
@@ -319,17 +337,27 @@ export function Palette({ state, repos = [], showClosed = false, jumps, onClose 
         </div>
         <div class={styles.foot}>
           <span>
-            <Kbd>↑</Kbd>
-            <Kbd>↓</Kbd> move
+            {tx("app.paletteMove", {
+              keys: (
+                <>
+                  <Kbd>↑</Kbd>
+                  <Kbd>↓</Kbd>
+                </>
+              ),
+            })}
           </span>
+          <span>{tx("app.paletteOpen", { keys: <Kbd>↵</Kbd> })}</span>
           <span>
-            <Kbd>↵</Kbd> open
+            {tx("app.paletteOpenGithub", {
+              keys: (
+                <>
+                  <Kbd>{isMac() ? "⌘" : "Ctrl"}</Kbd>
+                  <Kbd>↵</Kbd>
+                </>
+              ),
+            })}
           </span>
-          <span>
-            <Kbd>{isMac() ? "⌘" : "Ctrl"}</Kbd>
-            <Kbd>↵</Kbd> open on GitHub
-          </span>
-          <span class={styles.tip}>Type a number (#23), a repo or an action</span>
+          <span class={styles.tip}>{t("app.paletteTip")}</span>
         </div>
       </div>
     </div>

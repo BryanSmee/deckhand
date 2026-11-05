@@ -1,6 +1,7 @@
 // The `?` sheet: every shortcut of the table (keys.ts SHORTCUTS), grouped by where it works.
 import { Fragment } from "preact";
-import { GROUPS, SHORTCUTS, type ShortcutId, shownKeys } from "./keys";
+import { t, tx } from "./i18n";
+import { GROUP_NAMES, GROUPS, SHORTCUTS, type ShortcutId, shownKeys } from "./keys";
 import { formatRoute } from "./route";
 import { Dialog } from "./ui/Dialog";
 import { Kbd } from "./ui/Kbd";
@@ -38,20 +39,19 @@ export function ShortcutsDialog({ onClose }: { onClose: () => void }) {
   });
   return (
     <Dialog
-      title="Keyboard shortcuts"
-      sub={
-        <>
-          Press <Kbd>?</Kbd> anywhere to see them
-        </>
-      }
+      title={t("app.shortcutsTitle")}
+      sub={tx("app.shortcutsSub", { key: <Kbd>?</Kbd> })}
       size="full"
       onClose={onClose}
       hint={
         <span>
-          Shortcuts never fire while you type in a field. On a Mac, Ctrl reads ⌘.{" "}
-          <a href={preferences} onClick={onClose}>
-            Turn them off in Preferences
-          </a>
+          {tx("app.shortcutsHint", {
+            link: (
+              <a href={preferences} onClick={onClose}>
+                {t("app.shortcutsOff")}
+              </a>
+            ),
+          })}
         </span>
       }
     >
@@ -59,7 +59,7 @@ export function ShortcutsDialog({ onClose }: { onClose: () => void }) {
         {GROUPS.map((g) => (
           <section key={g} class={styles.group} aria-labelledby={`keys-${g}`}>
             <h3 id={`keys-${g}`} class={styles.heading}>
-              {g}
+              {t(GROUP_NAMES[g])}
             </h3>
             <dl class={styles.list}>
               {IDS.filter((id) => SHORTCUTS[id].group === g).map((id) => (

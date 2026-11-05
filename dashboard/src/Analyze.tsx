@@ -5,9 +5,10 @@
 // issue, then its task.
 import { useEffect, useLayoutEffect, useRef, useState } from "preact/hooks";
 import { previewAnalysis, startAnalysis } from "./api";
-import { plural, repoTabs, runKindName, uniqueRepos } from "./format";
+import { repoTabs, runKindName, uniqueRepos } from "./format";
 import { useSubmit } from "./hooks";
-import { number } from "./i18n";
+import { t, tx } from "./i18n";
+import type { Plain } from "./locales";
 import type { Action } from "./NewRequest";
 import { formatRoute } from "./route";
 import type { AnalysisPreview, AnalysisResult, AnalysisSelection, Outcome, Task } from "./types";
@@ -19,12 +20,12 @@ export const DEFAULT_RUNS = 10;
 // The preview waits for the selection to settle: typing a count asks once.
 const PREVIEW_MS = 250;
 
-const OUTCOMES: { id: Outcome; label: string }[] = [
-  { id: "ok", label: "Success" },
-  { id: "error", label: "Error" },
-  { id: "needs-input", label: "Needs input" },
-  { id: "interrupted", label: "Interrupted" },
-  { id: "cancelled", label: "Cancelled" },
+const OUTCOMES: { id: Outcome; label: Plain }[] = [
+  { id: "ok", label: "request.outcomeOk" },
+  { id: "error", label: "request.outcomeError" },
+  { id: "needs-input", label: "request.outcomeNeedsInput" },
+  { id: "interrupted", label: "request.outcomeInterrupted" },
+  { id: "cancelled", label: "request.outcomeCancelled" },
 ];
 
 // The repos the form offers: those api/state shows the user, by name.
@@ -86,11 +87,12 @@ export function AnalyzeForm({
   const offered = seen?.kinds ?? [];
   const matching = kinds !== null && validCount && !seen?.error ? (seen?.included ?? 0) : 0;
   const ready = matching > 0 && !!kinds?.length && outcomes.length > 0 && !sending;
-  const label = matching ? `Analyze ${plural(matching, "run")}` : "Analyze";
+  const label = matching ? t("request.analyzeRuns", { count: matching }) : t("request.analyze");
+  const pendingLabel = t("request.starting");
   // Before the paint: the footer's button says it with the form, not a frame later.
   useLayoutEffect(() => {
-    onAction({ label, pendingLabel: "Starting…", disabled: !ready && !sending, pending: sending });
-  }, [label, ready, sending]);
+    onAction({ label, pendingLabel, disabled: !ready && !sending, pending: sending });
+  }, [label, pendingLabel, ready, sending]);
 
   const toggle = <T,>(list: T[], value: T) =>
     list.includes(value) ? list.filter((v) => v !== value) : [...list, value];
@@ -106,13 +108,14 @@ export function AnalyzeForm({
   };
 
   const task = (sent?.task && tasks.find((t) => t.key === sent.task)) || null;
+  const issue = sent ? t("request.issue", { number: sent.number ?? "" }) : "";
 
   return (
-    <form id={id} class={styles.form} aria-label="Analysis" onSubmit={send}>
+    <form id={id} class={styles.form} aria-label={t("request.analysis")} onSubmit={send}>
       <fieldset class={styles.fields} disabled={sending}>
         <Field
           type="number"
-          label="Runs to read"
+          label={t("request.runsToRead")}
           class={styles.count}
           min={1}
           max={max ?? undefined}
@@ -121,17 +124,19 @@ export function AnalyzeForm({
             validCount
               ? undefined
               : max === null
-                ? "Pick 1 run or more."
-                : `Pick from 1 to ${max} runs.`
+                ? t("request.pickOneOrMore")
+                : t("request.pickUpTo", { max })
           }
-          help={`The most recent${max !== null ? `, ${max} at most` : ""}.`}
+          help={max !== null ? t("request.mostRecentMax", { max }) : t("request.mostRecent")}
           onInput={(e) => setCount(e.currentTarget.value)}
         />
         <div class={styles.group} role="group" aria-labelledby={`${id}-kinds`}>
           <span id={`${id}-kinds`} class={styles.legend}>
-            Kinds
+            {t("request.kinds")}
           </span>
-          {seen && !offered.length && <span class={styles.help}>No finished runs yet.</span>}
+          {seen && !offered.length && (
+            <span class={styles.help}>{t("request.noFinishedRuns")}</span>
+          )}
           {offered.map((k) => (
             <FilterChip
               key={k}
@@ -144,7 +149,7 @@ export function AnalyzeForm({
         </div>
         <div class={styles.group} role="group" aria-labelledby={`${id}-outcomes`}>
           <span id={`${id}-outcomes`} class={styles.legend}>
-            Outcomes
+            {t("request.outcomes")}
           </span>
           {OUTCOMES.map((o) => (
             <FilterChip
@@ -152,7 +157,7 @@ export function AnalyzeForm({
               pressed={outcomes.includes(o.id)}
               onClick={() => setOutcomes(toggle(outcomes, o.id))}
             >
-              {o.label}
+              {t(o.label)}
             </FilterChip>
           ))}
         </div>
@@ -163,17 +168,14 @@ export function AnalyzeForm({
           : seen?.error
             ? seen.error
             : !seen || kinds === null
-              ? "Counting the runs…"
+              ? t("request.counting")
               : matching
-                ? `${plural(matching, "run")} match, about ${number(seen.tokens ?? 0)} tokens to read.` +
-                  (seen.left
-                    ? ` ${plural(seen.left, "older run")} left out: over the digest's cap.`
-                    : "")
-                : "No run matches: pick other kinds or outcomes."}
+                ? t("request.matching", { count: matching, tokens: seen.tokens ?? 0 }) +
+                  // A sentence of its own after the first: joined as sentences are.
+                  (seen.left ? ` ${t("request.leftOut", { count: seen.left })}` : "")
+                : t("request.noMatch")}
       </p>
-      <p class={styles.warning}>
-        This is a large run: it uses the operator's Claude budget, on the model of light runs.
-      </p>
+      <p class={styles.warning}>{t("request.warning")}</p>
       {error && (
         <p class={`${styles.said} ${styles.failed}`} role="alert">
           {error}
@@ -181,19 +183,22 @@ export function AnalyzeForm({
       )}
       {sent && (
         <p class={styles.said}>
-          Started:{" "}
-          {sent.url ? (
-            <a href={sent.url} target="_blank" rel="noreferrer">
-              issue #{sent.number}
-            </a>
-          ) : (
-            `issue #${sent.number}`
-          )}
+          {tx("request.started", {
+            issue: sent.url ? (
+              <a href={sent.url} target="_blank" rel="noreferrer">
+                {issue}
+              </a>
+            ) : (
+              issue
+            ),
+          })}
           {task && (
             <>
               {" · "}
               <a href={formatRoute({ repo, task: task.key, run: task.runs[0]?.id ?? null })}>
-                its run{task.runs[0] ? ` (${task.runs[0].status})` : ""}
+                {task.runs[0]
+                  ? t("request.itsRunStatus", { status: task.runs[0].status })
+                  : t("request.itsRun")}
               </a>
             </>
           )}

@@ -62,13 +62,16 @@ export function pick(catalog: Catalog, key: Key, count: number | undefined, at: 
   return entry[form] ?? entry.other;
 }
 
-// The text's pieces: its own, and each placeholder's value (numbers written in the locale).
+// The text's pieces: its own, and each placeholder's value (numbers written in the locale, but
+// an issue's or pull request's after a `#`: "#1234", never "#1,234").
 function fill<V>(text: string, params: Record<string, V> | undefined): (string | V)[] {
-  return text.split(/\{(\w+)\}/).map((piece, i) => {
+  const pieces = text.split(/\{(\w+)\}/);
+  return pieces.map((piece, i) => {
     if (i % 2 === 0) return piece;
     const value = params?.[piece];
     if (value === undefined) return `{${piece}}`;
-    return typeof value === "number" ? number(value) : value;
+    if (typeof value !== "number") return value;
+    return pieces[i - 1].endsWith("#") ? String(value) : number(value);
   });
 }
 

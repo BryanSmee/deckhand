@@ -14,7 +14,6 @@ import {
   inChip,
   issueList,
   numberOf,
-  plural,
   readyStatus,
   repoTabs,
   sameRepo,
@@ -31,7 +30,8 @@ import {
   waitingOnYou,
 } from "./overview";
 import { CiStatus } from "./CiStatus";
-import { locale } from "./i18n";
+import { locale, t } from "./i18n";
+import type { Plain } from "./locales";
 import { Questions } from "./Questions";
 import { ReviewMarks } from "./ReviewLoop";
 import { RepoBadge } from "./RepoBadge";
@@ -84,7 +84,7 @@ export function Overview({ state, repos, github, onChip, refresh }: Props) {
 
 function Tile(props: {
   tone: Tone;
-  label: string;
+  label: Plain;
   count: number;
   meta: string;
   chip: ChipId;
@@ -97,11 +97,11 @@ function Tile(props: {
       href={allTasks}
       class={`${styles.tile} ${toneClass(tone)}`}
       onClick={() => onChip(chip)}
-      aria-label={`${label}: ${count}, ${meta}`}
+      aria-label={t("overview.tile", { label: t(label), count, meta })}
     >
       <span class={styles.tileLabel}>
         <StatusDot tone={tone} pulse={pulse} />
-        {label}
+        {t(label)}
       </span>
       <span class={styles.tileCount}>{count}</span>
       <span class={styles.tileMeta}>{meta}</span>
@@ -111,26 +111,26 @@ function Tile(props: {
 
 // Each total counts what its chip lists, and says what is in it.
 function Totals({ state, onChip }: { state: State; onChip: (chip: ChipId) => void }) {
-  const of = (chip: ChipId) => state.tasks.filter((t) => inChip(chip, t));
+  const of = (chip: ChipId) => state.tasks.filter((task) => inChip(chip, task));
   const asking = of("input");
-  const count = (state: Task["state"]) => asking.filter((t) => t.state === state).length;
+  const count = (state: Task["state"]) => asking.filter((task) => task.state === state).length;
   const ready = of("review");
   const failed = of("error");
-  const rerunnable = failed.filter((t) => t.rerunnable).length;
-  const numbers = ready.flatMap((t) => (t.pr ? [t.pr.number] : []));
+  const rerunnable = failed.filter((task) => task.rerunnable).length;
+  const numbers = ready.flatMap((task) => (task.pr ? [task.pr.number] : []));
   // Ready, but CI failed, a conflict, findings left or a review before the last push.
-  const unclean = ready.filter((t) => readyStatus(t)?.tone === "input").length;
+  const unclean = ready.filter((task) => readyStatus(task)?.tone === "input").length;
   return (
     <div class={styles.tiles}>
       <Tile
         tone="run"
-        label="Running"
+        label="overview.running"
         count={state.running}
         meta={[
-          `of ${plural(state.maxParallel, "slot")}`,
-          state.autoPickup && `${state.autoPickup.running} auto-picked`,
+          t("overview.ofSlots", { count: state.maxParallel }),
+          state.autoPickup && t("overview.autoPicked", { count: state.autoPickup.running }),
           heldText(state),
-          `${state.queued} queued`,
+          t("overview.queued", { count: state.queued }),
         ]
           .filter(Boolean)
           .join(" · ")}
@@ -140,17 +140,19 @@ function Totals({ state, onChip }: { state: State; onChip: (chip: ChipId) => voi
       />
       <Tile
         tone="input"
-        label="Needs you"
+        label="overview.needsYou"
         count={asking.length}
         meta={
-          [
-            [count("needs-input"), "question"],
-            [count("brainstorm"), "brainstorm turn"],
-            [count("idle-brainstorm"), "idle brainstorm"],
-          ]
-            .filter(([n]) => n)
-            .map(([n, what]) => plural(n as number, what as string))
-            .join(" · ") || "nothing asks"
+          (
+            [
+              ["overview.questions", count("needs-input")],
+              ["overview.brainstormTurns", count("brainstorm")],
+              ["overview.idleBrainstorms", count("idle-brainstorm")],
+            ] as const
+          )
+            .filter(([, n]) => n)
+            .map(([key, n]) => t(key, { count: n }))
+            .join(" · ") || t("overview.nothingAsks")
         }
         chip="input"
         onChip={onChip}
@@ -160,15 +162,15 @@ function Totals({ state, onChip }: { state: State; onChip: (chip: ChipId) => voi
           and its meta says how many aren't clean; their rows below are amber. */}
       <Tile
         tone="ready"
-        label="Ready for review"
+        label="overview.readyForReview"
         count={ready.length}
         meta={[
           !ready.length
-            ? "nothing to review"
+            ? t("overview.nothingToReview")
             : numbers.length <= 3
-              ? `${numbers.length === 1 ? "pull request" : "pull requests"} ${issueList(numbers)}`
-              : plural(ready.length, "pull request"),
-          unclean && `${unclean} not clean`,
+              ? t("overview.pullRequestList", { count: numbers.length, list: issueList(numbers) })
+              : t("overview.pullRequests", { count: ready.length }),
+          unclean && t("overview.notClean", { count: unclean }),
         ]
           .filter(Boolean)
           .join(" · ")}
@@ -177,14 +179,14 @@ function Totals({ state, onChip }: { state: State; onChip: (chip: ChipId) => voi
       />
       <Tile
         tone="err"
-        label="Failed"
+        label="overview.failed"
         count={failed.length}
         meta={
           !failed.length
-            ? "nothing failed"
+            ? t("overview.nothingFailed")
             : rerunnable === failed.length
-              ? "can be rerun"
-              : `${rerunnable} can be rerun`
+              ? t("overview.canBeRerun")
+              : t("overview.someCanBeRerun", { count: rerunnable })
         }
         chip="error"
         onChip={onChip}
@@ -193,11 +195,12 @@ function Totals({ state, onChip }: { state: State; onChip: (chip: ChipId) => voi
   );
 }
 
-const BADGES: Record<Need, { label: string; action: string }> = {
-  input: { label: "Needs input", action: "Answer" },
-  turn: { label: "Your turn", action: "Reply" },
-  ready: { label: "Ready for review", action: "Review PR" },
-  error: { label: "", action: "Rerun" },
+// Keys: written at render, in the language then. A failed run's badge is its state's own.
+const BADGES: Record<Need, { label?: Plain; action: Plain }> = {
+  input: { label: "overview.needsInput", action: "overview.answer" },
+  turn: { label: "overview.yourTurn", action: "overview.reply" },
+  ready: { label: "overview.readyForReview", action: "overview.reviewPr" },
+  error: { action: "overview.rerun" },
 };
 
 function WaitingOnYou({
@@ -223,25 +226,25 @@ function WaitingOnYou({
   const manages = (t: Task) => can.repo(t.repo, "runs:manage");
   const goesOn = (t: Task, mode: string | null | undefined) =>
     manages(t) && can.start(t.repo, mode || "work");
-  const rerun = async (t: Task) => {
-    setRerunning(t.key);
+  const rerun = async (task: Task) => {
+    setRerunning(task.key);
     setSaid(null);
-    const answer = await sendRerun(t.repo, t.runs[0].id);
-    const name = `${numberOf(t) || titleOf(t)} (${t.repo})`;
+    const answer = await sendRerun(task.repo, task.runs[0].id);
+    const name = { task: numberOf(task) || titleOf(task), repo: task.repo };
     setSaid({
-      text: answer.error ?? `Rerun of ${name} queued.`,
+      text: answer.error ?? t("overview.rerunQueued", name),
       error: !!answer.error,
     });
     if (!answer.error) await refresh?.();
     setRerunning(null);
   };
-  const dismiss = async (t: Task) => {
-    setDismissing(t.key);
+  const dismiss = async (task: Task) => {
+    setDismissing(task.key);
     setSaid(null);
-    const answer = await sendDismiss(t.repo, t.runs[0].id);
-    const name = `${numberOf(t) || titleOf(t)} (${t.repo})`;
+    const answer = await sendDismiss(task.repo, task.runs[0].id);
+    const name = { task: numberOf(task) || titleOf(task), repo: task.repo };
     setSaid({
-      text: answer.error ?? `${name} dismissed: its task page can undo it.`,
+      text: answer.error ?? t("overview.dismissed", name),
       error: !!answer.error,
     });
     if (!answer.error) await refresh?.();
@@ -250,20 +253,20 @@ function WaitingOnYou({
 
   // A failed run's row: its action, then Dismiss, which stops it asking.
   const actions = (row: Waiting): ComponentChildren => {
-    const t = row.task;
-    if (row.need !== "error" || !t.runs[0] || !manages(t)) return action(row, styles.action);
+    const task = row.task;
+    if (row.need !== "error" || !task.runs[0] || !manages(task)) return action(row, styles.action);
     return (
       <span class={styles.actions}>
         {action(row)}
         <Button
           size="small"
           variant="ghost"
-          pending={dismissing === t.key}
-          pendingLabel="Dismissing…"
-          title="It stops waiting on you until another run; its task page can undo it"
-          onClick={() => void dismiss(t)}
+          pending={dismissing === task.key}
+          pendingLabel={t("overview.dismissing")}
+          title={t("overview.dismissHelp")}
+          onClick={() => void dismiss(task)}
         >
-          Dismiss
+          {t("overview.dismiss")}
         </Button>
       </span>
     );
@@ -272,8 +275,8 @@ function WaitingOnYou({
   // The task page's own action: its questions' form, a brainstorm's thread (on GitHub, or the
   // dashboard's for a discussion), the pull request, Rerun; else the task page. `place`: its
   // class in the row, when it has the row's action column to itself.
-  const action = ({ task: t, need }: Waiting, place?: string): ComponentChildren => {
-    const label = BADGES[need].action;
+  const action = ({ task, need }: Waiting, place?: string): ComponentChildren => {
+    const label = t(BADGES[need].action);
     const link = (href: string, text: string, outside = true) => (
       <a
         class={buttonClass("secondary", "small", place)}
@@ -283,44 +286,47 @@ function WaitingOnYou({
         {text}
       </a>
     );
-    const page = taskHref(t);
-    const issue = githubUrl(t, github);
+    const page = taskHref(task);
+    const issue = githubUrl(task, github);
     if (need === "input") {
       // A run's questions: its session goes on in its mode.
-      if (t.questions && (t.questions.source === "run" ? goesOn(t, t.mode) : manages(t)))
+      if (
+        task.questions &&
+        (task.questions.source === "run" ? goesOn(task, task.mode) : manages(task))
+      )
         return (
-          <Button size="small" class={place} onClick={() => setAnswering(t)}>
+          <Button size="small" class={place} onClick={() => setAnswering(task)}>
             {label}
           </Button>
         );
       return issue ? link(issue, label) : link(page, label, false);
     }
     if (need === "turn")
-      return t.kind === "discussion" || !issue ? link(page, label, false) : link(issue, label);
-    if (need === "ready" && t.pr) return link(t.pr.url, label);
-    if (need === "error" && t.rerunnable && t.runs[0] && goesOn(t, t.runs[0].taskMode))
+      return task.kind === "discussion" || !issue ? link(page, label, false) : link(issue, label);
+    if (need === "ready" && task.pr) return link(task.pr.url, label);
+    if (need === "error" && task.rerunnable && task.runs[0] && goesOn(task, task.runs[0].taskMode))
       return (
         <Button
           size="small"
           class={place}
-          pending={rerunning === t.key}
-          pendingLabel="Rerunning…"
-          title="Runs it again with the same comments and mode"
-          onClick={() => void rerun(t)}
+          pending={rerunning === task.key}
+          pendingLabel={t("overview.rerunning")}
+          title={t("overview.rerunHelp")}
+          onClick={() => void rerun(task)}
         >
           {label}
         </Button>
       );
-    return link(page, "Open", false);
+    return link(page, t("overview.open"), false);
   };
 
   return (
     <Card as="section" class={styles.needs} aria-labelledby="waiting-on-you">
       <div class={styles.needsHead}>
         <h2 id="waiting-on-you" class={styles.section}>
-          Waiting on you
+          {t("overview.waitingOnYou")}
         </h2>
-        {rows.length > 1 && <span class={styles.meta}>Oldest first</span>}
+        {rows.length > 1 && <span class={styles.meta}>{t("overview.oldestFirst")}</span>}
       </div>
       {said && (
         <Notice tone={said.error ? "err" : "done"} class={styles.said}>
@@ -330,32 +336,31 @@ function WaitingOnYou({
       {rows.length ? (
         <ul class={styles.rows}>
           {rows.map((row) => {
-            const t = row.task;
+            const task = row.task;
+            const badge = BADGES[row.need].label;
             return (
               <li
-                key={t.key}
-                class={`${styles.need} ${row.need === "ready" && readyStatus(t)?.tone === "input" ? styles.warned : ""}`}
+                key={task.key}
+                class={`${styles.need} ${row.need === "ready" && readyStatus(task)?.tone === "input" ? styles.warned : ""}`}
               >
                 <StatusBadge
                   class={styles.badge}
-                  state={t.state}
-                  {...(row.need === "ready"
-                    ? readyStatus(t)
-                    : { label: BADGES[row.need].label || undefined })}
+                  state={task.state}
+                  {...(row.need === "ready" ? readyStatus(task) : { label: badge && t(badge) })}
                 />
                 <span class={styles.titleCell}>
-                  <a class={styles.needTitle} href={taskHref(t)}>
+                  <a class={styles.needTitle} href={taskHref(task)}>
                     {/* Without a title, titleOf() says the number already. */}
-                    {t.title && t.number !== null && (
-                      <span class={styles.number}>{numberOf(t)} </span>
+                    {task.title && task.number !== null && (
+                      <span class={styles.number}>{numberOf(task)} </span>
                     )}
-                    {titleOf(t)}
+                    {titleOf(task)}
                   </a>
                   {/* Where you decide what to review: its pull request's CI. */}
-                  {row.need === "ready" && t.pr && <CiStatus pr={t.pr} link />}
+                  {row.need === "ready" && task.pr && <CiStatus pr={task.pr} link />}
                 </span>
-                {row.need === "ready" && <ReviewMarks task={t} class={styles.left} />}
-                <span class={styles.needRepo}>{t.repo}</span>
+                {row.need === "ready" && <ReviewMarks task={task} class={styles.left} />}
+                <span class={styles.needRepo}>{task.repo}</span>
                 <span class={styles.age} title={new Date(row.at).toLocaleString(locale())}>
                   {age(row.at, now)}
                 </span>
@@ -365,11 +370,11 @@ function WaitingOnYou({
           })}
         </ul>
       ) : (
-        <p class={styles.empty}>Nothing waits on you.</p>
+        <p class={styles.empty}>{t("overview.nothingWaits")}</p>
       )}
       {answering?.questions && (
         <Dialog
-          title={`Answer ${numberOf(answering) || titleOf(answering)}`}
+          title={t("overview.answerTitle", { task: numberOf(answering) || titleOf(answering) })}
           sub={`${titleOf(answering)} · ${answering.repo}`}
           onClose={() => setAnswering(null)}
           wide
@@ -392,7 +397,7 @@ function WaitingOnYou({
 // The repositories: the App's (api/repos) and those with tasks, in the sidebar's order
 // (the most recently active first), then the others by name.
 function RepoCards({ state, repos }: { state: State; repos?: RepoList }) {
-  const active = repoTabs(state.tasks).map((t) => t.repo);
+  const active = repoTabs(state.tasks).map((tab) => tab.repo);
   const listed = repos?.repos ?? [];
   const names = [
     ...active,
@@ -401,10 +406,10 @@ function RepoCards({ state, repos }: { state: State; repos?: RepoList }) {
   return (
     <section class={styles.repos} aria-labelledby="overview-repos">
       <h2 id="overview-repos" class={styles.section}>
-        Repositories
+        {t("overview.repositories")}
       </h2>
       {repos?.error && !repos.repos && (
-        <Notice tone="err">Can't list the repositories ({repos.error})</Notice>
+        <Notice tone="err">{t("overview.cantList", { error: repos.error })}</Notice>
       )}
       {names.length ? (
         <div class={styles.cards}>
@@ -420,7 +425,9 @@ function RepoCards({ state, repos }: { state: State; repos?: RepoList }) {
         </div>
       ) : (
         <p class={styles.empty}>
-          {repos && !repos.repos && !repos.error ? "Loading…" : "No repository yet."}
+          {repos && !repos.repos && !repos.error
+            ? t("overview.loading")
+            : t("overview.noRepository")}
         </p>
       )}
     </section>
@@ -438,7 +445,7 @@ function RepoCard({
   row: Repo | null;
   repos?: RepoList;
 }) {
-  const tasks = state.tasks.filter((t) => sameRepo(t.repo, name));
+  const tasks = state.tasks.filter((task) => sameRepo(task.repo, name));
   const parts = repoParts(tasks, state.now);
   const status = row?.status ?? null;
   const summary = parts.map((p) => p.words).join(" · ");
@@ -449,36 +456,34 @@ function RepoCard({
   const can = useCan();
   const reads = can.repo(name, "repo:config:read");
 
-  let text: ComponentChildren = summary || "Nothing going on.";
+  let text: ComponentChildren = summary || t("overview.nothingGoingOn");
   let foot: string | null = backlogLine(
     row?.backlog,
     laneCount(name, state.tasks, state.edges, state.blockers),
   );
   let main = (
     <a class={buttonClass("secondary", "small")} href={board}>
-      Open board
+      {t("overview.openBoard")}
     </a>
   );
   if (status === "not-onboarded" && reads && can.start(name, "onboarding")) {
-    text = row?.issues
-      ? "Onboarding opens a run that proposes its .deckhand.yaml in a pull request."
-      : "Its issues are turned off on GitHub: turn them on to onboard it.";
-    foot = "No config yet";
+    text = row?.issues ? t("overview.onboardHelp") : t("overview.issuesOff");
+    foot = t("overview.noConfig");
     main = (
       <Button
         size="small"
         variant="primary"
         disabled={!row?.issues || !repos || (!!repos.starting && repos.starting !== name)}
         pending={repos?.starting === name}
-        pendingLabel="Onboarding…"
+        pendingLabel={t("overview.onboarding")}
         onClick={() => void repos?.onboard(name)}
       >
-        Onboard
+        {t("overview.onboard")}
       </Button>
     );
   } else if (status === "onboarding" && row?.issue) {
-    text = summary || `Its onboarding runs on issue #${row.issue.number}.`;
-    foot = "Being onboarded";
+    text = summary || t("overview.onboardingOn", { number: row.issue.number });
+    foot = t("overview.beingOnboarded");
     main = (
       <a
         class={buttonClass("secondary", "small")}
@@ -486,14 +491,14 @@ function RepoCard({
         target="_blank"
         rel="noreferrer"
       >
-        Open issue
+        {t("overview.openIssue")}
       </a>
     );
   } else if (status === "invalid" && reads) {
-    text = summary || "Its .deckhand.yaml has errors: no run starts until they are fixed.";
+    text = summary || t("overview.configErrors");
     main = (
       <a class={buttonClass("secondary", "small")} href={config}>
-        See config
+        {t("overview.seeConfig")}
       </a>
     );
   }
@@ -506,7 +511,7 @@ function RepoCard({
         </h3>
         {status && <RepoBadge status={status} />}
       </div>
-      <span class={styles.bar} role="img" aria-label={summary || "No tasks"}>
+      <span class={styles.bar} role="img" aria-label={summary || t("overview.noTasks")}>
         {parts.map((p) => (
           <span key={p.words} class={toneClass(p.tone)} style={{ flexGrow: p.count }} />
         ))}

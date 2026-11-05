@@ -3,6 +3,7 @@
 // (WorkQueue.tsx), on every tab.
 import { useId, useState } from "preact/hooks";
 import type { Tone } from "./format";
+import { t, tx } from "./i18n";
 import { Button } from "./ui/Button";
 import { Dialog } from "./ui/Dialog";
 import { Field } from "./ui/Field";
@@ -61,33 +62,28 @@ export function Chooser({ number, targets, disabled, onQueue, onClose }: Props) 
 
   return (
     <Dialog
-      title={
-        <>
-          Queue <span class="mono">#{number}</span> after…
-        </>
-      }
-      sub="It starts once the issue you pick is done."
+      title={tx("app.chooserTitle", { number: <span class="mono">#{number}</span> })}
+      sub={t("app.chooserSub")}
       onClose={onClose}
       onSubmit={queue}
-      keys={
-        <>
-          <Kbd>↑</Kbd>
-          <Kbd>↓</Kbd> pick · <Kbd>↵</Kbd> queue
-        </>
-      }
+      keys={tx("app.chooserKeys", {
+        arrows: (
+          <>
+            <Kbd>↑</Kbd>
+            <Kbd>↓</Kbd>
+          </>
+        ),
+        enter: <Kbd>↵</Kbd>,
+      })}
       actions={
         <>
           <Button variant="ghost" onClick={onClose}>
-            Cancel
+            {t("app.chooserCancel")}
           </Button>
           <Button variant="primary" disabled={after === null || disabled} onClick={queue}>
-            {after === null ? (
-              "Queue"
-            ) : (
-              <>
-                Queue after <span class="mono">#{after}</span>
-              </>
-            )}
+            {after === null
+              ? t("app.chooserQueue")
+              : tx("app.chooserQueueAfter", { number: <span class="mono">#{after}</span> })}
           </Button>
         </>
       }
@@ -105,10 +101,10 @@ export function Chooser({ number, targets, disabled, onQueue, onClose }: Props) 
         }}
       >
         <Field
-          label="Filter issues"
+          label={t("app.chooserFilter")}
           hideLabel
           lead={<Search size={15} />}
-          placeholder="Filter by number or title"
+          placeholder={t("app.chooserPlaceholder")}
           autoComplete="off"
           role="combobox"
           aria-expanded="true"
@@ -117,10 +113,10 @@ export function Chooser({ number, targets, disabled, onQueue, onClose }: Props) 
           value={filter}
           onInput={(e) => setFilter(e.currentTarget.value)}
         />
-        <div id={listId} class={styles.list} role="listbox" aria-label="Issues on the board">
+        <div id={listId} class={styles.list} role="listbox" aria-label={t("app.chooserIssues")}>
           {!options.length && (
             <p class={styles.empty}>
-              {filter.trim() ? "No issue matches." : "No issue on the board to queue it after."}
+              {filter.trim() ? t("app.chooserNoMatch") : t("app.chooserNone")}
             </p>
           )}
           {options.map((t) => (

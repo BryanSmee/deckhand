@@ -7,7 +7,7 @@ import { Access } from "./Access";
 import { useCan } from "./access";
 import type { RepoList } from "./api";
 import { Clients } from "./Clients";
-import { t } from "./i18n";
+import { t, tx } from "./i18n";
 import type { Plain } from "./locales";
 import type { Notify } from "./notify";
 import { Preferences } from "./Preferences";
@@ -101,8 +101,7 @@ export function Settings({
       )}
       {serverWide && !reads ? (
         <p class={styles.refused}>
-          This page isn't yours to see: it needs <code>server:read</code>, which the operator's
-          policies give.
+          {tx("app.settingsRefused", { permission: <code>server:read</code> })}
         </p>
       ) : route.section === "access" ? (
         <Access />

@@ -7,6 +7,7 @@
 // the screen's width, from the bottom.
 import type { ComponentChildren } from "preact";
 import { useEffect, useId, useRef } from "preact/hooks";
+import { t, tx } from "../i18n";
 import { isMac } from "../keys";
 import { IconButton } from "./Button";
 import { Close } from "./icons";
@@ -75,15 +76,13 @@ export function Dialog({
   }, []);
 
   const shownHint =
-    hint !== undefined ? (
-      hint
-    ) : keys !== undefined ? (
-      keys
-    ) : onSubmit ? (
-      <>
-        <Kbd>{isMac() ? "⌘ ↵" : "Ctrl ↵"}</Kbd> to send
-      </>
-    ) : null;
+    hint !== undefined
+      ? hint
+      : keys !== undefined
+        ? keys
+        : onSubmit
+          ? tx("ui.dialogSend", { keys: <Kbd>{isMac() ? "⌘ ↵" : "Ctrl ↵"}</Kbd> })
+          : null;
 
   return (
     <div
@@ -133,7 +132,7 @@ export function Dialog({
               <IconButton
                 variant="ghost"
                 size="small"
-                label="Close"
+                label={t("ui.close")}
                 icon={<Close size={14} />}
                 onClick={onClose}
               />

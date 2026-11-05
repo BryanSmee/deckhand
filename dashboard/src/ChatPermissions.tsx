@@ -6,6 +6,8 @@
 // proxy, the runner); the dashboard edits toggles, never policy text.
 import { useEffect, useState } from "preact/hooks";
 import { getChatPermissions, restartChat, saveChatPermissions } from "./api";
+import { t } from "./i18n";
+import type { Plain } from "./locales";
 import type { ChatPermissions as Permissions, ChatProfile, GithubLevel } from "./types";
 import { Button } from "./ui/Button";
 import { OptionCard, Switch } from "./ui/Choice";
@@ -14,23 +16,23 @@ import styles from "./ChatPermissions.module.css";
 
 const DOCS = "https://github.com/BryanSmee/deckhand/blob/main/docs/security.md#chats";
 
-// What each GitHub level and capability is called here.
-const LEVELS: Record<GithubLevel, string> = {
-  read: "Read only",
-  comment: "Comment on issues",
-  push: "Push its own branch and open a draft pull request",
+// What each GitHub level and capability is called here: keys, written when shown.
+const LEVELS: Record<GithubLevel, Plain> = {
+  read: "chats.levelRead",
+  comment: "chats.levelComment",
+  push: "chats.levelPush",
 };
-const NAMES: Record<string, string> = {
-  pull: "The repository's code",
-  setup: "Setup command",
-  "image:repo": "The repository's image",
-  "image:branch": "A pull request's image",
-  docker: "Container engine",
-  internet: "The open internet",
-  "read:issues": "Read issues",
-  "read:pulls": "Read pull requests",
-  "read:discussions": "Read discussions",
-  "read:actions": "Read CI results",
+const NAMES: Record<string, Plain> = {
+  pull: "chats.capPull",
+  setup: "chats.capSetup",
+  "image:repo": "chats.capImageRepo",
+  "image:branch": "chats.capImageBranch",
+  docker: "chats.capDocker",
+  internet: "chats.capInternet",
+  "read:issues": "chats.capReadIssues",
+  "read:pulls": "chats.capReadPulls",
+  "read:discussions": "chats.capReadDiscussions",
+  "read:actions": "chats.capReadActions",
 };
 
 // What the panel edits: every list concrete (what is on), from what the next run gets.
@@ -90,7 +92,7 @@ export function ChatPermissions({ chatId }: { chatId: string }) {
 
   if (error) {
     return (
-      <section class={styles.panel} aria-label="Permissions">
+      <section class={styles.panel} aria-label={t("chats.permissions")}>
         <p class={styles.alert} role="alert">
           <Alert size={16} />
           {error}
@@ -100,8 +102,8 @@ export function ChatPermissions({ chatId }: { chatId: string }) {
   }
   if (!view || !draft) {
     return (
-      <section class={styles.panel} aria-label="Permissions" aria-busy="true">
-        <p class={styles.note}>Loading the permissions…</p>
+      <section class={styles.panel} aria-label={t("chats.permissions")} aria-busy="true">
+        <p class={styles.note}>{t("chats.permissionsLoading")}</p>
       </section>
     );
   }
@@ -145,11 +147,7 @@ export function ChatPermissions({ chatId }: { chatId: string }) {
     }
     setView(said);
     setDraft(draftOf(said));
-    setNote(
-      said.running
-        ? "Saved. The sandbox going keeps the permissions it started with: restart it to use these."
-        : "Saved. The next message starts the sandbox with these permissions.",
-    );
+    setNote(said.running ? t("chats.savedRunning") : t("chats.savedNext"));
   }
 
   async function restart() {
@@ -166,12 +164,11 @@ export function ChatPermissions({ chatId }: { chatId: string }) {
   return (
     <section class={styles.panel} aria-labelledby="chat-permissions">
       <header class={styles.head}>
-        <h2 id="chat-permissions">Permissions</h2>
+        <h2 id="chat-permissions">{t("chats.permissions")}</h2>
         <p class={styles.note}>
-          What this chat's sandbox may do, within what the operator's grants and the repository's
-          policies give a chat. Enforced in the sandbox; changes apply at its next start.{" "}
+          {t("chats.permissionsNote")}{" "}
           <a href={DOCS} target="_blank" rel="noreferrer">
-            How chats are kept in
+            {t("chats.permissionsDocs")}
           </a>
         </p>
       </header>
@@ -180,7 +177,7 @@ export function ChatPermissions({ chatId }: { chatId: string }) {
         <div class={styles.alert} role="alert">
           <Alert size={16} />
           <div>
-            <b>This chat's next run wouldn't start, whatever its permissions:</b>
+            <b>{t("chats.wouldntStart")}</b>
             <ul>
               {view.errors.map((e) => (
                 <li key={e}>{e}</li>
@@ -191,13 +188,13 @@ export function ChatPermissions({ chatId }: { chatId: string }) {
       )}
 
       <fieldset class={styles.group}>
-        <legend>GitHub</legend>
+        <legend>{t("chats.github")}</legend>
         <div class={styles.levels}>
           {ceiling.github.map((l) => (
             <OptionCard
               key={l.level}
               name={`github-${chatId}`}
-              label={LEVELS[l.level]}
+              label={t(LEVELS[l.level])}
               help={l.reason ?? undefined}
               checked={draft.github === l.level}
               disabled={!l.allowed}
@@ -208,7 +205,7 @@ export function ChatPermissions({ chatId }: { chatId: string }) {
       </fieldset>
 
       <fieldset class={styles.group}>
-        <legend>Capabilities</legend>
+        <legend>{t("chats.capabilities")}</legend>
         <ul class={styles.rows}>
           {capabilities.map((c) => (
             <li key={c.name}>
@@ -216,7 +213,7 @@ export function ChatPermissions({ chatId }: { chatId: string }) {
                 label={
                   <span class={styles.label}>
                     <span>
-                      {NAMES[c.name] ?? c.name} <code>{c.name}</code>
+                      {NAMES[c.name] ? t(NAMES[c.name]) : c.name} <code>{c.name}</code>
                     </span>
                     <span class={styles.help}>{c.reason ?? c.what}</span>
                   </span>
@@ -231,7 +228,7 @@ export function ChatPermissions({ chatId }: { chatId: string }) {
       </fieldset>
 
       <fieldset class={styles.group}>
-        <legend>Network</legend>
+        <legend>{t("chats.network")}</legend>
         {ceiling.hosts.length ? (
           <ul class={styles.rows}>
             {ceiling.hosts.map((h) => (
@@ -251,20 +248,14 @@ export function ChatPermissions({ chatId }: { chatId: string }) {
             ))}
           </ul>
         ) : (
-          <p class={styles.note}>
-            The operator grants this repository no hosts beyond those every run needs.
-          </p>
+          <p class={styles.note}>{t("chats.noHosts")}</p>
         )}
-        <p class={styles.note}>
-          {internet
-            ? "With the open internet on, the sandbox reaches any public host."
-            : "The hosts every run needs (the agent's API, GitHub) stay reachable. A host the grants don't list can't be added here."}
-        </p>
+        <p class={styles.note}>{internet ? t("chats.internetOn") : t("chats.hostsNeeded")}</p>
       </fieldset>
 
       {ceiling.mounts.length > 0 && (
         <fieldset class={styles.group}>
-          <legend>Mounts</legend>
+          <legend>{t("chats.mounts")}</legend>
           <ul class={styles.rows}>
             {ceiling.mounts.map((m) => {
               const kept = draft.mounts.find((d) => d.target === m.target);
@@ -275,7 +266,9 @@ export function ChatPermissions({ chatId }: { chatId: string }) {
                       <span class={styles.label}>
                         <code>{m.target}</code>
                         <span class={styles.help}>
-                          {m.writable ? "Read-write as granted" : `Read-only: ${m.reason}`}
+                          {m.writable
+                            ? t("chats.readWrite")
+                            : t("chats.readOnly", { reason: m.reason ?? "" })}
                         </span>
                       </span>
                     }
@@ -309,7 +302,7 @@ export function ChatPermissions({ chatId }: { chatId: string }) {
         <div class={styles.alert} role="alert">
           <Alert size={16} />
           <div>
-            <b>Not saved: this goes beyond what the chat may get.</b>
+            <b>{t("chats.notSaved")}</b>
             <ul>
               {refused.map((e) => (
                 <li key={e}>{e}</li>
@@ -325,8 +318,12 @@ export function ChatPermissions({ chatId }: { chatId: string }) {
       )}
       <footer class={styles.actions}>
         {view.running && (
-          <Button onClick={restart} pending={pending === "restart"} pendingLabel="Restarting…">
-            Restart now
+          <Button
+            onClick={restart}
+            pending={pending === "restart"}
+            pendingLabel={t("chats.restarting")}
+          >
+            {t("chats.restartNow")}
           </Button>
         )}
         <Button
@@ -334,9 +331,9 @@ export function ChatPermissions({ chatId }: { chatId: string }) {
           onClick={save}
           disabled={!changed || pending !== null}
           pending={pending === "save"}
-          pendingLabel="Saving…"
+          pendingLabel={t("chats.saving")}
         >
-          Save
+          {t("chats.save")}
         </Button>
       </footer>
     </section>

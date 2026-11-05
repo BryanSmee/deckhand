@@ -3,6 +3,8 @@
 // notes) folded as activity, and each run's sandbox starting (setup, the image's build) as one
 // fold. Its messages still on their way (listener/chats.mjs `pending`, and those just sent)
 // after them. Then what the chat is doing now, in words: chatState().
+import { t } from "./i18n";
+import type { Plain } from "./locales";
 import { type Item, logSections } from "./logModel";
 import type { Chat, Entry, Phase, Run } from "./types";
 
@@ -56,7 +58,7 @@ export function runTurns(run: Run, entries: Entry[], end: number): Turn[] {
       } else if (item.kind === "result") {
         // Its text repeats the agent's last words: shown when it said none (some agents).
         if (item.status === "error") {
-          turns.push({ kind: "error", id: id(item), text: item.text || "The agent failed." });
+          turns.push({ kind: "error", id: id(item), text: item.text || t("chats.agentFailed") });
         } else if (item.text.trim() && !said) {
           turns.push({ kind: "agent", id: id(item), text: item.text });
         }
@@ -182,39 +184,23 @@ export function chatState(chat: Chat): ChatState {
 // request for more permissions.
 export function chatNote(chat: Chat, state: ChatState = chatState(chat)): string {
   if (state === "stopped" && !runsSinceReset(chat).length) {
-    return "No sandbox now: your next message starts it, from a fresh clone of the repository.";
+    return t("chats.noteFresh");
   }
   if (state === "working" && chat.requests.length) {
-    const which = chat.requests.length === 1 ? "its request" : "its requests";
-    return `The agent waits for your answer to ${which} above.`;
+    return t("chats.noteRequests", { count: chat.requests.length });
   }
-  return CHAT_STATES[state].note;
+  return t(CHAT_STATES[state].note);
 }
 
+// Their label and note as keys: written when shown, in the language chosen then.
 export const CHAT_STATES: Record<
   ChatState,
-  { label: string; tone: "run" | "idle" | "input" | "done"; note: string }
+  { label: Plain; tone: "run" | "idle" | "input" | "done"; note: Plain }
 > = {
-  starting: {
-    label: "Starting",
-    tone: "run",
-    note: "Its sandbox starts: a clone of the repository.",
-  },
-  resuming: {
-    label: "Resuming",
-    tone: "run",
-    note: "Its sandbox starts again, in the same session.",
-  },
-  waiting: {
-    label: "Waiting for a slot",
-    tone: "input",
-    note: "Other chats' sandboxes take every slot: it starts when one is free.",
-  },
-  working: { label: "Running", tone: "run", note: "The agent is on it." },
-  idle: { label: "Idle", tone: "done", note: "Its sandbox waits for your next message." },
-  stopped: {
-    label: "Stopped",
-    tone: "idle",
-    note: "No sandbox now: your next message starts it again, where the chat left off.",
-  },
+  starting: { label: "chats.stateStarting", tone: "run", note: "chats.noteStarting" },
+  resuming: { label: "chats.stateResuming", tone: "run", note: "chats.noteResuming" },
+  waiting: { label: "chats.stateWaiting", tone: "input", note: "chats.noteWaiting" },
+  working: { label: "chats.stateWorking", tone: "run", note: "chats.noteWorking" },
+  idle: { label: "chats.stateIdle", tone: "done", note: "chats.noteIdle" },
+  stopped: { label: "chats.stateStopped", tone: "idle", note: "chats.noteStopped" },
 };
