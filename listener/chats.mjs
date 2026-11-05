@@ -633,7 +633,13 @@ export function createChats(
     const verdict = requestVerdict(request, {
       ceiling: limit,
       profile: chat.profile,
-      live: { hosts: live?.hosts ?? null, mounts: live?.mounts ?? [], engine: !!live?.engine },
+      live: {
+        hosts: live?.hosts ?? null,
+        mounts: live?.mounts ?? [],
+        engine: !!live?.engine,
+        // With the open internet, no host mount (preparation.mjs).
+        internet: !!live?.capabilities?.includes("internet"),
+      },
     });
     return { ...verdict, ceiling: limit };
   }

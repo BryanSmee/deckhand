@@ -294,6 +294,10 @@ test("a mount: only the repository's granted ones, read-only, for the next start
   const mounted = { ...LIVE, mounts: ["/srv/ro"] };
   assert.equal(verdict({ kind: "mount", value: "/srv/ro" }, { live: mounted }).verdict, "given");
   assert.equal(verdict({ kind: "mount", value: "srv" }).verdict, "invalid");
+  // With the open internet, no mount at any start: refused, the profile's `internet` named.
+  const open = verdict({ kind: "mount", value: "/srv/ro" }, { live: { ...LIVE, internet: true } });
+  assert.equal(open.verdict, "invalid");
+  assert.match(open.message, /reaches the open internet.*`internet` turned off/);
   assert.equal(verdict({ kind: "root", value: "/" }).verdict, "invalid");
 });
 

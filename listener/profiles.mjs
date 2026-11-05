@@ -336,6 +336,14 @@ export function requestVerdict({ kind, value }, { ceiling, profile, live }) {
     const target = text.replace(/(?<=.)\/+$/, "");
     if (!target.startsWith("/")) return invalid("a mount is the absolute path it is mounted at");
     const row = ceiling.mounts.find((m) => m.target === target);
+    // A run with the open internet gets no host mount, whatever is approved (preparation.mjs):
+    // the profile's `internet` off first, which its owner may do.
+    if (row && live.internet) {
+      return {
+        verdict: "invalid",
+        message: `Refused: this chat reaches the open internet, and a run that does gets no host mount (what the operator mounts could leave through it). Tell the user: with \`internet\` turned off in the chat's permissions, ${target} can be asked for. Don't ask again until then.`,
+      };
+    }
     if (!row) {
       return beyond(
         `${target} isn't among the repository's granted mounts (its .deckhand.yaml asks for them, the operator grants them)`,

@@ -405,3 +405,19 @@ test("a request kept undecided by the copy before: decided by the next one, not 
     [[ID(1), "refused"]],
   );
 });
+
+test("a request the store didn't take: forgotten, its event left to read again, then kept", async () => {
+  const store = openStore("memory:");
+  const set = store.set.bind(store);
+  let failing = true;
+  store.set = async (...args) => {
+    if (failing) throw new Error("the store is away");
+    return set(...args);
+  };
+  const { requests } = setup({ store, verdicts: { host: ASK } });
+  await assert.rejects(requests.take(event(1)), /the store is away/);
+  assert.equal(requests.get(ID(1)), null);
+  failing = false;
+  await requests.take(event(1));
+  assert.equal((await store.get(REQUESTS_KEY))[ID(1)].state, "pending");
+});

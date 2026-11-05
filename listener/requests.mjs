@@ -74,17 +74,16 @@ export function createRequests(
   }
 
   let saving = Promise.resolve();
-  function save() {
+  // One write after the other, the latest state when each begins. A failure is logged, and the
+  // next write has it; `strict`: it rejects too, for a caller that must know (stored()).
+  function save({ strict = false } = {}) {
     const kept = now() - KEPT_MS;
     for (const [id, r] of requests) {
       if (r.state !== "pending" && r.told && r.answeredAt < kept) requests.delete(id);
     }
-    saving = saving.then(() =>
-      ctx.store
-        .set(REQUESTS_KEY, Object.fromEntries(requests))
-        .catch((error) => log(`Saving the permission requests: ${error.stack ?? error}`)),
-    );
-    return saving;
+    const done = saving.then(() => ctx.store.set(REQUESTS_KEY, Object.fromEntries(requests)));
+    saving = done.catch((error) => log(`Saving the permission requests: ${error.stack ?? error}`));
+    return strict ? done : saving;
   }
 
   // The task whose run is `run` (its id, the tokens' `jti`), or null once it ended.
@@ -160,7 +159,14 @@ export function createRequests(
       );
     }
     busy.add(id);
-    await save();
+    try {
+      await save({ strict: true });
+    } catch (error) {
+      // Not in the store: forgotten here, the event left unacknowledged, read again.
+      busy.delete(id);
+      requests.delete(id);
+      throw error;
+    }
     return () => first(task, record);
   }
 

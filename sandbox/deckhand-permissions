@@ -107,7 +107,13 @@ async function ask(kind, value, reason) {
         pause = 500;
         continue;
       }
-      if (res.status === 404) return { state: "denied", message: "Denied: the request is gone." };
+      // Its record gone at the broker (expired, lost): no answer, which isn't a denial.
+      if (res.status === 404) {
+        return {
+          state: "unanswered",
+          message: "No answer could be read (the request is gone at the broker): ask again.",
+        };
+      }
       process.stderr.write(`deckhand-permissions: the broker answered ${res.status}\n`);
     } catch (error) {
       process.stderr.write(`deckhand-permissions: ${error.cause?.code ?? error.message}\n`);
