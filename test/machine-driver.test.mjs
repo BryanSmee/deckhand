@@ -267,6 +267,7 @@ async function fakeMcp(t, works) {
     finished: {},
     refreshed: 0,
     approvals: [],
+    handedOver: false,
   };
   const outbox = {};
   const closed = {};
@@ -309,6 +310,11 @@ async function fakeMcp(t, works) {
       return { work };
     },
     post_events: (a) => {
+      // The first batch refused by a copy that stops: sent again, none of its lines lost.
+      if (!seen.handedOver) {
+        seen.handedOver = true;
+        return { refused: "Deckhand is restarting: send them again." };
+      }
       const lines = seen.lines[a.run];
       assert.equal(a.from, lines.length, "sent from what Deckhand has");
       lines.push(...a.lines);
@@ -334,10 +340,12 @@ async function fakeMcp(t, works) {
       return { status: a.outcome };
     },
     release: (a) => (held.delete(a.run), { released: a.run }),
-    // Pending at first, as while the owner hasn't answered; then allowed.
+    // Pending at first, as while the owner hasn't answered; refused by a copy that stops (a
+    // handover), asked again of the next; then allowed.
     approve_permission: (a) => {
       seen.approvals.push(a);
       if (seen.approvals.length === 1) return { request: "q1", state: "pending" };
+      if (seen.approvals.length === 2) return { refused: "Deckhand is restarting: ask again." };
       return { request: "q1", state: "granted", behavior: "allow", updatedInput: a.input };
     },
   };
@@ -356,11 +364,13 @@ async function fakeMcp(t, works) {
     const { id, params } = JSON.parse(body);
     seen.calls.push(params.name);
     const answer = await tools[params.name](params.arguments);
+    // A refusal as listener/mcp.mjs answers one: a tool result marked as an error.
+    const result = answer?.refused
+      ? { isError: true, content: [{ type: "text", text: answer.refused }] }
+      : { content: [], structuredContent: answer };
     res
       .writeHead(200, { "content-type": "application/json" })
-      .end(
-        JSON.stringify({ jsonrpc: "2.0", id, result: { content: [], structuredContent: answer } }),
-      );
+      .end(JSON.stringify({ jsonrpc: "2.0", id, result }));
   });
   const credentials = {
     url,
@@ -532,11 +542,11 @@ test("the driver's loop: claim, run, stream, push, finish; its lease kept throug
   assert.equal(arg("--resume", second.args), session);
   assert.ok(!second.args.includes("--session-id"));
   // Its permission prompt: through the driver's own MCP server, to approve_permission, asked
-  // again while pending, with no token in the agent's reach.
+  // again while pending and after a handover's refusal, with no token in the agent's reach.
   assert.equal(arg("--permission-prompt-tool", second.args), "mcp__deckhand__approve");
   assert.ok(!readFileSync(arg("--mcp-config", second.args), "utf8").includes("fresh"));
-  assert.equal(mcp.seen.approvals.length, 2);
-  assert.deepEqual(mcp.seen.approvals[1], {
+  assert.equal(mcp.seen.approvals.length, 3);
+  assert.deepEqual(mcp.seen.approvals[2], {
     machine: "m1",
     run: "r2",
     tool_name: "Bash",

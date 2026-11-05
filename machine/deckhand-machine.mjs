@@ -575,6 +575,10 @@ function loopback() {
 // A tool's error: Deckhand refused the call (its text says why). Not retried.
 export class ToolError extends Error {}
 
+// Refused, but by a copy of Deckhand that stops (a handover, listener/claims.mjs's 503s): the
+// same call goes again, to the next copy, rather than ending what it was for.
+const restarting = (error) => /\brestarting\b/i.test(error.message);
+
 // The tools of /mcp, as `credentials` signs in (login()'s, refreshed when they run out, `save`d
 // each time). call(name, args) → the tool's structuredContent; ToolError for its refusal,
 // another error for the network or the server (worth another try).
@@ -796,8 +800,7 @@ export function createDriver({
       try {
         return await client.call(name, args);
       } catch (error) {
-        // Refused, but for a copy of Deckhand that stops (a handover): asked again of the next.
-        if (error instanceof ToolError && !/restarting/i.test(error.message)) throw error;
+        if (error instanceof ToolError && !restarting(error)) throw error;
         log(`${name}: ${error.message}: trying again`);
         await sleep(retryMs);
       }
@@ -1143,7 +1146,7 @@ export function createDriver({
           protocol: PROTOCOL,
         });
       } catch (error) {
-        if (error instanceof ToolError)
+        if (error instanceof ToolError && !restarting(error))
           return deny(`Deckhand refused the request: ${error.message}`);
         log(`approve_permission: ${error.message}: trying again`);
         await sleep(retryMs);
