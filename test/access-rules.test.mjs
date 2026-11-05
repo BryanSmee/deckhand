@@ -1203,3 +1203,95 @@ test("the access actions' check: a mismatch reads the layers again, once (#765)"
   assert.equal(twice.events.filter((e) => e === "evaluate").length, 2);
   assert.deepEqual(twice.events.slice(1), ["read", "evaluate", "read", "evaluate"]);
 });
+
+// fakeGithub()'s `github`, its next call whose path `pattern` matches held until `release()`:
+// `reached`, resolved once that call is made.
+function holding(github, pattern) {
+  let release;
+  let reached;
+  const gate = new Promise((resolve) => (release = resolve));
+  const asked = new Promise((resolve) => (reached = resolve));
+  let held = false;
+  const wrapped = async (...args) => {
+    const [, , url] = args;
+    if (!held && pattern.test(url.split("?")[0])) {
+      held = true;
+      reached();
+      await gate;
+    }
+    return github(...args);
+  };
+  return { github: wrapped, reached: asked, release };
+}
+
+test("access: a read in flight when forget() runs isn't kept after it (#875)", async (t) => {
+  const repos = { "acme/api": { private: false } };
+  const { github, calls } = fakeGithub(repos);
+  const engine = policyEngineOf(t, { readOperator: () => new Map() });
+  const infos = () => calls.filter((p) => p === "/repos/acme/api").length;
+  const listings = () => calls.filter((p) => p.endsWith("/contents/.deckhand/policy")).length;
+
+  // GET /repos/{repo} sent before a privatization, answered after its forget().
+  const info = holding(github, /^\/repos\/acme\/api$/);
+  const policies = createPolicies({
+    config: {},
+    github: info.github,
+    service: localService(engine),
+  });
+  const pending = policies.access("bob", "acme/api");
+  await info.reached;
+  policies.forget("acme/api");
+  repos["acme/api"].private = true;
+  info.release();
+  assert.equal((await pending).error, null);
+  await policies.access("bob", "acme/api");
+  assert.equal(infos(), 2);
+  // Not forgotten: kept as before.
+  await policies.access("bob", "acme/api");
+  assert.equal(infos(), 2);
+
+  // A listing sent before a push, answered after its forget().
+  const listed = { full_name: "acme/web", private: true, default_branch: "main" };
+  repos["acme/web"] = {};
+  const listing = holding(github, /^\/repos\/acme\/web\/contents\//);
+  const other = createPolicies({
+    config: {},
+    github: listing.github,
+    service: localService(engine),
+  });
+  const before = listings();
+  const listing1 = other.access("bob", listed);
+  await listing.reached;
+  other.forget("acme/web");
+  listing.release();
+  await listing1;
+  await other.access("bob", listed);
+  assert.equal(listings(), before + 2);
+  await other.access("bob", listed);
+  assert.equal(listings(), before + 2);
+});
+
+test("access: a GitHub hiccup on a read forget() ran during fails closed, not on what was kept (#875)", async (t) => {
+  const repos = { "acme/api": { private: false } };
+  const { github } = fakeGithub(repos);
+  const engine = policyEngineOf(t, { readOperator: () => new Map() });
+  const clock = { now: 1_000 };
+  const info = holding(github, /^\/repos\/acme\/api$/);
+  let first = true;
+  // The first read goes through; the one held is the next.
+  const policies = createPolicies({
+    config: {},
+    github: (...args) => (first ? ((first = false), github(...args)) : info.github(...args)),
+    service: localService(engine),
+    now: () => clock.now,
+  });
+  assert.equal((await policies.access("bob", "acme/api")).error, null);
+  // Past ACCESS_MS, GitHub down: the kept answer would do, unless forgotten meanwhile.
+  clock.now += ACCESS_MS;
+  repos["acme/api"].infoDown = true;
+  const pending = policies.access("bob", "acme/api");
+  await info.reached;
+  policies.forget("acme/api");
+  info.release();
+  assert.match((await pending).error, /can't be read/);
+});

@@ -2163,8 +2163,10 @@ answer also forgets what GitHub said before and the last listing, so a hiccup ri
 no action either. A push forgets both, and so does a repository removed from the installation
 (or out of an installation deleted or suspended), deleted, transferred, renamed or made private
 (their `installation_repositories`, `installation` and `repository` deliveries), rather than
-waiting for them to expire. An orchestrator that hasn't read them in that hour, since
-its start or since a push, gives no action.
+waiting for them to expire. A read of either sent before one of those and answered after it
+answers that decision alone, never kept, and a hiccup on it gives no action: an answer from before
+a repository was made private can't come back once it is forgotten. An orchestrator that hasn't
+read them in that hour, since its start or since a push, gives no action.
 
 **When a change holds.** An edit of your policy files holds at the next decision (the answers
 are kept per digest of your files); a repository's own at the push to its default branch, which
