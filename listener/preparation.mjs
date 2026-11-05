@@ -250,7 +250,7 @@ export function createPreparation(ctx) {
         `${cantRun(agentOf(task))}: #${number}'s thread couldn't be read (${error.message ?? error}). Comment again to retry.`,
       );
     }
-    note(`Thread: #${number}, Deckhand's and the comments of users who may start work runs only`);
+    note(`Thread: #${number}, Deckhand's comments and those of users who may start work runs only`);
     return redact(text, operatorSecrets(ctx));
   }
 

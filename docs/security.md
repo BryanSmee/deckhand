@@ -2626,17 +2626,17 @@ only). It widens nothing, so it needs no grant: a review is a light run with a r
   policies let it: Deckhand's default `policy/review.rego` refuses them (`deny_review`), and
   only a file of that name, the operator's or the repository's maintainers', replaces it. A
   bot that opens a pull request on a branch of the repository was given write access to it.
-- **Only allowed users' comments**: the review reads its thread (the pull request's
-  description, comments and reviews, and the issue it closes) from a file the orchestrator writes
+- **Only allowed users' comments**: the review reads its thread (the pull request's description,
+  comments and reviews, and the issue it closes) from a file the orchestrator writes
   (`TASK_DIGEST`), with only what users of `ALLOWED_USERS` and the repo's `users` whose access
-  decision gives `runs:start:work` there, and the App itself, wrote: its findings can become a
-  fix run's message, so a viewer who may start nothing can't steer one through it. What anyone
-  else wrote, another bot included (or someone whose decision failed), is replaced with a line saying
-  it was left out; an allowed user who wants it read quotes it in a comment of their own. It
-  can't read the thread another way: the [GitHub gateway](#the-github-gateway) refuses a
-  review's calls for comments, reviews and review comments, REST and GraphQL alike, and the
-  web host's pages. What an outsider can still put in front of it is the pull request's own
-  description and diff, which it reviews.
+  decision gives `runs:start:work` there, and the App itself, wrote: its findings can become a fix
+  run's message, so a viewer who may start nothing can't steer one through it. What anyone else
+  wrote, another bot included (or someone whose decision failed), is replaced with a line saying it
+  was left out; an allowed user who wants it read quotes it in a comment of their own. It can't read
+  the thread another way: the [GitHub gateway](#the-github-gateway) refuses a review's calls for
+  comments, reviews and review comments, REST and GraphQL alike, and the web host's pages. What an
+  outsider can still put in front of it is the pull request's own description and diff, which it
+  reviews.
 - **No loops**: each pull request's head commit is reviewed by itself once (the store's `reviews`),
   and the App's review is a bot's `pull_request_review`, which starts nothing. Acting on a
   review is the maintainer's call, with a trigger comment, unless the repo sets `review.fix`

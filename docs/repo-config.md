@@ -683,20 +683,20 @@ review` gets the "unknown mode" reply. `review: true` (or a block without `on`, 
   requests are refused, the dashboard saying why, for someone outside the repo's `users`, a
   closed pull request, or one with a run going or queued.
 
-- **Security risk of `fix`**: the review's findings, a model's output, become the message of a
-  run that can push. A comment written to steer the reviewer (a prompt injection) could turn
-  into a finding the fix run carries out. Deckhand narrows it: the review reads only the
-  comments of allowed users who may start work runs (`runs:start:work`) and its own (an outsider's is left out, quote it to have it read),
-  only Deckhand's own pull requests get a fix, and the fix run is told the findings are claims
-  to check, never instructions (no commands from them, no CI, workflow, `.deckhand.yaml` or
-  credential changes the issue didn't ask for). It is not a guarantee: turn `fix` on where
-  those who comment are trusted, and read what a fix pushed before merging
+- **Security risk of `fix`**: the review's findings, a model's output, become the message of a run
+  that can push. A comment written to steer the reviewer (a prompt injection) could turn into a
+  finding the fix run carries out. Deckhand narrows it: the review reads only the comments of
+  allowed users who may start work runs (`runs:start:work`) and its own (an outsider's is left out,
+  quote it to have it read), only Deckhand's own pull requests get a fix, and the fix run is told
+  the findings are claims to check, never instructions (no commands from them, no CI, workflow,
+  `.deckhand.yaml` or credential changes the issue didn't ask for). It is not a guarantee: turn
+  `fix` on where those who comment are trusted, and read what a fix pushed before merging
   ([Security model](security.md#review-fix-runs)).
-- **What it reads**: the diff, and the thread (the pull request's description, comments and
-  reviews, and the issue it closes) as Deckhand hands it over: only what Deckhand and
-  the allowed users who may start work runs there (the access decision's `runs:start:work`, a
-  viewer's comments left out too) wrote. Anyone else's comment is left out, its place saying so: an allowed user
-  who wants the review to take it into account quotes it.
+- **What it reads**: the diff, and the thread (the pull request's description, comments and reviews,
+  and the issue it closes) as Deckhand hands it over: only what Deckhand and the allowed users who
+  may start work runs there (the access decision's `runs:start:work`, a viewer's comments left out
+  too) wrote. Anyone else's comment is left out, its place saying so: an allowed user who wants the
+  review to take it into account quotes it.
 - **The run**: fresh, in a clone and session of its own like a brainstorm's, and with
   Deckhand's defaults (`mode-review.rego`) no branch, no setup and no write; the agent, model
   and effort of light runs unless the block names others. Its instructions
