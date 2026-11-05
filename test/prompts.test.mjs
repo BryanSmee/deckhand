@@ -306,6 +306,10 @@ test("the onboarding prompt fits one environment string (TASK_PROMPT), its refer
   assert.doesNotMatch(text, /### The (run|merge|GitHub) input/);
   assert.match(text, /The policies' inputs, field by field, are in docs\/repo-config\.md/);
   assert.match(text, /### The default policies/);
+  // How a review's reply is read, left out the same way, with its own pointer (#662).
+  assert.doesNotMatch(text, /How a review's items are read|A block that doesn't validate/);
+  assert.match(text, /How Deckhand reads a review's reply \([^)]*\) is in docs\/repo-config\.md/);
+  assert.match(text, /- \*\*A plausibility bar for findings\.\*\*/);
   assert.doesNotMatch(text, /onboarding: (skip|end)/);
   assert.equal(
     compactTables(
@@ -844,6 +848,47 @@ test("prompts: a review's verdict rule says what its tolerance lets through", ()
     /With medium\n {2}findings and no critical or high one nor blocking comment, the verdict is\n {2}`comment`, and the summary says the medium findings don't block it\. A\n {2}blocking comment still blocks\./,
   );
   assert.doesNotMatch(medium, /<blocking>|<tolerated>/);
+});
+
+test("prompts: a review's findings meet a plausibility bar; contrived edge cases are notes (#662)", () => {
+  const issue = { repo: "org/app", number: 12, kind: "issue", base: "main" };
+  const review = promptFor(issue, { mode: "review", pull: 31 });
+  // Each Must fix finding names its trigger; a contrived one is a note, or left out.
+  assert.match(
+    review,
+    /a Must fix finding names the concrete, plausible situation that triggers\nit/,
+  );
+  assert.match(review, /A trigger that needs contrived conditions makes no finding/);
+  assert.match(
+    review,
+    /a trusted party \(the operator, an allowed user, the\nrepository's own code\) acting against itself, or a value no caller produces/,
+  );
+  assert.match(
+    review,
+    /Such a case is a\n\*\*note\*\* under Comments, with its trigger, or left out\./,
+  );
+  // Security keeps its bar: untrusted input is plausible by definition.
+  assert.match(
+    review,
+    /Security keeps its own bar: input an\nuntrusted party controls[^]*is plausible by definition/,
+  );
+  // Severities weigh likelihood; "the higher one" only for security and data loss.
+  assert.match(review, /- \*\*medium\*\*: an edge case a user or operator can plausibly hit/);
+  assert.match(review, /- \*\*low\*\*: a real defect with a plausible trigger and a small cost/);
+  assert.match(
+    review,
+    /Hardening, defensive coding\n {2}and a theoretical case are notes, under Comments, never low findings/,
+  );
+  assert.match(
+    review,
+    /pick the higher one for security and data loss, and otherwise the one the\ntrigger's likelihood supports/,
+  );
+  assert.doesNotMatch(review, /When unsure between two severities, pick the higher one\./);
+  // An empty Must fix is a valid result.
+  assert.match(
+    review,
+    /nor raising improbable\n {3}ones: a review with nothing under Must fix is a valid result/,
+  );
 });
 
 test("prompts: a work run follows its capabilities: no push, no branch talk; no pull, no clone or gh", () => {
