@@ -26,6 +26,8 @@ import { createLogs } from "../runner/logs.mjs";
 import { createRunnerService, ROUTES } from "../runner/service.mjs";
 import { runnerMetrics } from "../runner/metrics.mjs";
 import { createRegistry } from "../lib/metrics.mjs";
+import { chatSandbox } from "../runner/spec-check.mjs";
+import { sandboxName } from "../listener/repo-config.mjs";
 import { grantsFrom } from "../listener/grants.mjs";
 import {
   assertHealth,
@@ -1007,6 +1009,59 @@ test("only this deployment's sandboxes and runs' networks: never another contain
   assert.equal(await status("DELETE", "/sandboxes/dh-o-a-1?run=dh-o-a-1-2"), 409);
   assert.equal(await status("POST", "/sandboxes/dh-o-a-1/kill"), 200);
   assert.equal(await status("DELETE", "/sandboxes/dh-o-a-1?run=dh-o-a-1-1"), 200);
+});
+
+test("a chat's session volumes: removed for a chat's key and sandbox only, once its sandbox is gone (#476)", async (t) => {
+  const store = fileStore();
+  const backend = host();
+  const { url } = await copy(t, { store, backend });
+  const key = "o/a#chat-0123456789abcdef";
+  const name = chatSandbox(config, key);
+  assert.equal(name, sandboxName(config, "o/a", "chat-0123456789abcdef"));
+  // Not a chat's: an issue's key, an id that isn't 16 hex digits.
+  assert.equal(chatSandbox(config, "o/a#1"), null);
+  assert.equal(chatSandbox(config, "o/a#chat-12"), null);
+  assert.equal(chatSandbox(config, "o/a#chat-0123456789abcdef/x"), null);
+  const issue = sandboxName(config, "o/a", "1");
+  const other = chatSandbox(config, "o/a#chat-fedcba9876543210");
+  for (const volume of [
+    `${name}-light-workspace`,
+    `${name}-light-claude`,
+    `${name}-light-trusted-codex`,
+    `${issue}-workspace`,
+    `${issue}-light-workspace`,
+    `${other}-light-workspace`,
+  ]) {
+    backend.volumes.set(volume, {});
+  }
+  const remove = (n, task) =>
+    call(url, "DELETE", `/sessions/${n}?task=${encodeURIComponent(task)}`, {
+      sub: "orchestrator",
+    });
+  // An issue's sessions, or a name that isn't the key's chat's: refused.
+  assert.equal((await remove(issue, "o/a#1")).status, 400);
+  assert.equal((await remove(issue, key)).status, 400);
+  assert.equal((await remove(other, key)).status, 400);
+  // Its sandbox still there: refused.
+  backend.containers.set(name, { running: false, ip: "10.0.0.11" });
+  assert.equal((await remove(name, key)).status, 409);
+  backend.containers.delete(name);
+  const done = await remove(name, key);
+  assert.equal(done.status, 200);
+  assert.deepEqual((await done.json()).removed.sort(), [
+    `${name}-light-claude`,
+    `${name}-light-trusted-codex`,
+    `${name}-light-workspace`,
+  ]);
+  assert.deepEqual(
+    [...backend.volumes.keys()].sort(),
+    [`${issue}-light-workspace`, `${issue}-workspace`, `${other}-light-workspace`].sort(),
+  );
+  // Only the orchestrator asks it.
+  const models = await call(url, "DELETE", `/sessions/${name}?task=${encodeURIComponent(key)}`, {
+    sub: "models",
+  });
+  assert.equal(models.status, 403);
 });
 
 test("a log file uploaded: parts end where its redaction's did, so the store finds no token it didn't", async (t) => {

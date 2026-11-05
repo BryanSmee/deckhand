@@ -50,11 +50,45 @@ export function noLongerAllowed(config, item, settings = null) {
   return null;
 }
 
+// Whether `task` is a user's chat (chats.mjs): its key is `<repo>#chat-<id>`, it has no issue.
+export const isChat = (task) => task?.kind === "chat";
+
+// The pools a task's runs take their slots in (#476): `shared`, the issues', pull requests' and
+// discussions', under MAX_PARALLEL, AUTO_PICKUP_SLOTS and the repos' max_parallel; `chats`, the
+// users' chats, under MAX_RUNNING_CHATS (machines, #594, add `machine:<id>`). Each counts against
+// its own cap (repo-config.mjs startable()): one never holds another's run back.
+export const SHARED = "shared";
+export const CHATS = "chats";
+// A task saved before tasks had a pool: a chat's, else shared.
+export const poolOf = (task) => task?.pool ?? (isChat(task) ? CHATS : SHARED);
+
+// Each pool's cap but shared's (MAX_PARALLEL, which startable() takes on its own).
+export const poolCaps = (config) => new Map([[CHATS, config.maxRunningChats ?? 0]]);
+
+// Its sandbox counted among its pool's runs going: shared's in `ctx.running` (MAX_PARALLEL), the
+// others' in `ctx.pools` (pool → count). `n` is 1 as it starts, -1 once it is over.
+export function countRun(ctx, task, n) {
+  const pool = poolOf(task);
+  if (pool === SHARED) ctx.running += n;
+  else {
+    ctx.pools ??= new Map();
+    ctx.pools.set(pool, (ctx.pools.get(pool) ?? 0) + n);
+  }
+}
+
+// How many runs of pool `pool` are going (countRun()).
+export const runningIn = (ctx, pool) =>
+  pool === SHARED ? ctx.running : (ctx.pools?.get(pool) ?? 0);
+
 // A task with nothing queued nor running yet: `fields` are the comment's (repo, id, kind,
-// number, base, name, settings), or those a listener left (restart.mjs).
+// number, base, name, settings), or those a listener left (restart.mjs); with its `owner`, a
+// login whose task it is alone (a chat's: chats.mjs), null for the repo's users' tasks, and its
+// `pool` (poolOf()).
 export function newTask(fields) {
   return {
+    owner: null,
     ...fields,
+    pool: poolOf(fields),
     pending: [],
     running: false,
     ready: false,
@@ -423,7 +457,9 @@ export function createTasks(ctx) {
     return isApart(task.pending.at(-1)?.mode);
   }
 
+  // A chat's message is sent whole, by its button: no burst to wait for.
   function debounce(task) {
+    if (isChat(task)) return 0;
     return talking(task) ? config.brainstormDebounceMs : config.debounceMs;
   }
 
@@ -508,7 +544,7 @@ export function createTasks(ctx) {
     const rank = (t) => ranks.get(taskId(taskKey(t.repo, t.id))) ?? Infinity;
     const since = (t) => t.pending[0].queuedAt ?? 0;
     return [...tasks.values()]
-      .filter((t) => !t.running && t.pending.length)
+      .filter((t) => !t.running && t.pending.length && poolOf(t) === SHARED)
       .sort(
         (a, b) =>
           Number(talking(b)) - Number(talking(a)) || rank(a) - rank(b) || since(a) - since(b),
@@ -522,21 +558,29 @@ export function createTasks(ctx) {
     // task whose run() is still reading its settings: `running`, its comments not taken yet.
     const waiting = [...tasks.values()].filter((t) => t.pending.length && !t.live);
     ctx.order?.keep(waiting.map((t) => taskKey(t.repo, t.id)));
-    const ready = queued.filter((t) => t.ready);
+    // The other pools' tasks after, by when their message came: startable() gives each its
+    // pool's slots.
+    const since = (t) => t.pending[0].queuedAt ?? 0;
+    const others = [...tasks.values()]
+      .filter((t) => !t.running && t.pending.length && poolOf(t) !== SHARED)
+      .sort((a, b) => since(a) - since(b));
+    const ready = [...queued, ...others].filter((t) => t.ready);
     const perRepo = new Map();
     let auto = 0;
     for (const t of tasks.values()) {
-      if (!t.running) continue;
+      if (!t.running || poolOf(t) !== SHARED) continue;
       perRepo.set(t.repo, (perRepo.get(t.repo) ?? 0) + 1);
       if (pickedTask(t)) auto++;
     }
-    const reserved = {
+    const caps = poolCaps(config);
+    const options = {
       reserved: config.autoPickupSlots ?? 0,
       auto,
       waiting: queued.filter(pickedTask),
       picked: pickedTask,
+      pools: { of: poolOf, caps, running: (pool) => runningIn(ctx, pool) },
     };
-    for (const task of startable(ready, perRepo, ctx.running, config.maxParallel, reserved)) {
+    for (const task of startable(ready, perRepo, ctx.running, config.maxParallel, options)) {
       ctx.run(task);
     }
   }
@@ -563,7 +607,9 @@ export function createTasks(ctx) {
   // which can start now.
   function pickedCount() {
     const list = [...tasks.values()];
-    const runningIn = (repo) => list.filter((t) => t.running && t.repo === repo).length;
+    // The shared pool's runs only, as schedule() counts a repo's max_parallel: not its chats.
+    const runningIn = (repo) =>
+      list.filter((t) => t.running && t.repo === repo && poolOf(t) === SHARED).length;
     // A repo without a cap of its own below MAX_PARALLEL holds nothing back: every slot is
     // busy then, and the task waits for the next one as any other.
     const room = (t) => {
@@ -602,7 +648,8 @@ export function createTasks(ctx) {
   function repoLoad(repo) {
     const name = repo.toLowerCase();
     return [...tasks.values()].filter(
-      (t) => t.repo.toLowerCase() === name && (t.running || t.pending.length),
+      (t) =>
+        poolOf(t) === SHARED && t.repo.toLowerCase() === name && (t.running || t.pending.length),
     ).length;
   }
 

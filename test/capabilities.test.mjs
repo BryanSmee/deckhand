@@ -459,9 +459,12 @@ test(
       if (RESEARCH.has(mode)) assert.deepEqual(allowed, ["internet"], mode);
       else {
         assert.ok(has("pull") && !has("internet"), mode);
-        for (const c of ["push", "setup", "docker", "image:branch"]) {
+        for (const c of ["push", "docker", "image:branch"]) {
           assert.equal(has(c), !APART.has(mode), `${mode}: ${c}`);
         }
+        // A chat runs the repository's setup in its own workspace (#476), without its caches
+        // (preparation.mjs).
+        assert.equal(has("setup"), !APART.has(mode) || mode === "chat", `${mode}: setup`);
         // Discussions for discussion runs only, as their token had.
         const discussions = mode === "discussion";
         assert.equal(has("read:discussions"), discussions, mode);

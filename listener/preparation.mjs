@@ -26,6 +26,7 @@ import { reviewThread } from "./reviews.mjs";
 import { personStarted, runTrigger } from "./run-policy.mjs";
 import { buildOutput, enterPhase } from "./runlog.mjs";
 import { operatorSecrets, redact } from "./secrets.mjs";
+import { isChat } from "./tasks.mjs";
 
 // What a research run reads of its issue: the last comments, each clipped.
 const THREAD_COMMENTS = 50;
@@ -412,13 +413,18 @@ export function createPreparation(ctx) {
       const { keepsCaches, noCaches } = (await ctx.images.info?.()) ?? ctx.images;
       const setup = caps.has("setup");
       const internet = caps.has("internet");
-      if (fork && setup && settings.caches?.length) note("No caches: a pull request from a fork");
+      // Nor a chat's: its workspace is its own and kept, and the caches are the work runs'.
+      const chat = isChat(task);
+      if (chat && setup && settings.caches?.length)
+        note("No caches: a chat keeps its own workspace");
+      else if (fork && setup && settings.caches?.length)
+        note("No caches: a pull request from a fork");
       else if (internet && setup && settings.caches?.length)
         note("No caches: this run reaches the open internet");
       else if (setup && settings.caches?.length && keepsCaches === false)
         note(`No caches: ${noCaches ?? `the ${config.runner} runner keeps none`}`);
       const caches =
-        !setup || fork || internet
+        !setup || fork || internet || chat
           ? []
           : await ctx.images.caches(task.repo, settings.caches, image);
       return { image, caches, settings };

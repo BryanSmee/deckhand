@@ -21,7 +21,7 @@ export function sameOrigin(req, publicUrl) {
 
 // A repo outside ALLOWED_REPOS, or one the user has no action on: the same answer, so that
 // neither tells the other apart.
-const hidden = (repo) => ({ error: `${repo} isn't one of this dashboard's repositories.` });
+export const hidden = (repo) => ({ error: `${repo} isn't one of this dashboard's repositories.` });
 
 // A route whose action couldn't be decided (a policy error, a policy service away): refused,
 // saying so, once the repo is known to be visible (else it is hidden()).
@@ -47,8 +47,8 @@ export async function mustDo(permissions, user, repo, action) {
 
 // A dashboard API's handle(req, res, user): what every route of work.mjs, discussions.mjs
 // and repos.mjs checks the same way, in the same order. `route(pathname)`: { what, repo, ... }
-// for a path of this API (`repo` null for one that names none), or null. `gets` and `posts`:
-// what → handler(req, res, user, repo, route). The handler throws Refused for what the
+// for a path of this API (`repo` null for one that names none), or null. `gets`, `posts` and
+// `deletes`: what → handler(req, res, user, repo, route). The handler throws Refused for what the
 // dashboard shows as it is; any other error is a 502, the stack in the logs.
 // `allowed(repo)`: ALLOWED_REPOS (config.mjs repoAllowed()). `named(repo)`: the name the
 // handler gets, GitHub's spelling (repo-check.mjs nameOf()). `name`: the log lines' prefix.
@@ -62,6 +62,7 @@ export function apiRoute({
   route,
   gets = {},
   posts = {},
+  deletes = {},
   allowed = () => true,
   permissions = null,
   action = () => null,
@@ -75,17 +76,20 @@ export function apiRoute({
     if (!found) return false;
     const { what, repo = null } = found;
     const run = async () => {
-      const get = Object.hasOwn(gets, what) ? gets[what] : null;
-      const post = Object.hasOwn(posts, what) ? posts[what] : null;
-      const methods = [post && "POST", get && "GET"].filter(Boolean);
+      const handlers = {
+        POST: Object.hasOwn(posts, what) ? posts[what] : null,
+        GET: Object.hasOwn(gets, what) ? gets[what] : null,
+        DELETE: Object.hasOwn(deletes, what) ? deletes[what] : null,
+      };
+      const methods = Object.keys(handlers).filter((m) => handlers[m]);
       if (!methods.includes(req.method)) {
         return send(res, 405, { error: `${methods.join(" or ")} only.` });
       }
       if (!user) return send(res, 401, { error: "Sign in first." });
-      // The Origin first: another site's POST costs no decision (which may read GitHub), and is
-      // answered the same whatever the repo, so that a hidden one isn't told from one outside
-      // ALLOWED_REPOS.
-      if (req.method === "POST" && !sameOrigin(req, publicUrl())) {
+      // The Origin first: another site's POST or DELETE costs no decision (which may read
+      // GitHub), and is answered the same whatever the repo, so that a hidden one isn't told
+      // from one outside ALLOWED_REPOS.
+      if (req.method !== "GET" && !sameOrigin(req, publicUrl())) {
         log(`${name}: refused for ${user}: Origin ${req.headers.origin ?? "missing"}`);
         return send(res, 403, { error: "Not from this dashboard." });
       }
@@ -107,7 +111,7 @@ export function apiRoute({
         }
       }
       const spelled = repo && (await named(repo));
-      return (req.method === "GET" ? get : post)(req, res, user, spelled, found);
+      return handlers[req.method](req, res, user, spelled, found);
     };
     run().catch((error) => {
       if (error instanceof Refused) {

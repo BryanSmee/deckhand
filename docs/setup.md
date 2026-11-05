@@ -592,6 +592,9 @@ What every sandbox may reach and its limits aren't settings: they go in
 | `SANDBOX_FAST_MODE`                                                                               | `sandbox_fast_mode`                                                                               | off                                                                          | `allowed`: `/speed fast` turns on Claude Code's fast mode, which costs more (see [Fast mode](#fast-mode))                                                                                                                                          |
 | `BRAINSTORM_IDLE_MINUTES`                                                                         | `brainstorm_idle_minutes`                                                                         | `10`                                                                         | minutes without a comment before a brainstorm shows as idle                                                                                                                                                                                        |
 | `MAX_PARALLEL`                                                                                    | `max_parallel`                                                                                    | `2`                                                                          | sandboxes running at once (a repo's `max_parallel` within it)                                                                                                                                                                                      |
+| `CHATS_PER_USER`                                                                                  | `chats_per_user`                                                                                  | `2`                                                                          | chats a user keeps from the dashboard, across the repositories, running or not (a repo's `chats.per_user` within it; `0`: none; see [Chats](#chats))                                                                                               |
+| `CHAT_IDLE_MINUTES`                                                                               | `chat_idle_minutes`                                                                               | `30`                                                                         | minutes after a chat's last message or answer before its sandbox stops; the next message starts it again, in the same conversation                                                                                                                 |
+| `MAX_RUNNING_CHATS`                                                                               | `max_running_chats`                                                                               | `2`                                                                          | chats' sandboxes running at once, apart from `MAX_PARALLEL` (`0`: none start, and messages are refused)                                                                                                                                            |
 | `AUTO_PICKUP_SLOTS`                                                                               | `auto_pickup_slots`                                                                               | `0` (off)                                                                    | slots within `MAX_PARALLEL` for the issues the orchestrator starts by itself (below MAX_PARALLEL; [Auto-pickup](#auto-pickup))                                                                                                                     |
 | `AUTO_PICKUP_LABEL`                                                                               | `auto_pickup_label`                                                                               | `auto-pickup`                                                                | the label that asks for it                                                                                                                                                                                                                         |
 | `SANDBOX_SUBNETS`, `SANDBOX_SUBNET_SIZE`                                                          | `sandbox_subnets`, `sandbox_subnet_size`                                                          | none (Docker's pools), `28`                                                  | an IPv4 range the runs' networks take their subnets from, in blocks of that size (below the table)                                                                                                                                                 |
@@ -712,6 +715,37 @@ The dashboard marks auto-picked tasks with a bolt (named "Auto-pickup" for scree
 on hover). Its run slots' meter keeps the reserved slots last: dashed while free, teal while an
 auto-picked run holds one, blue and still dashed while a standard run borrows it. The line under
 it says how they are used ("1 auto-pickup slot (1 in use)", "… (free)").
+
+### Chats
+
+A chat is a conversation a user has with the agent on one repository, from the dashboard
+rather than an issue (`/api/chats`, [architecture.md](architecture.md#chats)). It runs in
+the repository's image, with its grants (hosts, setup) and under its `users`, in volumes of
+its own, and its answers stay in the conversation: Deckhand's default policies
+(`policy/mode-chat.rego`) give it the code, its setup and its reads, no branch, no engine and
+no GitHub write. Only its owner sees it.
+
+- `CHATS_PER_USER` (2) is how many chats a user keeps, running or not, across the
+  repositories; a repository's `chats.per_user` may lower it ([repo-config.md](repo-config.md#chats)).
+  `0`: no chats.
+- `MAX_RUNNING_CHATS` (2) is how many chats' sandboxes run at once, apart from
+  `MAX_PARALLEL`: chats never hold an issue's run back, nor the other way round. A message
+  waits for a slot otherwise. `0`: none start, and messages are refused.
+- `CHAT_IDLE_MINUTES` (30): a chat's sandbox waits that long after the user's last message
+  or the agent's last answer, whichever came later, then stops. The next message starts it
+  again, in the same conversation, with the clone's commits and branches but not its
+  uncommitted files.
+
+With Claude Code, a chat's sandbox waits between messages, and each message goes to it.
+Codex and the Antigravity CLI take no message while they run: each message of a chat with one
+of them is a run of its own, a new sandbox in the same conversation, which stops once it has
+answered.
+
+A chat's reset drops its volumes and its conversation, and keeps it; deleting it removes its
+volumes and its runs' logs too. A user taken out of `ALLOWED_USERS` or a repository's `users`,
+or whose [access](repo-config.md#access) there no longer gives `runs:start:chat`, can no longer
+send a message there, and their chat's sandbox stops; its volumes stay until it
+is deleted.
 
 ### Fast mode
 

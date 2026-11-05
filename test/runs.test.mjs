@@ -347,6 +347,70 @@ test("unqueue: a queued task's latest comment leaves the queue for a wait, the o
   await following;
 });
 
+test("a chat's run (#476): its inbox stays open between answers, its idle rest stops it, nothing posted", async (t) => {
+  const { ctx, runs, runner, task, answers, settled, following } = setup(t, {
+    mode: "chat",
+    graceMs: 30,
+  });
+  Object.assign(task, { kind: "chat", id: "chat-0123456789abcdef", number: null });
+  task.live.handled = [{ kind: "chat", author: "alice", text: "hi" }];
+  task.pool = "chats";
+  ctx.pools = new Map([["chats", 1]]);
+  ctx.running = 0;
+  let deliveries = 0;
+  ctx.deliver = () => (deliveries++, false);
+  runner.out(result("run() starts a run."));
+  // Nothing more to send: the sandbox still waits for the user's next message.
+  assert.equal(deliveries, 1);
+  assert.equal(runner.closes, 0);
+  assert.equal(task.live.open, true);
+  assert.equal(task.live.answered, false);
+  await sleep(60);
+  assert.equal(runner.kills, 0);
+  // CHAT_IDLE_MINUTES later (chats.mjs): its inbox closes, and as it said all it had to, its
+  // sandbox stops after the grace if it doesn't exit by itself.
+  assert.equal(runs.rest(task), true);
+  assert.equal(runner.closes, 1);
+  assert.equal(task.live.answered, true);
+  await following;
+  assert.equal(runner.kills, 1);
+  // Its answers are in its log, which its owner reads: no reply, no reaction.
+  assert.deepEqual(answers, []);
+  assert.deepEqual(settled, ["ok"]);
+  assert.equal(ctx.pools.get("chats"), 0);
+  assert.equal(ctx.running, 0);
+});
+
+test("a restored chat whose inbox isn't known open (the runner didn't answer): its idle rest still closes it, and stops it", async (t) => {
+  const { runs, runner, task, answers, following } = setup(t, { mode: "chat", graceMs: 30 });
+  Object.assign(task, { kind: "chat", id: "chat-0123456789abcdef", number: null });
+  // restart.mjs restoreRuns(): `closed()` threw, `open` left false; it had answered.
+  Object.assign(task.live, { open: false, result: { ok: true, text: "Done.", durationMs: 1 } });
+  assert.equal(runs.rest(task), true);
+  assert.equal(runner.closes, 1, "closed at the runner all the same");
+  assert.equal(task.live.answered, true);
+  // Once: it lingers now.
+  assert.equal(runs.rest(task), false);
+  await following;
+  assert.equal(runner.kills, 1);
+  assert.deepEqual(answers, []);
+});
+
+test("a chat's run resting while its agent works: its inbox closes, it answers and exits", async (t) => {
+  const { runs, runner, task, answers, following } = setup(t, { mode: "chat", graceMs: 30 });
+  Object.assign(task, { kind: "chat", id: "chat-0123456789abcdef", number: null });
+  task.live.unanswered = [{ text: "a long one" }];
+  assert.equal(runs.rest(task), true);
+  assert.equal(task.live.answered, false);
+  runner.out(result("Done with the long one."));
+  assert.equal(task.live.answered, true);
+  await following;
+  assert.equal(runner.kills, 1);
+  assert.deepEqual(answers, []);
+  // Nothing to rest once it ends.
+  assert.equal(runs.rest(task), false);
+});
+
 test("output after the answer postpones its stop", async (t) => {
   const { runner, answers, following } = setup(t, { graceMs: 80 });
   // The test's clock: a pause between a line and the next 40 ms wait (a busy runner's) would

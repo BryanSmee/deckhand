@@ -627,16 +627,20 @@ the host. What the runner
 does, it does for its callers, each endpoint naming which (`runner/service.mjs` `ROUTES`, checked
 with their service tokens first, below):
 
-| Caller       | May                                                                                                                                                                                                                                                                                                                                                                                                                  |
-| ------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| orchestrator | start, follow, message, stop and remove sandboxes; build images, install agents, prepare caches; write and remove logs; and, for the egress policy, ask where an address is, the egress proxy's addresses, whether a sandbox installs its agent, and read a run's inbox and files, and read a run's log, for the dashboard's live view too, which edge passes on (unfenced: a copy still draining answers the proxy) |
-| models       | have the Antigravity login refreshed: it sends the token file, never a container to run                                                                                                                                                                                                                                                                                                                              |
+| Caller       | May                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| ------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| orchestrator | start, follow, message, stop and remove sandboxes, and a chat's session volumes; build images, install agents, prepare caches; write and remove logs; and, for the egress policy, ask where an address is, the egress proxy's addresses, whether a sandbox installs its agent, and read a run's inbox and files, and read a run's log, for the dashboard's live view too, which edge passes on (unfenced: a copy still draining answers the proxy) |
+| models       | have the Antigravity login refreshed: it sends the token file, never a container to run                                                                                                                                                                                                                                                                                                                                                            |
 
 None can act on a container or a network that isn't one of this deployment's runs: the runner
 stops, follows and removes only the sandboxes it lists by their labels (`deckhand.owner`,
 `deckhand.run`), their engines, volumes, pods and Secrets only when their own labels say they are
 that run's, a sandbox's run must be its own (`<name>-<ms>`), and a network goes only when its
-labels say it is that run's (a start removes only the one it made). None can name a container's
+labels say it is that run's (a start removes only the one it made). Session volumes go only for
+a chat's reset or deletion (`DELETE /sessions/<name>?task=<key>`): the key must be a chat's
+(`<repo>#chat-<16 hex digits>`), the name its sandbox's (`runner/spec-check.mjs`
+`chatSandbox()`), with no sandbox of that name left, and only that sandbox's session volumes
+(on Kubernetes, claims labelled as this deployment's sessions): an issue's are never removed. None can name a container's
 image, mounts or capabilities beyond a sandbox spec
 (`listener/sandbox-spec.mjs`), which the runner turns into Docker's options: `--cap-drop ALL`, `no-new-privileges`, the operator's limits and a user. And it
 checks the spec again first, against the grants folder it reads itself and the operator's
@@ -2158,7 +2162,8 @@ only. An open live log stops within a second of its viewer losing `logs:read` (l
 repository's `users` included). Edge checks the session on each request it passes on, not during
 a stream: a live log already open goes on after a sign-out until its stream ends or reconnects.
 The dashboard only shows the controls a user's actions allow: what it hides is still refused by
-the orchestrator, which decides every request again.
+the orchestrator, which decides every request again. A chat's runs and
+logs are its owner's alone ([The dashboard's actions](#the-dashboards-actions)).
 
 Every answer on edge's port carries `Content-Security-Policy: default-src 'self';
 frame-ancestors 'none'` and `X-Content-Type-Options: nosniff`: the dashboard runs its own
@@ -2391,6 +2396,32 @@ Comment triggers aren't held back for a run's questions either way (`tasks.mjs`
 `unanswered()`); an issue's own open questions still go by the label. The label put back asks
 again, and so does the dismiss API's `undo` for that run (the dashboard shows no Undo for
 these).
+
+A chat (`/api/chats`, `listener/chats.mjs`, [architecture.md](architecture.md#chats)) is
+created, and each of its messages sent, with the repository's half of these checks (same
+origin, the repository in `ALLOWED_REPOS` and the App installed on it, a config without
+errors, the user in `ALLOWED_USERS` and the repository's `users`, with the
+`runs:start:chat` [action](#access) there, a repository they have no action on answering as one
+outside `ALLOWED_REPOS`), at each request: a user taken out of any of them can't send another
+message, and a sandbox of theirs still going is stopped, then and within a minute anyway (from
+the repository's `users` as last read, and the access decision; one that fails stops nothing).
+Their chats' volumes stay until they are deleted. A chat is its owner's alone: another user doesn't
+list it, can't send it a message, reset or delete it (a `404`, as for a chat that doesn't
+exist), nor read its runs' logs (`GET /api/runs/<id>/stream`), which the board, `/status` and
+the run analyses leave out. Reset and Delete take the same origin and the owner's session
+only, so a user who lost access can still drop what they left: their chat still lists for them,
+without its runs (listed with `logs:read` only), whose logs are refused them too. `CHATS_PER_USER` caps the chats
+a user keeps across the repositories (a repository's `chats.per_user` lowers it, never raises
+it), and `MAX_RUNNING_CHATS` the chats' sandboxes running at once, apart from `MAX_PARALLEL`.
+
+What a chat's sandbox gets is its policies' (`policy/mode-chat.rego`, which a grants folder's
+file of that name replaces): the repository's code, its setup and its reads, never `push`, an
+engine or a GitHub write (no `allow_github` rule allows any for the `chat` mode: the GitHub
+gateway refuses them all), and its answers stay in its log. Its volumes are its own (its
+task's sandbox name, `<repo>#chat-<id>`'s), never an issue's, and it gets none of the
+repository's caches: nothing a chat leaves behind runs in a work run, with a work run's token.
+Its prompt and its messages are the user's own words, read by the agent as an allowed user's
+comment would be.
 
 An inbox entry sent from the dashboard (`POST /api/repos/<owner>/<repo>/inbox`) passes the
 repository's half of these checks (same origin, the user in `ALLOWED_USERS` and the repo's

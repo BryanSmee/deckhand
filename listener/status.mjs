@@ -6,6 +6,9 @@ import { AUTHS } from "./agents/credentials.mjs";
 import { parseKey } from "./events.mjs";
 import { GrantsError, grantErrors, loadGrants } from "./grants.mjs";
 
+// status()'s default: every repo's runs and queues, the chats' too (a local caller's).
+const everything = () => true;
+
 // Which Deckhand runs and since when, for api/state and /status. DECKHAND_VERSION: the release
 // (a git tag), edge-<short sha> for a commit of main that passed its checks, "dev" from source. DECKHAND_SOURCE: the
 // repository the image was built from, where the dashboard links the version ("" without
@@ -115,22 +118,27 @@ export function createStatus(ctx) {
   // the store's `brainstorms` and their volume. Nothing needs to drain before a restart. `sees(repo)`:
   // which repos' runs and queues are listed (a signed-in user's, http.mjs); `idle` is
   // the whole listener's either way.
-  function status(sees = () => true) {
+  function status(sees = everything) {
     const active = ctx.runs.filter((r) => r.status === "running");
+    // A run with an owner (a chat's, chats.mjs) only for the whole listener's: a signed-in
+    // user's lists none.
     const reasons = (shown) => [
       ...active
-        .filter((r) => shown(r.repo ?? parseKey(r.key)?.repo))
+        .filter((r) => (r.owner ? shown === everything : shown(r.repo ?? parseKey(r.key)?.repo)))
         .map((r) => `${r.kind} run ${r.key} since ${new Date(r.startedAt).toISOString()}`),
       ...(inflight.size ? [`${inflight.size} reaction update(s) in flight`] : []),
     ];
     return {
       version: ctx.server.version,
       startedAt: ctx.server.startedAt,
-      idle: ctx.running === 0 && !reasons(() => true).length,
+      idle:
+        ctx.running === 0 &&
+        ![...(ctx.pools?.values() ?? [])].some(Boolean) &&
+        !reasons(everything).length,
       reasons: reasons(sees),
       setUp: ctx.app !== null,
       queued: [...tasks.values()]
-        .filter((t) => sees(t.repo))
+        .filter((t) => (t.owner ? sees === everything : sees(t.repo)))
         .reduce((n, t) => n + t.pending.length, 0),
       now: Date.now(),
     };

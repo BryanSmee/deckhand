@@ -1762,6 +1762,26 @@ test("wait, kill and remove: the pod deleted with its grace, then with its Secre
   assert.equal(objects.pods.size + objects.secrets.size, 0);
 });
 
+test("removeSessions: a chat's session claims, never another deployment's or one that isn't a session's (#476)", async (t) => {
+  const { runner, objects } = setup(t);
+  const claim = (name, labels) =>
+    objects.persistentvolumeclaims.set(name, { metadata: { name, labels } });
+  claim("dh-o-a-chat-x-light-workspace", { "deckhand.owner": "dh", "deckhand.role": "session" });
+  claim("dh-o-a-chat-x-light-claude", { "deckhand.owner": "other", "deckhand.role": "session" });
+  claim("dh-o-a-chat-x-light-codex", { "deckhand.owner": "dh", "deckhand.role": "cache" });
+  const removed = await runner.removeSessions([
+    "dh-o-a-chat-x-light-workspace",
+    "dh-o-a-chat-x-light-claude",
+    "dh-o-a-chat-x-light-codex",
+    "dh-o-a-chat-x-light-missing",
+  ]);
+  assert.deepEqual(removed, ["dh-o-a-chat-x-light-workspace"]);
+  assert.deepEqual([...objects.persistentvolumeclaims.keys()].sort(), [
+    "dh-o-a-chat-x-light-claude",
+    "dh-o-a-chat-x-light-codex",
+  ]);
+});
+
 test("hasSession, address and proxyAddresses", async (t) => {
   const slices = [
     {

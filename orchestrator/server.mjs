@@ -34,6 +34,7 @@ import { createEgressHttp } from "../listener/egress-http.mjs";
 import { createGithubClient } from "../github/client.mjs";
 import { createProjects } from "../listener/projects.mjs";
 import { createBrainstorms, createIssueModes } from "../listener/brainstorms.mjs";
+import { createChats } from "../listener/chats.mjs";
 import { createComments } from "../listener/comments.mjs";
 import { createConflicts, intoDefaultBranch } from "../listener/conflicts.mjs";
 import {
@@ -1036,7 +1037,8 @@ ctx.repoApi = createRepoApi({
 // Run analyses (the dashboard's Analyze): digests of a repo's past runs, without the secrets
 // their logs must never carry.
 ctx.analysis = createAnalysis({
-  runs: () => ctx.runs,
+  // Never a chat's: its owner's alone (chats.mjs).
+  runs: () => ctx.runs.filter((r) => !r.chat),
   secrets: () => operatorSecrets(ctx),
   // From the runner, which keeps the logs.
   readLog: async (id) => (await ctx.logMoved(id), runnerClient.logs.text(id)),
@@ -1114,6 +1116,12 @@ ctx.discussionApi = createDiscussionApi({
   log,
 });
 
+// Users' chats from the dashboard (chats.mjs), with the work area's checks: tasks of their own,
+// whose runs are their owner's alone.
+ctx.chats = createChats(ctx, { checks: discussionChecks });
+// From the store, before the spellings and the requests that read them.
+await ctx.chats.load();
+
 // --- Servers -------------------------------------------------------------------------------
 
 // The App as edge has it, before what needs it at start. Edge away a while: the start goes on
@@ -1139,6 +1147,7 @@ const keyed = [
   ctx.waits,
   ctx.brainstorms,
   ctx.issueModes,
+  ctx.chats,
   inputs,
   pulls,
   ctx.conflicts,
@@ -1193,6 +1202,8 @@ ctx.waits.dedupe(
 );
 // A fix loop's step whose run neither came back nor waits in the queue: no longer on its way.
 ctx.reviews.forgetSteps(stepsGoing(ctx.tasks));
+// The chats' idle timers, from their last message, and who may still reach them.
+ctx.chats.start();
 // The keys of comments dropped as the queue came back (their author no longer allowed) stay in
 // the run order otherwise, and would rank a new comment there as placed.
 order.keep(ctx.queueOrder().map((t) => taskKey(t.repo, t.id)));
@@ -1379,6 +1390,7 @@ sigterm = () => {
   ctx.waits.stop();
   ctx.reviews.stop();
   ctx.autoPickup.stop();
+  ctx.chats.stop();
   history.stop();
   runEvents.stop();
   clearInterval(relinking);

@@ -1180,6 +1180,19 @@ export function createKubernetesRunner({
     return Boolean(await api.find(claimPath(`${name}-${agent.session.volume}`)));
   }
 
+  // A chat's session claims, each that exists and is this deployment's session claim: → the
+  // volumes removed.
+  async function removeSessions(volumes) {
+    const removed = [];
+    for (const volume of volumes) {
+      const claim = await api.find(claimPath(volume));
+      if (!ownedBy(claim) || claim.metadata?.labels?.[ROLE] !== "session") continue;
+      await api.remove(claimPath(volume));
+      removed.push(volume);
+    }
+    return removed;
+  }
+
   // Whether the sandbox's init container is installing its agent: its pod has one, and it
   // hasn't ended yet. Asked of the init container's own status, not the pod's phase, which
   // the kubelet reports Running only at its next sync, after the sandbox has started; and
@@ -1325,6 +1338,7 @@ export function createKubernetesRunner({
     kill,
     remove,
     hasSession,
+    removeSessions,
     installing,
     relink,
     proxyAddresses,
