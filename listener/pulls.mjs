@@ -5,11 +5,12 @@
 // ciSummary(), #436), kept up to date from CI's deliveries (ciChanged()) while it is open; a new
 // head resets it to `none` until something reports; the last one known stays once it is merged or
 // closed. `conflict`: whether its head conflicts with its base, as GitHub last computed it (absent
-// while unknown; a new head forgets it). `pull_request` webhooks keep it current (events.mjs pullRequest()), and the listener's
-// own record of the runs' changes (github-pulls.mjs); tasks older than that are looked up once per
+// while unknown; a new head forgets it), read again from the dashboard's Sync and after the
+// repo's default branch moved (baseMoved()), which no delivery of the pull request says.
+// `pull_request` webhooks keep it current (events.mjs pullRequest()), and the listener's own
+// record of the runs' changes (github-pulls.mjs); tasks older than that are looked up once per
 // listener start, from the repo's recent pull requests. Kept in the store (lib/store-map.mjs:
-// `pulls`), so a restart neither
-// forgets nor asks again. The open ones are asked about again at start and from the dashboard's
+// `pulls`), so a restart neither forgets nor asks again. The open ones are asked about again at start and from the dashboard's
 // Sync (resync()): a lost delivery would leave one a draft forever.
 import {
   linkedIssue,
@@ -26,16 +27,21 @@ import { respellMap, sameTask } from "./spelling.mjs";
 const open = (pr) => pr?.state === "draft" || pr?.state === "ready";
 // How many open pull requests' CI resync() reads at once (three GitHub calls each).
 const CI_AT_ONCE = 4;
+// How many open pull requests readMerge() reads at once (one GitHub call each).
+const MERGE_AT_ONCE = 4;
 
 // `listPulls(repo)`: the repo's recent pull requests, as GET /repos/{repo}/pulls has them;
 // `getPull(repo, number)`: one of them, or null.
 // `readCi(repo, sha)`: a commit's CI as GitHub has it now (ci.mjs commitCi()), or null.
-// `pulls`: the Map they are kept in (storeMap()'s).
+// `pulls`: the Map they are kept in (storeMap()'s). `mergeDelayMs`: baseMoved()'s wait, while
+// GitHub computes the mergeability again (CONFLICT_MERGE_DELAY_MS); `sleep(ms)`, for tests.
 export function createPulls({
   pulls = new Map(),
   listPulls,
   getPull = async () => null,
   readCi = async () => null,
+  mergeDelayMs = 30_000,
+  sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms).unref?.()),
   log = () => {},
 }) {
   // The tasks whose CI is being read (`key` → whether to read it once more after): deliveries
@@ -48,6 +54,12 @@ export function createPulls({
   const sizeAsked = new Set();
   let fetching = null;
   let resyncing = null;
+  // The keys the resync under way read with getPull(): a user's Sync sharing it doesn't read
+  // them again.
+  let resyncRead = new Set();
+  // repo (lowercase) → baseMoved()'s reads under way: the deliveries of one move (the push, the
+  // merged pull request's `closed`) share them.
+  const moving = new Map();
 
   // Records `pr` on task `key`, the latest event winning: the same pull request leaves the
   // task it was on (its "Closes #n" was edited, or a listener from before #287 kept it under
@@ -187,12 +199,18 @@ export function createPulls({
   // The open pull requests' states asked again from GitHub (one listing per repo, then those it
   // doesn't have or whose size isn't known one by one), and the tasks without one looked up
   // again at the next fill(). Resolves to how many changed state. One at a time: a second call shares it.
-  // `allCi`: the dashboard's Sync, which reads the CI of every open pull request again (a CI
-  // delivery lost on a settled head); at start, only those not settled.
-  function resync({ allCi = false } = {}) {
-    // One going (the one at start): shared, then every CI read too if asked.
-    if (resyncing) return allCi ? resyncing.then((n) => (catchUp(openHeads()), n)) : resyncing;
+  // `all`: the dashboard's Sync, which also reads every open pull request it didn't read itself
+  // (a listing doesn't say whether it conflicts, and a base that moved changes it without a
+  // delivery) and the CI of every one again (a CI delivery lost on a settled head), both after
+  // it resolves, so Sync doesn't wait for them; at start, only the CI of those not settled.
+  function resync({ all = false } = {}) {
+    // One going (the one at start): shared, then every pull request and CI read too if asked.
+    if (resyncing) {
+      const read = resyncRead;
+      return all ? resyncing.then((n) => (readAllLater(read), catchUp(openHeads()), n)) : resyncing;
+    }
     listed.clear();
+    const read = (resyncRead = new Set());
     resyncing = (async () => {
       const byRepo = new Map();
       for (const [key, pr] of openPulls()) {
@@ -210,6 +228,7 @@ export function createPulls({
           // Not listed, or its size not known yet (recorded from a listing, or before sizes
           // were): the pull request itself has it.
           if (!found || !("additions" in pr)) {
+            read.add(key);
             try {
               found = await getPull(repo, pr.number);
             } catch (error) {
@@ -257,8 +276,9 @@ export function createPulls({
       }
       // What CI deliveries lost meanwhile (the listener down, a delivery that failed): read
       // again for the open pull requests whose CI isn't settled for their head, after, so the
-      // dashboard's Sync doesn't wait for them.
-      catchUp(allCi ? openHeads() : stalePulls());
+      // dashboard's Sync doesn't wait for them. Its mergeability reads too.
+      if (all) readAllLater(read);
+      catchUp(all ? openHeads() : stalePulls());
       return changed;
     })().finally(() => (resyncing = null));
     return resyncing;
@@ -358,6 +378,79 @@ export function createPulls({
     if (pr.conflict !== conflict) pulls.set(key, { ...pr, conflict });
   }
 
+  // The repo's default branch moved (a push to it, a pull request merged into it): its open pull
+  // requests may conflict now, or no longer, at the same head, and no delivery of theirs says so.
+  // After mergeDelayMs, while GitHub computes it again, each is read (getPull()) and what it
+  // says recorded (sawMerge()); those GitHub hadn't computed yet are read once more after
+  // another wait, then keep what was known. The conflict watcher reads its repos too
+  // (conflicts.mjs soon()); this is for the dashboard, in every repo. Resolves once read; never throws.
+  function baseMoved(repo) {
+    const id = repo?.toLowerCase();
+    if (!id) return Promise.resolve();
+    if (moving.has(id)) return moving.get(id);
+    const done = (async () => {
+      await sleep(mergeDelayMs);
+      // A move from now on is after GitHub's answers this reads: a wait of its own.
+      moving.delete(id);
+      const keys = openPulls()
+        .filter(([key]) => sameRepo(parseKey(key)?.repo, repo))
+        .map(([key]) => key);
+      const pending = await readMerge(keys);
+      if (pending.length) {
+        await sleep(mergeDelayMs);
+        await readMerge(pending);
+      }
+    })().catch((error) => {
+      if (moving.get(id) === done) moving.delete(id);
+      log(`Pull requests of ${repo}: ${error.message ?? error}`);
+    });
+    moving.set(id, done);
+    return done;
+  }
+
+  // The open pull requests that `read` (the resync's) doesn't have read again, for a user's
+  // Sync, without waiting: caughtUp() resolves once they are.
+  let merging = Promise.resolve();
+  function readAllLater(read) {
+    const keys = openPulls()
+      .map(([key]) => key)
+      .filter((key) => !read.has(key));
+    const reads = readMerge(keys);
+    merging = Promise.all([merging, reads]);
+  }
+
+  // The open pull requests of `keys` read, MERGE_AT_ONCE at a time, whether each conflicts
+  // recorded. Resolves to the keys GitHub hadn't computed it for yet; never throws.
+  async function readMerge(keys) {
+    const pending = [];
+    const queue = [...keys];
+    const worker = async () => {
+      while (queue.length) {
+        const key = queue.shift();
+        if (await readOneMerge(key)) pending.push(key);
+      }
+    };
+    await Promise.all(Array.from({ length: MERGE_AT_ONCE }, worker));
+    return pending;
+  }
+
+  // Task `key`'s pull request read and whether it conflicts recorded, if it is still open.
+  // Resolves to whether GitHub hadn't computed it yet at the head recorded.
+  async function readOneMerge(key) {
+    const pr = pulls.get(key);
+    if (!open(pr)) return false;
+    let found;
+    try {
+      found = await getPull(parseKey(key).repo, pr.number);
+    } catch (error) {
+      log(`Pull requests: ${key} #${pr.number}: ${error.message ?? error}`);
+      return false;
+    }
+    if (!found) return false;
+    sawMerge(key, found);
+    return mergeConflict(found).conflict === undefined && found.head?.sha === pr.head;
+  }
+
   // Rekeyed with spelled() (restart.mjs unifySpellings()): the conflict watcher would start
   // runs under a key the rest of the state no longer has. Both spellings of one task: merged.
   function respell(spelled) {
@@ -371,8 +464,9 @@ export function createPulls({
     resync,
     ciChanged,
     sawMerge,
-    // The CI reads resync() started, for tests.
-    caughtUp: () => catching,
+    baseMoved,
+    // The CI and mergeability reads resync() started, for tests.
+    caughtUp: () => Promise.all([catching, merging]),
     open: openPulls,
     keys: () => [...pulls.keys()],
     respell,
