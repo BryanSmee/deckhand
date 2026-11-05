@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { request } from "node:http";
 import { test } from "node:test";
 import { escape, page, same } from "../listener/html.mjs";
 import { Refused, parseJson, readBody, readJsonBody, refuse, sendJson } from "../lib/http.mjs";
@@ -36,22 +37,61 @@ test("sendJson: never cached, with its status", async (t) => {
   assert.deepEqual(await res.json(), { ok: true });
 });
 
-test("readBody: the body up to its limit; past it, the request is dropped", async (t) => {
+// A POST sent in `chunks`, chunked (no length to refuse it by): its status, or the error that
+// cut it.
+function postChunked(url, chunks) {
+  return new Promise((resolve) => {
+    const req = request(url, { method: "POST" }, (res) => {
+      let text = "";
+      res.on("data", (chunk) => (text += chunk));
+      res.on("end", () => resolve({ status: res.statusCode, text }));
+    });
+    req.on("error", (error) => resolve(error));
+    for (const chunk of chunks) req.write(chunk);
+    req.end();
+  });
+}
+
+test("readBody: the body up to its limit; past it a 413 its client reads, chunked or not", async (t) => {
   const { url } = await serve(t, (req, res) =>
     readBody(req, 10).then(
       (body) => res.end(`got ${body}`),
-      (error) => res.end(error.message),
+      (error) => res.writeHead(error.status ?? 500).end(error.message),
     ),
   );
   assert.equal(
     await (await fetch(url, { method: "POST", body: "0123456789" })).text(),
     "got 0123456789",
   );
-  const big = await fetch(url, { method: "POST", body: "x".repeat(100000) }).then(
-    (res) => res.text(),
-    () => "dropped",
+  const big = await fetch(url, { method: "POST", body: "x".repeat(100000) });
+  assert.equal(big.status, 413);
+  assert.equal(await big.text(), "body over 10 bytes");
+  const chunked = await postChunked(url, Array(100).fill("x".repeat(1024)));
+  assert.deepEqual(chunked, { status: 413, text: "body over 10 bytes" });
+  // Still answered once the rest was dropped: the connection holds no more of it.
+  assert.equal(await (await fetch(url, { method: "POST", body: "small" })).text(), "got small");
+});
+
+test("readBody: far past its limit, the request is cut, declared that large or not", async (t) => {
+  const seen = [];
+  const { url } = await serve(t, (req, res) =>
+    readBody(req, 10, { drain: 1000 }).then(
+      (body) => res.end(`got ${body}`),
+      (error) => {
+        seen.push(error.status);
+        res.writeHead(error.status).end();
+      },
+    ),
   );
-  assert.match(big, /^(body over 10 bytes|dropped)$/);
+  // Declared: cut before a byte is read. The client may still read the 413 or see a reset.
+  const declared = await fetch(url, { method: "POST", body: "x".repeat(100000) }).then(
+    (res) => res.status,
+    () => "cut",
+  );
+  assert.match(String(declared), /^(413|cut)$/);
+  const chunked = await postChunked(url, Array(100).fill("x".repeat(1024)));
+  assert.ok(chunked instanceof Error || chunked.status === 413, String(chunked));
+  assert.deepEqual(seen, [413, 413]);
 });
 
 test("parseJson and readJsonBody: JSON, else a 400; past the limit, a 413", async (t) => {
@@ -63,14 +103,22 @@ test("parseJson and readJsonBody: JSON, else a 400; past the limit, a 413", asyn
   const { url } = await serve(t, (req, res) =>
     readJsonBody(req, 20).then(
       (body) => sendJson(res, { body }),
-      (error) => sendJson(res, { status: error.status, error: error.message }),
+      (error) => sendJson(res, { error: error.message }, error.status),
     ),
   );
-  const post = (body) => fetch(url, { method: "POST", body }).then((res) => res.json());
-  assert.deepEqual(await post('{"n":3}'), { body: { n: 3 } });
-  assert.deepEqual(await post("{"), { status: 400, error: "Not JSON." });
-  const big = await post(JSON.stringify({ text: "x".repeat(100000) })).catch(() => "dropped");
-  assert.ok(big === "dropped" || big.status === 413, JSON.stringify(big));
+  const post = (body) => fetch(url, { method: "POST", body });
+  assert.deepEqual(await (await post('{"n":3}')).json(), { body: { n: 3 } });
+  const notJson = await post("{");
+  assert.equal(notJson.status, 400);
+  assert.deepEqual(await notJson.json(), { error: "Not JSON." });
+  const big = await post(JSON.stringify({ text: "x".repeat(100000) }));
+  assert.equal(big.status, 413);
+  assert.deepEqual(await big.json(), { error: "The request is over 20 bytes." });
+  const chunked = await postChunked(url, Array(100).fill("x".repeat(1024)));
+  assert.deepEqual(chunked, {
+    status: 413,
+    text: JSON.stringify({ error: "The request is over 20 bytes." }),
+  });
 });
 
 test("same origin: the public URL, or the host the browser asked for", () => {

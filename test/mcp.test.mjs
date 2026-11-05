@@ -215,11 +215,11 @@ test("MCP: initialize, the five read tools, ping; notifications accepted, GET re
     body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }),
   });
   assert.equal(noScopes.status, 401);
-  // Too large a body is refused before it is read whole.
+  // Too large a body is refused, never held whole: a 413 its client reads.
   const large = await post(
     JSON.stringify({ jsonrpc: "2.0", id: 1, method: "ping", pad: "x".repeat(70_000) }),
-  ).catch((error) => error);
-  assert.ok(large instanceof Error || large.status >= 400);
+  );
+  assert.equal(large.status, 413);
 });
 
 test("MCP: a token without deckhand:read lists no read tool, and calls none", async (t) => {
@@ -1152,8 +1152,8 @@ test("MCP: a claim's run tools (#597): its output, messages, question and end, u
     method: "POST",
     headers: { "content-type": "application/json", "x-user": "alice", "x-scopes": "deckhand:read" },
     body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "ping", pad: line }),
-  }).catch((error) => error);
-  assert.ok(large instanceof Error || large.status >= 400);
+  });
+  assert.equal(large.status, 413);
 });
 
 test("MCP: approve_permission (#600) waits on the owner's answer, then says it as Claude Code's permission prompt reads it", async (t) => {

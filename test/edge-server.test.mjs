@@ -320,6 +320,42 @@ test("unsigned or oversized deliveries are refused unread; one client gets only 
   for (const req of held) req.destroy();
 });
 
+test("a dashboard API body over its limit, chunked: a 413 its client reads, never passed on", async (t) => {
+  const edge = await startEdge(t);
+  const answer = await new Promise((resolve, reject) => {
+    const req = request(
+      {
+        host,
+        port: edge.port,
+        method: "POST",
+        path: "/api/work",
+        headers: { cookie: session("alice"), "transfer-encoding": "chunked" },
+      },
+      (res) => {
+        let text = "";
+        res.on("data", (chunk) => (text += chunk));
+        res.on("end", () => resolve({ status: res.statusCode, text }));
+      },
+    );
+    req.on("error", reject);
+    for (let i = 0; i < 1100; i++) req.write("x".repeat(1024));
+    req.end();
+  });
+  assert.deepEqual(answer, {
+    status: 413,
+    text: JSON.stringify({ error: `The request is over ${1024 * 1024} bytes.` }),
+  });
+  assert.equal(edge.asked.length, 0);
+  // A smaller one is passed on.
+  const small = await fetch(`http://127.0.0.1:${edge.port}/api/work`, {
+    method: "POST",
+    headers: { cookie: session("alice") },
+    body: "{}",
+  });
+  assert.equal(small.status, 200);
+  assert.equal(edge.asked.length, 1);
+});
+
 test("a path with dot segments is refused at edge, never passed on as another", async (t) => {
   const edge = await startEdge(t);
   const base = `http://127.0.0.1:${edge.port}`;
