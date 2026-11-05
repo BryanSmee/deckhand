@@ -216,6 +216,7 @@ export function Preferences({ notify, user }: { notify: Notify; user?: string })
         <Toggle name="logFollow" title="prefs.logFollow" help={t("prefs.logFollowHelp")} />
         <Toggle name="logErrors" title="prefs.logErrors" help={t("prefs.logErrorsHelp")} />
         <Toggle name="logWrap" title="prefs.logWrap" help={t("prefs.logWrapHelp")} />
+        <Toggle name="logTimes" title="prefs.logTimes" help={t("prefs.logTimesHelp")} />
       </Group>
 
       <Group title="prefs.keyboardAndAccount">

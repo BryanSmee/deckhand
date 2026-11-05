@@ -265,6 +265,9 @@ export const fr = {
   "prefs.logErrorsHelp": "Une commande ou une étape de build en échec s’ouvre d’elle-même.",
   "prefs.logWrap": "Renvoyer à la ligne les lignes longues",
   "prefs.logWrapHelp": "Désactivé : les lignes longues défilent horizontalement.",
+  "prefs.logTimes": "Afficher l’heure des lignes du journal",
+  "prefs.logTimesHelp":
+    "L’heure de chaque ligne à sa gauche, dans les copies et téléchargements aussi.",
   "prefs.keyboardAndAccount": "Clavier et compte",
   "prefs.shortcuts": "Raccourcis clavier",
   "prefs.shortcutsHelp":

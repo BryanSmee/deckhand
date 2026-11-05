@@ -76,6 +76,9 @@ export const log = {
   "log.timeDone": "Durée",
   "log.timeRunning": "En cours depuis",
   "log.timeUnfinished": "Toujours en cours à la fin de l’exécution",
+  // A line's timestamp (#719): the toolbar's switch, and its tooltip.
+  "log.showTimes": "Afficher l’heure",
+  "log.stampTitle": "{date} · {elapsed} après le début de l’exécution",
 
   // Thread.tsx: a discussion's thread, its reply and comment boxes.
   "thread.reading": "Lecture de la discussion…",

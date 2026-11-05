@@ -22,7 +22,7 @@ import { parseKey } from "./events.mjs";
 import { AGENTS } from "./agents/index.mjs";
 import { CLAIM_WAIT_MS, LEASE_MS, MACHINE_PROTOCOL, MACHINE_PROTOCOLS } from "./claims.mjs";
 import { HEARTBEAT_MS, MAX_CAPACITY, ONLINE_MS, WARNING } from "./machines.mjs";
-import { reader, stampOf } from "./runlog.mjs";
+import { endsPlain, reader } from "./runlog.mjs";
 import { taskId } from "./spelling.mjs";
 
 // The versions of the protocol this server speaks, the newest first: a client asking for
@@ -55,8 +55,13 @@ const LINE_STEP = 4 * 1024;
 // What a page in the middle of a log reads of the run's preparation at once, at first: a log from
 // before phases needs its first lines only (readerAt()).
 const PRIMING_BYTES = 4 * 1024;
-// Enough for an `at` line (runlog.mjs writeEvent()), the one before a page's first line.
+// What linesBack() reads back first: an `at` line (runlog.mjs writeEvent()) and the agent's
+// line before it, most often; twice as much each time after.
 const STAMP_BYTES = 128;
+// The most read back from a page for the lines before it that say how its first ones read
+// (readerAt()): a page. Further back, plain lines at its start (more than that of them since
+// the agent's last line) may read untimed until their next `at` line.
+const BACK_BYTES = PAGE_BYTES;
 
 export const READ = "deckhand:read";
 export const WORK = "deckhand:work";
@@ -1117,25 +1122,48 @@ export function createMcp({ source, version = "dev", now = Date.now, log = () =>
     if (from === 0) return read;
     const decoder = new StringDecoder("utf8");
     let rest = "";
-    for (let offset = 0, chunk = PRIMING_BYTES; offset < from && !read.settled();) {
+    let offset = 0;
+    let unread = false;
+    for (let chunk = PRIMING_BYTES; offset < from && !read.settled();) {
       const data = await readRange(run.id, offset, Math.min(from, offset + chunk));
       if (!data.length) break;
       offset += data.length;
       chunk = Math.min(2 * chunk, PAGE_BYTES);
       const lines = (rest + decoder.write(data)).split("\n");
       rest = lines.pop();
-      for (const line of lines) if (!read.settled()) read(line);
+      for (const line of lines) {
+        if (read.settled()) unread = true;
+        else read(line);
+      }
     }
-    // Read again when the priming got there: an `at` line only sets the time of the next one.
-    const start = Math.max(0, from - STAMP_BYTES);
-    const lines = (await readRange(run.id, start, from)).toString("utf8").split("\n");
-    lines.pop();
-    const before = lines.pop();
-    // Whole, not the end of a longer line cut where the read starts.
-    if (before !== undefined && (lines.length || start === 0) && stampOf(before) !== null) {
-      read(before);
-    }
+    // Lines left unread: those just before the page, read again from the agent's last line
+    // among them (runlog.mjs endsPlain()), say the time of its first lines: an `at` line's for
+    // the first, the last said in a run of plain lines for those (reader()). What the priming
+    // read ends no later than its last line (a phase's, the agent's, or plain with no time),
+    // like the agent's line they start after.
+    if (unread || offset < from) for (const line of await linesBack(run, from)) read(line);
     return read;
+  }
+
+  // The whole lines before byte `from` after the agent's last one (runlog.mjs endsPlain()),
+  // read back from it, BACK_BYTES at most: all those read when none is that near.
+  async function linesBack(run, from) {
+    const agent = agentFor(run.agent);
+    const least = Math.max(0, from - BACK_BYTES);
+    let data = Buffer.alloc(0);
+    let lines = [];
+    for (let start = from, step = STAMP_BYTES; start > least; step *= 2) {
+      const end = start;
+      start = Math.max(least, end - step);
+      data = Buffer.concat([await readRange(run.id, start, end), data]);
+      lines = data.toString("utf8").split("\n");
+      lines.pop();
+      // Whole, not the end of a longer line cut where the read starts.
+      if (start > 0) lines.shift();
+      const last = lines.findLastIndex((line) => endsPlain(line, agent));
+      if (last >= 0) return lines.slice(last + 1);
+    }
+    return lines;
   }
 
   // The start of the line holding byte `a - 1` (no new line), read back from it: `a` itself
