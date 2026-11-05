@@ -1197,7 +1197,8 @@ export function fakeDocker({
         if (!volumes.has(last)) return missing;
         if (args.includes("--format")) {
           const labels = volumes.get(last);
-          return ok(`${labels["deckhand.owner"] ?? ""}|${labels["deckhand.engine"] ?? ""}`);
+          const value = (key) => labels[`deckhand.${key}`] ?? "";
+          return ok(["owner", "engine", "role"].map(value).join("|"));
         }
         return ok("[]");
       case "volume rm":

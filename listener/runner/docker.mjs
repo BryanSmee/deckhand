@@ -47,6 +47,7 @@ import {
   userArg,
   volumeArgs,
   volumeExists,
+  volumeLabels,
 } from "../docker.mjs";
 import { engineEnv } from "./engine.mjs";
 import { createRelink } from "./gc.mjs";
@@ -56,6 +57,9 @@ import { createNetworks } from "./networks.mjs";
 import { createEngines } from "./volumes.mjs";
 
 export { CLOSE } from "./inbox.mjs";
+
+// The label saying what a volume of Deckhand's is for (a session's), as on Kubernetes.
+const ROLE = "deckhand.role";
 export { LINE_CUT, MAX_LINE, unstamped } from "./lines.mjs";
 export { aliasOf } from "./networks.mjs";
 
@@ -165,6 +169,7 @@ export function createDockerRunner({
         ...inbox.env(ca, digest),
       };
       await recheck();
+      await labelSessions(spec.volumes);
       checked(
         await docker(runArgs({ run, name, image, labels: all, env, engineVars, args }), {
           env: cliEnv(env),
@@ -319,12 +324,34 @@ export function createDockerRunner({
     return volumeExists(docker, `${name}-${agent.session.volume}`);
   }
 
+  // The run's session volumes it makes, made first with this deployment's labels rather than
+  // by `docker run -v`, which labels none: what removeSessions() checks. One that exists keeps
+  // its own (Docker can't relabel a volume).
+  async function labelSessions(volumes = []) {
+    for (const { kind, name } of volumes) {
+      if (kind !== "session" || (await volumeExists(docker, name))) continue;
+      const labels = { "deckhand.owner": config.prefix, [ROLE]: "session" };
+      checked(
+        await docker(["volume", "create", ...labelArgs(labels), name]),
+        `creating the session volume ${name}`,
+      );
+    }
+  }
+
   // A chat's session volumes, each that exists (the runner service checks they are a chat's,
-  // without a sandbox): → the names removed.
+  // without a sandbox) and is this deployment's session volume: → the names removed. One
+  // without labels was made before sessions had them (by `docker run -v`): its name, with the
+  // deployment's prefix and the chat's hash, is all there is to go by.
   async function removeSessions(volumes) {
     const removed = [];
     for (const volume of volumes) {
-      if (!(await volumeExists(docker, volume))) continue;
+      const labels = await volumeLabels(docker, volume);
+      if (!labels) continue;
+      const labelled = labels.owner || labels.engine || labels.role;
+      if (labelled && (labels.owner !== config.prefix || labels.role !== "session")) {
+        log(`Not removing ${volume}: not a session volume of this deployment's`);
+        continue;
+      }
       checked(await docker(["volume", "rm", volume]), `docker volume rm ${volume}`);
       removed.push(volume);
     }
