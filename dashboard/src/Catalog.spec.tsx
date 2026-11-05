@@ -26,7 +26,8 @@ vi.mock("./locales", async (original) =>
 let { Dashboard } = {} as typeof import("./App");
 let { makeCapabilities, makePolicyFile, makeState, makeChat, makeChats, mockApi } =
   {} as typeof import("./testUtils");
-let { keysShown, unmarked, useMarked } = {} as typeof import("./testCatalog");
+let { t } = {} as typeof import("./i18n");
+let { keysShown, parts, unmarked, useMarked } = {} as typeof import("./testCatalog");
 let { CATALOGS } = {} as typeof import("./locales");
 let { PR_NAMES, STATE_NAMES } = {} as typeof import("./format");
 
@@ -35,7 +36,8 @@ beforeAll(async () => {
   ({ Dashboard } = await import("./App"));
   ({ makeCapabilities, makePolicyFile, makeState, makeChat, makeChats, mockApi } =
     await import("./testUtils"));
-  ({ keysShown, unmarked, useMarked } = await import("./testCatalog"));
+  ({ t } = await import("./i18n"));
+  ({ keysShown, parts, unmarked, useMarked } = await import("./testCatalog"));
   ({ CATALOGS } = await import("./locales"));
   ({ PR_NAMES, STATE_NAMES } = await import("./format"));
 });
@@ -267,7 +269,11 @@ const HEALTH: Health = {
 };
 
 let config: RepoConfig;
+// What the spec's routes answer: written for these pages, all data.
 let given: unknown[];
+// The fixture's state: its prose ("Done: settings follow…") is data only in the parts no
+// English text has ("Done" is the catalog's).
+let prose: unknown[];
 beforeEach(() => {
   useMarked();
   config = {
@@ -289,6 +295,7 @@ beforeEach(() => {
     "api/chats": () => makeChats([makeChat()]),
   };
   mockApi(routes);
+  prose = [];
   given = [REPOS, APP, config, SETUP, CLIENTS, ACCESS, HEALTH, PREVIEW, makeChats([makeChat()])];
 });
 
@@ -300,16 +307,17 @@ const show = (hash: string) => {
     ...fixture,
     tasks: fixture.tasks.map((task) => ({ ...task, title: `Xyzzy ${task.number}` })),
   };
-  given.push(state);
+  prose.push(state);
   return render(<Dashboard state={state} error={null} repos={list()} />).container;
 };
 
-// The English catalog's texts: never data, so one written inline again isn't taken for some.
+// The English catalog's texts, in parts: never the fixture's data, so one written inline again
+// isn't taken for some.
 const english = () =>
   new Set<string>(
-    Object.values(CATALOGS.en).flatMap((text) =>
-      typeof text === "string" ? [text] : Object.values(text),
-    ),
+    Object.values(CATALOGS.en)
+      .flatMap((text) => (typeof text === "string" ? [text] : Object.values(text)))
+      .flatMap(parts),
   );
 
 // A task's state and its pull request's, as format.ts names them on a badge and in the
@@ -317,9 +325,14 @@ const english = () =>
 const left = (root: Element = document.body, more: readonly string[] = []) => {
   const keys = keysShown(root, Object.keys(CATALOGS.en));
   if (keys.length) return keys;
-  const catalog = english();
+  const own = english();
   return unmarked(root, {
-    data: strings(given).filter((text) => !catalog.has(text)),
+    data: [
+      ...strings(given),
+      ...strings(prose)
+        .flatMap(parts)
+        .filter((part) => !own.has(part)),
+    ],
     names: [...NAMES, ...more],
     within: {
       [`.${statusStyles.badge}, .${statusStyles.dot}, .${paletteStyles.state}`]: [
@@ -343,7 +356,7 @@ test.each([
     "its policies",
     "#/settings/repositories/acme/app/policies",
     "size.rego",
-    ["allow", "deny", "fix", "link", "branch", "request"],
+    ["allow", "deny", "run", "fix", "link", "branch", "request"],
   ],
   ["its capabilities", "#/settings/repositories/acme/app/capabilities", "work"],
   ["Settings › Preferences", "#/settings/preferences", null],
@@ -382,12 +395,18 @@ test("New request: each kind's form", async () => {
   show("#/acme/app");
   fireEvent.keyDown(document.body, { key: "n" });
   const dialog = await screen.findByRole("dialog");
-  const kinds = within(dialog).getByRole("group", { name: /⟦/ });
-  for (const kind of within(kinds).getAllByRole("button")) {
-    fireEvent.click(kind);
-    // Its form, not only the switch: the description's field is each inbox form's.
-    if (/Analy/.test(kind.textContent!)) await within(dialog).findByText(/⟦ runs? match/);
-    else expect(within(dialog).getAllByRole("textbox", { name: /⟦/ }).length).toBeGreaterThan(0);
+  const kinds = within(within(dialog).getByRole("group", { name: t("request.kind") }));
+  // Each kind's own field: the form that shows is that kind's, not the one before it.
+  const forms = [
+    ["request.kindIdea", "inbox.ideaTitle"],
+    ["request.kindBug", "inbox.bugTitle"],
+    ["request.kindDiscussion", "inbox.discussionTitle"],
+    ["request.kindAnalyze", null],
+  ] as const;
+  for (const [kind, title] of forms) {
+    fireEvent.click(kinds.getByRole("button", { name: t(kind) }));
+    if (title) expect(within(dialog).getByPlaceholderText(t(title))).toBeTruthy();
+    else await within(dialog).findByText(/⟦ runs? match/);
     // A run's kind, as runKindName() names it, is the run pages' (#722).
     expect(left(dialog, ["Bug", "Work"])).toEqual([]);
   }

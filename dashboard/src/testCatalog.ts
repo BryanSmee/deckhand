@@ -66,9 +66,9 @@ const verbatim = (text: string) => text.replace(/[\w.:-]*(?:[_/]|\.\w)[\w.:/-]*/
 
 // A text's parts between the marks and the punctuation that joins what the page shows ("acme/app ·
 // #12", "(Ctrl Shift C)"): each is the dashboard's own unless it is data as a whole.
-const parts = (text: string) =>
+export const parts = (text: string) =>
   verbatim(text)
-    .split(/⟦[^⟧]*⟧|[·,;:()[\]“”"…—–|+]+/)
+    .split(/⟦[^⟧]*⟧|\{\w+\}|[·,;:()[\]“”"…—–|+]+/)
     .map((part) => part.trim())
     .filter((part) => /\p{L}{2,}/u.test(part));
 
