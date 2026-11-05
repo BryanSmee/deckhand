@@ -9,15 +9,18 @@ import { fileURLToPath } from "node:url";
 import { posix } from "./helpers.mjs";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
-// What isn't the repository's own: packages, builds, git's files.
-const SKIP = new Set(["node_modules", ".git", "dist", "coverage"]);
+// What isn't the repository's own: packages, builds, git's files, Claude Code's worktrees.
+const SKIP = new Set(["node_modules", ".git", "dist", "coverage", ".claude"]);
 const TEXT = /\.(mjs|js|ts|tsx|md|rego|ya?ml|json|sh|css|html)$|Dockerfile$/;
 
+// The repository's files. Not `git ls-files`: the tests also run from a tarball without .git
+// (AGENTS.md). A directory with a .git of its own is another checkout (a worktree, a scratch
+// clone), its references resolved against its own docs/, not these.
 function files(dir = root) {
   return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
     if (SKIP.has(entry.name)) return [];
     const path = join(dir, entry.name);
-    if (entry.isDirectory()) return files(path);
+    if (entry.isDirectory()) return existsSync(join(path, ".git")) ? [] : files(path);
     return TEXT.test(entry.name) ? [path] : [];
   });
 }

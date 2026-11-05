@@ -317,10 +317,6 @@ test("the onboarding prompt fits one environment string (TASK_PROMPT), its refer
     /How Deckhand reads a review's reply \([^)]*\) is in docs\/repo-config\/reviews\.md/,
   );
   assert.match(text, /- \*\*A plausibility bar for findings\.\*\*/);
-  // The default policies' rules on single writes, left out too: the rules themselves kept.
-  assert.doesNotMatch(text, /#### (Reactions|Review threads|Assignees and milestones)/);
-  assert.match(text, /reactions, review threads, [^.]* are in docs\/repo-config\/policies\.md/);
-  assert.match(text, /#### review\.rego/);
   assert.doesNotMatch(text, /onboarding: (skip|end)/);
   assert.equal(
     compactTables(

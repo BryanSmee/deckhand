@@ -457,8 +457,6 @@ this holds without any setup. The operator's `policy/mode-work.rego` replaces it
 repository (a copy without the rule on `delete`, say). A repository's own modes edit theirs
 once its `allow_github` lets them.
 
-<!-- onboarding: skip: The default policies' rules on reactions, review threads, updating a pull request's branch, assignees and milestones are in docs/repo-config/policies.md in Deckhand's source. -->
-
 #### Reactions
 
 A run acknowledges a comment with a reaction rather than another comment (issue #458): 👀 when
@@ -573,8 +571,6 @@ deny_github contains "only work runs assign people" if {
   input.mode != "work"
 }
 ```
-
-<!-- onboarding: end -->
 
 ### A dry run and the dashboard
 
