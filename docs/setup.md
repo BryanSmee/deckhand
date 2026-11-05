@@ -1874,8 +1874,9 @@ and its copies go to any node. What changes for you:
   install that still has any of those in `/data` (one that never ran a release with the
   services, #557, or the runner service) updates first to the last release before #619
   (following `edge`: an image built before #619), lets the orchestrator start once there, then
-  updates to this one. This release doesn't read them: their comments, credentials and logs would
-  be left out.
+  updates to this one. This release doesn't read them, and edge and the github service no longer take
+  an App handed over (their `PUT /app`, #820): their comments, credentials and logs would be
+  left out.
 - **The screenshots' volume is gone from Compose** (`SHOTS_VOLUME`, `deckhand-screenshots`, at
   `/data/shots`): the broker has kept the screenshots since #609. An install from before #609
   whose screenshots are still there goes through the release before #619 first, or mounts that

@@ -27,7 +27,6 @@ import { statSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { activePassive } from "../lib/active.mjs";
-import { writeFileAtomic } from "../lib/files.mjs";
 import { createBrokerCaller } from "../lib/broker-client.mjs";
 import { drain } from "../lib/drain.mjs";
 import { createLogger } from "../lib/log.mjs";
@@ -36,7 +35,7 @@ import { serviceClient } from "../lib/service-client.mjs";
 import { networkCallers } from "../lib/service-token.mjs";
 import { openStore } from "../lib/store.mjs";
 import { createGithubClient } from "../github/client.mjs";
-import { createAuth, importEpochs, sessionKey } from "../listener/auth.mjs";
+import { createAuth, sessionKey } from "../listener/auth.mjs";
 import { createBrokerService } from "../listener/broker-service.mjs";
 import { ConfigError, loadConfig, readConfigFile } from "../listener/config.mjs";
 import { createRedeliveries } from "../listener/redeliveries.mjs";
@@ -89,9 +88,9 @@ const brokerCaller = createBrokerCaller({
 });
 const broker = createBrokerService({ caller: brokerCaller, log });
 
-const app = createEdgeApp({ dir: dataDir, log });
-// The session key, read again once another copy of edge on this volume replaced it (a
-// listener's taken over there).
+const app = createEdgeApp({ dir: dataDir });
+// The session key, read again once it was replaced on this volume (rotated by hand: everyone
+// signed out, on both copies).
 const keyPath = join(dataDir, "session.key");
 let key = sessionKey(dataDir);
 let keySeen = statSync(keyPath).mtimeMs;
@@ -206,19 +205,6 @@ const internal = createEdgeInternal({
   keys: { get: (kid) => broker.serviceKeys().get(kid) },
   bound: env.SERVICE_NETWORKS === "none" ? null : networkCallers(config.serviceNetworks ?? ""),
   redeliveries,
-  // A listener's session key and sign-outs, with its App: its sessions go on.
-  handOver: async ({ sessionKey: legacy, epochs }) => {
-    // The sign-outs first: a key taken without them would let cookies signed out of work again.
-    const count = await importEpochs(store, epochs);
-    const taken = typeof legacy === "string" ? Buffer.from(legacy, "base64") : null;
-    if (taken?.length >= 32) {
-      // Whole or not at all: the other copy, reading it meanwhile, never sees it cut short.
-      writeFileAtomic(keyPath, taken, { mode: 0o600 });
-      key = taken;
-      keySeen = statSync(keyPath).mtimeMs;
-    }
-    log(`Sessions: the listener's key${count ? ` and ${count} sign-out(s)` : ""} taken over`);
-  },
   log,
 });
 

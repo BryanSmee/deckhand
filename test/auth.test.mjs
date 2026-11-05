@@ -1,13 +1,7 @@
 import assert from "node:assert/strict";
 import { join } from "node:path";
 import { test } from "node:test";
-import {
-  createAuth,
-  importEpochs,
-  SESSION_COOKIE,
-  SESSION_MS,
-  sessionKey,
-} from "../listener/auth.mjs";
+import { createAuth, SESSION_COOKIE, SESSION_MS, sessionKey } from "../listener/auth.mjs";
 import { openStore } from "../lib/store.mjs";
 import { assertMode, serve, tempDir, testConfig } from "./helpers.mjs";
 
@@ -191,18 +185,6 @@ test("sign-out ends the login's sessions everywhere: on edge's other copy, after
   const next = await serveAuth(t, { store });
   assert.equal((await next.get("/", again)).status, 200);
   assert.equal((await next.get("/", there)).status, 401);
-});
-
-test("a listener's sign-outs from before edge are kept: its epochs imported where none is", async (t) => {
-  const store = openStore("memory:");
-  const s = await serveAuth(t, { store });
-  const old = `${SESSION_COOKIE}=${await s.auth.issue("alice")}`;
-  assert.equal(await importEpochs(store, { Alice: 2, bob: "x", carol: 0 }), 1);
-  assert.equal((await s.get("/", old)).status, 401);
-  // Imported again (a handover asked twice): a later sign-out isn't undone.
-  await store.set("sessions/alice", 3);
-  assert.equal(await importEpochs(store, { alice: 2 }), 0);
-  assert.equal(await store.get("sessions/alice"), 3);
 });
 
 test("without an App, sign-in says to set it up first", async (t) => {

@@ -224,7 +224,6 @@ test("each route takes its callers only: edge reads, the runner gets tarballs, t
   );
   const query = { query: "query { viewer { login } }" };
   assert.equal((await call(a, "edge", "POST", "/graphql/org/repo", { body: query })).status, 200);
-  assert.equal((await call(a, "edge", "PUT", "/app", { body: { pem: "x" } })).status, 403);
   assert.equal(
     (await call(a, "edge", "PUT", "/runs/r1", { body: { repo: "org/repo" } })).status,
     403,
@@ -511,42 +510,27 @@ test("the listener's client: GitHub's answers as fetch() gives them, the service
   assert.equal(JSON.stringify(info).includes("PRIVATE"), false);
 });
 
-test("the App: a listener's key handed over once, never another App's; a setup only without one", async (t) => {
+test("the App: its calls wait for one; a setup only without one, edge's", async (t) => {
   const github = await fakeGitHub(t);
   const key = testKey();
-  const copy = await service(t, github, { store: openStore("memory:"), key, app: false });
+  const none = await service(t, github, { store: openStore("memory:"), key, app: false });
   const as = `Bearer ${signServiceToken({ sub: "orchestrator", aud: "github" }, key)}`;
-  const put = (body) =>
-    fetch(`${copy.url}/app`, {
-      method: "PUT",
-      headers: { authorization: as, [EPOCH_HEADER]: "5", "content-type": "application/json" },
-      body: JSON.stringify(body),
-    });
   // No App yet: its calls wait for one.
-  const before = await fetch(`${copy.url}/as/org/repo/repos/org/repo`, {
+  const before = await fetch(`${none.url}/as/org/repo/repos/org/repo`, {
     headers: { authorization: as },
   });
   assert.equal(before.status, 412);
-  assert.equal(
-    (await put({ id: 5, slug: "deckhand-x", pem: PEM, webhook_secret: "w" })).status,
-    200,
-  );
-  assert.equal((await put({ id: 6, slug: "other", pem: PEM })).status, 409);
-  // What the service keeps: its key, not edge's secrets.
-  const { readFileSync } = await import("node:fs");
-  const saved = JSON.parse(readFileSync(join(copy.dir, "app.json"), "utf8"));
-  assert.equal(saved.pem, PEM);
-  assert.equal(saved.webhook_secret, undefined);
   // /setup's conversion is edge's (#506): the orchestrator's refused, edge's with an App held.
-  const manifest = (authorization) =>
-    fetch(`${copy.url}/app/manifest`, {
+  const manifest = (url, authorization) =>
+    fetch(`${url}/app/manifest`, {
       method: "POST",
       headers: { authorization, [EPOCH_HEADER]: "5", "content-type": "application/json" },
       body: JSON.stringify({ code: "abc" }),
     });
-  assert.equal((await manifest(as)).status, 403);
+  assert.equal((await manifest(none.url, as)).status, 403);
+  const held = await service(t, github, { store: openStore("memory:"), key });
   const asEdge = `Bearer ${signServiceToken({ sub: "edge", aud: "github" }, key)}`;
-  assert.equal((await manifest(asEdge)).status, 409);
+  assert.equal((await manifest(held.url, asEdge)).status, 409);
 });
 
 test("tarballs: the runner's, of an allowed repo, streamed from GitHub; nothing else of it", async (t) => {

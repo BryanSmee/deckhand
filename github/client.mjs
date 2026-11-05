@@ -125,8 +125,6 @@ export function createGithubClient({
     info: () => client.json("GET", "/app", { waitMs: 10_000 }),
     // /setup's manifest code → the App's credentials but its key, which the service keeps.
     convert: (code) => client.json("POST", "/app/manifest", { body: { code }, once: true }),
-    // A listener's App from before the service: its key goes there.
-    handOver: (credentials) => client.json("PUT", "/app", { body: credentials }),
   };
 
   // --- The service's events ----------------------------------------------------------------

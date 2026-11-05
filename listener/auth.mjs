@@ -76,18 +76,6 @@ const nextPath = (next) =>
 // The store key of a login's session epoch.
 const epochKey = (login) => `sessions/${login}`;
 
-// The epochs a listener from before edge kept (its sessions.json, login → epoch), copied into
-// `store` where it has none: a sign-out made then still holds.
-export async function importEpochs(store, epochs) {
-  if (!epochs || typeof epochs !== "object" || Array.isArray(epochs)) return 0;
-  let count = 0;
-  for (const [login, epoch] of Object.entries(epochs)) {
-    if (!Number.isSafeInteger(epoch) || epoch < 1) continue;
-    if (await store.setIfAbsent(epochKey(login.toLowerCase()), epoch)) count++;
-  }
-  return count;
-}
-
 export function createAuth({
   config,
   app, // () => the GitHub App, or null before /setup
