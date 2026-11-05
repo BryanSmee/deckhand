@@ -716,27 +716,33 @@ export function createClaims(
 
   // --- Closed issues -----------------------------------------------------------------------
 
-  // Whether task `task` still has something of its route's: a claim, a run, comments queued or
-  // held for its owner.
-  const busy = (task) =>
-    !!task && (!!task.claim || task.running || task.pending.length > 0 || task.held.length > 0);
+  // Whether task `task` still has something of its route's: a claim, a run, comments queued.
+  // Comments held for its owner don't count: only the owner empties them, who may never come
+  // back to a closed issue.
+  const busy = (task) => !!task && (!!task.claim || task.running || task.pending.length > 0);
 
   // Issue `key` closed (an `issues` delivery, http.mjs): its route goes, so the store keeps none
   // for good and a reopen months later doesn't wait for a machine long gone; a `runs-on` label
   // still on routes it again then. Kept while its task is busy: forgetClosed() drops it after.
-  // → whether it went.
+  // The comments held for its owner are dropped with it (their 👀 off), rather than queued for a
+  // sandbox the owner never asked for. → whether it went.
   function forget(key) {
     if (!routes.has(taskId(key))) return false;
     const task = taskOf(key);
     if (busy(task)) return false;
     routes.delete(taskId(key));
+    const held = task?.held.splice(0) ?? [];
+    for (const item of held) ctx.track?.(ctx.settle(item, "cancelled"));
+    if (held.length) ctx.saveQueue?.();
     if (task) place(task, null);
-    log(`${key}: its route dropped, the issue closed`);
+    const dropped = held.length ? `, ${held.length} held comment(s) dropped` : "";
+    log(`${key}: its route dropped, the issue closed${dropped}`);
     return true;
   }
 
   // The routes of the issues closed as titles.mjs last heard of them, dropped: those whose task
-  // was busy when they closed, or that closed while no copy was listening. → their keys.
+  // was busy when they closed, or that closed while no copy was listening. Not at start: an
+  // issue reopened while none was would lose its route before its delivery says so. → their keys.
   function forgetClosed() {
     const titles = ctx.titles;
     if (!titles?.keys || !routes.size) return [];
@@ -835,7 +841,6 @@ export function createClaims(
     if (timer) return;
     timer = every(expire, EXPIRE_EVERY_MS);
     timer?.unref?.();
-    forgetClosed();
     forgetting = every(forgetClosed, FORGET_EVERY_MS);
     forgetting?.unref?.();
   }
