@@ -384,6 +384,7 @@ export function createClaims(
       // Its pull request's head as the run starts: what finish() tells a push of this run's by.
       head: ctx.pulls?.get(key)?.head ?? null,
     };
+    markPull(task, task.claim);
     task.next = {};
     ctx.order?.drop(key);
     log(`${key}: claimed by ${m.owner}'s ${m.name} (${m.id}), run ${work.run}`);
@@ -491,6 +492,7 @@ export function createClaims(
   // with the issue told (runs.mjs interruptExternal(): its comments queued again there).
   function giveBack(task, why) {
     const { claim: c } = task;
+    markPull(task, c);
     task.claim = null;
     if (task.live?.external && task.live.id === c.id) {
       log(`${keyOf(task)}: ${c.name}'s claim ${c.id} given back: ${why}`);
@@ -518,6 +520,18 @@ export function createClaims(
       if (!runs || runs.includes(task.claim.id)) task.claim.leaseUntil = until;
     }
     return mine.map((t) => ({ run: t.claim.id, key: keyOf(t), leaseUntil: t.claim.leaseUntil }));
+  }
+
+  // The task's open pull request marked as claim `c`'s machine's (`external`, pulls.mjs, #598):
+  // its machine may push to its branch with its owner's own git, never through the git gateway,
+  // whether or not it names the branch at its end, so machines.rego never auto-merges it. Marked
+  // as the claim is taken, and again at its end, for one the pulls store learned of meanwhile.
+  function markPull(task, c) {
+    const key = keyOf(task);
+    const pr = ctx.pulls?.get(key);
+    if (!c || !pr || pr.external || !["draft", "ready"].includes(pr.state)) return;
+    ctx.pulls.record(key, { ...pr, external: c.owner });
+    log(`${key}: pull request #${pr.number} marked as ${c.owner}'s machine's`);
   }
 
   // The machine gives its claim `run` back: → the task's key.
@@ -592,6 +606,7 @@ export function createClaims(
         owner: c.owner,
         machine: c.name,
         since: c.head ?? null,
+        now,
       });
       // Its run ended meanwhile (a lease run out, a cancel): its pull request stays.
       task = going(owner, id, run);
@@ -599,6 +614,8 @@ export function createClaims(
       record.branch = pushed.branch;
       if (pull.moved) record.lastPushAt = now();
     }
+    // Without one named: its pull request is the machine's all the same, whatever it pushed.
+    markPull(task, task.claim);
     const { record } = task.live;
     await ctx.finishExternal(task, { outcome, reply });
     return { key: keyOf(task), status: record.status, pull };

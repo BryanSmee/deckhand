@@ -43,12 +43,12 @@ Pushed from @${owner}'s machine ${machine} (a Deckhand machine run): its commits
 // `owner` and `machine`: the machine's (claims.mjs); `since`: the pull request's head when the
 // run was claimed (null: none known). → { number, url, state, opened, moved } (`moved`: its
 // head isn't the one it had then, a push this run made, whether or not its `synchronize`
-// delivery came first). Refused (400, 409) when
+// delivery came first). `now`: the clock, for its `readyAt`. Refused (400, 409) when
 // a check fails, nothing written then. `ctx`: github, graphql, config, pulls, titles, log.
 export async function openPull(
   ctx,
   task,
-  { branch, sha, ready = false, owner, machine, since = null },
+  { branch, sha, ready = false, owner, machine, since = null, now = Date.now },
 ) {
   const { github } = ctx;
   const repo = task.repo;
@@ -117,7 +117,7 @@ export async function openPull(
       { id: pr.node_id },
     );
     pr = { ...pr, draft: false };
-    readyAt = Date.now();
+    readyAt = now();
   }
   const { pr: entry } = pullEntry(repo, pr, readyAt);
   if (readyAt) ctx.pulls?.record(key, { ...entry, head: sha, external: owner });

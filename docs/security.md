@@ -2387,7 +2387,10 @@ client, and no sandbox service, run token or git gateway is on the machine.
   comments. **A machine's pull request is
   trusted as an allowed user's**: its commits are whatever the owner's machine pushed (its
   refs, `allow_push`, the workflow files: none of the gateway's checks ran), so the review is
-  their check. It is recorded as the machine's (`pr.external`, the owner's login), shown so on
+  their check. It is recorded as the machine's (`pr.external`, the owner's login), and so is the
+  task's open pull request whenever a machine's claim covers it (at the claim, at its end, at a
+  release or a lease run out), whether or not `finish` names a branch: the machine may push to it
+  either way. It is shown so on
   the dashboard, and in the policies' input of `deny_review`, `deny_fix`, `deny_merge` and
   `deny_request_review`.
 - **Never merged by itself, by default**: on top of auto-merge's gates ([Auto-merge](#auto-merge):

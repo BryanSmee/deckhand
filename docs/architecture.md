@@ -1084,7 +1084,9 @@ branch, sha, ready }` (or `ask`). Before the run ends, the orchestrator checks i
   (`Closes #<n>`), and marks it ready with `ready`. A refusal (400, 409) writes nothing, and the
   run goes on. The pull request is the App's, so the review and its fix loop treat it as any
   of Deckhand's own: a fix round is the issue's task, which sticks to the machine. It is recorded
-  with `external: <owner>` (`pulls.mjs`) once opened or found, before it is marked ready, kept whatever later deliveries say, for the dashboard
+  with `external: <owner>` (`pulls.mjs`), as is any open pull request of the task a machine's
+  claim covers (`claims.mjs` `markPull()`: at the claim and at its end, whatever `finish` names),
+  once opened or found, before it is marked ready, kept whatever later deliveries say, for the dashboard
   and the policies' `pr.external`; the run's record gets the branch, and `lastPushAt` when its
   head isn't the one the pull request had at the claim (its reviewers asked again), its
   `synchronize` delivery recorded first or not.

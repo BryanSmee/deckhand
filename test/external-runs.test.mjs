@@ -588,6 +588,43 @@ test("finish with a pushed branch: a branch with nothing beyond its base is said
   assert.equal(b.run(work.run).status, "running");
 });
 
+test("a pull request a machine's claim covers is the machine's, whether or not finish names its branch", async (t) => {
+  const b = bench(t);
+  const { ctx } = b;
+  fakeGithub(b, {});
+  // A sandbox run's pull request, open when the issue moves to Desk: marked at the claim.
+  const sandbox = { number: 30, url: "u", state: "ready", readyAt: null, head: "a".repeat(40) };
+  ctx.pulls.record(KEY, sandbox);
+  const { desk, work } = await claimed(b);
+  assert.equal(ctx.pulls.externalOf("org/repo", 30), "alice");
+  await ctx.claims.finish("alice", desk, work.run, { outcome: "ok", reply: "Fixed." });
+  assert.equal(ctx.pulls.externalOf("org/repo", 30), "alice");
+
+  // One the pulls store learns of during the run, the run finishing without `branch`: marked
+  // at its end.
+  const other = bench(t);
+  fakeGithub(other, {});
+  const second = await claimed(other);
+  other.ctx.pulls.record(KEY, { ...sandbox, number: 31 });
+  assert.equal(other.ctx.pulls.externalOf("org/repo", 31), null);
+  await other.ctx.claims.finish("alice", second.desk, second.work.run, { outcome: "ok" });
+  assert.equal(other.ctx.pulls.externalOf("org/repo", 31), "alice");
+
+  // Or given back (its lease run out): marked all the same.
+  const third = bench(t);
+  fakeGithub(third, {});
+  const given = await claimed(third);
+  third.ctx.pulls.record(KEY, { ...sandbox, number: 32 });
+  third.ctx.claims.release("alice", given.desk, given.work.run);
+  assert.equal(third.ctx.pulls.externalOf("org/repo", 32), "alice");
+  // A closed one isn't.
+  const fourth = bench(t);
+  fakeGithub(fourth, {});
+  fourth.ctx.pulls.record(KEY, { ...sandbox, number: 33, state: "merged" });
+  await claimed(fourth);
+  assert.equal(fourth.ctx.pulls.externalOf("org/repo", 33), null);
+});
+
 test("finish with a pushed branch: a pull request from it that isn't the App's, or closes another issue, is refused", async (t) => {
   const b = bench(t);
   const { ctx } = b;
