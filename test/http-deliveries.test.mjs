@@ -204,3 +204,39 @@ test("a workflow_run delivery goes to the reviews' checksDone() alone", async ()
     [["checksDone", "workflow_run", true]],
   );
 });
+
+test("a repository out of the installation, deleted or made private: the policies forget it (#855)", async () => {
+  const forgotten = [];
+  const refreshed = [];
+  const ctx = httpCtx({
+    policies: { forget: (repo) => forgotten.push(repo) },
+    repoList: { refresh: (repo) => refreshed.push(repo ?? "*") },
+    onboarding: { onboard: async () => {} },
+  });
+  const http = createHttp(ctx);
+  const sender = { login: "bob" };
+  await http.deliver({
+    event: "installation_repositories",
+    payload: {
+      action: "removed",
+      installation: { id: 7 },
+      repositories_removed: [{ full_name: "org/repo" }, { full_name: "org/lib" }],
+      sender,
+    },
+  });
+  assert.deepEqual(forgotten, ["org/repo", "org/lib"]);
+  for (const action of ["privatized", "deleted"]) {
+    await http.deliver({
+      event: "repository",
+      payload: { action, installation: { id: 7 }, repository, sender },
+    });
+  }
+  assert.deepEqual(forgotten, ["org/repo", "org/lib", "org/repo", "org/repo"]);
+  assert.deepEqual(refreshed, ["*", "*", "*"]);
+  // A comment forgets nothing.
+  await http.deliver({
+    event: "issue_comment",
+    payload: { action: "created", installation: { id: 7 }, repository, sender },
+  });
+  assert.equal(forgotten.length, 4);
+});

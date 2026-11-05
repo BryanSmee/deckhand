@@ -1644,7 +1644,8 @@ export function createPolicies({
     return { text: clean.slice(0, MAX_TEXT), truncated: true };
   }
 
-  // `repo`'s default branch moved (a push, a merge: repos.mjs refreshFor()): its policies are
+  // `repo`'s default branch moved (a push, a merge: repos.mjs refreshFor()), or it left the App's
+  // reach, was deleted, transferred or made private (repos.mjs forgottenFor()): its policies are
   // listed again at the next decision, and what GitHub says of it read again (access()).
   function forget(repo) {
     const key = repo.toLowerCase();

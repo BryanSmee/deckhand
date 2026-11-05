@@ -78,7 +78,7 @@ What the App asks for:
 | Deployments, Discussions: read and write | `pull_request_review` |
 | Workflows, Actions: read and write | `pull_request_review_comment`, `workflow_run` |
 | Checks, Commit statuses, Metadata: read | `discussion`, `discussion_comment` |
-| Organization projects: read and write | `push`, `check_suite`, `status` |
+| Organization projects: read and write | `push`, `repository`, `check_suite`, `status` |
 
 An App created before Deckhand answered discussions lacks the `discussion` events and the
 Discussions permission: add them in the App's settings (_Permissions & events_), then accept
@@ -160,6 +160,13 @@ name (to broaden a feature, say) now replaces nothing and only adds its rules be
 `mode-<mode>.rego` files. To broaden a mode, replace its file instead (a copy of
 `mode-work.rego` without its rule on `assign`, say). A repository's own `modes:` that push need
 its `allow_push` too, as they need its `allow_github` to write.
+
+An App created before Deckhand followed repositories' changes lacks the `repository` event: turn
+on **Repository** under _Subscribe to events_ in its settings. Without it, a repository deleted,
+transferred or made private keeps what the access decisions last read of it (whether it is
+private, its policy listing) up to a minute, or up to an hour while GitHub fails, rather than
+being read again at once ([docs/security.md](security.md), Fail closed). A repository removed
+from the installation needs no event of its own.
 
 An App created before `/after` lacks the `issues` event: turn on **Issues** under _Subscribe
 to events_ in its settings. Without it, a comment waiting for an issue (`/after #77`) still
