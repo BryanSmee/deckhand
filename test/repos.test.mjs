@@ -490,6 +490,34 @@ test("GET /api/repos?backlog=1: each configured repo's backlog count for the use
   assert.equal(refreshed.body.repos[0].backlog.count, 3);
 });
 
+test("GET /api/repos?backlog=1: counts only where the user has tasks:read (#804)", async () => {
+  const asked = [];
+  const { api } = apiSetup({
+    first: [info("org/App"), info("org/logs"), info("org/review")],
+    configured: ["org/App", "org/logs", "org/review"],
+    backlogs: (repos, user) => {
+      asked.push([repos, user]);
+      return Object.fromEntries(
+        repos.map((r) => [r.toLowerCase(), { count: 2, more: false, readAt: 5 }]),
+      );
+    },
+    permissions: permissionsOf({
+      bob: { "org/app": VIEWER, "org/logs": ["logs:read"], "org/review": ["runs:start:review"] },
+    }),
+  });
+  const res = await call(api, "GET", "/api/repos?backlog=1", { user: "bob" });
+  // Every repo listed (an action on each), counted only for tasks:read, the others not read.
+  assert.deepEqual(
+    res.body.repos.map((r) => [r.repo, r.backlog]),
+    [
+      ["org/App", { count: 2, more: false, readAt: 5 }],
+      ["org/logs", null],
+      ["org/review", null],
+    ],
+  );
+  assert.deepEqual(asked, [[["org/App"], "bob"]]);
+});
+
 test("GET /api/repos: the App's links, under GITHUB_URL, as its owner's type says", async () => {
   const stored = { slug: "my-app", owner: "acme", html_url: "https://github.com/apps/my-app" };
   const links = async (app) =>
