@@ -334,9 +334,12 @@ const REASONS = {
 };
 
 // The listener's own lines: a run's first line (what it is), notes and delivered comments.
-function listenerEntries(e, agent) {
+// `seen.chat`: whether the run's first line said it is a chat (reader() keeps it for the lines
+// after it).
+function listenerEntries(e, agent, seen) {
   // When the next line came: reader() puts it on that line's entries.
   if (e.event === "at") return [];
+  if (e.event === undefined && e.kind !== undefined) seen.chat = e.kind === "chat";
   if (e.event === "phase") return [{ kind: "phase", phase: e.phase, at: e.at }];
   if (e.event === "note") return [{ kind: "meta", text: e.message }];
   // The record's mode corrected (runs.mjs reopen()): the note beside it says why. The sandbox
@@ -352,8 +355,10 @@ function listenerEntries(e, agent) {
     const text = `Stopped at ${time} UTC, silent for ${minutes(e.after)} min after its answer: the answer is posted`;
     return [{ kind: "meta", text }];
   }
-  // A chat's message (tasks.mjs deliver()): its owner's turn in the conversation.
-  if (e.event === "delivered" && e.chat) return [{ kind: "message", text: e.message }];
+  // A chat's message (tasks.mjs deliver()): its owner's turn in the conversation. Those
+  // written before #817 lack `chat`: the run's first line says it then (#850).
+  if (e.event === "delivered" && (e.chat || seen.chat))
+    return [{ kind: "message", text: e.message }];
   if (e.event === "delivered") {
     const time = new Date(e.at).toISOString().slice(11, 19);
     const text = `New comment delivered to ${agent.displayName} at ${time} UTC: ${e.message}`;
@@ -423,8 +428,9 @@ function clipRaw(line) {
 }
 
 // One log line (the listener's, the agent's, or setup output) → entries for the dashboard.
-// `agent`: the run's (agents/), Claude Code for logs from before agents had names.
-export function format(line, agent = agentFor()) {
+// `agent`: the run's (agents/), Claude Code for logs from before agents had names. `seen`: what
+// the log's earlier lines said of the run (listenerEntries()), reader()'s.
+export function format(line, agent = agentFor(), seen = {}) {
   if (!line.trim()) return [];
   const e = parse(line);
   // A line cut at MAX_LINE: raw, unless the agent still knows whose output it was.
@@ -432,7 +438,7 @@ export function format(line, agent = agentFor()) {
     const cut = agent.normalize(line).flatMap((event) => agentEntry(event, agent) ?? []);
     return cut.length ? cut : [{ kind: "raw", text: clipRaw(line) }];
   }
-  if (e.type === "listener") return listenerEntries(e, agent);
+  if (e.type === "listener") return listenerEntries(e, agent, seen);
   return agent.normalize(line).flatMap((event) => agentEntry(event, agent) ?? []);
 }
 
@@ -491,11 +497,12 @@ const STAMPED = new Set(["tool", "output", "step"]);
 // image build's lines come as its steps (buildEntries()), and a line after an `at` one gets
 // its time (`at`, ms). Logs from before `at` lines have none.
 export function reader(agent = agentFor()) {
+  const seen = {};
   let phase = null;
   let steps = new Map();
   let at = null;
   const read = (line) => {
-    const entries = format(line, agent);
+    const entries = format(line, agent, seen);
     for (const e of entries) {
       if (e.kind !== "phase") continue;
       phase = e.phase;

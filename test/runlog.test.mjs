@@ -153,6 +153,15 @@ test("format: the listener's lines", () => {
   assert.deepEqual(format(line({ type: "listener", mode: "continue", kind: "chat" })), [
     { kind: "meta", text: "Continuing the session" },
   ]);
+  // A chat's log from before its delivered lines said so (#850): its first line says it, for
+  // the lines after it, not for another run's.
+  const delivered = line({ type: "listener", event: "delivered", at: 0, message: "Hi" });
+  const chat = reader();
+  chat(line({ type: "listener", mode: "start", kind: "chat" }));
+  assert.deepEqual(chat(delivered), [{ kind: "message", text: "Hi" }]);
+  const issue = reader();
+  issue(line({ type: "listener", mode: "start", kind: "issue", taskMode: "work" }));
+  assert.equal(issue(delivered)[0].kind, "meta");
   const start = (e) => format(line({ type: "listener", ...e }))[0].text;
   assert.equal(start({ mode: "start", kind: "issue", taskMode: "work" }), "Starting");
   assert.equal(
