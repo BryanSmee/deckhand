@@ -426,6 +426,8 @@ export function Dashboard({ state, error, repos, refresh, onOverview }: Props) {
             </div>
           )}
         </div>
+        {/* Not over a task or an open chat, which take the screen: so its Tasks and Board never
+            sit beside an open chat's header, which goes to that chat's repository (#871). */}
         {!wide && !task && !(onChats && route.chat) && (
           <TabBar state={state} route={route} lastRepo={lastRepo} chats={chats.data} />
         )}

@@ -228,6 +228,28 @@ test("a phone: the top bar names the repository, its Chats tab stays on it; All'
   );
 });
 
+test("a phone's tab bar: none with a chat open, the repository last browsed on the list", async () => {
+  vi.stubGlobal("matchMedia", () => ({
+    matches: false,
+    addEventListener() {},
+    removeEventListener() {},
+  }));
+  history.replaceState(null, "", "#/acme/api");
+  show(makeChats([makeChat()]));
+  await screen.findByRole("button", { name: "acme/api: switch repository" });
+  // An open chat (acme/app): no tab bar to send Tasks and Board elsewhere than its header.
+  history.replaceState(null, "", "#/chats/0123456789abcdef");
+  window.dispatchEvent(new HashChangeEvent("hashchange"));
+  await screen.findByRole("button", { name: "acme/app: switch repository" });
+  expect(screen.queryByRole("navigation", { name: "Pages" })).toBeNull();
+  // The list: the repository the user came from, as the header's Tasks.
+  history.replaceState(null, "", "#/chats");
+  window.dispatchEvent(new HashChangeEvent("hashchange"));
+  const tabs = within(await screen.findByRole("navigation", { name: "Pages" }));
+  expect(tabs.getByRole("link", { name: "Tasks" }).getAttribute("href")).toBe("#/acme/api");
+  expect(tabs.getByRole("link", { name: "Board" }).getAttribute("href")).toBe("#/acme/api/board");
+});
+
 test("the limit: New chat disabled past it, with the reason", async () => {
   const kept = [0, 1, 2, 3].map((n) => makeChat({ id: `${n}`.repeat(16), title: `Chat ${n}` }));
   show(makeChats(kept));
