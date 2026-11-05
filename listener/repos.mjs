@@ -406,8 +406,9 @@ export function createRepoApi({
 
   // The list's answer: its rows, when GitHub listed them, and the App's links. With
   // `backlog`, a configured repo's row has its `backlog` for `user`: { count, more, readAt },
-  // or null before its first read. Only when asked: keeping the counts fresh reads each repo
-  // from GitHub, which the pages that poll the list without showing them shouldn't cost.
+  // or null before its first read (or without `tasks:read` there). Only when asked: keeping the
+  // counts fresh reads each repo from GitHub, which the pages that poll the list without showing
+  // them shouldn't cost.
   async function listed(user, backlog = false) {
     const all = await list.list();
     const seen =
@@ -418,7 +419,14 @@ export function createRepoApi({
       ));
     const rows = seen ? all.filter((r) => seen.has(r.repo.toLowerCase())) : all;
     const configured = rows.filter((r) => r.status === "configured").map((r) => r.repo);
-    const counts = backlog ? backlogs(configured, user) : {};
+    // The counts are the backlog's, which needs `tasks:read` (work.mjs): a repo seen through
+    // another action has none, and isn't read for it either.
+    const readable =
+      backlog && permissions ? await permissions.which(user, configured, "tasks:read") : null;
+    const counted = readable
+      ? configured.filter((repo) => readable.has(repo.toLowerCase()))
+      : configured;
+    const counts = backlog ? backlogs(counted, user) : {};
     const repos = rows.map((r) =>
       backlog && r.status === "configured"
         ? { ...r, backlog: counts[r.repo.toLowerCase()] ?? null }
