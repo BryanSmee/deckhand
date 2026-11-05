@@ -6,9 +6,12 @@ import { grantFor, grantsFrom, withGrants } from "../listener/grants.mjs";
 import {
   createMachines,
   machineFields,
+  mapLimited,
   MAX_MACHINES,
+  OFFER_READS,
   offeredLabels,
   ONLINE_MS,
+  READ_MS,
   repoMatches,
 } from "../listener/machines.mjs";
 import { parseRepoConfig } from "../listener/repo-config.mjs";
@@ -172,6 +175,67 @@ test("offers: the repositories of the machine's that opt in, where its owner may
   const bobs = machines.register("bob", { name: "desk", repos: ["org/app", "org/game"] });
   // Bob's machine has no `unreal` label: org/game isn't offered to it.
   assert.deepEqual(await machines.offers("bob", bobs.id), [{ repo: "org/app", labels: [] }]);
+});
+
+test("mapLimited: its results in order, never more than its limit at once", async () => {
+  let running = 0;
+  let most = 0;
+  const results = await mapLimited([5, 1, 4, 2, 3], 2, async (n) => {
+    running++;
+    most = Math.max(most, running);
+    for (let i = 0; i < n; i++) await new Promise((resolve) => setImmediate(resolve));
+    running--;
+    return n * 10;
+  });
+  assert.deepEqual(results, [50, 10, 40, 20, 30]);
+  assert.equal(most, 2);
+  assert.deepEqual(await mapLimited([], 4, async () => 1), []);
+});
+
+test("offers for owner/*: OFFER_READS reads at once, each .deckhand.yaml read again only after READ_MS (#914)", async () => {
+  let clock = 1_000_000;
+  const names = Array.from({ length: 30 }, (_, i) => `org/r${String(i).padStart(2, "0")}`);
+  let running = 0;
+  let most = 0;
+  const reads = [];
+  let failing = true;
+  const machines = createMachines({
+    config,
+    now: () => clock,
+    repoNames: async () => names,
+    granted: async () => {
+      running++;
+      most = Math.max(most, running);
+      await new Promise((resolve) => setImmediate(resolve));
+      running--;
+      return true;
+    },
+    settings: async (repo) => {
+      reads.push(repo);
+      if (repo === "org/r00" && failing) throw new Error("GitHub is away");
+      return { settings: settingsOf("machines: true\n"), errors: [] };
+    },
+    mayRun: async () => true,
+  });
+  const desk = machines.register("alice", { name: "desk", repos: ["org/*"] });
+  const first = await machines.offers("alice", desk.id);
+  // org/r00's read failed: not offered (fail closed).
+  assert.equal(first.length, 29);
+  assert.equal(most, OFFER_READS);
+  assert.equal(reads.length, 30);
+  // Registering again, another machine, a claim's takes(): the reads kept, but the one that
+  // failed, asked again.
+  failing = false;
+  machines.register("alice", { name: "desk", repos: ["org/*"] });
+  const laptop = machines.register("alice", { name: "laptop", repos: ["org/*"] });
+  assert.equal((await machines.offers("alice", desk.id)).length, 30);
+  assert.equal((await machines.offers("alice", laptop.id)).length, 30);
+  assert.deepEqual(await machines.takes("alice", laptop.id, "Org/R05"), []);
+  assert.deepEqual(reads.slice(30), ["org/r00"]);
+  // READ_MS later, each is read again.
+  clock += READ_MS;
+  await machines.offers("alice", desk.id);
+  assert.equal(reads.length, 61);
 });
 
 test("a machine that isn't one: the answer doesn't repeat what was asked", () => {
