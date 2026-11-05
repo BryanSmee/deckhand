@@ -1,14 +1,15 @@
 // Issues waiting for the maintainer's answers: an `## Open questions` section in an issue's
 // body labels it NEEDS_INPUT_LABEL, and an allowed user's comment, or a box ticked in every
-// question, takes the label off (they answered). Inbox runs file their issues with that section
-// (prompts/idea.md, bug.md), and a hand-written issue can have one too. The questions
-// themselves are parsed for the dashboard (parseQuestions()), from an issue's section or a
-// run's reply that stopped to ask; their format is in ../prompts/sandbox.md. Pure, so tested on
-// its own (../test/questions.test.mjs), apart from applyInput(), which acts on what a delivery
-// changes.
+// question, takes the label off (they answered; with `runs:manage`, applyInput()). Inbox runs
+// file their issues with that section (prompts/idea.md, bug.md), and a hand-written issue can
+// have one too. The questions themselves are parsed for the dashboard (parseQuestions()), from
+// an issue's section or a run's reply that stopped to ask; their format is in
+// ../prompts/sandbox.md. Pure, so tested on its own (../test/questions.test.mjs), apart from
+// applyInput(), which acts on what a delivery changes.
 import { hasLabel, labelFailed } from "./comments.mjs";
 import { repoAllowed } from "./config.mjs";
 import { MARKER, prId, saysMore, taskKey } from "./events.mjs";
+import { refusal } from "./permissions.mjs";
 import { CONFIG_FILE, effectiveConfig } from "./repo-config.mjs";
 import { Refused } from "../lib/http.mjs";
 
@@ -516,6 +517,9 @@ const ISSUE_ACTIONS = {
   transferred: goneInput,
 };
 
+// The action an answer to an issue's open questions needs, on GitHub as on the dashboard.
+const ANSWER = "runs:manage";
+
 // Open questions in an issue, or an answer to them (inputEvent()): the needs-input label and
 // the dashboard's list of issues waiting for input (inputs.mjs). `ctx` (server.mjs): the
 // listener's state and services.
@@ -544,6 +548,15 @@ export async function applyInput(ctx, change) {
       // Their ticks answer nothing: wait_for_answers ignores them too (tasks.mjs).
       if (change.ticked) ctx.inputs.update(key, undefined, true);
       return skip(`${key}: ${by} not among ${repo}'s users`);
+    }
+    // An answer needs what the dashboard's needs (work.mjs `answer`): it takes the label off,
+    // and with wait_for_answers lets held-back comments go on. Refused, or not decided (which
+    // refuses as much), nothing is said, and its ticks answer nothing, as above.
+    const said =
+      label === false && ctx.permissions && (await ctx.permissions.decide(by, repo, ANSWER));
+    if (said && !said.ok) {
+      if (change.ticked) ctx.inputs.update(key, undefined, true);
+      return skip(`${key}: answer refused: ${refusal(said, by, ANSWER)}`);
     }
     // A trigger line alone answers nothing: the issue still waits (tasks.mjs holdBack()).
     if (
