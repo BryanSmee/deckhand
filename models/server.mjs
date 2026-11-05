@@ -51,7 +51,7 @@ import { CLOUDCODE_HOST, createGoogleRelay } from "./google.mjs";
 import { createModelsServer } from "./http.mjs";
 import { fingerprintSalt, loginKey, loginSeal } from "./logins.mjs";
 import { createOpenAiProxy } from "./openai.mjs";
-import { modelMetrics } from "./metrics.mjs";
+import { declareMetrics } from "./metrics.mjs";
 import { createRuns } from "./runs.mjs";
 import { antigravityPoll, claudePoll, codexPoll, createUsage } from "./usage.mjs";
 
@@ -149,7 +149,7 @@ export function createModels({
   log = () => {},
 }) {
   // Its calls, tokens, plans' usage and logins' refreshes (metrics.mjs).
-  const metrics = modelMetrics(registry, { readUsage: () => usage.read(), now });
+  const metrics = declareMetrics(registry, { readUsage: () => usage.read(), now });
   const runs = createRuns({
     keys: { get: (kid) => broker.keys().get(kid) },
     unknownKey: broker.unknownKey,

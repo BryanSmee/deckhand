@@ -42,7 +42,7 @@ import { blockedAddress, inSubnets, ownSubnets } from "./addresses.mjs";
 import { certifiable, createAuthority } from "./authority.mjs";
 import { createCache, DEFAULT_ENTRY_MAX, DEFAULT_MAX, parseSize, requestUse } from "./cache.mjs";
 import { createCachedPath } from "./cached.mjs";
-import { egressMetrics } from "./metrics.mjs";
+import { declareMetrics } from "./metrics.mjs";
 import {
   AGENT_TOKEN_HEADERS,
   agentTokenOf,
@@ -238,8 +238,8 @@ export function createProxy({
   engine = false,
   // What GET /health says: when it started, its version (../lib/health.mjs).
   health = healthInfo(),
-  // Its metrics (metrics.mjs egressMetrics()), the same for both ports'.
-  metrics = egressMetrics(),
+  // Its metrics (metrics.mjs declareMetrics()), the same for both ports'.
+  metrics = declareMetrics(),
 }) {
   const asEngine = engine ? { engine: true } : {};
   // The policy's answer about `socket`'s connection to `host`, timed. Its `source` said always:
@@ -845,7 +845,7 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
     entryMax: parseSize(process.env.EGRESS_CACHE_ENTRY_MAX, DEFAULT_ENTRY_MAX),
     log,
   });
-  const metrics = egressMetrics(registry, { cache });
+  const metrics = declareMetrics(registry, { cache });
   // The CA lives next to the cache, in the proxy's volume, cache on or off: relayed hosts need
   // it too.
   let authority = createAuthority({ dir: join(dir, "ca"), log });

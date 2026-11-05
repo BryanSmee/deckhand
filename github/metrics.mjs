@@ -257,3 +257,6 @@ export const NO_METRICS = {
   git: () => {},
   refused: () => {},
 };
+
+// Every metric its server declares, and test/metrics-services.test.mjs: githubMetrics()'s alone.
+export const declareMetrics = githubMetrics;

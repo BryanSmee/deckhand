@@ -33,7 +33,7 @@ import { publishKey, signingKey } from "../lib/tokens.mjs";
 import { createCallers, inClusterReview } from "./callers.mjs";
 import { createFiles } from "./files.mjs";
 import { createBrokerServer } from "./http.mjs";
-import { brokerMetrics } from "./metrics.mjs";
+import { declareMetrics } from "./metrics.mjs";
 import { createRuns } from "./runs.mjs";
 
 export const DRAIN_MS = 30_000;
@@ -78,7 +78,7 @@ export function createBroker({
   }
   const runs = createRuns({ store, key, now, expired: (id) => files.remove(id) });
   const files = createFiles({ store, blobs, runs, now, sleep });
-  const metrics = registry ? brokerMetrics(registry, { runs }) : undefined;
+  const metrics = registry ? declareMetrics(registry, { runs }) : undefined;
   let draining = false;
   const server = createBrokerServer({
     runs,
