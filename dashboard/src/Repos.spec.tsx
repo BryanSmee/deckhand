@@ -86,6 +86,7 @@ const CONFIG: RepoConfig = {
       allowResearch: false,
       allowWorkflows: false,
       allowWorkflowSecrets: false,
+      allowMachines: false,
       allowAutoMerge: false,
       hosts: ["pypi.org"],
       cachedHosts: [],

@@ -7,8 +7,9 @@
 // only. Read again at each run, so an edit applies without a restart. Format: ../docs/security.md.
 //
 // The yes-or-no grants (its Dockerfile and its pull requests' branches', a container engine,
-// research runs, pushes that change workflows, auto-merge) are the operator's policies' since
-// #498: `allow_grant` rules in GRANTS_DIR/policy/, asked per repository (GRANTS, grantsOf()).
+// research runs, pushes that change workflows, auto-merge, users' own machines) are the
+// operator's policies' since #498: `allow_grant` rules in GRANTS_DIR/policy/, asked per
+// repository (GRANTS, grantsOf()).
 // The keys they had here are errors that say what to write instead, but the preview hook's,
 // gone (#574): a warning, so that a file that still has them loads.
 //
@@ -77,6 +78,8 @@ export const GRANTS = {
   auto_merge: "allowAutoMerge",
   // On a public one too: the field then says "public".
   auto_merge_public: "allowAutoMerge",
+  // Its tasks may run on its users' own machines (machines.mjs, #594), with its `machines:`.
+  machines: "allowMachines",
 };
 
 // The grants a rule must give one repository at a time, never all of them (it names

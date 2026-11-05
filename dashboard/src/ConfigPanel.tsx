@@ -681,6 +681,7 @@ function GrantCard({ grant }: { grant: Grant }) {
     ["workflows", grant.allowWorkflows],
     ["workflow_secrets", grant.allowWorkflowSecrets],
     ["auto_merge", grant.allowAutoMerge],
+    ["machines", grant.allowMachines],
   ];
   const policies = grant.grantFiles.length
     ? grant.grantFiles.map((f) => `policy/${f}`).join(", ")

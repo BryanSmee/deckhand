@@ -161,6 +161,19 @@ async function fakeGitHub(files = {}) {
         const content = Buffer.from(files[`policy:${policyBlob[1]}`]).toString("base64");
         return res.end(JSON.stringify({ content, encoding: "base64" }));
       }
+      // Another repository's default branch's files are keyed "<owner>/<repo>:<path>".
+      const other = /^\/repos\/([^/]+\/[^/]+)\/contents\/([^?]+)(?:\?ref=trunk)?$/.exec(req.url);
+      if (other && other[1] !== "org/repo") {
+        const text = files[`${other[1]}:${decodeURIComponent(other[2])}`];
+        if (text === undefined) return res.writeHead(404).end("{}");
+        return res.end(
+          JSON.stringify({
+            type: "file",
+            sha: gitBlob(Buffer.from(text)),
+            content: Buffer.from(text).toString("base64"),
+          }),
+        );
+      }
       // Other branches' files are keyed "<branch>:<path>".
       // Without a ref, the default branch's (the runner's blob lookups).
       const file = /^\/repos\/org\/repo\/contents\/([^?]+)(?:\?ref=(.+))?$/.exec(req.url);
@@ -4177,46 +4190,17 @@ allow_capabilities contains "read:pulls"
     assert.equal((await get("/api/runs/org-repo-pr-3-1000/stream", session)).status, 404);
   });
 
-  test("MCP (#482, #480): a client signed in through edge lists the repos, reads a log, reruns a failed run", async (t) => {
-    const issue = JSON.stringify({ number: 12, title: "Fix the build", state: "open" });
-    const repo = { full_name: "org/repo", html_url: "https://github.com/org/repo" };
-    const installed = JSON.stringify({ repositories: [repo] });
-    const { dir, github, port } = await listen(
-      t,
-      { "issue:12": issue, installed },
-      (dir, github) => {
-        const meta = { type: "listener", key: "org/repo#pr-3", repo: "org/repo", startedAt: 1000 };
-        const result = { type: "result", result: "## Fixed\n\nThe typo.", duration_ms: 6000 };
-        pastRun(dir, "org-repo-pr-3-1000", [meta, result]);
-        // Issue #12's work run, which failed.
-        const items = [{ text: "@deckhand fix it" }];
-        const failed = {
-          ...meta,
-          key: "org/repo#12",
-          kind: "issue",
-          taskMode: "work",
-          items,
-          startedAt: 2000,
-        };
-        const error = {
-          type: "result",
-          is_error: true,
-          result: "The tests fail.",
-          duration_ms: 60,
-        };
-        pastRun(dir, "org-repo-12-2000", [failed, error]);
-        return { GITHUB_URL: github.url };
-      },
-    );
+  // An MCP client of edge's /mcp, as `claude mcp add` connects one: its discovery, alice's
+  // GitHub sign-in and her consent, then its token. `scope`: what it asks for (none: the
+  // offered ones). → { rpc(method, params), resource }.
+  async function mcpClient(port, scope = null) {
     const base = `http://127.0.0.1:${port}`;
     const get = (path, cookie) =>
       fetch(base + path, { redirect: "manual", headers: cookie ? { cookie } : {} });
     const post = (path, body, headers = {}) =>
       fetch(base + path, { method: "POST", redirect: "manual", headers, body });
     const form = { "content-type": "application/x-www-form-urlencoded" };
-    // Without a token: where to sign in.
     const none = await post("/mcp", "{}");
-    assert.equal(none.status, 401);
     const metadata = /resource_metadata="([^"]+)"/.exec(none.headers.get("www-authenticate"))[1];
     // The client's discovery, as the MCP authorization spec has it: the resource's metadata
     // names its authorization server, whose own names its endpoints. They are the public URL's;
@@ -4224,7 +4208,6 @@ allow_capabilities contains "read:pulls"
     const local = (url) => new URL(url).pathname;
     const protectedResource = await (await get(local(metadata))).json();
     const { resource } = protectedResource;
-    assert.equal(resource, "https://hooks.example.com/mcp");
     const [issuer] = protectedResource.authorization_servers;
     const server = await (
       await get(`/.well-known/oauth-authorization-server${local(issuer).replace(/\/$/, "")}`)
@@ -4247,6 +4230,7 @@ allow_capabilities contains "read:pulls"
     );
     const { client_id } = await registered.json();
     const query = new URLSearchParams({
+      ...(scope && { scope }),
       response_type: "code",
       client_id,
       redirect_uri: redirect,
@@ -4284,6 +4268,48 @@ allow_capabilities contains "read:pulls"
       assert.equal(res.status, 200);
       return (await res.json()).result;
     };
+    return { rpc, resource };
+  }
+
+  test("MCP (#482, #480): a client signed in through edge lists the repos, reads a log, reruns a failed run", async (t) => {
+    const issue = JSON.stringify({ number: 12, title: "Fix the build", state: "open" });
+    const repo = { full_name: "org/repo", html_url: "https://github.com/org/repo" };
+    const installed = JSON.stringify({ repositories: [repo] });
+    const { dir, github, port } = await listen(
+      t,
+      { "issue:12": issue, installed },
+      (dir, github) => {
+        const meta = { type: "listener", key: "org/repo#pr-3", repo: "org/repo", startedAt: 1000 };
+        const result = { type: "result", result: "## Fixed\n\nThe typo.", duration_ms: 6000 };
+        pastRun(dir, "org-repo-pr-3-1000", [meta, result]);
+        // Issue #12's work run, which failed.
+        const items = [{ text: "@deckhand fix it" }];
+        const failed = {
+          ...meta,
+          key: "org/repo#12",
+          kind: "issue",
+          taskMode: "work",
+          items,
+          startedAt: 2000,
+        };
+        const error = {
+          type: "result",
+          is_error: true,
+          result: "The tests fail.",
+          duration_ms: 60,
+        };
+        pastRun(dir, "org-repo-12-2000", [failed, error]);
+        return { GITHUB_URL: github.url };
+      },
+    );
+    const base = `http://127.0.0.1:${port}`;
+    const post = (path, body, headers = {}) =>
+      fetch(base + path, { method: "POST", redirect: "manual", headers, body });
+    // Without a token: where to sign in.
+    const none = await post("/mcp", "{}");
+    assert.equal(none.status, 401);
+    const { rpc, resource } = await mcpClient(port);
+    assert.equal(resource, "https://hooks.example.com/mcp");
     const init = await rpc("initialize", { protocolVersion: "2025-06-18", capabilities: {} });
     assert.equal(init.serverInfo.name, "deckhand");
     const { tools } = await rpc("tools/list", {});
@@ -4331,6 +4357,49 @@ allow_capabilities contains "read:pulls"
     assert.match(JSON.parse(posted.body).body, /^Rerun from the dashboard by @alice.*failed\./);
     await until(() => exists(join(dir, "run-env")), "#12's rerun");
     assert.match(readFileSync(join(dir, "run-env"), "utf8"), /^TASK_ISSUE=12$/m);
+  });
+
+  test("machines (#595): a machine registered through edge is offered the repositories that opt in", async (t) => {
+    const repos = ["org/repo", "org/other", "org/plain"].map((full_name) => ({
+      full_name,
+      html_url: `https://github.com/${full_name}`,
+      default_branch: "trunk",
+    }));
+    const { port } = await listen(
+      t,
+      {
+        installed: JSON.stringify({ repositories: repos }),
+        // Both opt in; the operator's policies grant org/repo alone. org/plain has no block.
+        ".deckhand.yaml": "machines:\n  labels: [unreal]\n",
+        "org/other:.deckhand.yaml": "machines: true\n",
+      },
+      (dir, github) => {
+        writeGrants(dir, ["machines"]);
+        return { GITHUB_URL: github.url };
+      },
+    );
+    // A machine's driver asks for deckhand:machine alone: its tools, none of the others.
+    const { rpc } = await mcpClient(port, "deckhand:machine");
+    const { tools } = await rpc("tools/list", {});
+    assert.deepEqual(
+      tools.map((x) => x.name),
+      ["register_machine", "heartbeat", "unregister_machine"],
+    );
+    const call = (name, args) => rpc("tools/call", { name, arguments: args });
+    assert.equal((await call("list_repos", {})).isError, true);
+    const registered = await call("register_machine", {
+      name: "studio",
+      labels: ["unreal", "gpu"],
+      repos: ["org/*"],
+    });
+    assert.equal(registered.isError, undefined, registered.content[0].text);
+    const { machine, offered } = registered.structuredContent;
+    assert.deepEqual(offered, [{ repo: "org/repo", labels: ["unreal"] }]);
+    const beat = await call("heartbeat", { machine: machine.id });
+    assert.equal(beat.structuredContent.machine.online, true);
+    const gone = await call("unregister_machine", { machine: machine.id });
+    assert.equal(gone.isError, undefined);
+    assert.equal((await call("heartbeat", { machine: machine.id })).isError, true);
   });
 
   test("access (#731): a login with no action sees nothing, starts nothing, its routes 404 and 403", async (t) => {

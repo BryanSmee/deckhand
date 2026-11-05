@@ -4,6 +4,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createHttp } from "../listener/http.mjs";
+import { createMachines, ONLINE_MS, WARNING } from "../listener/machines.mjs";
 import { Refused } from "../lib/http.mjs";
 import { agentFor } from "../listener/agents/index.mjs";
 import {
@@ -221,11 +222,14 @@ test("MCP: initialize, the five read tools, ping; notifications accepted, GET re
   assert.ok(large instanceof Error || large.status >= 400);
 });
 
-test("MCP: a token without deckhand:read lists no tool, and calls none", async (t) => {
+test("MCP: a token without deckhand:read lists no read tool, and calls none", async (t) => {
   const { ctx } = orchestrator();
   const { rpc, tool } = await serveMcp(t, ctx);
   const scopes = "deckhand:machine";
-  assert.deepEqual((await rpc("tools/list", {}, { scopes })).tools, []);
+  assert.deepEqual(
+    (await rpc("tools/list", {}, { scopes })).tools.map((x) => x.name),
+    ["register_machine", "heartbeat", "unregister_machine"],
+  );
   const refused = await tool("list_repos", {}, { scopes });
   assert.equal(refused.isError, true);
   assert.match(refused.content[0].text, /deckhand:read/);
@@ -810,4 +814,168 @@ test("MCP: schedule and rerun answer the dashboard's message, its refusals as to
   const failed = await tool("rerun", { runId: "r" }, as);
   assert.equal(failed.isError, true);
   assert.match(failed.content[0].text, /orchestrator's logs/);
+});
+
+// The machines of alice and bob (listener/machines.mjs): org/repo grants machines and opts in
+// for `unreal` machines, org/secret does neither.
+function withMachines(ctx, clock = { now: 1_000_000 }) {
+  ctx.machines = createMachines({
+    config: ctx.config,
+    repoNames: async () => ["org/repo", "org/secret"],
+    granted: async (repo) => repo === "org/repo",
+    settings: async (repo) => ({
+      settings: { machines: repo === "org/repo" ? { labels: ["unreal"] } : null },
+      errors: [],
+    }),
+    mayRun: async () => true,
+    now: () => clock.now,
+  });
+  return clock;
+}
+
+const MACHINE = { scopes: "deckhand:machine" };
+
+test("MCP: register, heartbeat and unregister a machine with deckhand:machine, refused without", async (t) => {
+  const { ctx } = orchestrator();
+  const clock = withMachines(ctx);
+  const { rpc, tool } = await serveMcp(t, ctx);
+  // Not listed nor called with the other scopes.
+  const listed = (await rpc("tools/list", {}, { scopes: "deckhand:read deckhand:work" })).tools;
+  assert.ok(!listed.some((x) => x.name.includes("machine") || x.name === "heartbeat"));
+  for (const [name, args] of [
+    ["register_machine", { name: "desk", repos: ["org/*"] }],
+    ["heartbeat", { machine: "0123456789abcdef" }],
+    ["unregister_machine", { machine: "0123456789abcdef" }],
+  ]) {
+    const refused = await tool(name, args, { scopes: "deckhand:read deckhand:work" });
+    assert.equal(refused.isError, true, name);
+    assert.match(refused.content[0].text, /deckhand:machine/, name);
+  }
+  assert.deepEqual(ctx.machines.list("alice"), []);
+
+  const { tools } = await rpc("tools/list", {}, MACHINE);
+  for (const x of tools) {
+    assert.equal(x.annotations.readOnlyHint, false, x.name);
+    assert.equal(x.annotations.openWorldHint, false, x.name);
+  }
+  assert.ok(tools.find((x) => x.name === "register_machine").description.includes(WARNING));
+
+  const registered = await tool(
+    "register_machine",
+    { name: "desk", labels: ["Unreal", "gpu"], repos: ["org/*"], version: "0.1.0" },
+    MACHINE,
+  );
+  assert.equal(registered.isError, undefined, registered.content[0].text);
+  const { machine, offered, warning } = registered.structuredContent;
+  assert.match(machine.id, /^[0-9a-f]{16}$/);
+  assert.deepEqual(
+    { ...machine, id: null },
+    {
+      id: null,
+      name: "desk",
+      labels: ["unreal", "gpu"],
+      capacity: 1,
+      repos: ["org/*"],
+      version: "0.1.0",
+      online: true,
+      seenAt: clock.now,
+    },
+  );
+  // org/secret neither grants nor opts in; org/repo takes its `unreal` label alone.
+  assert.deepEqual(offered, [{ repo: "org/repo", labels: ["unreal"] }]);
+  assert.equal(warning, WARNING);
+  assert.match(registered.content[0].text, /Warning: An agent will run on this machine/);
+  assert.match(registered.content[0].text, /- org\/repo \(unreal\)/);
+
+  // Offline once its heartbeats stop; a heartbeat brings it back.
+  clock.now += ONLINE_MS;
+  assert.equal(ctx.machines.list("alice")[0].online, false);
+  const beat = await tool("heartbeat", { machine: machine.id, version: "0.1.1" }, MACHINE);
+  assert.equal(beat.structuredContent.machine.online, true);
+  assert.equal(beat.structuredContent.machine.version, "0.1.1");
+  assert.equal(ctx.machines.list("alice")[0].seenAt, clock.now);
+
+  // The same name again: the same machine, its fields replaced.
+  const again = await tool(
+    "register_machine",
+    { name: "desk", repos: ["org/repo"], capacity: 2 },
+    MACHINE,
+  );
+  assert.equal(again.structuredContent.machine.id, machine.id);
+  assert.equal(again.structuredContent.machine.capacity, 2);
+  // Not offered: it has no `unreal` label any more.
+  assert.deepEqual(again.structuredContent.offered, []);
+  assert.match(again.content[0].text, /None: no repository/);
+
+  const bad = await tool("register_machine", { name: "desk", repos: ["nope"] }, MACHINE);
+  assert.equal(bad.isError, true);
+  assert.match(bad.content[0].text, /isn't "owner\/name" or "owner\/\*"/);
+
+  const gone = await tool("unregister_machine", { machine: machine.id }, MACHINE);
+  assert.equal(gone.content[0].text, "desk is unregistered.");
+  assert.deepEqual(ctx.machines.list("alice"), []);
+  const after = await tool("heartbeat", { machine: machine.id }, MACHINE);
+  assert.equal(after.isError, true);
+  assert.match(after.content[0].text, /register it again/);
+});
+
+test("MCP: a machine is listed and reached by its owner alone", async (t) => {
+  const { ctx } = orchestrator();
+  withMachines(ctx);
+  const { url, tool } = await serveMcp(t, ctx);
+  const alice = await tool("register_machine", { name: "desk", repos: ["org/repo"] }, MACHINE);
+  const id = alice.structuredContent.machine.id;
+  // Bob's own of the same name is another machine.
+  const bob = await tool(
+    "register_machine",
+    { name: "desk", repos: ["org/repo"] },
+    { ...MACHINE, user: "bob" },
+  );
+  assert.notEqual(bob.structuredContent.machine.id, id);
+  for (const [name, args] of [
+    ["heartbeat", { machine: id }],
+    ["unregister_machine", { machine: id }],
+  ]) {
+    const refused = await tool(name, args, { ...MACHINE, user: "bob" });
+    assert.equal(refused.isError, true, name);
+    assert.equal(refused.content[0].text, `No machine ${id} of yours: register it again.`);
+  }
+  // The dashboard's list: each their own.
+  const list = async (user) =>
+    (await (await fetch(`${url}/api/machines`, { headers: { "x-user": user } })).json()).machines;
+  const listed = (await list("alice")).map((m) => m.id);
+  assert.deepEqual(listed, [id]);
+  assert.deepEqual(
+    (await list("bob")).map((m) => m.id),
+    [bob.structuredContent.machine.id],
+  );
+  // Bob's Remove of Alice's machine is refused; hers goes through, from the dashboard's page.
+  const remove = (user, origin = url) =>
+    fetch(`${url}/api/machines/${id}/remove`, {
+      method: "POST",
+      headers: { "x-user": user, origin, host: new URL(url).host },
+    });
+  assert.equal((await remove("bob")).status, 404);
+  assert.equal((await remove("alice", "https://elsewhere.example")).status, 403);
+  const removed = await remove("alice");
+  assert.equal(removed.status, 200);
+  assert.deepEqual(await removed.json(), { removed: id });
+  assert.deepEqual(await list("alice"), []);
+  assert.equal((await list("bob")).length, 1);
+});
+
+test("MCP: a login taken out of ALLOWED_USERS loses its machines at once", async (t) => {
+  const { ctx } = orchestrator();
+  withMachines(ctx);
+  const { tool } = await serveMcp(t, ctx);
+  const desk = await tool("register_machine", { name: "desk", repos: ["org/repo"] }, MACHINE);
+  const id = desk.structuredContent.machine.id;
+  ctx.config.users = ["bob"];
+  assert.deepEqual(ctx.machines.list("alice"), []);
+  const beat = await tool("heartbeat", { machine: id }, MACHINE);
+  assert.equal(beat.isError, true);
+  await assert.rejects(ctx.machines.offers("alice", id), /No machine/);
+  // Back in, the machine is there again, offline until its next heartbeat.
+  ctx.config.users = ["alice", "bob"];
+  assert.equal(ctx.machines.list("alice").length, 1);
 });

@@ -25,3 +25,10 @@ package deckhand
 #   input.repo.name == "your-org/your-repo"
 #   input.grant in {"docker", "workflows", "branch_docker_images"}
 # }
+
+# Its tasks may run on its users' own machines (#594), once its .deckhand.yaml has a
+# `machines:` block too: an agent runs there with the machine owner's files and credentials.
+# allow_grant if {
+#   input.repo.name == "your-org/your-game"
+#   input.grant == "machines"
+# }

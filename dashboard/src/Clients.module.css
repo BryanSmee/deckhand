@@ -56,7 +56,8 @@
   min-width: 0;
 }
 
-.text b {
+.text b,
+.title b {
   font-weight: 500;
 }
 
@@ -69,6 +70,22 @@
   font-family: var(--mono);
   font-size: 12px;
   overflow-wrap: anywhere;
+}
+
+.text > .title {
+  color: var(--text);
+  font-size: inherit;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+}
+
+.warning {
+  margin: 0;
+  padding: 4px 18px 12px;
+  color: var(--text-2);
+  font-size: 13px;
 }
 
 .empty,
@@ -90,6 +107,10 @@
 
   .group h2 {
     padding: 14px 16px 4px;
+  }
+
+  .warning {
+    padding: 4px 16px 12px;
   }
 
   .client {
