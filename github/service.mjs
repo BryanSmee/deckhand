@@ -475,8 +475,24 @@ export function createGithubService({
   // A call as the App's: `make()` → GitHub's Response. A GET streamed, a write made once.
   async function asGitHub(req, res, caller, make) {
     if (!app.get()) throw new Refused(412, "no GitHub App yet: set it up at /setup");
-    if (req.method === "GET") return streamAnswer(res, await make());
-    sendAnswer(res, await once(req, caller, make));
+    if (req.method === "GET") return streamAnswer(res, await reached(make));
+    sendAnswer(res, await once(req, caller, () => reached(make)));
+  }
+
+  // `make()`'s answer, GitHub refusing the App's own setup of the call (its installation looked
+  // up, a token minted: github-app.mjs json(), GitHub's status on the error) passed on as the
+  // service's refusal with that status: a repository out of the App's reach is a 404 to the
+  // caller, not the service failing, which a caller may take for a hiccup (policies.mjs
+  // transient(), #785). A 5xx or a rate limit stays a failure.
+  async function reached(make) {
+    try {
+      return await make();
+    } catch (error) {
+      const status = error?.status;
+      if (error instanceof Refused || !Number.isInteger(status)) throw error;
+      if (status < 400 || status >= 500 || status === 429) throw error;
+      throw new Refused(status, `GitHub answered ${status} for the App's access to it`);
+    }
   }
 
   async function bodyOf(req) {
@@ -586,7 +602,9 @@ export function createGithubService({
       if (!app.get()) throw new Refused(412, "no GitHub App yet: set it up at /setup");
       return sendAnswer(
         res,
-        await once(req, caller, () => app.get().request(repo, "POST", "/graphql", body)),
+        await once(req, caller, () =>
+          reached(() => app.get().request(repo, "POST", "/graphql", body)),
+        ),
       );
     }
     m = /^\/as-app(\/.*)$/.exec(path);

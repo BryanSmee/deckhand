@@ -2142,14 +2142,17 @@ writes do: every decision first reads the operator's layer, which the orchestrat
 service for again once 30 seconds have passed (`DEFAULTS_MS`), whatever answer is kept, so a
 policy service away hides every repository within about 30 seconds, until it is back. Deckhand's default
 `access.rego` alone, with no repository policy, is decided without evaluating `opa`, but still
-needs the service's listing of its policies. GitHub isn't needed the same way. A decision on a repository reads what GitHub says of it (its
-default branch, whether it is private), kept 60 seconds, and lists its policy folder. When GitHub
-can't answer (no answer, a 5xx, a rate limit), the decision takes what GitHub last said and the
-last listing, up to an hour old, as run decisions do, and the log says so: a short GitHub error
-refuses nothing. Any other answer (a 404: the repository deleted or out of the App's reach; a
-plain 403) gives no action at once, since its listing would read as no policy and drop its deny
-rules. A push forgets both, and an orchestrator that hasn't read them in that hour, since its
-start or since a push, gives no action.
+needs the service's listing of its policies. GitHub isn't needed the same way. A decision on a
+repository reads what GitHub says of it (its default branch, whether it is private), kept 60
+seconds, and lists its policy folder. When GitHub can't answer (no answer, a 5xx, a rate limit,
+which a 403 may be too), the decision takes what GitHub last said and the last listing, up to an
+hour old, as run decisions do, and the log says so: a short GitHub error refuses nothing. The github
+service failing, or out of reach, counts as GitHub failing. Any other answer gives no action at
+once, since its listing would read as no policy and drop its deny rules: a 404 (the repository
+deleted, or out of the App's reach, which the github service passes on as GitHub said it, its
+installation included), any other 403, or the github service's own refusal (no App yet). A push
+forgets both, and an orchestrator that hasn't read them in that hour, since its start or since a
+push, gives no action.
 
 **When a change holds.** An edit of your policy files holds at the next decision (the answers
 are kept per digest of your files); a repository's own at the push to its default branch, which

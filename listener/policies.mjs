@@ -28,7 +28,7 @@
 // reason, and so do a decision no allow rule matches and a policy service that can't be reached.
 // Format: ../docs/repo-config.md#policies; trust: ../docs/security.md#policies.
 import { createHash } from "node:crypto";
-import { getJson } from "./github.mjs";
+import { getJson, rateLimited } from "./github.mjs";
 import {
   ACCESS_RULES,
   CAPABILITY_RULES,
@@ -865,13 +865,14 @@ export function createPolicies({
         if (!res.ok) {
           const why = res.error
             ? String(res.error?.message ?? res.error)
-            : `GitHub GET /repos/${name}: ${res.status}`;
+            : `GitHub GET /repos/${name}: ${res.status}${await said(res)}`;
           // A GitHub hiccup (transient()): what it last said, up to STALE_LISTING_MS old, as
           // listing()'s `stale` keeps the listing, so that it refuses nothing (#785). Its `at`
           // stays: a failed read never extends it. Not kept, forgotten by a push, or an answer
-          // that isn't a hiccup (a 404: deleted, or out of the App's reach): fails closed, since
-          // its listing would then 404 too, read as no policy, dropping its deny rules.
-          if (!transient(res) || !kept || now() - kept.at > STALE_LISTING_MS) {
+          // that isn't a hiccup (a 404: deleted, or out of the App's reach; the github service's
+          // own refusal): fails closed, since its listing would then 404 too, read as no policy,
+          // dropping its deny rules.
+          if (!(await transient(res)) || !kept || now() - kept.at > STALE_LISTING_MS) {
             throw res.error ?? new Error(why);
           }
           log(`${name}: reading the repository: ${why}; what GitHub last said kept`);
@@ -898,17 +899,26 @@ export function createPolicies({
   }
 
   // Whether GitHub's answer `res` (or { error }, a call that threw) is a hiccup that may pass: no
-  // answer, a 5xx, or a rate limit (429, or a 403 saying it is one). Anything else says something
-  // of the repository.
-  function transient(res) {
-    if (res.error) return true;
-    if (res.status >= 500 || res.status === 429) return true;
-    const headers = res.headers;
-    return (
-      res.status === 403 &&
-      !!headers &&
-      (headers.get("retry-after") != null || headers.get("x-ratelimit-remaining") === "0")
-    );
+  // answer (a call that threw without a status: the network), a 5xx, or a rate limit
+  // (rateLimited()). A throw with any other status is the github service's own refusal (no App,
+  // a repository it doesn't reach: ../github/client.mjs): it says something, as a 404 does.
+  async function transient(res) {
+    if (res.error) {
+      const status = res.error?.status;
+      return typeof status !== "number" || status >= 500 || status === 429;
+    }
+    return res.status >= 500 || (await rateLimited(res));
+  }
+
+  // The message of GitHub's failed answer `res`, for the log (": …"), or "".
+  async function said(res) {
+    const text = await (res.clone?.() ?? res).text().catch(() => "");
+    try {
+      const message = JSON.parse(text)?.message;
+      return typeof message === "string" && message ? `: ${message.slice(0, 200)}` : "";
+    } catch {
+      return "";
+    }
   }
 
   // GitHub's info about a repository → repoOf()'s answer.

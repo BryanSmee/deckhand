@@ -704,6 +704,10 @@ test("Deckhand's defaults alone, with permissions: GitHub failing on the reposit
   const noAnswer = () => {
     throw new Error("socket hang up");
   };
+  // The github service's own answer (../github/client.mjs): thrown, with its status.
+  const service = (status) => () => {
+    throw Object.assign(new Error(`the github service: ${status}`), { status });
+  };
   const reads = [];
   const logs = [];
   const policies = createPolicies({
@@ -748,6 +752,13 @@ test("Deckhand's defaults alone, with permissions: GitHub failing on the reposit
     answering(429),
     answering(403, { "x-ratelimit-remaining": "0" }),
     answering(403, { "retry-after": "60" }),
+    // A secondary rate limit may send neither header: its body says it.
+    () =>
+      new Response(JSON.stringify({ message: "You have exceeded a secondary rate limit." }), {
+        status: 403,
+      }),
+    service(500),
+    service(503),
   ]) {
     down = hiccup;
     assert.equal(await allowed(work(), "work", "Org/Repo#12"), true);
@@ -759,6 +770,13 @@ test("Deckhand's defaults alone, with permissions: GitHub failing on the reposit
     [answering(404), /404/],
     [answering(403), /403/],
     [answering(403, { "x-ratelimit-remaining": "12" }), /403/],
+    [
+      () => Response.json({ message: "Resource not accessible by integration" }, { status: 403 }),
+      /403: Resource not accessible/,
+    ],
+    // The github service's refusals: no App yet, a repository out of the App's reach.
+    [service(412), /412/],
+    [service(404), /404/],
   ]) {
     down = answer;
     assert.equal(await allowed(work(), "work", "Org/Repo#12"), false);
