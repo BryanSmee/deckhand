@@ -25,6 +25,26 @@ export const KINDS = ["work", "light", "review", "fix", "ci-fix", "conflict", "a
 // answers to its issue's open questions once they are done.
 export const QUEUED = ["slot", "repo", "pickup", "pause", "after", "answers"];
 
+// What a run's end waits for the store to take (restart.mjs endWait(), #821), by its `what`:
+// its summary, the queue's write, its state's removal.
+const ENDING_WHAT = new Map([
+  ["its summary", "summary"],
+  ["the queue", "queue"],
+  ["its state's removal", "state"],
+]);
+export const ENDING = [...ENDING_WHAT.values()];
+
+// The runs whose end waits for the store, by what (`ends`: ctx.endsWaiting's values): every
+// label, at 0 too, so that an alert sees them go back to 0.
+export function endingRuns(ends) {
+  const counts = new Map(ENDING.map((what) => [what, 0]));
+  for (const { what } of ends) {
+    const label = ENDING_WHAT.get(what);
+    if (label) counts.set(label, counts.get(label) + 1);
+  }
+  return [...counts].map(([what, n]) => [{ what }, n]);
+}
+
 // What became of a delivery (deliveryResult()).
 export const DELIVERY_RESULTS = ["taken", "ignored", "refused"];
 
@@ -262,6 +282,17 @@ export function orchestratorMetrics(registry, { ctx }) {
       );
     },
   });
+  // A store refusing for good never ends them (#861): only /ready, the status page and the log
+  // said so, which no alert reads.
+  registry.gauge(
+    "deckhand_runs_ending",
+    "Runs whose end waits for the store (its summary, the queue, its state's removal), each holding its task and a parallel slot.",
+    {
+      labels: ["what"],
+      values: { what: ENDING },
+      collect: () => (acting() ? endingRuns(acting().endsWaiting?.values() ?? []) : []),
+    },
+  );
   registry.gauge("deckhand_max_parallel", "MAX_PARALLEL: the most runs going at once.", {
     collect: () => (acting() ? acting().config.maxParallel : []),
   });

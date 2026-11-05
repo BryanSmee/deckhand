@@ -92,8 +92,9 @@ export const ENDING_LOG_MS = 10 * 60_000;
 // and its state's removal (removeLive()). Such a run holds its task and a parallel slot until
 // the store takes the write, which a store refusing it for good (a summary file it can't write,
 // a Redis ACL without the key) never does: the run is kept in `ctx.endsWaiting` (run id →
-// { key, what, since, tries, error }), which the orchestrator's /ready and its warnings on the
-// dashboard's status page say (endsWaitingWarnings()), and logged again every ENDING_LOG_MS.
+// { key, what, since, tries, error }), which the orchestrator's /ready, its warnings on the
+// dashboard's status page (endsWaitingWarnings()) and its metrics (metrics.mjs endingRuns(), by
+// `what`: name a new one there) say, and logged again every ENDING_LOG_MS.
 // Not given up: a store away for an hour is the same refusal, and the run's summary is kept
 // nowhere else (#619). → { failed(error), done() }, failed() at each refusal, done() once the
 // write landed or the copy leaves the run to the next one.

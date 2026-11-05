@@ -400,7 +400,7 @@
       "type": "timeseries",
       "id": 8,
       "title": "Runs going and queued, against MAX_PARALLEL",
-      "description": "Running runs, the tasks waiting by why (slot, repo, pickup, pause, after, answers), and MAX_PARALLEL.",
+      "description": "Running runs, the tasks waiting by why (slot, repo, pickup, pause, after, answers), MAX_PARALLEL, and the runs whose end waits for the store (their summary, the queue, their state's removal), each holding a slot.",
       "datasource": {
         "type": "prometheus",
         "uid": "${datasource}"
@@ -468,6 +468,16 @@
           "expr": "max(deckhand_max_parallel)",
           "legendFormat": "max_parallel",
           "refId": "C",
+          "range": true
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "sum by (what) (deckhand_runs_ending) > 0",
+          "legendFormat": "ending: {{what}}",
+          "refId": "D",
           "range": true
         }
       ]

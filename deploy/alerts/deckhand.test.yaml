@@ -254,6 +254,31 @@ tests:
               summary: "1 Deckhand task(s) wait for a slot while slots are free"
               description: "Tasks have waited for a free slot for 15 minutes with fewer runs going than MAX_PARALLEL. The orchestrator's log says why its runs don't start: the runner, the policy service or the broker away (deckhand_service_calls_total), or its store."
 
+  # A summary that waits for the store, then the queue's write too; a store away for 10 minutes
+  # (deckhand_runs_ending back to 0) doesn't fire it.
+  - interval: 1m
+    input_series:
+      - series: deckhand_runs_ending{what="summary"}
+        values: 0 0 1x10 0x5 1x40
+      - series: deckhand_runs_ending{what="queue"}
+        values: 0x30 1x30
+      - series: deckhand_runs_ending{what="state"}
+        values: 0x60
+    alert_rule_test:
+      - eval_time: 14m
+        alertname: DeckhandRunsEndingStuck
+        exp_alerts: []
+      - eval_time: 30m
+        alertname: DeckhandRunsEndingStuck
+        exp_alerts: []
+      - eval_time: 40m
+        alertname: DeckhandRunsEndingStuck
+        exp_alerts:
+          - exp_labels: { severity: warning }
+            exp_annotations:
+              summary: "2 Deckhand run(s) can't end: the store refuses their last writes"
+              description: "Runs' ends have waited for the store for 15 minutes, each holding its task and a parallel slot. The dashboard's status page and the orchestrator's log say which runs and the store's error: a summary file it can't write, a Redis ACL without the key, the store away. Fix it and the next try ends them, no restart needed."
+
   - interval: 1m
     input_series:
       - series: deckhand_sandboxes_failed_to_start_total{reason="unschedulable"}

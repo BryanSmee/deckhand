@@ -8,6 +8,8 @@ import { createHttp } from "../listener/http.mjs";
 import {
   CALLEES,
   deliveryResult,
+  ENDING,
+  endingRuns,
   KINDS,
   OUTCOMES,
   modeLabel,
@@ -18,6 +20,7 @@ import {
   serviceCallMetrics,
 } from "../listener/metrics.mjs";
 import { BUILT_IN } from "../listener/modes.mjs";
+import { endWait } from "../listener/restart.mjs";
 import { testConfig } from "./helpers.mjs";
 
 // The samples of `text` (no comments), each line as it is.
@@ -89,6 +92,22 @@ test("queuedReasons: a slot, the repo's own cap, the pause, the waits", () => {
   assert.deepEqual([reasons(tasks, 2).slot, reasons(tasks, 2).pickup], [3, 0]);
 });
 
+test("endingRuns: the runs whose end waits for the store, by what, every label at 0 too", () => {
+  const counts = (ends) => Object.fromEntries(endingRuns(ends).map(([l, n]) => [l.what, n]));
+  assert.deepEqual(counts([]), { summary: 0, queue: 0, state: 0 });
+  // endWait()'s own `what`s, as runs.mjs and restart.mjs name them.
+  const ctx = { log: () => {} };
+  endWait(ctx, { id: "r1", key: "org/repo#1" }, "its summary").failed(new Error("EACCES"));
+  endWait(ctx, { id: "r2", key: "org/repo#2" }, "its summary").failed(null);
+  endWait(ctx, { id: "r3", key: "org/repo#3" }, "the queue").failed(null);
+  const state = endWait(ctx, { id: "r4", key: "org/repo#4" }, "its state's removal");
+  state.failed(null);
+  assert.deepEqual(counts(ctx.endsWaiting.values()), { summary: 2, queue: 1, state: 1 });
+  state.done();
+  assert.deepEqual(counts(ctx.endsWaiting.values()), { summary: 2, queue: 1, state: 0 });
+  assert.deepEqual(ENDING, ["summary", "queue", "state"]);
+});
+
 test("pickupSlots: used by picked tasks, lent to the others past their share, the rest free", () => {
   const slots = (fields) =>
     Object.fromEntries(pickupSlots(fields).map(([{ state }, n]) => [state, n]));
@@ -126,6 +145,7 @@ test("orchestratorMetrics: the runs' lives counted, the queue's gauges from the 
   assert.match(waiting, /# TYPE deckhand_runs_queued gauge/);
   assert.equal(sample(waiting, "deckhand_runs_running"), undefined);
   assert.equal(sample(waiting, "deckhand_max_parallel"), undefined);
+  assert.equal(sample(waiting, 'deckhand_runs_ending{what="summary"}'), undefined);
   // The runs' counters at 0 before any run, every series: an increase() counts the first one.
   assert.equal(
     sample(waiting, 'deckhand_runs_finished_total{mode="work",outcome="error"}'),
@@ -178,6 +198,7 @@ test("orchestratorMetrics: the runs' lives counted, the queue's gauges from the 
     ]),
     waits: { list: () => [{ blockers: [1] }] },
     pickedCount: () => 0,
+    endsWaiting: new Map([["r1", { key: "org/repo#1", what: "its summary", since: 0 }]]),
   };
   const text = await registry.render();
   assert.equal(
@@ -217,6 +238,14 @@ test("orchestratorMetrics: the runs' lives counted, the queue's gauges from the 
   assert.equal(
     sample(text, 'deckhand_runs_queued{reason="after"}'),
     'deckhand_runs_queued{reason="after"} 1',
+  );
+  assert.equal(
+    sample(text, 'deckhand_runs_ending{what="summary"}'),
+    'deckhand_runs_ending{what="summary"} 1',
+  );
+  assert.equal(
+    sample(text, 'deckhand_runs_ending{what="queue"}'),
+    'deckhand_runs_ending{what="queue"} 0',
   );
   assert.equal(
     sample(text, 'deckhand_auto_pickup_slots{state="free"}'),

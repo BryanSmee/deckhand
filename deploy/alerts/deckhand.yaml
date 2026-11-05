@@ -138,6 +138,22 @@ groups:
             MAX_PARALLEL. The orchestrator's log says why its runs don't start: the runner, the
             policy service or the broker away (deckhand_service_calls_total), or its store.
 
+      # Runs whose end waits for the store (#861): their summary, the queue's write or their
+      # state's removal refused. A store away for minutes passes; one refusing for good (a
+      # summary file it can't write, a Redis ACL without the key) holds them until it is fixed.
+      - alert: DeckhandRunsEndingStuck
+        expr: sum(deckhand_runs_ending) > 0
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $value }} Deckhand run(s) can't end: the store refuses their last writes"
+          description: >-
+            Runs' ends have waited for the store for 15 minutes, each holding its task and a
+            parallel slot. The dashboard's status page and the orchestrator's log say which runs
+            and the store's error: a summary file it can't write, a Redis ACL without the key,
+            the store away. Fix it and the next try ends them, no restart needed.
+
       # Sandboxes left Pending past KUBERNETES_PENDING_MINUTES, then given up on.
       - alert: DeckhandSandboxesStuckStarting
         expr: |
