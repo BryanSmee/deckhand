@@ -33,12 +33,35 @@ export async function rateLimited(res) {
   return /rate limit/i.test(text);
 }
 
+// GitHub failing a call for a while (a 5xx, a rate limit) after the App's tries
+// (github-app.mjs request()): not the call's fault, so a run it stops goes back in the queue
+// (runs.mjs). `what`: what the call was for ("reading .deckhand.yaml").
+export class GitHubUnavailable extends Error {
+  constructor(method, path, status, what = null) {
+    super(
+      what
+        ? `GitHub returned ${status} ${what} (${method} ${path})`
+        : `GitHub ${method} ${path}: ${status}`,
+    );
+    this.name = "GitHubUnavailable";
+    Object.assign(this, { method, path, status });
+  }
+}
+
+// Whether GitHub's failed answer `res` is its own unavailability (GitHubUnavailable).
+export async function unavailable(res) {
+  return res.status >= 500 || (await rateLimited(res));
+}
+
 // GET `path` as JSON, or null when GitHub answers a status in `expected` (404, 410: not
-// there). Any other failure throws.
+// there). Any other failure throws: GitHubUnavailable for GitHub's own.
 export async function getJson(github, repo, path, expected = []) {
   const res = await github(repo, "GET", path, undefined, expected);
   if (expected.includes(res.status)) return null;
-  if (!res.ok) throw new Error(`GitHub GET ${path}: ${res.status}`);
+  if (!res.ok) {
+    if (await unavailable(res)) throw new GitHubUnavailable("GET", path, res.status);
+    throw new Error(`GitHub GET ${path}: ${res.status}`);
+  }
   return res.json();
 }
 

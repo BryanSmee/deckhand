@@ -1479,6 +1479,17 @@ blob id. The orchestrator calls through `github/client.mjs` (`app()`: `request()
   orchestrator call that changes something carries its epoch (`lib/fence.mjs`, as the
   runner's), and a write may carry an idempotency key, made once however often it is asked: a
   run's reply carries `<run>:reply` (`comments.mjs` `reply()`).
+- **GitHub's hiccups** (#680): a `500`, `502`, `503` or `504`, or no answer at all, is tried
+  again after 1 s, 3 s and 9 s (or GitHub's `retry-after`), each retry logged once, for a call
+  that may be repeated: a `GET` or `HEAD`, a `PUT` or `PATCH` but a merge, never a `POST` or
+  `DELETE` (`github-app.mjs` `request()`, `repeatable()`). A secondary rate limit (a `403` or
+  `429` that says so) is waited for as GitHub says, a minute when it doesn't, up to a minute
+  and three times, whatever the method: it isn't a failed try. What still fails is answered as
+  GitHub left it. A run whose start it stops (its `.deckhand.yaml` unread, say:
+  `GitHubUnavailable`, `github.mjs`) ends as `error`, its log and summary saying GitHub's
+  status, method and path, and its comments go back in the queue, 👀 kept, for a run 1, 5 then
+  15 minutes later (`runs.mjs` `githubDown()`, `GITHUB_REQUEUE_MS`); after those, its reply
+  says GitHub failed.
 - **The App's key**: edge's /setup has the service convert a new App's manifest code
   (`POST /app/manifest`), so a key never reaches edge or the orchestrator.
 
