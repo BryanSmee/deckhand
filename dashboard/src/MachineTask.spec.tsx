@@ -23,7 +23,9 @@ test("a machine task says what it waits for, then where it works", () => {
   expect(taskStatus(waiting).label).toBe("Waiting for unreal");
   render(<MachineFact task={waiting} />);
   expect(
-    screen.getByText("Runs on @alice's machines labelled unreal: waiting for its claim"),
+    screen.getByText(
+      "Runs on @alice's machines labelled unreal: waiting for one of them to claim it",
+    ),
   ).toBeTruthy();
   const working = makeTask({
     state: "working",
@@ -31,10 +33,12 @@ test("a machine task says what it waits for, then where it works", () => {
   });
   expect(taskStatus(working).label).toBe("On Desk");
   render(<MachineFact task={working} />);
-  expect(screen.getByText("Runs on @alice's Desk: at work on Desk")).toBeTruthy();
+  expect(screen.getByText("Claimed by @alice's Desk")).toBeTruthy();
   const away = makeTask({ state: "queued", machine: route({ via: "comment", available: false }) });
   render(<MachineFact task={away} />);
-  expect(screen.getByText("Runs on @alice's machines (unreal): none of them online")).toBeTruthy();
+  expect(
+    screen.getByText("Runs on @alice's machines (unreal): none of them is online"),
+  ).toBeTruthy();
   // Any other task: its state's own name.
   expect(taskStatus(makeTask({ state: "queued" })).label).toBe("Queued");
 });

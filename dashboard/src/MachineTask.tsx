@@ -9,20 +9,28 @@ import type { Task } from "./types";
 import { Button } from "./ui/Button";
 import styles from "./MachineTask.module.css";
 
-// "Runs on @alice's machines labelled unreal: none online", "… : on Desk".
+// "Runs on @alice's machines labelled unreal: waiting for one to claim it", "Claimed by
+// @alice's Desk".
 export function MachineFact({ task: t }: { task: Task }) {
   const m = t.machine;
   if (!m) return null;
+  const title = m.via === "label" ? `Its runs-on:${m.want} label` : "A /machine comment";
+  if (m.claimed)
+    return (
+      <span title={title}>
+        Claimed by @{m.owner}'s {machineName(m)}
+      </span>
+    );
   const asked = m.machine
     ? `@${m.owner}'s ${m.machine}`
     : `@${m.owner}'s machines ${m.via === "label" ? `labelled ${m.want}` : `(${m.want})`}`;
-  const now = m.claimed
-    ? `at work on ${machineName(m)}`
-    : m.available
-      ? "waiting for its claim"
-      : "none of them online";
+  const now = m.available
+    ? `waiting for ${m.machine ? "it" : "one of them"} to claim it`
+    : m.machine
+      ? "it is offline"
+      : "none of them is online";
   return (
-    <span title={m.via === "label" ? `Its runs-on:${m.want} label` : "A /machine comment"}>
+    <span title={title}>
       Runs on {asked}: {now}
     </span>
   );
