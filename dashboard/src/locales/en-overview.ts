@@ -75,8 +75,8 @@ export const overview = {
   "overview.partFailed": "{count} failed",
   "overview.partQueued": "{count} queued",
   "overview.partIdle": "{count} idle",
-  "overview.partEnded": "{count} done this week",
-  "overview.partMerged": "{count} merged this week",
+  "overview.partEnded": { one: "{count} done this week", other: "{count} done this week" },
+  "overview.partMerged": { one: "{count} merged this week", other: "{count} merged this week" },
   "overview.backlog": "Backlog {count}",
   // More than the count read: "Backlog 100+".
   "overview.backlogMore": "Backlog {count}+",

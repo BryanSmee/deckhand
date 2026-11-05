@@ -3,6 +3,7 @@
 // fails `tsc`, and so `npm run build`. Adding a language is its catalog here and its code in
 // public/theme.js's list (a spec keeps the two in step).
 import { en } from "./en";
+import { fr } from "./fr";
 
 // One text per plural form the language has (Intl.PluralRules), `other` always.
 export type Plural = { other: string } & Partial<Record<Intl.LDMLPluralRule, string>>;
@@ -10,6 +11,9 @@ export type Plural = { other: string } & Partial<Record<Intl.LDMLPluralRule, str
 export type Source = typeof en;
 export type Key = keyof Source;
 export type Catalog = { [K in Key]: Source[K] extends string ? string : Plural };
+// A catalog's part in a file of its own (fr-board.ts), checked against the English file's keys
+// (en-board.ts): `satisfies Section<typeof board>`.
+export type Section<T> = { [K in keyof T & Key]: Catalog[K] };
 
 // The names in a text's placeholders ("{n}s ago" has "n"), a plural's count among them.
 type Names<S> = S extends `${string}{${infer N}}${infer R}` ? N | Names<R> : never;
@@ -17,7 +21,7 @@ export type Holes<E> = E extends string ? Names<E> : "count" | Names<E[keyof E] 
 // The keys whose text has no placeholder: what a label kept as a key can be.
 export type Plain = { [K in Key]: [Holes<Source[K]>] extends [never] ? K : never }[Key];
 
-export const CATALOGS = { en } satisfies Record<string, Catalog>;
+export const CATALOGS = { en, fr } satisfies Record<string, Catalog>;
 
 export type Language = keyof typeof CATALOGS;
 export const LANGUAGES = Object.keys(CATALOGS) as Language[];
