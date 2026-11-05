@@ -76,6 +76,7 @@ export const poolCaps = (config) => new Map([[CHATS, config.maxRunningChats ?? 0
 // it started in, though the task moved since (a `/machine` comment during its run).
 export function countRun(ctx, task, n) {
   const pool = n > 0 ? (task.countedIn = poolOf(task)) : (task.countedIn ?? poolOf(task));
+  if (n < 0) delete task.countedIn;
   if (pool === SHARED) ctx.running += n;
   else {
     ctx.pools ??= new Map();
@@ -624,7 +625,8 @@ export function createTasks(ctx) {
     const perRepo = new Map();
     let auto = 0;
     for (const t of tasks.values()) {
-      if (!t.running || poolOf(t) !== SHARED) continue;
+      // A sandbox's slot where it started (countRun()), though its task moved since.
+      if (!t.running || (t.countedIn ?? poolOf(t)) !== SHARED) continue;
       perRepo.set(t.repo, (perRepo.get(t.repo) ?? 0) + 1);
       if (pickedTask(t)) auto++;
     }

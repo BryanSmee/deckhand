@@ -209,6 +209,30 @@ export interface PolicyDryRun {
   url: string | null;
 }
 
+// A machine task's route (listener/claims.mjs view()).
+export interface TaskMachine {
+  // Whose machines take it: who added its label, or commented `/machine`.
+  owner: string;
+  // The machine's name or label asked for, as written.
+  want: string;
+  via: "comment" | "label";
+  // The machine that holds it, or that it sticks to (it ran it); null while any that fits may.
+  machine: string | null;
+  // Whether a machine holds it now.
+  claimed: boolean;
+  // Whether one of the owner's machines that fits is online.
+  available: boolean;
+}
+
+// A comment held on a machine task for its owner.
+export interface HeldComment {
+  author: string | null;
+  at: number | null;
+  // Its start, 500 characters at most.
+  text: string;
+  url: string | null;
+}
+
 export interface Task {
   key: string;
   repo: string;
@@ -240,6 +264,11 @@ export interface Task {
   // Picked by the listener from its auto-pickup label (listener/auto-pickup.mjs): queued so, or
   // its last run was.
   autoPickup?: boolean;
+  // Routed to its owner's machines (a `runs-on:<label>` label, a `/machine` comment:
+  // listener/claims.mjs): waiting for one, or claimed by one.
+  machine?: TaskMachine;
+  // Other people's comments on it, held until its machine's owner delivers or drops them.
+  held?: HeldComment[];
   // Its issue or pull request closed: as completed (merged), not planned (closed without
   // merging), or null while open or not known yet (listener/titles.mjs).
   closed: Closed;

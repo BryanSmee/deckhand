@@ -1,7 +1,7 @@
 // Settings › MCP clients' machines (#595): your own computers that take Deckhand's tasks, each
 // registered by its driver, an MCP client with the deckhand:machine scope (listener/machines.mjs),
-// from GET api/machines, with Remove. Nobody else sees them. Removing one deletes its entry (its
-// claims, once machines take tasks, #596, end with it).
+// from GET api/machines, with Remove. Nobody else sees them. Removing one deletes its entry: its
+// claims end with it, their tasks waiting again (listener/claims.mjs, #596).
 import { useState } from "preact/hooks";
 import { postJson, usePolled } from "./api";
 import { ago } from "./format";

@@ -7,7 +7,7 @@ import { branchSlug, createClaims, fits, LEASE_MS } from "../listener/claims.mjs
 import { parseMachine, splitTrigger } from "../listener/events.mjs";
 import { createMachines, hasRunsOn, runsOn } from "../listener/machines.mjs";
 import { parseRepoConfig } from "../listener/repo-config.mjs";
-import { createTasks, poolOf } from "../listener/tasks.mjs";
+import { countRun, createTasks, poolOf } from "../listener/tasks.mjs";
 import { testConfig } from "./helpers.mjs";
 
 const KEY = "org/repo#12";
@@ -46,9 +46,11 @@ function bench({
     runs: [],
     running: 0,
     stopping: false,
+    // A sandbox's run, counted in its pool as runs.mjs counts it.
     run: (task) => {
       task.running = true;
-      ctx.running++;
+      task.pending = [];
+      countRun(ctx, task, 1);
       t.started.push(task.id);
     },
     titles: { set: () => {}, get: () => "Café : bientôt" },
@@ -113,6 +115,12 @@ function bench({
   t.register = (owner, name, fields = {}) =>
     ctx.machines.register(owner, { name, repos: ["org/repo"], ...fields }).id;
   t.task = (key = KEY) => ctx.tasks.get(key);
+  // A sandbox's run over, its slot free.
+  t.finish = (key = KEY) => {
+    const task = ctx.tasks.get(key);
+    task.running = false;
+    countRun(ctx, task, -1);
+  };
   return { t, ctx };
 }
 
@@ -440,4 +448,21 @@ test("a claim saved with the queue comes back running on its machine, with a fre
   assert.equal(task.running, true);
   assert.equal(task.pool, "machine:m1");
   assert.equal(task.claim.leaseUntil, t.clock + LEASE_MS);
+});
+
+test("/machine during a sandbox's run: that run keeps its slot, what comes next goes to the machine", async () => {
+  const { t, ctx } = bench();
+  const desk = t.register("alice", "Desk");
+  await t.say("alice", "Deckhand");
+  t.ready();
+  assert.deepEqual(t.started, ["12"]);
+  assert.equal(ctx.running, 1);
+  await t.say("alice", "Deckhand\n/machine Desk\nOn the desk now.", { id: 101 });
+  // Named, the machine it sticks to at once.
+  assert.equal(poolOf(t.task()), `machine:${desk}`);
+  t.finish();
+  assert.equal(ctx.running, 0);
+  t.ready();
+  assert.deepEqual(t.started, ["12"]);
+  assert.equal((await ctx.claims.claim("alice", desk)).message, "On the desk now.");
 });

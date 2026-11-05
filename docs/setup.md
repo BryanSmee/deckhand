@@ -501,15 +501,19 @@ so they ask before calling them:
 | `schedule` | An issue of `repo` (`number`) as dragging it on the graph does, or the task page's **Stop**: `action` `start`, `queue` (waits for issue `after`), `plan` (a parent issue and its sub-issues, after `after` if given), `dequeue` (stops waiting) or `cancel` (stops its run or drops its queued comments; `pr` for a pull request) |
 
 A machine's driver asks for the `deckhand:machine` scope, which no client gets unless it asks
-for it: its tools register one of your own computers to take Deckhand's tasks (machines, #594;
-only their registration so far). An agent then runs there on its own, with your files,
-credentials and network: Deckhand suggests settings and enforces none there.
+for it: its tools register one of your own computers and claim the issues routed to it
+(machines, #594: a `runs-on:<label>` label or a `/machine` comment,
+[repo-config.md](repo-config.md#routing-an-issue-to-a-machine)). An agent then runs there on its
+own, with your files, credentials and network: Deckhand suggests settings and enforces none
+there.
 
-| Tool                 | What it does                                                                                                                                                                                           |
-| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `register_machine`   | Registers a machine (`name`, unique among yours; `labels`; `capacity`, 1 by default; `repos`, `owner/name` or `owner/*`), or again under the same name: its id, and the repositories offered to it now |
-| `heartbeat`          | Says the machine (`machine`, its id) is there, every 30 s: it is online while its last heartbeat is under 90 s old                                                                                     |
-| `unregister_machine` | Removes the machine, as its **Remove** in Settings › MCP clients does                                                                                                                                  |
+| Tool                 | What it does                                                                                                                                                                                                         |
+| -------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `register_machine`   | Registers a machine (`name`, unique among yours; `labels`; `capacity`, 1 by default; `repos`, `owner/name` or `owner/*`), or again under the same name: its id, and the repositories offered to it now               |
+| `heartbeat`          | Says the machine (`machine`, its id) is there, every 30 s: it is online while its last heartbeat is under 90 s old, and its claims' leases (2 min) are renewed, those of `runs` alone when given; returns its claims |
+| `claim`              | Waits up to 25 s for the next task routed to the machine and claims it: repository, issue, branch, mode, prompt and message (`resume`: its session goes on), or none                                                 |
+| `release`            | Gives a claim (`run`) back: its task waits again for this machine                                                                                                                                                    |
+| `unregister_machine` | Removes the machine, as its **Remove** in Settings › MCP clients does: its claims end                                                                                                                                |
 
 A repository is offered to a machine only when the operator's policies grant it `machines`
 ([security.md](security.md#the-grants)) and its `.deckhand.yaml` has a `machines:` block

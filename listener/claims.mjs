@@ -119,8 +119,9 @@ export function createClaims(
     return isMachinePool(poolOf(task)) ? active(routeOf(keyOf(task))) : null;
   }
 
-  // Task `task` put in the pool `route` (null: none) says: shared again without one. Not while a
-  // sandbox runs for it: countRun() keeps that one's slot where it started.
+  // Task `task` put in the pool `route` (null: none) says: shared again without one. A sandbox
+  // that runs for it meanwhile keeps its slot where it started (tasks.mjs countRun()); what
+  // queues after it goes by the pool.
   function place(task, route) {
     const before = poolOf(task);
     task.pool = route ? (route.machine ? machinePool(route.machine) : MACHINES) : SHARED;
@@ -236,10 +237,10 @@ export function createClaims(
       log(`${key}: runs on ${author}'s machine(s) ${asked.want} (/machine)`);
     }
     // What waits for a run of its own follows: to the machine's pool, or back to shared.
-    const task = tasks.get(key);
-    if (task && !task.running) {
+    const task = taskOf(key);
+    if (task) {
       place(task, active(routeOf(key)));
-      if (task.pending.length) ctx.startLater(task);
+      if (task.pending.length && !task.running) ctx.startLater(task);
     }
     if (item.trigger || item.modeLine) return true;
     await ctx.settle(item, "acknowledged");
@@ -249,7 +250,7 @@ export function createClaims(
   // `task` as `item` is queued on it (tasks.mjs queue()), with its route (routeFor()): in its
   // pool. → whether `item` is held for the owner instead (fromSomeoneElse()): then it is.
   function admit(task, item, route) {
-    if (!task.running) place(task, route);
+    place(task, route);
     if (!route || !fromSomeoneElse(item, route.owner)) return false;
     task.held.push(item);
     log(
@@ -411,7 +412,8 @@ export function createClaims(
     task.pending.unshift(...c.items.filter((item) => !task.pending.includes(item)));
     log(`${keyOf(task)}: ${c.name}'s claim ${c.id} given back: ${why}`);
     ctx.saveQueue?.();
-    if (task.pending.length) ctx.startLater(task, now());
+    // Its pause over already: they were queued before the claim.
+    if (task.pending.length) ctx.startLater(task, 0);
     wake();
   }
 
@@ -467,7 +469,7 @@ export function createClaims(
       if (route.machine !== m.id) continue;
       routes.set(id, { ...route, machine: null, ran: false });
       const task = taskOf(id);
-      if (task && !task.running) task.pool = MACHINES;
+      if (task) task.pool = MACHINES;
     }
     wake();
   }
