@@ -4,6 +4,7 @@ import { readFileSync } from "node:fs";
 import { entryName } from "./agents/index.mjs";
 import { entryLabel, providerLabel } from "./agents/select.mjs";
 import { mandatoryHosts } from "./egress.mjs";
+import { languageLine } from "./language.mjs";
 import { FRESH, INBOX, MODES } from "./modes.mjs";
 import { triggerWord } from "./onboarding.mjs";
 import { blockingSeverities } from "./reviews.mjs";
@@ -440,17 +441,6 @@ The ${own.name} mode's instructions, from the repository:
 
 ${instructions.trim()}`;
 }
-// The repo's `language` (repo-config.mjs), last in what the agent reads so the English around
-// it doesn't win: what people read only. The tokens the listener parses stay English, and a
-// review's whole format, which parseReview() (reviews.mjs) reads in English alone.
-export function languageLine(language, mode) {
-  const review =
-    mode === "review"
-      ? "; in a review, so does its format: the `## Must fix`, `## Follow-ups` and `## Comments` headings, the severities (`critical`, `high`, `medium`, `low`), `blocking` and `note`, `None.`, and the `Rating: <n>/10` and `Verdict: approve|comment|request-changes` lines, words and values as your prompt writes them"
-      : "";
-  return `Write in ${language} everything this run produces for people (replies, issues, pull requests, comments); code, code comments and commit messages stay in English unless the repository's instructions say otherwise, and so do the parts the listener reads (\`<!-- needs-input -->\`, \`Open questions\`, \`None\`, \`(recommended)\`: see Open questions in your instructions)${review}.`;
-}
-
 // The run's prompt, by what it is. `own`: the repo's mode, with its `instructions` text;
 // `onboardingWork`: a work run on an onboarding issue; `grant`: what the operator grants the
 // repo (grantFor()); `branches`: what the run may push (preparation.mjs pushBranches());

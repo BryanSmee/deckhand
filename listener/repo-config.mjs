@@ -713,7 +713,7 @@ export const KEYS = {
     display: orNone,
   },
   instructions: { field: "instructions", default: null, parse: pathKey, display: orNone },
-  // The language its runs write in for people (prompts.mjs languageLine()); none: English.
+  // The language its runs write in for people (language.mjs languageLine()); none: English.
   language: {
     field: "language",
     default: null,

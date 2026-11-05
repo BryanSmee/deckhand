@@ -3,7 +3,7 @@ import { test } from "node:test";
 import { ConfigError } from "../listener/config.mjs";
 import { AGENTS } from "../listener/agents/index.mjs";
 import { sandboxArgs } from "../listener/runner/docker.mjs";
-import { languageLine } from "../listener/prompts.mjs";
+import { languageLine } from "../listener/language.mjs";
 import { createBackend } from "../listener/runner/index.mjs";
 import {
   SANDBOX_USER,

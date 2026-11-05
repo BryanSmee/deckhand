@@ -389,7 +389,7 @@ if [ -n "${TASK_PERMISSIONS:-}" ]; then
   DECKHAND_MCP_TIMEOUT=3900 agent_mcp deckhand-permissions deckhand-permissions mcp
 fi
 
-# The repo's `language` (TASK_LANGUAGE, prompts.mjs languageLine()) closes the prompt: TASK_PROMPT
+# The repo's `language` (TASK_LANGUAGE, language.mjs languageLine()) closes the prompt: TASK_PROMPT
 # ends with it, but a continued session wraps its message in notes, and the run follows the
 # last English it reads (#919). Added again unless the prompt already ends with it.
 close_language() {

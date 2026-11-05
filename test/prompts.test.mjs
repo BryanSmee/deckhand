@@ -7,7 +7,6 @@ import {
   compactTables,
   firstMessage,
   handoffMessage,
-  languageLine,
   liveMessage,
   openingMessages,
   promptFor,
@@ -23,6 +22,7 @@ import {
   resolved,
 } from "../listener/agents/select.mjs";
 import { replyFooter } from "../listener/footer.mjs";
+import { languageLine } from "../listener/language.mjs";
 
 const settings = {
   model: "opus",
