@@ -1881,7 +1881,8 @@ and its copies go to any node. What changes for you:
   `orchestrator-screenshots` claim is gone from the base and the chart
   (`persistence.sizes.orchestrator-screenshots`).
 - **What is left in `/data`**: once moved, the orchestrator removes the emptied `logs/` and
-  `shots/`, and names in its log anything else beside the store that nothing reads any more, in
+  `shots/`, and names in its log anything else beside the store that nothing reads any more (never
+  a filesystem's own `lost+found`), in
   `logs/` too (a run log from before the runner service, `logs/<run>.log`), as in
   `/data holds run-token.key, which no longer is read: remove it`. Remove them then. Once the
   orchestrator has started once on this release, the screenshots' volume can go, and with Redis

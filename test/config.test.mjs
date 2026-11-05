@@ -759,6 +759,8 @@ test("the data volume: the orchestrator says what it can't write, anywhere in it
       entry("queue.json", "file"),
       entry("x", "link"),
       entry("shots"),
+      // The filesystem's own (ext4 on a claim's block storage), root's: never checked.
+      entry("lost+found"),
     ],
     [at("logs")]: [entry("r1.json", "file")],
     [at("store")]: [entry("state.json", "file"), entry("streams")],
@@ -798,6 +800,7 @@ test("the data volume: the orchestrator says what it can't write, anywhere in it
     [at("store"), constants.W_OK | constants.X_OK],
   );
   assert.ok(!asked.some(([path]) => path === at("x")));
+  assert.ok(!asked.some(([path]) => path === at("lost+found")));
 
   // shots/: its first level only. A run's screenshot folder is checked (made and deleted
   // through it), not the screenshots in it: 90 days of them aren't read at every start. logs/'s
@@ -1047,6 +1050,9 @@ test("dataToCheck: the whole volume, the store's folder alone, or nothing", () =
   assert.equal(check([], null), null);
   // The store at the volume's root: all of it is the store's.
   assert.equal(check(["state.json", "keys"], ""), dir);
+  // The filesystem's own lost+found (ext4 on a claim's block storage): no release's.
+  assert.equal(check(["lost+found", "store"], "store"), store);
+  assert.equal(check(["lost+found"], null), null);
 });
 
 test("leftInData: what nothing reads any more, never the store's nor what is still moving", () => {
@@ -1077,4 +1083,7 @@ test("leftInData: what nothing reads any more, never the store's nor what is sti
   ]);
   // The store at the volume's root: its own files, never named.
   assert.deepEqual(leftInData(dir, "", moving, { list: () => ["state.json", "keys"] }), []);
+  // The filesystem's own lost+found: never named, at every start of a claim on ext4.
+  const ext4 = (path) => (path === dir ? ["lost+found", "store"] : []);
+  assert.deepEqual(leftInData(dir, "store", moving, { list: ext4 }), []);
 });

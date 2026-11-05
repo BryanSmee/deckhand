@@ -315,6 +315,11 @@ export function storeFolder(storeUrl, dir) {
   return path.split(sep)[0];
 }
 
+// What the volume's own filesystem keeps at its root, no release's: ext4's lost+found, on the
+// block storage a claim may be (Longhorn, EBS, Ceph RBD: runner/kubernetes.mjs says the same of
+// the sessions' claims). Never left by a release before, never written, never to remove.
+const FILESYSTEM = new Set(["lost+found"]);
+
 // The folder #536's write check covers (unwritableData()), or null: the whole volume while a
 // release before left something there beside the store (its moves remove it), or while the
 // store's folder isn't made yet (the volume must take it: an empty one root's gets the chown
@@ -322,7 +327,7 @@ export function storeFolder(storeUrl, dir) {
 // elsewhere and nothing is left: an empty folder of a read-only image.
 export function dataToCheck(dir, folder, { list = listDir, exists = existsSync } = {}) {
   if (folder === "") return dir;
-  const left = list(dir).some((name) => name !== folder);
+  const left = list(dir).some((name) => name !== folder && !FILESYSTEM.has(name));
   if (left) return dir;
   if (folder === null) return null;
   const store = join(dir, folder);
@@ -336,7 +341,9 @@ export function dataToCheck(dir, folder, { list = listDir, exists = existsSync }
 // volume's root: every entry is the store's then.
 export function leftInData(dir, folder, moving, { list = listDir } = {}) {
   if (folder === "") return [];
-  const left = list(dir).filter((name) => name !== folder && !moving.has(name));
+  const left = list(dir).filter(
+    (name) => name !== folder && !moving.has(name) && !FILESYSTEM.has(name),
+  );
   const logs = folder === "logs" ? [] : list(join(dir, "logs"));
   // The moves still read its .json files: the summaries and those kept (`.summary.json`,
   // runlog.mjs moveSummaries()), the states and queues (`.live.json`, `.queued.json`, restart.mjs).
@@ -384,6 +391,7 @@ export function unwritableData(dir, { access = accessSync, list = readdirSync, s
       return;
     }
     for (const entry of entries) {
+      if (path === dir && FILESYSTEM.has(entry.name)) continue;
       const child = join(path, entry.name);
       if (!entry.isDirectory()) {
         if (!entry.isSymbolicLink()) writable(child, false);
