@@ -157,12 +157,22 @@ export function board({
     t.dismissed = dismissedOf(t, dismissed.get(k));
     t.updatedAt = updatedAt(t, pr(t.key), decisions(t.key));
   }
-  // Most recent activity first, the live ones on top.
-  const live = (t) =>
-    ["scheduled", "building-image", "working", "stopping", "queued", "in-review"].includes(t.state);
-  return [...tasks.values()].sort(
-    (a, b) => Number(live(b)) - Number(live(a)) || b.updatedAt - a.updatedAt,
-  );
+  return [...tasks.values()].sort((a, b) => byPlace(placeOf(a), placeOf(b)));
+}
+
+const LIVE = ["scheduled", "building-image", "working", "stopping", "queued", "in-review"];
+
+// Where a task sits on the board: the live ones on top, then the most recent activity first,
+// its key settling a tie, so that every place is a task's alone (mcp.mjs list_tasks's cursor).
+export function placeOf(t) {
+  return { live: LIVE.includes(t.state), updatedAt: t.updatedAt || 0, key: t.key };
+}
+
+// The board's order of two places (placeOf()): below 0 when `x` comes first.
+export function byPlace(x, y) {
+  if (x.live !== y.live) return x.live ? -1 : 1;
+  if (x.updatedAt !== y.updatedAt) return y.updatedAt - x.updatedAt;
+  return x.key < y.key ? -1 : x.key > y.key ? 1 : 0;
 }
 
 // When Deckhand last saw something happen to the task: its `since` (a run starting, a

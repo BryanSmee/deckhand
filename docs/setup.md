@@ -486,13 +486,13 @@ it, and a browser page from another origin is refused.
 
 Its read tools need the `deckhand:read` scope:
 
-| Tool           | What it gives                                                                                                                                                                                      |
-| -------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `list_repos`   | The repositories you see, whether each is set up, and its backlog's size                                                                                                                           |
-| `list_tasks`   | The board's tasks, 25 at a time (`limit` up to 100, `offset` for the next page; `repo`, `state` to narrow them): each issue or pull request, its state, its runs and how the last one ended        |
-| `list_runs`    | A task's runs (`task`: `owner/repo#12`, `owner/repo#pr-12`), the newest first: id, mode, agent and model, start, duration, outcome                                                                 |
-| `get_run_log`  | A run's log as text, a page at a time (64 KB of the log by default, `limit` up to 1 MB; `from` for another page): the newest page first, from the start of the line it would cut when that is near |
-| `get_schedule` | The runs going, the queue in its run order, what waits for which issues, the lanes, and the backlog (`repo`: its open issues; else counts)                                                         |
+| Tool           | What it gives                                                                                                                                                                                                                                                          |
+| -------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `list_repos`   | The repositories you see, whether each is set up, and its backlog's size                                                                                                                                                                                               |
+| `list_tasks`   | The board's tasks, 25 at a time (`limit` up to 100, `cursor`, a page's `next`, for the one after it, which tasks starting or moving meanwhile don't shift; `repo`, `state` to narrow them): each issue or pull request, its state, its runs and how the last one ended |
+| `list_runs`    | A task's runs (`task`: `owner/repo#12`, `owner/repo#pr-12`), the newest first: id, mode, agent and model, start, duration, outcome                                                                                                                                     |
+| `get_run_log`  | A run's log as text, a page at a time (64 KB of the log by default, `limit` up to 1 MB; `from` for another page): the newest page first, from the start of the line it would cut when that is near                                                                     |
+| `get_schedule` | The runs going, the queue in its run order, what waits for which issues, the lanes, and the backlog (`repo`: its open issues; else counts)                                                                                                                             |
 
 Its write tools need the `deckhand:work` scope, and act as you would on the dashboard: the same
 checks (your access on the repository, its `users`, the issue's state, its open questions), and
