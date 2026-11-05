@@ -13,11 +13,20 @@ export const LOCAL_HEADER = "x-deckhand-local";
 // Host, so the browser's goes in a header of its own.
 export const HOST_HEADER = "x-deckhand-host";
 export const ORIGIN_HEADER = "x-deckhand-origin";
+// An MCP client's token's scopes (oauth.mjs), space-separated: /mcp's alone.
+export const SCOPES_HEADER = "x-deckhand-scopes";
 
 // What the browser sent that the orchestrator's routes read.
-const PASSED = ["content-type", "accept", "last-event-id"];
+const PASSED = ["content-type", "accept", "last-event-id", "mcp-protocol-version"];
 // What the orchestrator answered that the browser reads.
-const BACK = ["content-type", "cache-control", "x-accel-buffering", "location", "retry-after"];
+const BACK = [
+  "content-type",
+  "cache-control",
+  "x-accel-buffering",
+  "location",
+  "retry-after",
+  "allow",
+];
 
 // A handover takes about a second; an orchestrator away longer answers 503 here.
 const WAIT_MS = 15_000;
@@ -38,14 +47,19 @@ export function createForwarder({
 
   // `body`: the request's, read already (a Buffer), or none. `still()`: whether its user is
   // still signed in, asked every second while an answer streams (a run's live log): signed out,
-  // the stream ends.
-  async function forward(req, res, { user = null, local = false, body, still = null } = {}) {
+  // the stream ends. `scopes`: an MCP client's (/mcp), none for the dashboard.
+  async function forward(
+    req,
+    res,
+    { user = null, local = false, body, still = null, scopes = null } = {},
+  ) {
     const headers = {};
     for (const name of PASSED) if (req.headers[name]) headers[name] = req.headers[name];
     if (req.headers.host) headers[HOST_HEADER] = req.headers.host;
     if (req.headers.origin) headers[ORIGIN_HEADER] = req.headers.origin;
     if (user) headers[USER_HEADER] = user;
     if (local) headers[LOCAL_HEADER] = "1";
+    if (scopes) headers[SCOPES_HEADER] = scopes.join(" ");
     // A browser gone: the orchestrator's answer (a live log) stops too.
     const gone = new AbortController();
     res.on("close", () => gone.abort());

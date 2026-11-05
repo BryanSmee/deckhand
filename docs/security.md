@@ -2133,7 +2133,7 @@ deliveries again.
 
 **Hidden repositories.** A repository where a login has no action at all is hidden from it
 everywhere: the repositories list, the tasks, inboxes, lanes and blockers of `api/state`,
-`/status` and the live logs (MCP's tools will ask the same checks once #482 and #483 land). Its routes answer as one outside `ALLOWED_REPOS` (the same
+`/status`, the live logs and MCP clients' tools (`listener/mcp.mjs`). Its routes answer as one outside `ALLOWED_REPOS` (the same
 404 and message), so a login can't tell a hidden repository from one that doesn't exist; a
 blocker in a repository it doesn't see is "a hidden issue", its title never read for it.
 Without `server:read`, the repositories list names only the installations of the accounts
@@ -2269,9 +2269,22 @@ resource_metadata="<PUBLIC_URL>/.well-known/oauth-protected-resource/mcp"` (RFC 
   Settings › MCP clients (the login's own clients, posted from the dashboard's origin), or the
   client's own `POST /oauth/revoke` (RFC 7009). A login keeps 20 clients at most: a 21st ends
   the oldest.
-- What a client may then do will be its login's, as on the dashboard: `/mcp`'s tools, once
-  #482 and #483 land, will check `ALLOWED_REPOS` and the login's [access](#access) (each
-  repository's `users` included) on every call, a hidden repository staying hidden.
+- **`/mcp` itself** (#482): edge refuses a request whose `Origin` isn't Deckhand's public URL
+  (`403`, before the token is read: a page elsewhere, DNS rebinding included, never reaches the
+  tools; native clients send no `Origin`), and one without a valid token (`401`). It passes the
+  rest on to the orchestrator as the token's login, with the token's scopes in a header of its
+  own that a client can't set (`edge/forward.mjs` passes on only the headers it names), and its
+  body 64 KB at most. The orchestrator answers `/mcp` only with those scopes, which a dashboard
+  session never has.
+- **What a client may do is its login's, as on the dashboard.** The read tools need
+  `deckhand:read`, and read what the dashboard shows that login (`listener/mcp.mjs`, through
+  `listener/http.mjs`): `ALLOWED_REPOS` and the login's [access](#access) (each repository's
+  `users` included), on every call; a hidden repository stays hidden, a run in it is "not found"
+  as one that doesn't exist, and a chat's runs are its owner's alone. A run's log may hold a
+  repository's secrets in tool output: the logins who read it on the dashboard (`logs:read`)
+  read it here, nobody else. It is also text the client's model reads, written by an agent that
+  read issues, pull requests and web pages: the tool's description tells the model it is data,
+  not instructions, which lowers the risk of a prompt injection through it, without removing it.
 
 ## Edge's and the orchestrator's data
 

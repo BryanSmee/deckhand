@@ -1,8 +1,8 @@
 // The orchestrator's HTTP (#506): what edge passes on to it (edge/forward.mjs), on its services
-// port under /edge/: the dashboard's API and /status, each with the user
-// edge signed in; and the verified deliveries edge puts on its stream (deliver()). The public
-// server (webhooks, /setup, sign-in, the dashboard's files) is edge's (../edge/http.mjs); the
-// egress policy, which the egress proxy asks, is egress-http.mjs.
+// port under /edge/: the dashboard's API and /status, each with the user edge signed in, /mcp
+// with the MCP client's login and scopes (mcp.mjs); and the verified deliveries edge puts on its
+// stream (deliver()). The public server (webhooks, /setup, sign-in, the dashboard's files) is
+// edge's (../edge/http.mjs); the egress policy, which the egress proxy asks, is egress-http.mjs.
 import { board, isLive, runPlaces, STATES } from "./board.mjs";
 import {
   ciDelivery,
@@ -31,7 +31,9 @@ import { staleFor } from "./work.mjs";
 import { publicRun, stream } from "./runlog.mjs";
 import { endPicks } from "./picks.mjs";
 import { closedAs } from "./titles.mjs";
-import { send, sendJson } from "../lib/http.mjs";
+import { Refused, send, sendJson } from "../lib/http.mjs";
+import { repoAllowed } from "./config.mjs";
+import { createMcp } from "./mcp.mjs";
 import { apiRoute, needs, undecided } from "./web.mjs";
 import { createPermissions, refusal } from "./permissions.mjs";
 
@@ -290,6 +292,40 @@ export function createHttp(ctx) {
     return { users, repos, error };
   }
 
+  // Whether `user` may read `run`'s log: `logs:read` on its repo. A run with an owner (a
+  // chat's): its owner's alone.
+  async function readsLog(user, run) {
+    if (run.owner && run.owner !== user) return false;
+    const repo = run.repo ?? repoOf(run.key);
+    return (await seeing(user, [repo].filter(Boolean), "logs:read"))(repo);
+  }
+
+  // What the MCP tools read (mcp.mjs), each for `user` as the dashboard shows it to them.
+  const mcp = createMcp({
+    version: ctx.server?.version,
+    source: {
+      state,
+      repos: async (user) =>
+        ctx.repoApi?.listed ? ctx.repoApi.listed(user, true) : { repos: [], listedAt: null },
+      run: async (user, id) => {
+        const run = ctx.runsById?.get(id);
+        return run && (await readsLog(user, run)) ? run : null;
+      },
+      readLog: (id, options) => ctx.runLogs.read(id, options),
+      // The work area's checks (its apiRoute()): ALLOWED_REPOS, then `tasks:read`, the repo's
+      // `users` narrowing it.
+      backlog: async (user, repo) => {
+        if (!ctx.workApi?.backlog || !repoAllowed(config, repo)) return null;
+        if (!(await seeing(user, [repo], TASKS))(repo)) return null;
+        return ctx.workApi.backlog(repo, user).catch((error) => {
+          if (error instanceof Refused && error.status === 404) return null;
+          throw error;
+        });
+      },
+    },
+    log,
+  });
+
   // The dashboard's API that edge passes on (GET), for its signed-in `user`.
   async function serveDashboard(req, res, user) {
     const url = new URL(req.url, "http://localhost");
@@ -329,13 +365,8 @@ export function createHttp(ctx) {
     }
     const match = /^\/api\/runs\/([\w.-]+)\/stream$/.exec(url.pathname);
     const run = match && ctx.runsById.get(match[1]);
-    // Asked again each second while it streams: an access taken away ends it. A run with an
-    // owner (a chat's): its owner's alone.
-    const visible = async () => {
-      if (run.owner && run.owner !== user) return false;
-      const repo = run.repo ?? repoOf(run.key);
-      return (await seeing(user, [repo].filter(Boolean), "logs:read"))(repo);
-    };
+    // Asked again each second while it streams: an access taken away ends it.
+    const visible = () => readsLog(user, run);
     // The log is the runner's: read from it as edge (../runner/client.mjs readLog()).
     if (run && (await visible()))
       return stream(req, res, run, {
@@ -577,16 +608,23 @@ export function createHttp(ctx) {
   // login edge signed in (null: none); `local`, a caller of /status from inside edge's
   // container. One request's unexpected throw answers 500 and is logged: it never takes the
   // orchestrator down.
-  function handle(req, res, { user = null, local = false } = {}) {
+  // `scopes`: an MCP client's token's, for /mcp alone (../edge/oauth.mjs).
+  function handle(req, res, { user = null, local = false, scopes = null } = {}) {
     // Async: a throw in it is a rejection too.
-    route(req, res, user, local).catch((error) => {
+    route(req, res, user, local, scopes).catch((error) => {
       (log.error ?? log)(`${req.method} ${req.url}: ${error.stack ?? error}`);
       if (!res.headersSent) res.writeHead(500);
       res.end();
     });
   }
 
-  async function route(req, res, user, local) {
+  async function route(req, res, user, local, scopes) {
+    const path = req.url.split("?")[0];
+    // MCP clients' (mcp.mjs): only with the scopes edge passes on from their token.
+    if (path === "/mcp" || path === "/mcp/") {
+      if (!ctx.app) return res.writeHead(503).end();
+      return mcp.handle(req, res, { user, scopes });
+    }
     if (req.url === "/status") {
       if (!local && !user) return res.writeHead(401).end();
       // A signed-in user's: only the repos they may see, as in api/state.

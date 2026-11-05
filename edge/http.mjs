@@ -47,6 +47,8 @@ const IDLE_MS = 2000;
 const BODY_MS = 10000;
 // The dashboard's posts are small: a comment, an answer, a discussion.
 const MAX_API_BODY = 1024 * 1024;
+// An MCP client's call is smaller still: a tool's name and its arguments (../listener/mcp.mjs).
+const MAX_MCP_BODY = 64 * 1024;
 // The most deliveries the stream keeps unread (far more than a handover leaves); one the
 // orchestrator acknowledged goes from it at once (internal.mjs).
 const STREAM_MAX = 10_000;
@@ -282,6 +284,18 @@ export function createEdgeHttp({
     return orchestrator.forward(req, res, { user, local: isLocal, body, still });
   }
 
+  // /mcp, its token checked (oauth.mjs `serve`): the orchestrator's tools answer it as the
+  // token's login, with its scopes.
+  async function mcp(req, res, { login, scopes }) {
+    metrics?.seen(login);
+    if (Number(req.headers["content-length"]) > MAX_MCP_BODY) {
+      res.writeHead(413, { connection: "close" });
+      return res.end();
+    }
+    const body = req.method === "POST" ? await readBody(req, MAX_MCP_BODY) : undefined;
+    return orchestrator.forward(req, res, { user: login, scopes, body });
+  }
+
   async function route(req, res) {
     const path = req.url.split("?")[0];
     // A path with dot segments, or a backslash (which fetch() takes for a slash in an http: URL):
@@ -349,5 +363,5 @@ export function createEdgeHttp({
     return web;
   }
 
-  return { handle, listen };
+  return { handle, listen, mcp };
 }
