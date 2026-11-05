@@ -52,8 +52,6 @@ const MAX_MCP_BODY = 64 * 1024;
 // But a machine's (deckhand:machine): post_events sends its agent's output, as the dashboard's
 // posts at most (../listener/mcp.mjs MAX_MACHINE_BODY).
 const MAX_MACHINE_BODY = MAX_API_BODY;
-// What edge reads and drops of a larger one before it answers 413 (mcpBody()).
-const MAX_DRAINED = MAX_API_BODY;
 // The most deliveries the stream keeps unread (far more than a handover leaves); one the
 // orchestrator acknowledged goes from it at once (internal.mjs).
 const STREAM_MAX = 10_000;
@@ -285,7 +283,10 @@ export function createEdgeHttp({
   // The orchestrator's to answer, with who asks: a signed-in user, or a local caller (/status).
   async function forward(req, res, { user = null, isLocal = false, still = null } = {}) {
     const body =
-      req.method === "GET" || req.method === "HEAD" ? undefined : await readBody(req, MAX_API_BODY);
+      req.method === "GET" || req.method === "HEAD"
+        ? undefined
+        : await within(req, res, MAX_API_BODY);
+    if (body === null) return;
     return orchestrator.forward(req, res, { user, local: isLocal, body, still });
   }
 
@@ -293,34 +294,22 @@ export function createEdgeHttp({
   // token's login, with its scopes.
   async function mcp(req, res, { login, scopes }) {
     metrics?.seen(login);
-    // Too large to read even to drop it: cut (its client may see a reset rather than the 413).
-    if (Number(req.headers["content-length"]) > MAX_DRAINED) {
-      res.writeHead(413, { connection: "close" });
-      return res.end();
-    }
     const max = String(scopes).includes("deckhand:machine") ? MAX_MACHINE_BODY : MAX_MCP_BODY;
-    const body = req.method === "POST" ? await mcpBody(req, max) : undefined;
-    // Over its most: its client reads the 413, the rest of the body read and dropped.
-    if (body === null) return res.writeHead(413, { connection: "close" }).end();
+    const body = req.method === "POST" ? await within(req, res, max) : undefined;
+    if (body === null) return;
     return orchestrator.forward(req, res, { user: login, scopes, body });
   }
 
-  // /mcp's body, `max` bytes at most, or null past it. Unlike readBody(), which cuts the
-  // connection at once, the rest is read and dropped (MAX_DRAINED at most, then cut), so that a
-  // client gets its 413: one whose request is cut while it sends sees a reset instead.
-  function mcpBody(req, max) {
-    return new Promise((resolve, reject) => {
-      const chunks = [];
-      let size = 0;
-      req.on("data", (chunk) => {
-        size += chunk.length;
-        if (size <= max) chunks.push(chunk);
-        else if (size > MAX_DRAINED) req.destroy();
-      });
-      req.on("end", () => resolve(size > max ? null : Buffer.concat(chunks)));
-      req.on("error", reject);
-      req.on("close", () => reject(new Error("the request was cut short")));
-    });
+  // The request's body, `max` bytes at most, or null once a larger one is refused (413): its
+  // client reads it, the rest of the body read and dropped (readBody()), unless far larger.
+  async function within(req, res, max) {
+    try {
+      return await readBody(req, max);
+    } catch (error) {
+      if (error.status !== 413) throw error;
+      if (!res.headersSent) res.writeHead(413, { connection: "close" }).end();
+      return null;
+    }
   }
 
   async function route(req, res) {

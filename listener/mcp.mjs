@@ -969,9 +969,8 @@ export function createMcp({ source, version = "dev", now = Date.now, log = () =>
         ),
       );
     } catch (error) {
-      // Cut, unanswered (readBody() destroys the request): edge refuses a body that large
-      // first, with a 413 its client reads (../edge/http.mjs mcpBody()).
-      if (/^body over/.test(error.message)) return;
+      // Edge refuses a body that large first (../edge/http.mjs within()), the same way.
+      if (error.status === 413) return res.writeHead(413, { connection: "close" }).end();
       return send(res, 400, rpcError(null, RPC.parse, "Not JSON."));
     }
     const batch = Array.isArray(body);
