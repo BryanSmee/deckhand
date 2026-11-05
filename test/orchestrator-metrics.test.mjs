@@ -1,6 +1,8 @@
 // The orchestrator's metrics (listener/metrics.mjs, #654): the runs, the queue and its slots,
 // the deliveries, and its calls to the other services.
 import assert from "node:assert/strict";
+import { readdirSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import { test } from "node:test";
 import { createRegistry, STATUS_LABELS } from "../lib/metrics.mjs";
 import { AGENTS } from "../listener/agents/index.mjs";
@@ -20,7 +22,7 @@ import {
   serviceCallMetrics,
 } from "../listener/metrics.mjs";
 import { BUILT_IN } from "../listener/modes.mjs";
-import { endWait } from "../listener/restart.mjs";
+import { END_WAITS, endWait } from "../listener/restart.mjs";
 import { testConfig } from "./helpers.mjs";
 
 // The samples of `text` (no comments), each line as it is.
@@ -95,17 +97,37 @@ test("queuedReasons: a slot, the repo's own cap, the pause, the waits", () => {
 test("endingRuns: the runs whose end waits for the store, by what, every label at 0 too", () => {
   const counts = (ends) => Object.fromEntries(endingRuns(ends).map(([l, n]) => [l.what, n]));
   assert.deepEqual(counts([]), { summary: 0, queue: 0, state: 0 });
-  // endWait()'s own `what`s, as runs.mjs and restart.mjs name them.
   const ctx = { log: () => {} };
-  endWait(ctx, { id: "r1", key: "org/repo#1" }, "its summary").failed(new Error("EACCES"));
-  endWait(ctx, { id: "r2", key: "org/repo#2" }, "its summary").failed(null);
-  endWait(ctx, { id: "r3", key: "org/repo#3" }, "the queue").failed(null);
-  const state = endWait(ctx, { id: "r4", key: "org/repo#4" }, "its state's removal");
+  endWait(ctx, { id: "r1", key: "org/repo#1" }, "summary").failed(new Error("EACCES"));
+  endWait(ctx, { id: "r2", key: "org/repo#2" }, "summary").failed(null);
+  endWait(ctx, { id: "r3", key: "org/repo#3" }, "queue").failed(null);
+  const state = endWait(ctx, { id: "r4", key: "org/repo#4" }, "state");
   state.failed(null);
   assert.deepEqual(counts(ctx.endsWaiting.values()), { summary: 2, queue: 1, state: 1 });
+  // The status page's words stay the prose.
+  assert.equal(ctx.endsWaiting.get("r4").what, "its state's removal");
   state.done();
   assert.deepEqual(counts(ctx.endsWaiting.values()), { summary: 2, queue: 1, state: 0 });
   assert.deepEqual(ENDING, ["summary", "queue", "state"]);
+  // A wait the gauge doesn't know is refused at once rather than left out of the alert.
+  assert.throws(() => endWait(ctx, { id: "r5", key: "org/repo#5" }, "its summary"), /unknown/);
+  // An entry of another kind is still counted, under its own label (the registry's `other`).
+  assert.equal(counts([{ kind: "later" }]).later, 1);
+});
+
+test("endWait()'s callers: each passes one of END_WAITS, every one of them used", () => {
+  const dir = join(import.meta.dirname, "..", "listener");
+  const calls = readdirSync(dir)
+    .filter((f) => f.endsWith(".mjs"))
+    .flatMap((f) => [...readFileSync(join(dir, f), "utf8").matchAll(/\bendWait\(([^)]+)\)/g)])
+    .map(([, args]) => args)
+    .filter((args) => !args.includes("kind"));
+  const kinds = calls.map((args) => args.match(/,\s*"([^"]+)"\s*$/)?.[1]);
+  assert.ok(
+    kinds.every((k) => Object.hasOwn(END_WAITS, k)),
+    kinds.join(", "),
+  );
+  assert.deepEqual([...new Set(kinds)].sort(), Object.keys(END_WAITS).sort());
 });
 
 test("pickupSlots: used by picked tasks, lent to the others past their share, the rest free", () => {
@@ -198,7 +220,7 @@ test("orchestratorMetrics: the runs' lives counted, the queue's gauges from the 
     ]),
     waits: { list: () => [{ blockers: [1] }] },
     pickedCount: () => 0,
-    endsWaiting: new Map([["r1", { key: "org/repo#1", what: "its summary", since: 0 }]]),
+    endsWaiting: new Map([["r1", { key: "org/repo#1", kind: "summary", since: 0 }]]),
   };
   const text = await registry.render();
   assert.equal(

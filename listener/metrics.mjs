@@ -7,6 +7,7 @@ import { AGENTS, ENTRIES } from "./agents/index.mjs";
 import { repoAllowed } from "./config.mjs";
 import { APP_EVENTS } from "./github-app.mjs";
 import { BUILT_IN } from "./modes.mjs";
+import { END_WAITS } from "./restart.mjs";
 import { pickedTask } from "./tasks.mjs";
 import { leaseMetric, STATUS_LABELS, statusLabel } from "../lib/metrics.mjs";
 
@@ -25,23 +26,15 @@ export const KINDS = ["work", "light", "review", "fix", "ci-fix", "conflict", "a
 // answers to its issue's open questions once they are done.
 export const QUEUED = ["slot", "repo", "pickup", "pause", "after", "answers"];
 
-// What a run's end waits for the store to take (restart.mjs endWait(), #821), by its `what`:
-// its summary, the queue's write, its state's removal.
-const ENDING_WHAT = new Map([
-  ["its summary", "summary"],
-  ["the queue", "queue"],
-  ["its state's removal", "state"],
-]);
-export const ENDING = [...ENDING_WHAT.values()];
+// What a run's end waits for the store to take (restart.mjs endWait(), #821): its summary, the
+// queue's write, its state's removal.
+export const ENDING = Object.keys(END_WAITS);
 
-// The runs whose end waits for the store, by what (`ends`: ctx.endsWaiting's values): every
-// label, at 0 too, so that an alert sees them go back to 0.
+// The runs whose end waits for the store, by what (`ends`: ctx.endsWaiting's values, each
+// with its END_WAITS `kind`): every label, at 0 too, so that an alert sees them go back to 0.
 export function endingRuns(ends) {
   const counts = new Map(ENDING.map((what) => [what, 0]));
-  for (const { what } of ends) {
-    const label = ENDING_WHAT.get(what);
-    if (label) counts.set(label, counts.get(label) + 1);
-  }
+  for (const { kind } of ends) counts.set(kind, (counts.get(kind) ?? 0) + 1);
   return [...counts].map(([what, n]) => [{ what }, n]);
 }
 

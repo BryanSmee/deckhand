@@ -255,7 +255,7 @@ tests:
               description: "Tasks have waited for a free slot for 15 minutes with fewer runs going than MAX_PARALLEL. The orchestrator's log says why its runs don't start: the runner, the policy service or the broker away (deckhand_service_calls_total), or its store."
 
   # A summary that waits for the store, then the queue's write too; a store away for 10 minutes
-  # (deckhand_runs_ending back to 0) doesn't fire it.
+  # (deckhand_runs_ending back to 0 at 13m) doesn't fire it, nor does the wait it cleared.
   - interval: 1m
     input_series:
       - series: deckhand_runs_ending{what="summary"}
@@ -265,7 +265,7 @@ tests:
       - series: deckhand_runs_ending{what="state"}
         values: 0x60
     alert_rule_test:
-      - eval_time: 14m
+      - eval_time: 12m
         alertname: DeckhandRunsEndingStuck
         exp_alerts: []
       - eval_time: 30m

@@ -994,7 +994,7 @@ export function createRuns(ctx) {
   // the dashboard's status page say it, the log again every 10 min.
   async function summarySaved(live) {
     const retryMs = ctx.queueRetryMs ?? QUEUE_RETRY_MS;
-    const wait = endWait(ctx, live, "its summary");
+    const wait = endWait(ctx, live, "summary");
     let tries = 0;
     const once = (line) => tries === 1 && log(line);
     try {
