@@ -329,7 +329,14 @@ export function createClaims(
       if (route.via === "label" && !route.machine && !labels.includes(route.want)) continue;
       if (!route.machine && !byName && !labels.includes(lower(route.want))) continue;
       const queued = [...task.pending];
-      const { settings, errors } = await ctx.repoSettings(task.repo, task.base);
+      // A read that fails (a GitHub 5xx) skips this task alone: the next one, another
+      // repository's maybe, can still be claimed, and this one is tried again at the next claim.
+      const read = await ctx.repoSettings(task.repo, task.base).catch((error) => {
+        log(`${keyOf(task)}: not claimed, ${CONFIG_FILE} couldn't be read: ${error.message}`);
+        return null;
+      });
+      if (!read) continue;
+      const { settings, errors } = read;
       // A config with errors starts nothing, as for a sandbox's run (tasks.mjs, runs.mjs): its
       // settings would be the defaults, wider than the repo's.
       if (errors?.length) {

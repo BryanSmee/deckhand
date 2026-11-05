@@ -694,6 +694,29 @@ test("a repo config with errors: no claim takes its task, whose comments stay qu
   assert.ok(t.logs.some((l) => l.includes(`${KEY}: not claimed, .deckhand.yaml has errors`)));
 });
 
+test("a repo config that can't be read skips its task alone: the next one is claimed", async () => {
+  const { t, ctx } = bench();
+  const desk = t.register("alice", "Desk", { capacity: 2 });
+  await t.say("alice", "Deckhand\n/machine Desk\nFirst.");
+  t.clock += 1;
+  await t.say("alice", "Deckhand\n/machine Desk\nSecond.", { number: 13, id: 101 });
+  t.ready();
+  const read = ctx.repoSettings;
+  ctx.repoSettings = async (...args) => {
+    ctx.repoSettings = read;
+    throw new Error("GitHub answered 502");
+  };
+  const work = await ctx.claims.claim("alice", desk);
+  assert.match(work.message, /Second\./);
+  assert.equal(ctx.tasks.get(KEY).claim, null);
+  assert.equal(ctx.tasks.get(KEY).pending.length, 1);
+  assert.ok(
+    t.logs.some((l) => l.includes(`${KEY}: not claimed, .deckhand.yaml couldn't be read: GitHub`)),
+  );
+  // The read back, the next claim takes the task it skipped.
+  assert.match((await ctx.claims.claim("alice", desk)).message, /First\./);
+});
+
 test("a claim asks the access decision again: a refused start drops its comment, one that can't be decided keeps it", async () => {
   for (const said of [{ ok: false }, { ok: false, error: "the policy service is away" }]) {
     const { t, ctx } = bench();
