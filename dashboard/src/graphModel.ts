@@ -1,6 +1,6 @@
 // The graph page's model: what each issue looks like, and where it goes: the graph, or the
 // work queue's Brainstorm tab (brainstormsOf()). Where each node is drawn: graphLayout.ts.
-import { inChip, readyStatus, STATE_NAMES, type Tone } from "./format";
+import { inChip, STATE_NAMES, taskStatus, type Tone } from "./format";
 import type { Backlog, Blocker, Edge, OrderMove, Pending, PullRequest, Task } from "./types";
 
 // What a node looks like: the graph's own families, not the list's (format.ts toneOf()).
@@ -85,29 +85,26 @@ type Looked = {
   review?: Task["review"];
 };
 
-// Its ready pull request's tone and word once its loop is over (format.ts readyStatus()).
-const readyOf = (t: Looked) => readyStatus({ pr: t.pr as PullRequest, review: t.review });
+// Its tone and word as the list has them (format.ts taskStatus()): a run failing, asking or
+// brainstorming wins over its pull request; else a ready one is purple only when clean
+// (cleanReady()), amber when it needs a fix first, running while its review loop or CI goes on.
+const statusAsListed = (t: Looked & { state: Task["state"] }) =>
+  taskStatus({ state: t.state, pr: t.pr as PullRequest, review: t.review });
 
-const queuedOn = (t: Looked) => t.state === "queued" || t.state === "waiting";
-
-// What it does now wins over how it ended: a run on a closed issue is still a run. Questions
-// win over a ready pull request (a follow-up run on it asked them), not over finished work. A
-// ready pull request is purple only when clean (format.ts cleanReady()): amber when it needs a
-// fix first, running while its review loop or CI goes on.
+// What it does now wins over how it ended: a run on a closed issue is still a run. Finished
+// work wins over the rest, questions too (a follow-up run on it asked them). The rest is the
+// list's order (taskStatus()), so the graph and the list never disagree.
 export function lookOf(t: Looked): Look {
   if (t.state && LIVE.includes(t.state)) return "run";
   if (t.pr?.state === "merged") return "done";
   if (t.closed === "completed") return "implemented";
-  if (t.state === "needs-input") return "input";
-  // A run queued or waiting to start on it: on its way, as the list has it (taskStatus()).
-  if (t.pr?.state === "ready" && queuedOn(t)) return "idle";
-  if (t.pr?.state === "ready") {
-    const tone = t.state === "in-review" ? "run" : readyOf(t)?.tone;
-    return tone === "ready" ? "ready" : tone === "input" ? "input" : "run";
+  if (!t.state) return "idle";
+  const { tone } = statusAsListed({ ...t, state: t.state });
+  // A brainstorm's turn, or one idle with nothing else to say (a ready pull request would).
+  if (t.state === "brainstorm" || (t.state === "idle-brainstorm" && tone === "idle")) {
+    return "talk";
   }
-  if (t.state === "brainstorm" || t.state === "idle-brainstorm") return "talk";
-  if (t.state === "error" || t.state === "interrupted") return "err";
-  return "idle";
+  return tone;
 }
 
 function statusOf(look: Look, t: Looked) {
@@ -116,10 +113,10 @@ function statusOf(look: Look, t: Looked) {
   if (look === "implemented") return "Implemented";
   if (look === "input" && t.state === "needs-input" && t.pr?.state === "ready")
     return "Needs input, PR ready";
-  const ready = t.pr?.state === "ready" && !queuedOn(t);
-  if (ready && look !== "run") return readyOf(t)!.label;
-  // Deckhand still reviews it, between the runs of its review-and-fix loop, or waits for CI.
-  if (ready && !(t.state && LIVE.includes(t.state))) return readyOf(t)?.label ?? "In review";
+  // The list's word: its ready pull request's, unless a run fails, asks or is on its way.
+  if (t.state && t.pr?.state === "ready" && !LIVE.includes(t.state)) {
+    return statusAsListed({ ...t, state: t.state }).label;
+  }
   if (t.closed === "not_planned") return "Closed, not planned";
   // "Done" in the list: its last run replied, which isn't implemented.
   if (t.state === "done") return "Run done";

@@ -10,6 +10,7 @@ import {
   moving,
   TONES,
 } from "./graphModel";
+import { STATE_NAMES, taskStatus } from "./format";
 import type { Pending, Task, WorkAction } from "./types";
 
 const task = (n: number, extra: Partial<Task> = {}): Task => ({
@@ -193,6 +194,48 @@ test("a ready pull request's node: purple only when clean, else why, or on its w
   expect(nodes.filter(moving).map((n) => n.number)).toEqual([13]);
   // Implemented without a merge is closed: hidden unless asked for.
   expect(graphOf([task(11, { closed: "completed" })], [], []).hidden).toBe(1);
+});
+
+test("a failed or brainstorming task on a ready pull request: as in the list (#748)", () => {
+  const pr = { number: 2, url: "", state: "ready" as const, readyAt: null, head: "b2" };
+  const failed = { ...pr, ci: { sha: "b2", state: "failed" as const, runs: [] } };
+  const { nodes } = graphOf(
+    [
+      task(1, { state: "error", pr }),
+      task(3, { state: "interrupted", pr: failed }),
+      task(5, { state: "brainstorm", pr }),
+      task(7, { state: "idle-brainstorm", pr }),
+    ],
+    [],
+    [],
+  );
+  expect(nodes.map((n) => [n.number, n.look, n.status])).toEqual([
+    [1, "err", "Error"],
+    [3, "err", "Interrupted"],
+    [5, "talk", "Brainstorm"],
+    // Idle, nothing to say of its own: its pull request's, as in the list.
+    [7, "ready", "Ready for review"],
+  ]);
+});
+
+test("the graph's tone is the list's, whatever the state and the pull request (#748)", () => {
+  const states = Object.keys(STATE_NAMES) as Task["state"][];
+  const head = { number: 2, url: "", readyAt: null, head: "b2" };
+  const prs: Task["pr"][] = [
+    null,
+    { ...head, state: "draft" },
+    { ...head, state: "ready" },
+    { ...head, state: "ready", conflict: true },
+    { ...head, state: "ready", ci: { sha: "b2", state: "running", runs: [] } },
+  ];
+  for (const state of states) {
+    for (const pr of prs) {
+      const t = task(1, { state, pr });
+      // The graph's own outline for an idle brainstorm, grey in the list: still "talk".
+      if (lookOf(t) === "talk" && state === "idle-brainstorm") continue;
+      expect([state, pr?.state, TONES[lookOf(t)]]).toEqual([state, pr?.state, taskStatus(t).tone]);
+    }
+  }
 });
 
 test("a run that asked on a ready pull request says both", () => {
