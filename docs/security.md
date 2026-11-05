@@ -1989,6 +1989,7 @@ allow_grant if {
 | `workflow_secrets`     | with `workflows`, its workflows that only run from the default branch may use secrets       |
 | `auto_merge`           | UNSAFE: `review.merge` merges on a private repository ([Auto-merge](#auto-merge))           |
 | `auto_merge_public`    | the same on a public repository too                                                         |
+| `machines`             | its tasks may run on its users' own machines, with its `machines:` ([Machines](#machines))  |
 
 - **Nothing by default**: Deckhand's default policies have no `allow_grant` rule. No rule, no
   grant.
@@ -2260,7 +2261,7 @@ resource_metadata="<PUBLIC_URL>/.well-known/oauth-protected-resource/mcp"` (RFC 
   refresh, an exchange or a code used twice racing a revocation never brings the family back. A
   refresh may ask for fewer scopes: its access token gets those, its refresh token keeps the
   grant (RFC 6749 §6). Scopes: `deckhand:read` and `deckhand:work` (what a client gets when it
-  asks for neither), and `deckhand:machine`, granted only when asked for (machines, #595);
+  asks for neither), and `deckhand:machine`, granted only when asked for ([Machines](#machines));
   others (`offline_access`) are ignored.
 - **Kept hashed.** Codes, access and refresh tokens are random (256 bits) and kept as their
   SHA-256 in edge's store (`mcp/…`), which its two copies share: they survive a restart and a
@@ -2296,6 +2297,35 @@ resource_metadata="<PUBLIC_URL>/.well-known/oauth-protected-resource/mcp"` (RFC 
   exist. Each posts the dashboard's App comment on the issue, in the login's name, and is
   logged as the dashboard's are, marked "(MCP)". Their annotations (`destructiveHint`) make
   clients ask before calling them; a client given `deckhand:read` alone can't.
+
+## Machines
+
+A machine is a user's own computer that takes Deckhand's tasks (#594): its driver is an MCP
+client of `/mcp`, signed in as its owner with the `deckhand:machine` scope, which a client gets
+only when it asks for it. Nothing new reaches the internet: edge answers `/mcp` as for any
+client, and no sandbox service, run token or git gateway is on the machine.
+
+- **Registration** (`listener/machines.mjs`, #595): `register_machine` keeps its name (unique
+  per owner), labels, capacity (1 by default, 16 at most), the repositories it takes
+  (`owner/name` or `owner/*`) and its driver's version in the orchestrator's store
+  (`machines/<id>`), with its owner and last heartbeat; 10 machines per owner at most. It is
+  online while its last `heartbeat` is under 90 s old.
+- **Its owner's alone**: every call names the machine by its id, and one that isn't the
+  login's is "not found" as one that doesn't exist; Settings › MCP clients lists the login's
+  own machines, its **Remove** posted from the dashboard's origin. Removing one ends its claims.
+- **Every call checks the login again**: a token's login out of `ALLOWED_USERS` is refused at
+  edge and at the orchestrator, as their dashboard session is; their machines are listed to
+  nobody and offered nothing until they are back.
+- **Opt-in per repository, both needed**: the operator's `machines` grant ([the
+  grants](#the-grants), an `allow_grant` rule, nothing by default) and a `machines:` block in
+  the repository's `.deckhand.yaml` on its default branch, whose `labels` narrow the machines
+  it takes, never widen the grant. A machine is offered a repository only while its owner may
+  start work runs there (`runs:start:work`, the repository's `users` narrowing it): never more
+  than they may do on the dashboard. A grant, config or access decision that can't be read
+  offers nothing (fail closed).
+- **What Deckhand doesn't enforce**: anything on the machine. An agent runs there on its own,
+  with the owner's files, credentials and network; Deckhand suggests settings for it and
+  enforces none. `register_machine`'s answer and the dashboard's list of machines say so.
 
 ## Edge's and the orchestrator's data
 

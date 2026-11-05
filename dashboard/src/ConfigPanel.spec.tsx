@@ -87,6 +87,7 @@ const BROKEN: RepoConfig = {
       allowResearch: true,
       allowWorkflows: false,
       allowWorkflowSecrets: false,
+      allowMachines: false,
       allowAutoMerge: false,
       hosts: ["registry.npmjs.org"],
       cachedHosts: [],

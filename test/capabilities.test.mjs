@@ -16,6 +16,7 @@ import {
 } from "../listener/capabilities.mjs";
 import { autoMergeProblems, GRANTS, grantOf, grantsBy, grantsFrom } from "../listener/grants.mjs";
 import { APART, MODES, RESEARCH } from "../listener/modes.mjs";
+import { offeredLabels } from "../listener/machines.mjs";
 import { readsOf } from "../listener/github-app.mjs";
 import { createPolicies } from "../listener/policies.mjs";
 import { builtInPolicies } from "../policy-service/engine.mjs";
@@ -851,6 +852,13 @@ test(
       workflow_secrets: (g) => g.allowWorkflowSecrets === true,
       auto_merge: (g) => !autoMergeProblems(g, merge, true).length,
       auto_merge_public: (g) => !autoMergeProblems(g, merge, false).length,
+      // A repository that opts in is offered to its users' machines.
+      machines: (g) =>
+        offeredLabels({
+          granted: g.allowMachines,
+          settings: { machines: { labels: null } },
+          machine: { labels: [] },
+        }) !== null,
     };
     assert.deepEqual(Object.keys(gates).sort(), [...names].sort());
     const all = await grantFor("org/all");

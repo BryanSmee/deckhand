@@ -182,6 +182,7 @@ projects:
 | `wait_for_answers`                      | `true`                                  | an issue's work runs wait until its open questions are answered (see Open questions)                                                            |
 | `auto_pickup`                           | `false`                                 | `true`: Deckhand starts this repo's open issues labelled `AUTO_PICKUP_LABEL` by itself, in the operator's `AUTO_PICKUP_SLOTS` (see Auto-pickup) |
 | `projects`                              | none                                    | organization projects (v2) Deckhand moves the issues on: `project`, `field`, `start`, `ready`, `merged` (see Projects)                          |
+| `machines`                              | none: off                               | `true`, or `labels: [...]`: its tasks may run on its users' own machines, with the operator's `machines` grant (see Machines)                   |
 
 ## Network and mounts
 
@@ -2118,6 +2119,35 @@ Each chat's owner may narrow what its sandbox gets from the dashboard, with its 
 profile ([security.md](security.md#chats)): never beyond what `policy/mode-chat.rego` (and this
 repository's `.deckhand/policy/`), this file and the operator's grants give a chat. A
 `deny_github` or `deny_capabilities` rule sees a chat's runs with `mode: "chat"`.
+
+## Machines
+
+A user's own computer may take this repository's tasks (Unreal Engine, a GPU, licensed tools
+the sandbox lacks): its driver, an MCP client signed in as its owner, registers it with its
+labels, its capacity and the repositories it takes ([setup.md](setup.md#mcp-clients)). Both
+sides must opt in before this repository is offered to one:
+
+- the operator's policies grant it `machines` ([security.md](security.md#the-grants)), nothing
+  by default;
+- this file has a `machines:` block, which may narrow the machines it takes to those with one
+  of its labels (never wider than the grant):
+
+```yaml
+machines: true # any machine of a user who may start runs here
+```
+
+```yaml
+machines:
+  labels: [unreal] # only machines labelled unreal, and only on that label
+```
+
+A label is letters, digits, `.`, `_` and `-`, compared in lower case. Without the grant, the
+config page says the block is offered to no machine; an error in the block leaves it off. A
+machine is offered the repository only while its owner is in `ALLOWED_USERS` and may start work
+runs here (`runs:start:work`, and `users`): never more than its owner may do on the dashboard.
+
+An agent runs on that machine on its own, with its owner's files, credentials and network:
+Deckhand suggests settings and enforces none there ([security.md](security.md#machines)).
 
 ## Auto-pickup
 

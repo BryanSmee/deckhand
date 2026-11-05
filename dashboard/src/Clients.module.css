@@ -71,6 +71,20 @@
   overflow-wrap: anywhere;
 }
 
+.title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+}
+
+.warning {
+  margin: 0;
+  padding: 4px 18px 12px;
+  color: var(--text-2);
+  font-size: 13px;
+}
+
 .empty,
 .error {
   margin: 0;
@@ -90,6 +104,10 @@
 
   .group h2 {
     padding: 14px 16px 4px;
+  }
+
+  .warning {
+    padding: 4px 16px 12px;
   }
 
   .client {

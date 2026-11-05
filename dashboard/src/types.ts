@@ -706,6 +706,8 @@ export interface Grant {
   // `review.merge` may merge Deckhand's pull requests (`auto_merge`); "public": on a public
   // repository too (`auto_merge_public`).
   allowAutoMerge: boolean | "public";
+  // Its tasks may run on its users' own machines, with its `machines:` (`machines`).
+  allowMachines: boolean;
   hosts: string[];
   // Those whose plain HTTP answers the egress proxy keeps in its cache.
   cachedHosts: string[];
@@ -1021,6 +1023,25 @@ export interface McpClient {
   scopes: string[];
   created: number;
   used: number | null;
+}
+
+// GET api/machines (listener/http.mjs): the user's own machines (listener/machines.mjs), by
+// name. `online`: its last heartbeat under 90 s old; `seenAt`, `createdAt`: ms; `repos`:
+// "owner/name" or "owner/*", those it takes; `version`: its driver's, if it said.
+export interface Machines {
+  machines: Machine[];
+}
+
+export interface Machine {
+  id: string;
+  name: string;
+  labels: string[];
+  capacity: number;
+  repos: string[];
+  version: string | null;
+  createdAt: number;
+  seenAt: number;
+  online: boolean;
 }
 
 // GET api/health (listener/health.mjs): each service's GET /health, as the orchestrator probed

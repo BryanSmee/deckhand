@@ -10,13 +10,15 @@
 // filters, ALLOWED_REPOS, the access decision and each repo's `users`. A run's log may hold a
 // repository's secrets in tool output: its readers are the dashboard's, nobody else. The write
 // tools (#483) call what the dashboard's work area does (work.mjs), with its checks and its App
-// comments: what it refuses is the tool's error, its message as the dashboard shows it.
+// comments: what it refuses is the tool's error, its message as the dashboard shows it. The
+// machine tools (#595) register the owner's machine, with `deckhand:machine` (machines.mjs).
 import { StringDecoder } from "node:string_decoder";
 
 import { Refused, readBody, send } from "../lib/http.mjs";
 import { agentFor } from "./agents/index.mjs";
 import { STATES } from "./board.mjs";
 import { parseKey } from "./events.mjs";
+import { HEARTBEAT_MS, MAX_CAPACITY, ONLINE_MS, WARNING } from "./machines.mjs";
 import { reader, stampOf } from "./runlog.mjs";
 import { taskId } from "./spelling.mjs";
 
@@ -48,6 +50,7 @@ const STAMP_BYTES = 128;
 
 export const READ = "deckhand:read";
 export const WORK = "deckhand:work";
+export const MACHINE = "deckhand:machine";
 
 // What a tool that only reads says of itself (MCP's tool annotations).
 const READ_ONLY = {
@@ -64,6 +67,14 @@ const WRITES = {
   openWorldHint: true,
 };
 
+// And a machine's: its own entry in Deckhand, nothing outside it.
+const MACHINE_TOOL = {
+  readOnlyHint: false,
+  destructiveHint: false,
+  idempotentHint: true,
+  openWorldHint: false,
+};
+
 // The work area's actions a client may ask for (work.mjs checkAction()): not a brainstorm's
 // wrap-up, which the task's own comments ask for.
 export const SCHEDULE_ACTIONS = ["start", "queue", "plan", "dequeue", "cancel"];
@@ -71,7 +82,8 @@ export const SCHEDULE_ACTIONS = ["start", "queue", "plan", "dequeue", "cancel"];
 const INSTRUCTIONS = `Deckhand runs coding agents on GitHub issues and pull requests. These tools \
 read what its dashboard shows you: your repositories, their tasks (an issue or pull request and \
 its runs), each run's log, and the schedule; with the deckhand:work scope, rerun and schedule act \
-as its dashboard does, commenting on the issue as the user. A task is named by its key, \
+as its dashboard does, commenting on the issue as the user; with deckhand:machine, a machine's \
+driver registers it and says it is there. A task is named by its key, \
 "owner/repo#12" for an issue, "owner/repo#pr-12" for a pull request.`;
 
 const RPC = {
@@ -97,7 +109,7 @@ const REPO = {
   description: 'A repository, "owner/repo", as list_repos names it.',
 };
 
-export const TOOLS = [
+const TOOL_SPECS = [
   {
     name: "list_repos",
     title: "List repositories",
@@ -207,15 +219,75 @@ export const TOOLS = [
       ["repo", "number", "action"],
     ),
   },
-].map(({ scope, ...tool }) => ({
-  ...tool,
-  annotations: { title: tool.title, ...(scope === WORK ? WRITES : READ_ONLY) },
-}));
+  {
+    name: "register_machine",
+    title: "Register this machine",
+    scope: MACHINE,
+    description: `Registers a machine of yours that takes Deckhand's tasks, or registers it again (the same name: the same machine, its labels, capacity and repositories replaced). Returns its id, for heartbeat and unregister_machine, and the repositories offered to it now: those of \`repos\` whose operator grants \`machines\` and whose .deckhand.yaml has a \`machines:\` block taking one of its labels, where you may start runs. Call heartbeat every ${HEARTBEAT_MS / 1000} s: it is online while its last one is under ${ONLINE_MS / 1000} s old. ${WARNING}`,
+    inputSchema: object(
+      {
+        name: {
+          type: "string",
+          description: "Its name, unique among your machines: 64 characters at most.",
+        },
+        labels: {
+          type: "array",
+          items: { type: "string" },
+          description:
+            'What it offers, that a repository\'s `machines.labels` names ("unreal", "gpu"): letters, digits, ".", "_" and "-".',
+        },
+        capacity: {
+          type: "integer",
+          minimum: 1,
+          maximum: MAX_CAPACITY,
+          description: "How many runs it takes at once: 1 by default.",
+        },
+        repos: {
+          type: "array",
+          items: { type: "string" },
+          description:
+            'The repositories it takes: "owner/name", or "owner/*" for all of an owner\'s.',
+        },
+        version: { type: "string", description: "The driver's version." },
+      },
+      ["name", "repos"],
+    ),
+  },
+  {
+    name: "heartbeat",
+    title: "Say this machine is there",
+    scope: MACHINE,
+    description: `Says your machine is there, every ${HEARTBEAT_MS / 1000} s: it is online while its last heartbeat is under ${ONLINE_MS / 1000} s old. A machine Deckhand no longer has (removed from the dashboard) is refused: register it again.`,
+    inputSchema: object(
+      {
+        machine: { type: "string", description: "Its id, from register_machine." },
+        version: { type: "string", description: "The driver's version." },
+      },
+      ["machine"],
+    ),
+  },
+  {
+    name: "unregister_machine",
+    title: "Unregister this machine",
+    scope: MACHINE,
+    description: "Removes your machine from Deckhand, as its Remove in Settings does.",
+    inputSchema: object(
+      { machine: { type: "string", description: "Its id, from register_machine." } },
+      ["machine"],
+    ),
+  },
+];
 
-// Each tool's scope: the read tools need deckhand:read, those that act deckhand:work.
-const SCOPE = Object.fromEntries(
-  TOOLS.map((t) => [t.name, t.annotations.readOnlyHint ? READ : WORK]),
-);
+// Each tool's scope: the read tools need deckhand:read, those that act deckhand:work, a
+// machine's deckhand:machine.
+const SCOPE = Object.fromEntries(TOOL_SPECS.map((t) => [t.name, t.scope ?? READ]));
+
+const ANNOTATIONS = { [READ]: READ_ONLY, [WORK]: WRITES, [MACHINE]: MACHINE_TOOL };
+
+export const TOOLS = TOOL_SPECS.map(({ scope = READ, ...tool }) => ({
+  ...tool,
+  annotations: { title: tool.title, ...ANNOTATIONS[scope] },
+}));
 
 // `source` (http.mjs createHttp()'s), each for the signed-in `user`:
 //   state(user)              api/state, as the dashboard gets it
@@ -227,6 +299,8 @@ const SCOPE = Object.fromEntries(
 //   rerun(user, runId)       the work area's rerun (work.mjs `mcp`): its answer's message, or
 //                            Refused as the dashboard's
 //   schedule(user, repo, body)  its POST …/work, the same way
+//   machines                 the user's machines (machines.mjs createMachines()): register(),
+//                            heartbeat(), remove() and offers(), each throwing Refused
 // `version`: Deckhand's, which `initialize` says.
 export function createMcp({ source, version = "dev", now = Date.now, log = () => {} }) {
   const tools = {
@@ -237,6 +311,9 @@ export function createMcp({ source, version = "dev", now = Date.now, log = () =>
     get_schedule: getSchedule,
     rerun: rerunTool,
     schedule: scheduleTool,
+    register_machine: registerMachine,
+    heartbeat,
+    unregister_machine: unregisterMachine,
   };
 
   // --- The tools ---------------------------------------------------------------------------
@@ -454,6 +531,78 @@ export function createMcp({ source, version = "dev", now = Date.now, log = () =>
       if (args[name] !== undefined && args[name] !== null) body[name] = args[name];
     }
     return acted(() => source.schedule(user, repo, body));
+  }
+
+  async function registerMachine(user, args) {
+    // A null is a field left out: its default.
+    const input = Object.fromEntries(Object.entries(args).filter(([, v]) => v !== null));
+    return machineAct(
+      () => source.machines.register(user, input),
+      async (m) => {
+        // Registered whatever they say: a repository that can't be read is offered nothing,
+        // and the next registration asks again.
+        const offered = await source.machines.offers(user, m.id).catch((error) => {
+          (log.error ?? log)(`MCP: ${user}: ${m.name}: its offers: ${error.stack ?? error}`);
+          return null;
+        });
+        const lines =
+          offered === null
+            ? ["The repositories offered to it can't be read now."]
+            : offered.length
+              ? offered.map(
+                  (o) => `- ${o.repo}${o.labels.length ? ` (${o.labels.join(", ")})` : ""}`,
+                )
+              : [
+                  "None: no repository of `repos` has both the operator's `machines` grant and a `machines:` block taking one of its labels, where you may start runs.",
+                ];
+        return result(
+          {
+            machine: machineView(m),
+            offered,
+            heartbeatSeconds: HEARTBEAT_MS / 1000,
+            warning: WARNING,
+          },
+          [
+            `Machine ${m.name} registered: ${m.id}. Call heartbeat with it every ${HEARTBEAT_MS / 1000} s.`,
+            "",
+            `Warning: ${WARNING}`,
+            "",
+            "Repositories offered to it now:",
+            ...lines,
+          ],
+        );
+      },
+    );
+  }
+
+  async function heartbeat(user, args) {
+    const id = requiredString(args, "machine");
+    const version = optionalString(args, "version");
+    return machineAct(
+      () => source.machines.heartbeat(user, id, version),
+      (m) =>
+        result({ machine: machineView(m), heartbeatSeconds: HEARTBEAT_MS / 1000 }, [
+          `${m.name} is online.`,
+        ]),
+    );
+  }
+
+  async function unregisterMachine(user, args) {
+    const id = requiredString(args, "machine");
+    return machineAct(
+      () => source.machines.remove(user, id),
+      (m) => result({ machine: machineView(m) }, [`${m.name} is unregistered.`]),
+    );
+  }
+
+  // `answer` of what `act` did, or its refusal (machines.mjs's Refused) as the tool's error.
+  async function machineAct(act, answer) {
+    try {
+      return await answer(await act());
+    } catch (error) {
+      if (error instanceof Refused) return failure(error.message);
+      throw error;
+    }
   }
 
   // A write's answer: the dashboard's message, or its refusal as the tool's error.
@@ -689,6 +838,17 @@ export function createMcp({ source, version = "dev", now = Date.now, log = () =>
       ...(t.rerunnable && { rerunnable: true }),
     };
   }
+
+  const machineView = (m) => ({
+    id: m.id,
+    name: m.name,
+    labels: m.labels,
+    capacity: m.capacity,
+    repos: m.repos,
+    version: m.version,
+    online: m.online,
+    seenAt: m.seenAt,
+  });
 
   // From its start to its end, or to now while it runs; null without either.
   function durationOf(r) {

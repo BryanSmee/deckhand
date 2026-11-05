@@ -333,6 +333,13 @@ export function createHttp(ctx) {
       // The work area's own checks (work.mjs `mcp`): those of its routes, but the Origin.
       rerun: (user, runId) => ctx.workApi.mcp.rerun(user, runId),
       schedule: (user, repo, body) => ctx.workApi.mcp.schedule(user, repo, body),
+      // The user's own machines (machines.mjs): what they register, they alone reach.
+      machines: {
+        register: (user, input) => ctx.machines.register(user, input),
+        heartbeat: (user, id, version) => ctx.machines.heartbeat(user, id, version),
+        remove: (user, id) => ctx.machines.remove(user, id),
+        offers: (user, id) => ctx.machines.offers(user, id),
+      },
     },
     log,
   });
@@ -606,6 +613,29 @@ export function createHttp(ctx) {
     log,
   });
 
+  // Settings › MCP clients' machines (machines.mjs): the user's own, and their Remove. Nobody
+  // sees another's.
+  const machinesApi = apiRoute({
+    name: "Machines",
+    route: (pathname) => {
+      if (pathname === "/api/machines") return { what: "list" };
+      const remove = /^\/api\/machines\/([^/]+)\/remove$/.exec(pathname);
+      return remove ? { what: "remove", id: remove[1] } : null;
+    },
+    gets: {
+      list: (req, res, user) => {
+        res.setHeader("cache-control", "no-store");
+        sendJson(res, { machines: ctx.machines.list(user) });
+      },
+    },
+    posts: {
+      remove: (req, res, user, repo, { id }) =>
+        sendJson(res, { removed: ctx.machines.remove(user, id).id }),
+    },
+    publicUrl: ctx.publicUrl,
+    log,
+  });
+
   // `promise`'s end, logged when it fails, waited for by an orchestrator that stops.
   function admittedAs(promise) {
     const done = Promise.resolve(promise).catch((error) => log(error.stack ?? error));
@@ -649,6 +679,9 @@ export function createHttp(ctx) {
     if (req.url.startsWith("/api/chats")) {
       if (!ctx.app) return res.writeHead(503).end();
       if (ctx.chats?.handle(req, res, user)) return;
+    }
+    if (req.url.startsWith("/api/machines") && ctx.machines) {
+      if (machinesApi(req, res, user)) return;
     }
     if (req.url.startsWith("/api/repos")) {
       if (!ctx.app) return res.writeHead(503).end();
