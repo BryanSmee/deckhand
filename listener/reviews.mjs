@@ -117,25 +117,248 @@ function lastAt(v) {
 // The run's final message (prompts/review.md's format) → { summary, findings: [{ severity,
 // path, line, text }], followUps: [{ title, path, line, text }], comments: [{ blocking, path,
 // line, text }], rating, verdict, allowed }, or null when it lacks the rating or the verdict.
-// Its three sections: `## Must fix` (the findings; a `## Findings` heading, as replies before
-// the sections and repos' own prompts have it, reads the same), `## Follow-ups` (for other
-// issues: Deckhand files them once the pull request is merged, fileFollowUps()) and
-// `## Comments` (each `blocking` or a `note`). Severity bullets before any heading are findings,
-// as before the sections. Follow-ups and notes never block nor cap the rating; a blocking
-// comment blocks whatever `allowed` says, and caps the rating as a medium finding does.
+// Read from its verdict block first (a fenced `json deckhand-review` block, readBlock(), #645):
+// its items are typed, so nothing is guessed. A block that doesn't validate is logged (`log`)
+// and the markdown read instead (readMarkdown()), the block's own `request-changes` kept, and so
+// is one the markdown says more than (saysLess(): it blocks on an item the block lacks, or
+// asks for changes the block doesn't); a reply
+// without one (a repo's own prompt, an older session) reads from its markdown as before it.
 // The rating is capped by the most severe finding (RATING_CAPS), and anything blocking makes
 // the verdict `request-changes`, whatever the message says. `allowed`: the most severe
 // finding that doesn't block (`review.max_allowed_severity`, for an automatic review in a fix
 // loop or deciding an auto-merge). The prompt is told the same tolerance (reviewPrompt()), but a model may still
 // write `request-changes` on tolerated findings only: that verdict says nothing more than the
-// findings, so it reads `comment`, and so does one whose Must fix section says `None.` (follow-ups
-// and notes only, which never block). Otherwise the model's `request-changes` stays, and blocks
-// the merge: a finding the parser missed (a numbered list, say) still does.
-export function parseReview(text, { allowed = "low" } = {}) {
+// findings, so it reads `comment`, and so does one with no finding at all (follow-ups and notes
+// only, which never block) when every item was read for sure. Otherwise the model's
+// `request-changes` stays, and blocks the merge: a finding the parser missed (a numbered list,
+// say) still does.
+export function parseReview(text, { allowed = "low", log = () => {} } = {}) {
+  const { json, rest } = verdictBlock(text);
+  const md = readMarkdown(rest);
+  if (json !== null) {
+    const read = readBlock(json);
+    const fromBlock =
+      read.block && settle({ summary: md.summary, ...read.block }, { allowed, sure: true });
+    // The markdown, read as it would be alone, saying more than the block (saysLess()): one of
+    // the two left something out, so the block is no surer than the markdown, read as when it
+    // doesn't validate.
+    const stricter =
+      read.block &&
+      saysLess(fromBlock, markdownAlone(md, read.block, allowed), {
+        asked: md.said === "request-changes" && read.block.verdict !== "request-changes",
+      });
+    if (read.block && !stricter) return fromBlock;
+    log(
+      stricter
+        ? "the review's verdict block says less than its markdown: read from its markdown"
+        : `the review's verdict block doesn't validate (${read.error}): read from its markdown`,
+    );
+    // The model's `request-changes` stands, the block's or the markdown's: the block may be what
+    // says changes are needed, and a reply that strayed from its format once may have again.
+    if (blockVerdict(json) === "request-changes") md.said = "request-changes";
+    md.doubtful = true;
+  }
+  if (md.rating === null || md.said === null) return null;
+  const { summary, findings, followUps, comments, rating, said } = md;
+  return settle(
+    { summary, findings, followUps, comments, rating },
+    { said, allowed, sure: markdownSure(md) },
+  );
+}
+
+// Whether the markdown's items were all read for sure (settle()): no finding is sure only when
+// the Must fix section said `None.` and every line under it and Comments was read.
+const markdownSure = ({ findings, none, unsure, doubtful }) =>
+  !doubtful && (findings.length > 0 || (none && !unsure));
+
+// The markdown's review settled as it would be alone, to hold a verdict block to it: without
+// its own verdict, it only blocks on its items; without its own rating, the block's.
+const markdownAlone = (md, block, allowed) =>
+  settle(
+    { ...md, rating: md.rating ?? block.rating },
+    { said: md.said ?? "comment", allowed, sure: markdownSure(md) },
+  );
+
+// Whether settled review `block` says less than `md` in anything that blocks, is posted as a
+// finding or a follow-up, or reaches the policies (`input.review`): `asked`, the markdown's
+// `request-changes` where the block's own verdict isn't (where both say it, the typed block
+// decides whether it reads `comment`, whatever the markdown's own doubts), blocking where the
+// block doesn't, a higher rating, fewer findings at any severity and above, fewer blocking
+// comments or follow-ups (each one a filed issue), or a finding or blocking comment of the
+// markdown's with a place that the block has nothing as severe at. The model wrote both: they
+// differ only when one left something out, and the markdown may be the right one.
+function saysLess(block, md, { asked }) {
+  if (asked || (blocks(md, md.allowed) && !blocks(block, block.allowed))) return true;
+  if (md.rating < block.rating || md.followUps.length > block.followUps.length) return true;
+  const rank = (item) => (item.severity ? SEVERITIES.indexOf(item.severity) : RANK_BLOCKING);
+  const atLeast = (review, limit) => review.findings.filter((f) => rank(f) <= limit).length;
+  if (SEVERITIES.some((_, limit) => atLeast(md, limit) > atLeast(block, limit))) return true;
+  const mdBlocking = blockingComments(md);
+  const blockBlocking = blockingComments(block);
+  if (mdBlocking.length > blockBlocking.length) return true;
+  const theirs = [...block.findings, ...blockBlocking];
+  return [...md.findings, ...mdBlocking].some(
+    (item) =>
+      item.path !== null &&
+      !theirs.some((b) => b.path === item.path && b.line === item.line && rank(b) <= rank(item)),
+  );
+}
+
+// A blocking comment's rank among the severities (saysLess()): as a medium finding, which caps
+// the rating as it does; a finding as severe or more stands for it at its place.
+const RANK_BLOCKING = SEVERITIES.indexOf("medium");
+
+// The review from its items, its rating capped and its verdict decided (parseReview()): `said`,
+// the model's verdict (a block's `verdict`, unless given), reads `comment` when it asked for
+// changes on nothing blocking but tolerated findings, or on no finding at all, and the items
+// were all read for sure (`sure`).
+function settle(
+  { summary, findings, followUps, comments, rating, verdict },
+  { said = verdict, allowed, sure },
+) {
+  // An `unclear` comment blocks when the model asked for changes (its kind unread, it may be
+  // why); with the model's `comment`, it is shown, not blocking.
+  const review = {
+    summary,
+    findings,
+    followUps,
+    comments,
+    unclearBlocks: said === "request-changes",
+    allowed,
+  };
+  const tolerated = findings.some((f) => BLOCKING.has(f.severity));
+  const caps = [
+    ...findings.map((f) => RATING_CAPS[f.severity]),
+    ...(blockingComments(review).length ? [RATING_CAPS.medium] : []),
+  ];
+  return {
+    ...review,
+    rating: Math.min(rating, ...caps),
+    verdict: blocks(review, allowed)
+      ? "request-changes"
+      : sure && (tolerated || !findings.length) && said === "request-changes"
+        ? "comment"
+        : said,
+  };
+}
+
+// The opening line of the review's verdict block (prompts/review.md).
+const BLOCK_OPEN = /^ {0,3}(`{3,}|~{3,})\s*json\s+deckhand-review\s*$/i;
+
+// `text` → { json, rest }: the last verdict block's contents (null: none), and the text without
+// any verdict block, for the markdown (their JSON lines would read as its text, an earlier
+// block's `"verdict": …` as its verdict). Other fences are no concern: a reply wrapped whole in
+// one, as the prompt's example is, still has its block. An unclosed block runs to the end, so
+// it fails to validate rather than passing for markdown.
+function verdictBlock(text) {
+  const lines = String(text ?? "").split(/\r?\n/);
+  const rest = [];
+  let json = null;
+  for (let from = 0; from < lines.length; from++) {
+    const open = BLOCK_OPEN.exec(lines[from]);
+    if (!open) {
+      rest.push(lines[from]);
+      continue;
+    }
+    let to = from + 1;
+    while (to < lines.length) {
+      const close = /^ {0,3}(`{3,}|~{3,})\s*$/.exec(lines[to]);
+      if (close && close[1][0] === open[1][0] && close[1].length >= open[1].length) break;
+      to++;
+    }
+    json = lines.slice(from + 1, to).join("\n");
+    from = to;
+  }
+  return { json, rest: rest.join("\n") };
+}
+
+// A verdict block's JSON → { block: { findings, followUps, comments, rating, verdict } } or
+// { error }: what doesn't validate, for the log. Each list is required (empty when there is
+// nothing); an item's `path` and `line` go together, or are both left out or null.
+function readBlock(json) {
+  let data;
+  try {
+    data = JSON.parse(json);
+  } catch {
+    return { error: "not JSON" };
+  }
+  if (!isObject(data)) return { error: "not an object" };
+  const rating = data.rating;
+  if (typeof rating !== "number" || !/^(?:10|\d)(?:\.\d)?$/.test(String(rating)) || rating > 10) {
+    return { error: "`rating` isn't a number from 0 to 10, with one decimal at most" };
+  }
+  if (!Object.hasOwn(VERDICTS, data.verdict)) return { error: "`verdict` is unknown" };
+  const block = { findings: [], followUps: [], comments: [], rating, verdict: data.verdict };
+  for (const [key, read] of Object.entries(BLOCK_ITEMS)) {
+    if (!Array.isArray(data[key])) return { error: `\`${key}\` isn't a list` };
+    for (const [i, item] of data[key].entries()) {
+      const at = isObject(item) ? place(item) : null;
+      const own = at && read(item);
+      if (!own) return { error: `\`${key}[${i}]\` doesn't validate` };
+      if (own.skip) continue;
+      block[key].push({ ...own, ...at });
+    }
+  }
+  return { block };
+}
+
+const isObject = (value) => value !== null && typeof value === "object" && !Array.isArray(value);
+const filled = (value) => typeof value === "string" && value.trim() !== "";
+
+// Each list of the verdict block → its item's own fields, or null when they don't validate.
+const BLOCK_ITEMS = {
+  findings: (f) => (SEVERITIES.includes(f.severity) ? { severity: f.severity } : null),
+  // "None" as a title files nothing (NOTHING), as in the markdown. No bold in it: the title is
+  // posted in bold, and read back to its first `**` (parsePostedReview()).
+  followUps: (f) =>
+    filled(f.title)
+      ? NOTHING.test(titleOf(f.title))
+        ? { skip: true }
+        : { title: titleOf(f.title.replace(/\*\*|__/g, "")) }
+      : null,
+  comments: (c) => (typeof c.blocking === "boolean" ? { blocking: c.blocking } : null),
+};
+
+// A block's item → { path, line, text } (as located()'s), or null: no text, a path that
+// couldn't be posted in backticks, or a line without its path or a path without its line.
+function place(item) {
+  if (!filled(item.text)) return null;
+  const path = item.path ?? null;
+  const line = item.line ?? null;
+  if ((path === null) !== (line === null)) return null;
+  if (path !== null && (typeof path !== "string" || !/^[^`\s]+$/.test(path))) return null;
+  if (line !== null && !(Number.isInteger(line) && line > 0)) return null;
+  // No blank line: a posted item ends at one (parsePostedReview()).
+  return { path, line, text: item.text.trim().replace(/\n\s*\n/g, "\n") };
+}
+
+// The verdict a block that doesn't validate still says, or null.
+function blockVerdict(json) {
+  try {
+    const data = JSON.parse(json);
+    // "request changes" too, as the markdown's is read.
+    return isObject(data) && typeof data.verdict === "string"
+      ? data.verdict.toLowerCase().replace(" ", "-")
+      : null;
+  } catch {
+    return /"verdict"\s*:\s*"request[- ]changes"/i.test(json) ? "request-changes" : null;
+  }
+}
+
+// The review's markdown (prompts/review.md's sections) → { summary, findings, followUps,
+// comments, rating, said, none, unsure, doubtful }: `rating` and `said` (the model's verdict)
+// null when it lacks them. Its three sections: `## Must fix` (the findings; a `## Findings`
+// heading, as replies before the sections and repos' own prompts have it, reads the same),
+// `## Follow-ups` (for other issues: Deckhand files them once the pull request is merged,
+// fileFollowUps()) and `## Comments` (each `blocking` or a `note`). Severity bullets before any
+// heading are findings, as before the sections. Follow-ups and notes never block nor cap the
+// rating; a blocking comment blocks whatever `allowed` says, and caps the rating as a medium
+// finding does. `none`: its Must fix section says `None.`; `unsure` and `doubtful`: what it
+// couldn't read, which keeps the model's `request-changes` (settle()).
+function readMarkdown(text) {
   const lines = String(text ?? "").split(/\r?\n/);
   const rating = /^\W*rating\W*\s*(\d{1,2}(?:\.\d)?)\s*\/\s*10\b/im.exec(text ?? "");
   const verdict = /^\W*verdict\W*\s*(approve|comment|request[- ]changes)\b/im.exec(text ?? "");
-  if (!rating || !verdict || Number(rating[1]) > 10) return null;
   const findings = [];
   const followUps = [];
   const comments = [];
@@ -219,32 +442,16 @@ export function parseReview(text, { allowed = "low" } = {}) {
     }
     if (!started) summary.push(line);
   }
-  const said = verdict[1].toLowerCase().replace(" ", "-");
-  // An `unclear` comment blocks when the model asked for changes (its kind unread, it may be
-  // why); with the model's `comment`, it is shown, not blocking.
-  const review = {
+  return {
     summary: summary.join("\n").trim(),
     findings,
     followUps,
     comments,
-    unclearBlocks: said === "request-changes",
-    allowed,
-  };
-  const tolerated = findings.some((f) => BLOCKING.has(f.severity));
-  const caps = [
-    ...findings.map((f) => RATING_CAPS[f.severity]),
-    ...(blockingComments(review).length ? [RATING_CAPS.medium] : []),
-  ];
-  return {
-    ...review,
-    rating: Math.min(Number(rating[1]), ...caps),
-    verdict: blocks(review, allowed)
-      ? "request-changes"
-      : !doubtful &&
-          (tolerated || (none && !unsure && !findings.length)) &&
-          said === "request-changes"
-        ? "comment"
-        : said,
+    rating: rating && Number(rating[1]) <= 10 ? Number(rating[1]) : null,
+    said: verdict ? verdict[1].toLowerCase().replace(" ", "-") : null,
+    none,
+    unsure,
+    doubtful,
   };
 }
 
@@ -613,7 +820,7 @@ export async function postReview(
   footer,
   { allowed = "low", full, from = null, followUps = true } = {},
 ) {
-  const review = parseReview(text, { allowed });
+  const review = parseReview(text, { allowed, log: (m) => log(`${repo}#${number}: ${m}`) });
   let pr = null;
   try {
     pr = await getJson(github, repo, `/repos/${repo}/pulls/${number}`, [404]);

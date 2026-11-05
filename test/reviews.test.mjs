@@ -4159,3 +4159,362 @@ test("follow-ups auto-picked: a late review's pull request without its merger is
     ],
   );
 });
+
+// A review's verdict block (#645): `data` as JSON in a `json deckhand-review` fence.
+const block = (data) =>
+  `\`\`\`json deckhand-review\n${typeof data === "string" ? data : JSON.stringify(data, null, 2)}\n\`\`\``;
+
+// SECTIONS's items, typed.
+const SECTIONS_BLOCK = {
+  findings: [
+    {
+      severity: "low",
+      path: "lib/cache.mjs",
+      line: 9,
+      text: "an off-by-one in the log line. Fix: count from 1.",
+    },
+  ],
+  followUps: [
+    {
+      title: "Share the retry helper with the uploader",
+      path: "lib/upload.mjs",
+      line: 30,
+      text: "the same loop twice.\nBoth back off the same way.",
+    },
+    { title: "Docs: the cache's limits", text: "nothing says how big it gets." },
+  ],
+  comments: [
+    { blocking: false, path: "lib/cache.mjs", line: 3, text: "`store` reads better than `bag`." },
+    {
+      blocking: true,
+      path: "lib/cache.mjs",
+      line: 20,
+      text: "should a miss go to the network at all?",
+    },
+  ],
+  rating: 9,
+  verdict: "request-changes",
+};
+
+test("parseReview: the verdict block read first, the same review as its markdown", () => {
+  const logged = [];
+  const log = (line) => logged.push(line);
+  const both = parseReview(`${SECTIONS}\n${block(SECTIONS_BLOCK)}\n`, { log });
+  assert.deepEqual(both, parseReview(SECTIONS));
+  assert.deepEqual(logged, []);
+  // The block alone decides the items: markdown it would misread, or none at all, changes
+  // nothing but the summary, which is the markdown's.
+  const stray = `Adds the cache.\n\n## Comments\n\n- a question without its kind?\n\n${block(SECTIONS_BLOCK)}`;
+  const read = parseReview(stray, { log });
+  assert.equal(read.summary, "Adds the cache.");
+  assert.deepEqual(
+    [read.findings, read.followUps, read.comments],
+    [both.findings, both.followUps, both.comments],
+  );
+  assert.deepEqual([read.rating, read.verdict], [8, "request-changes"]);
+  // Typed, nothing is in doubt: request-changes on notes and follow-ups alone reads comment, as
+  // on tolerated findings; a low finding keeps it.
+  const notes = { ...SECTIONS_BLOCK, findings: [], comments: SECTIONS_BLOCK.comments.slice(0, 1) };
+  assert.equal(parseReview(block(notes)).verdict, "comment");
+  const medium = { ...notes, findings: [{ severity: "medium", text: "an edge case." }] };
+  const tolerated = parseReview(block(medium), { allowed: "medium" });
+  assert.deepEqual(
+    [tolerated.verdict, tolerated.rating, reviewEvent(tolerated)],
+    ["comment", 8, "COMMENT"],
+  );
+  const low = { ...notes, findings: [{ severity: "low", text: "a typo." }] };
+  assert.equal(parseReview(block(low)).verdict, "request-changes");
+  // The markdown asking for changes the block doesn't: logged, and read from the markdown, its
+  // request-changes kept even on a block with no finding or tolerated ones only.
+  const asked = "- **high** `a.mjs:1`: bug.\n\nRating: 4/10\nVerdict: request-changes";
+  for (const [data, allowed] of [
+    [{ ...notes, rating: 9, verdict: "comment" }, "low"],
+    [{ ...medium, verdict: "comment" }, "medium"],
+    [{ ...low, verdict: "comment" }, "low"],
+  ]) {
+    const disagree = [];
+    const review = parseReview(`${asked}\n\n${block(data)}`, {
+      allowed,
+      log: (line) => disagree.push(line),
+    });
+    assert.deepEqual(
+      [review.verdict, review.rating, review.findings, reviewEvent(review)],
+      [
+        "request-changes",
+        4,
+        [{ severity: "high", path: "a.mjs", line: 1, text: "bug." }],
+        "REQUEST_CHANGES",
+      ],
+    );
+    assert.match(
+      disagree[0],
+      /the review's verdict block says less than its markdown: read from its markdown/,
+    );
+  }
+  // Without findings in the markdown either, the verdict stays: one of the two is wrong.
+  const bare = parseReview(
+    `Rating: 9/10\nVerdict: request-changes\n\n${block({ ...notes, verdict: "comment" })}`,
+  );
+  assert.equal(bare.verdict, "request-changes");
+  // The verdicts agreeing, but the markdown blocking on a finding the block lacks: the same.
+  for (const said of ["request-changes", "comment"]) {
+    const lacking = [];
+    const review = parseReview(
+      `${asked.replace("request-changes", said)}\n\n${block({ ...notes, rating: 9, verdict: said })}`,
+      { log: (line) => lacking.push(line) },
+    );
+    assert.deepEqual(
+      [review.verdict, review.rating, review.findings.length, reviewEvent(review)],
+      ["request-changes", 4, 1, "REQUEST_CHANGES"],
+      said,
+    );
+    assert.match(
+      lacking[0],
+      /the review's verdict block says less than its markdown: read from its markdown/,
+    );
+  }
+  // A block that says as much as the markdown, or more: its own review, nothing logged.
+  const same = [];
+  const highBlock = {
+    ...notes,
+    findings: [{ severity: "high", path: "a.mjs", line: 1, text: "bug." }],
+    rating: 4,
+  };
+  const agreed = parseReview(`${asked}\n\n${block(highBlock)}`, { log: (line) => same.push(line) });
+  assert.deepEqual([agreed.verdict, agreed.findings.length, same], ["request-changes", 1, []]);
+  const more = parseReview(`Fine.\n\nRating: 9/10\nVerdict: comment\n\n${block(highBlock)}`, {
+    log: (line) => same.push(line),
+  });
+  assert.deepEqual([more.verdict, more.rating, same], ["request-changes", 4, []]);
+  // Both blocking, but the block saying less than the markdown: read from the markdown, logged.
+  // A high finding the block has as a medium one elsewhere, or downgraded at its place; one of
+  // two blocking findings; a low finding or a better rating than the markdown's; a blocking
+  // comment the block lacks.
+  const sql = "- **high** `a.mjs:1`: SQL injection.";
+  const two = `${sql}\n- **high** \`c.mjs:3\`: another.\n\nRating: 4/10\nVerdict: request-changes`;
+  const finding = (severity, path, line) => ({ severity, path, line, text: "x." });
+  const less = [
+    [
+      asked.replace("bug.", "SQL injection."),
+      { findings: [finding("medium", "b.mjs", 2)], rating: 8 },
+    ],
+    [asked, { findings: [finding("medium", "a.mjs", 1)], rating: 4 }],
+    [two, { findings: [finding("high", "a.mjs", 1)], rating: 4 }],
+    [two, { findings: [finding("high", "a.mjs", 1), finding("high", "b.mjs", 9)], rating: 4 }],
+    [
+      "- **low** `a.mjs:1`: typo.\n\nRating: 4/10\nVerdict: comment",
+      { findings: [], rating: 4, verdict: "comment" },
+    ],
+    [
+      "## Must fix\n\nNone.\n\nRating: 4/10\nVerdict: comment",
+      { findings: [], rating: 10, verdict: "comment" },
+    ],
+    [
+      "## Must fix\n\nNone.\n\n## Comments\n\n- **blocking** `a.mjs:5`: why?\n\nRating: 8/10\nVerdict: request-changes",
+      {
+        findings: [],
+        rating: 8,
+        comments: [{ blocking: false, path: "a.mjs", line: 5, text: "why?" }],
+      },
+    ],
+  ];
+  for (const [markdown, data] of less) {
+    const said = [];
+    const review = parseReview(
+      `${markdown}\n\n${block({ ...notes, comments: [], verdict: "request-changes", ...data })}`,
+      { log: (line) => said.push(line) },
+    );
+    assert.deepEqual(
+      [review.verdict, review.findings, review.rating, said],
+      [
+        data.verdict ?? "request-changes",
+        parseReview(markdown).findings,
+        parseReview(markdown).rating,
+        ["the review's verdict block says less than its markdown: read from its markdown"],
+      ],
+      markdown,
+    );
+  }
+  // Saying more than the markdown, at the same places: the block's review, nothing logged.
+  const moreSaid = [];
+  const fuller = parseReview(
+    `${sql}\n\nRating: 4/10\nVerdict: request-changes\n\n${block({ ...notes, comments: [], findings: [finding("critical", "a.mjs", 1), finding("low", "d.mjs", 4)], rating: 3 })}`,
+    { log: (line) => moreSaid.push(line) },
+  );
+  assert.deepEqual([fuller.findings.length, fuller.rating, moreSaid], [2, 3, []]);
+  // Markdown and block agreeing on request-changes over nothing blocking: comment, as either
+  // alone reads, nothing logged. Tolerated medium findings, and Must fix None. with follow-ups.
+  const quiet = [];
+  const tolerant = parseReview(
+    `- **medium** \`a.mjs:1\`: an edge case.\n\nRating: 7/10\nVerdict: request-changes\n\n${block({ ...notes, comments: [], findings: [{ severity: "medium", path: "a.mjs", line: 1, text: "an edge case." }], rating: 7 })}`,
+    { allowed: "medium", log: (line) => quiet.push(line) },
+  );
+  assert.deepEqual([tolerant.verdict, reviewEvent(tolerant)], ["comment", "COMMENT"]);
+  const followUpsOnly = { ...notes, comments: [], rating: 9 };
+  const noneMd = `Fine.\n\n## Must fix\n\nNone.\n\n## Follow-ups\n\n- **Share the retry helper with the uploader** \`lib/upload.mjs:30\`: the same loop twice.\n- **Docs: the cache's limits**: nothing says how big it gets.\n\nRating: 9/10\nVerdict: request-changes`;
+  assert.equal(parseReview(noneMd).verdict, "comment");
+  const agreeing = parseReview(`${noneMd}\n\n${block(followUpsOnly)}`, {
+    log: (line) => quiet.push(line),
+  });
+  assert.deepEqual([agreeing.verdict, agreeing.followUps.length, quiet], ["comment", 2, []]);
+  // Agreeing on request-changes beside an off-format markdown, unsure alone (a stray section, no
+  // None. under Must fix): the typed block decides, comment, nothing logged.
+  const offFormat = [];
+  const tolerantBlock = {
+    findings: [finding("medium", "a.mjs", 1)],
+    followUps: [],
+    comments: [],
+    rating: 7,
+    verdict: "request-changes",
+  };
+  const caseA = parseReview(
+    `## Must fix\n\n- **medium** \`a.mjs:1\`: x.\n\n## Follow-ups\n\nNone.\n\n## Comments\n\nNone.\n\n## Checks\n\nThe tests weren't run.\n\nRating: 7/10\nVerdict: request-changes\n\n${block(tolerantBlock)}`,
+    { allowed: "medium", log: (line) => offFormat.push(line) },
+  );
+  const followUp = "- **Docs: the cache's limits**: nothing says how big it gets.";
+  const followUpBlock = {
+    findings: [],
+    followUps: [{ title: "Docs: the cache's limits", text: "nothing says how big it gets." }],
+    comments: [],
+    rating: 9,
+    verdict: "request-changes",
+  };
+  const caseBMd = `## Follow-ups\n\n${followUp}\n\nRating: 9/10\nVerdict: request-changes`;
+  assert.equal(parseReview(caseBMd).verdict, "request-changes");
+  const caseB = parseReview(`${caseBMd}\n\n${block(followUpBlock)}`, {
+    log: (line) => offFormat.push(line),
+  });
+  assert.deepEqual(
+    [caseA.verdict, caseB.verdict, caseB.followUps.length, offFormat],
+    ["comment", "comment", 1, []],
+  );
+  // A block without the markdown's follow-up (an issue that would never be filed): the markdown.
+  const dropped = [];
+  const keptFollowUp = parseReview(
+    `## Must fix\n\nNone.\n\n${caseBMd.replace("request-changes", "comment")}\n\n${block({ ...followUpBlock, followUps: [], verdict: "comment" })}`,
+    { log: (line) => dropped.push(line) },
+  );
+  assert.deepEqual(
+    [keptFollowUp.followUps.map((f) => f.title), dropped],
+    [
+      ["Docs: the cache's limits"],
+      ["the review's verdict block says less than its markdown: read from its markdown"],
+    ],
+  );
+  // A title's bold and a text's blank lines are dropped: the posted review reads them back.
+  const styled = {
+    ...notes,
+    followUps: [{ title: "Use the **x** helper", text: "first para.\n\nsecond para." }],
+  };
+  const read2 = parseReview(block(styled));
+  assert.deepEqual(read2.followUps, [
+    { title: "Use the x helper", path: null, line: null, text: "first para.\nsecond para." },
+  ]);
+  assert.deepEqual(parsePostedReview(reviewBody(read2, "", "f")).followUps, read2.followUps);
+  // A follow-up saying there is none files nothing; the last block is the one read.
+  const none = { ...notes, followUps: [{ title: "None.", text: "nothing to file." }] };
+  const last = parseReview(`${block(SECTIONS_BLOCK)}\n\n${block(none)}`);
+  assert.deepEqual([last.followUps, last.verdict], [[], "comment"]);
+  // Posted as a markdown review is, and read back the same (its blocking comments first).
+  const posted = parsePostedReview(reviewBody(read, stray, "f"));
+  assert.deepEqual(
+    [posted.findings, posted.followUps, posted.comments, posted.verdict],
+    [read.findings, read.followUps, read.comments.toReversed(), read.verdict],
+  );
+  assert.deepEqual(logged, []);
+});
+
+test("parseReview: prompts/review.md's example reads from its block as from its markdown", () => {
+  const prompt = readFileSync(new URL("../prompts/review.md", import.meta.url), "utf8");
+  const example = /^````markdown\n([^]*?)^````$/m.exec(prompt)[1];
+  assert.match(example, /^```json deckhand-review$/m);
+  const logged = [];
+  const fromBlock = parseReview(example, { log: (line) => logged.push(line) });
+  assert.deepEqual(logged, []);
+  const markdown = example.replace(/^```json deckhand-review$[^]*?^```$/m, "");
+  assert.doesNotMatch(markdown, /"severity"/);
+  // The same review, but for the markdown's line breaks inside an item.
+  const flat = (review) =>
+    JSON.parse(JSON.stringify(review), (k, v) => (k === "text" ? v.replace(/\s+/g, " ") : v));
+  assert.deepEqual(flat(fromBlock), flat(parseReview(markdown)));
+  assert.equal(fromBlock.findings.length, 2);
+});
+
+test("parseReview: a verdict block that doesn't validate is logged, the markdown read, its request-changes kept", () => {
+  const clean = "Fine.\n\n## Must fix\n\nNone.\n\nRating: 10/10\nVerdict: comment";
+  const invalid = [
+    ["{ not json", "not JSON"],
+    ["[]", "not an object"],
+    [{ ...SECTIONS_BLOCK, rating: 7.25 }, "`rating`"],
+    [{ ...SECTIONS_BLOCK, rating: "9" }, "`rating`"],
+    [{ ...SECTIONS_BLOCK, verdict: "approved" }, "`verdict`"],
+    [{ ...SECTIONS_BLOCK, comments: undefined }, "`comments` isn't a list"],
+    [{ ...SECTIONS_BLOCK, findings: [{ severity: "blocker", text: "x" }] }, "`findings[0]`"],
+    [{ ...SECTIONS_BLOCK, findings: [{ severity: "High", text: "x" }] }, "`findings[0]`"],
+    [{ ...SECTIONS_BLOCK, findings: [{ severity: "high" }] }, "`findings[0]`"],
+    [
+      { ...SECTIONS_BLOCK, findings: [{ severity: "high", path: "a.mjs", text: "x" }] },
+      "`findings[0]`",
+    ],
+    [
+      { ...SECTIONS_BLOCK, findings: [{ severity: "high", path: "a b", line: 1, text: "x" }] },
+      "`findings[0]`",
+    ],
+    [{ ...SECTIONS_BLOCK, followUps: [{ text: "x" }] }, "`followUps[0]`"],
+    [{ ...SECTIONS_BLOCK, comments: [{ blocking: "yes", text: "x" }] }, "`comments[0]`"],
+  ];
+  for (const [data, why] of invalid) {
+    const logged = [];
+    const review = parseReview(`${clean}\n\n${block(data)}`, { log: (line) => logged.push(line) });
+    assert.equal(logged.length, 1, why);
+    assert.match(logged[0], /^the review's verdict block doesn't validate \(/);
+    assert.ok(logged[0].includes(why), `${logged[0]} / ${why}`);
+    // The markdown's items, and the block's request-changes, when it said so, kept.
+    assert.deepEqual(review.findings, [], why);
+    const verdict = typeof data === "object" && !Array.isArray(data) ? data.verdict : null;
+    assert.equal(
+      review.verdict,
+      verdict === "request-changes" ? "request-changes" : "comment",
+      why,
+    );
+  }
+  // An invalid block's "request changes", spelt as the markdown may: kept too.
+  const spelt = { ...SECTIONS_BLOCK, verdict: "request changes" };
+  assert.equal(parseReview(`${clean}\n\n${block(spelt)}`).verdict, "request-changes");
+  // Unreadable JSON that still says request-changes: kept too.
+  const broken = parseReview(`${clean}\n\n${block('{ "verdict": "request-changes", }')}`);
+  assert.equal(broken.verdict, "request-changes");
+  // A failed block puts the markdown in doubt: its request-changes stands even where the markdown
+  // alone would read comment (None. and nothing else).
+  const none = clean.replace("Verdict: comment", "Verdict: request-changes");
+  assert.equal(parseReview(none).verdict, "comment");
+  assert.equal(parseReview(`${none}\n\n${block("{")}`).verdict, "request-changes");
+  // An unclosed block runs to the end: no markdown after it, so no verdict, as unparsed.
+  const logged = [];
+  const unclosed = `${clean.replace(/\nRating[^]*/, "")}\n\n\`\`\`json deckhand-review\n${JSON.stringify(SECTIONS_BLOCK)}\nRating: 9/10\nVerdict: comment`;
+  assert.equal(parseReview(unclosed, { log: (line) => logged.push(line) }), null);
+  assert.equal(logged.length, 1);
+  // No block at all: the markdown as before, nothing logged; a plain json fence is no block.
+  const plain = `${SECTIONS}\n\`\`\`json\n${JSON.stringify(SECTIONS_BLOCK)}\n\`\`\``;
+  const quiet = [];
+  const review = parseReview(plain, { log: (line) => quiet.push(line) });
+  assert.deepEqual([review.findings, quiet], [parseReview(SECTIONS).findings, []]);
+});
+
+test("postReview: a verdict block that doesn't validate is logged with its pull request", async () => {
+  const gh = fakeGitHub();
+  const logged = [];
+  const text = `${SECTIONS}\n${block({ ...SECTIONS_BLOCK, rating: 11 })}`;
+  const posted = await postReview(
+    { ...gh, log: (line) => logged.push(line) },
+    "org/repo",
+    5,
+    text,
+    "f",
+  );
+  assert.equal(posted.event, "REQUEST_CHANGES");
+  assert.deepEqual(posted.review.comments, parseReview(SECTIONS).comments);
+  assert.deepEqual(logged, [
+    "org/repo#5: the review's verdict block doesn't validate (`rating` isn't a number from 0 to 10, with one decimal at most): read from its markdown",
+  ]);
+});
