@@ -15,7 +15,8 @@ comments comes back to you as the next message of this conversation.
 2. Propose a full `.deckhand.yaml` in one fenced `yaml` block, grounded in what you read,
    with a one-line comment giving the reason for each key. Typically: `setup` (installing
    dependencies, starting services), `caches` (the package managers' caches),
-   `instructions` and `dockerfile` when needed. Leave
+   `instructions` and `dockerfile` when needed, and `language` (such as `French`) when the
+   repository's issues, pull requests or docs aren't written in English. Leave
    out keys whose default is right; say in one line which defaults you kept on purpose.
    - A **`.deckhand/Dockerfile`** in its own block when the project needs a toolchain beyond
      the base image (Node 26, git, gh, jq, ripgrep, Playwright with Chromium), following

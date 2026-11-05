@@ -189,6 +189,9 @@ export function fileLines(text) {
 const SYNTAX_FIX = "Fix the YAML: until then, none of the file is read.";
 const KEY_FIX = "Change the value as the message says, or remove the key to get the default.";
 
+// `language`: a name or code ("French", "pt-BR", "Simplified Chinese"), not a paragraph.
+const MAX_LANGUAGE = 40;
+
 // Non-empty text, else an error.
 function text(key, value, fail) {
   if (typeof value === "string" && value.trim()) return value.trim();
@@ -708,6 +711,21 @@ export const KEYS = {
     display: orNone,
   },
   instructions: { field: "instructions", default: null, parse: pathKey, display: orNone },
+  // The language its runs write in for people (prompts.mjs languageLine()); none: English.
+  language: {
+    field: "language",
+    default: null,
+    parse: (value, { key, settings, fail }) => {
+      const name = typeof value === "string" ? value.trim() : "";
+      if (name && name.length <= MAX_LANGUAGE && !/[\r\n]/.test(name)) settings.language = name;
+      else
+        fail(
+          key,
+          `expected a language's name or code on one line (French, fr), at most ${MAX_LANGUAGE} characters`,
+        );
+    },
+    display: ({ value, row }) => row(value ?? "none: English"),
+  },
   dockerfile: {
     field: "dockerfile",
     default: null,

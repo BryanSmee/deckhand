@@ -9,7 +9,8 @@ subagents and commands in the foreground, and end your turn only with that final
 turn that ends while work still runs in the background answers too early.
 
 Write in English everything a run produces (replies, pull requests, commit messages, code
-comments) unless the repository's instructions say otherwise.
+comments) unless the repository's instructions say otherwise, or its `.deckhand.yaml` sets a
+`language` (your prompt then ends with what to write in it).
 
 Deckhand's own source, the version that runs here, is in `/usr/local/share/deckhand/src`
 (read-only): read it when a task touches a `.deckhand.yaml` or `.deckhand/Dockerfile`.
