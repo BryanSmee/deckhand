@@ -1,20 +1,21 @@
 // The graph's legend, a small card floating on its canvas: each tone, and the arrow.
 import { LOOKS } from "./graphModel";
+import { t } from "./i18n";
 import { StatusDot } from "./ui/Status";
 import styles from "./Graph.module.css";
 
 export function GraphLegend() {
   return (
-    <ul class={styles.legend} aria-label="Legend">
+    <ul class={styles.legend} aria-label={t("graph.legend")}>
       {LOOKS.map(({ tone, name, means }) => (
-        <li key={tone} title={means}>
+        <li key={tone} title={t(means)}>
           <StatusDot tone={tone} />
-          {name}
+          {t(name)}
         </li>
       ))}
-      <li title="It starts once the issue the arrow comes from is done">
+      <li title={t("graph.waitsForHelp")}>
         <span class={styles.arrowKey} aria-hidden="true" />
-        waits for
+        {t("graph.waitsFor")}
       </li>
     </ul>
   );

@@ -12,6 +12,7 @@
 // (asking first), Shift R reviews its pull request again and Shift F asks for one more fix
 // round once its review loop is over, [ and ] go through its thread, every run (those without a
 // tab too), its policies and its review.
+import type { ComponentChildren } from "preact";
 import { useEffect, useRef, useState } from "preact/hooks";
 import { useCan } from "./access";
 import { sendCancel, sendDismiss, sendRerun, sendReview, useRunLog } from "./api";
@@ -26,6 +27,7 @@ import {
   loopLine,
   modeOf,
   PR_NAMES,
+  prTitle,
   reviewOffers,
   reviewOutdated,
   runName,
@@ -34,6 +36,8 @@ import {
   titleOf,
 } from "./format";
 import { type Handlers, useShortcuts, withKey } from "./keys";
+// `tr`: t() where the task is called `t`.
+import { and, locale, t as tr, tx } from "./i18n";
 import { Log } from "./Log";
 import { copyText, downloadText } from "./logExport";
 import { logSections, plainText } from "./logModel";
@@ -130,7 +134,7 @@ export function Detail({
   if (!t) {
     return (
       <div class={styles.detail}>
-        <p class={styles.placeholder}>Pick an issue or pull request</p>
+        <p class={styles.placeholder}>{tr("detail.pick")}</p>
       </div>
     );
   }
@@ -168,7 +172,7 @@ export function Detail({
     const ok = await copyText(logText());
     setSent({
       key: t.key,
-      message: ok ? "Log copied." : "Couldn't copy the log: download it instead.",
+      message: ok ? tr("detail.logCopied") : tr("detail.copyFailed"),
       error: !ok,
     });
   };
@@ -183,7 +187,7 @@ export function Detail({
     const said = await sendCancel(t.repo, t.number!, isPrTask(t));
     setSent({
       key: t.key,
-      message: said.error ?? said.message ?? "Stopping.",
+      message: said.error ?? said.message ?? tr("detail.stoppingSent"),
       error: !!said.error,
     });
     if (!said.error) await refresh?.();
@@ -192,7 +196,7 @@ export function Detail({
   const again = async (run: Run) => {
     setRerunning(run.id);
     const said = await sendRerun(t.repo, run.id);
-    setSent({ key: t.key, message: said.error ?? "Rerun queued.", error: !!said.error });
+    setSent({ key: t.key, message: said.error ?? tr("detail.rerunQueued"), error: !!said.error });
     if (!said.error) await refresh?.();
     setRerunning(null);
   };
@@ -208,7 +212,7 @@ export function Detail({
   const review = async (action: "review" | "fix") => {
     setReviewing({ key: t.key, action });
     const said = await sendReview(t.repo, t.pr!.number, action);
-    const done = action === "fix" ? "Fix round queued." : "Review queued.";
+    const done = action === "fix" ? tr("detail.fixQueued") : tr("detail.reviewQueued");
     setSent({ key: t.key, message: said.error ?? said.message ?? done, error: !!said.error });
     if (!said.error) await refresh?.();
     setReviewing(null);
@@ -220,30 +224,30 @@ export function Detail({
           variant="primary"
           size={size}
           pending={pending === "fix"}
-          pendingLabel="Fixing…"
+          pendingLabel={tr("detail.fixing")}
           disabled={pending === "review"}
-          title="One more fix run on the last review's findings, then its review"
+          title={tr("detail.fixHelp")}
           shortcut="fix"
           onClick={() => review("fix")}
         >
-          Fix
+          {tr("detail.fix")}
         </Button>
       )}
       {offers.review && (
         <Button
           size={size}
           pending={pending === "review"}
-          pendingLabel="Reviewing…"
+          pendingLabel={tr("detail.reviewing")}
           disabled={pending === "fix"}
           title={
             outdated
-              ? `Reviews the new head, ${shortSha(outdated.head)}, as /mode review does`
-              : "Reviews the pull request's head now, as /mode review does"
+              ? tr("detail.reviewHeadHelp", { sha: shortSha(outdated.head) })
+              : tr("detail.reviewHelp")
           }
           shortcut="review"
           onClick={() => review("review")}
         >
-          Review
+          {tr("detail.review")}
         </Button>
       )}
     </>
@@ -252,7 +256,7 @@ export function Detail({
   const dismiss = async (run: Run, undo = false) => {
     setDismissing(run.id);
     const said = await sendDismiss(t.repo, run.id, undo);
-    const done = undo ? "Dismissal undone." : "Dismissed: it no longer waits on you.";
+    const done = undo ? tr("detail.dismissUndone") : tr("detail.dismissedSent");
     setSent({ key: t.key, message: said.error ?? done, error: !!said.error });
     if (!said.error) await refresh?.();
     setDismissing(null);
@@ -261,13 +265,13 @@ export function Detail({
   const many = t.runs.length > ALL_TABS;
   const tabbed = many ? t.runs.filter((x, i) => i === 0 || x.id === r?.id) : t.runs;
   const tabs = [
-    ...(discussion ? [{ id: THREAD, label: "Thread" }] : []),
+    ...(discussion ? [{ id: THREAD, label: tr("detail.thread") }] : []),
     ...tabbed.map((x) => ({
       id: x.id,
       // Narrow, it shrinks: its name cut short, which its title and All runs have whole.
       attrs: {
         class: styles.runTab,
-        title: `${x === t.runs[0] ? "Latest: follows the next runs" : x.id}\n${runName(x)}`,
+        title: `${x === t.runs[0] ? tr("detail.latestTab") : x.id}\n${runName(x)}`,
       },
       label: (
         <span class={styles.run}>
@@ -275,7 +279,7 @@ export function Detail({
           <StatusDot state={x.status} />
           <span class={styles.name}>
             {runName(x)}
-            {x.speed === "fast" && " · fast"}
+            {x.speed === "fast" && ` · ${tr("detail.fast")}`}
           </span>{" "}
           <span class={styles.ago}>
             {x.status === "running" ? duration(x, now) : ago(x.startedAt, now)}
@@ -283,19 +287,22 @@ export function Detail({
         </span>
       ),
     })),
-    ...(decided ? [{ id: POLICIES, label: "Policies", count: t.decisions!.length }] : []),
-    ...(reviewed ? [{ id: REVIEW, label: "Review" }] : []),
+    ...(decided
+      ? [{ id: POLICIES, label: tr("detail.policies"), count: t.decisions!.length }]
+      : []),
+    ...(reviewed ? [{ id: REVIEW, label: tr("detail.reviewTab") }] : []),
   ];
-  // "Thread, runs, policies and review", what the tabs are.
-  const named = [
-    discussion && "thread",
-    "runs",
-    decided && "policies",
-    reviewed && "review",
-  ].filter((x): x is string => !!x);
-  const listed =
-    named.length > 1 ? `${named.slice(0, -1).join(", ")} and ${named.at(-1)}` : named[0];
-  const tabsLabel = listed[0].toUpperCase() + listed.slice(1);
+  // "Thread, runs, policies and review", what the tabs are: its first letter as the locale
+  // writes it in capital.
+  const listed = and(
+    [
+      discussion && tr("detail.tabsThread"),
+      tr("detail.tabsRuns"),
+      decided && tr("detail.tabsPolicies"),
+      reviewed && tr("detail.tabsReview"),
+    ].filter((x): x is string => !!x),
+  );
+  const tabsLabel = listed.charAt(0).toLocaleUpperCase(locale()) + listed.slice(1);
   const pick = (id: string) => {
     const aside = id === POLICIES || id === REVIEW;
     setPaneOf(aside ? { key: t.key, id } : null);
@@ -307,7 +314,7 @@ export function Detail({
   keys.github = () => (url ? void window.open(url, "_blank", "noreferrer") : false);
   keys.answer = () => {
     const field = root.current?.querySelector<HTMLElement>(
-      "form[aria-label='Open questions'] input, form[aria-label='Open questions'] textarea",
+      "form[data-questions] input, form[data-questions] textarea",
     );
     if (!field) return false;
     field.focus();
@@ -345,13 +352,13 @@ export function Detail({
               icon={<Icon.ChevronLeft size={18} />}
               onClick={onBack}
             >
-              Back
+              {tr("detail.back")}
             </Button>
             {menu && (
               <IconButton
                 variant="ghost"
                 size="touch"
-                label="More: open on GitHub, copy, download"
+                label={tr("detail.more")}
                 icon={<Icon.More size={20} />}
                 aria-haspopup="dialog"
                 onClick={() => setMore(true)}
@@ -376,7 +383,7 @@ export function Detail({
                     <span class={styles.mono}>#{t.number}</span>
                   </>
                 )}
-                {mode && ` · ${mode} mode`}
+                {mode && ` · ${tr("detail.mode", { mode })}`}
               </span>
               <h2 class={styles.title}>
                 {url ? (
@@ -392,13 +399,13 @@ export function Detail({
               {url && !menu && (
                 <a
                   class={buttonClass("secondary", size)}
-                  title={withKey("Open on GitHub", "github")}
+                  title={withKey(tr("detail.openGithub"), "github")}
                   href={url}
                   target="_blank"
                   rel="noreferrer"
                 >
                   <Icon.External size={14} />
-                  GitHub
+                  {tr("detail.github")}
                 </a>
               )}
               {failed && thread && (
@@ -406,23 +413,23 @@ export function Detail({
                   variant="primary"
                   size={size}
                   pending={rerunning === failed.id}
-                  pendingLabel="Rerunning…"
-                  title="Runs it again with the same comments and mode"
+                  pendingLabel={tr("detail.rerunning")}
+                  title={tr("detail.rerunHelp")}
                   shortcut="rerun"
                   onClick={() => again(failed)}
                 >
-                  Rerun
+                  {tr("detail.rerun")}
                 </Button>
               )}
               {dismissable && thread && (
                 <Button
                   size={size}
                   pending={dismissing === dismissable.id}
-                  pendingLabel="Dismissing…"
-                  title="It stops waiting on you until another run"
+                  pendingLabel={tr("detail.dismissing")}
+                  title={tr("detail.dismissHelp")}
                   onClick={() => dismiss(dismissable)}
                 >
-                  Dismiss
+                  {tr("detail.dismiss")}
                 </Button>
               )}
               {stoppable && (
@@ -431,12 +438,12 @@ export function Detail({
                   size={size}
                   icon={<Icon.Stop size={11} />}
                   pending={stopping === t.key}
-                  pendingLabel="Stopping…"
-                  title="Stops the run now: what it did since its last push is lost"
+                  pendingLabel={tr("detail.stopping")}
+                  title={tr("detail.stopHelp")}
                   shortcut="stop"
                   onClick={() => setConfirming(t.key)}
                 >
-                  Stop
+                  {tr("detail.stop")}
                 </Button>
               )}
               {unqueue && (
@@ -445,12 +452,12 @@ export function Detail({
                   size={size}
                   icon={<Icon.Stop size={11} />}
                   pending={stopping === t.key}
-                  pendingLabel="Removing…"
-                  title="Takes it out of the queue: its queued comments are dropped"
+                  pendingLabel={tr("detail.removing")}
+                  title={tr("detail.unqueueHelp")}
                   shortcut="stop"
                   onClick={stop}
                 >
-                  Remove from queue
+                  {tr("detail.unqueue")}
                 </Button>
               )}
               {stoppable && asking && (
@@ -467,18 +474,20 @@ export function Detail({
           <div class={styles.facts}>
             <StatusBadge state={t.state} {...taskStatus(t)} />
             {loopLine(t) && <span>{loopLine(t)}</span>}
-            {held && <StatusBadge tone="input" label="Not merged automatically" />}
+            {held && <StatusBadge tone="input" label={tr("detail.held")} />}
             {r && (
               <span>
-                Started {dayTime(r.startedAt, now, false)} ·{" "}
-                <span class={styles.mono}>{duration(r, now)}</span>
+                {tx("detail.started", {
+                  when: dayTime(r.startedAt, now, false),
+                  took: <span class={styles.mono}>{duration(r, now)}</span>,
+                })}
               </span>
             )}
             {r?.model && thread && (
               <span>
                 {r.model}
-                {r.effort && ` · ${r.effort} effort`}
-                {r.speed === "fast" && " · fast"}
+                {r.effort && ` · ${tr("detail.effort", { effort: r.effort })}`}
+                {r.speed === "fast" && ` · ${tr("detail.fast")}`}
                 {r.auth && " · "}
                 <AuthTag auth={r.auth} />
               </span>
@@ -492,44 +501,49 @@ export function Detail({
             )}
             {t.dismissed && t.runs[0] && (
               <span class={styles.dismissed}>
-                Dismissed by @{t.dismissed.by} {ago(t.dismissed.at, now)}
+                {tr("detail.dismissedBy", { user: t.dismissed.by, ago: ago(t.dismissed.at, now) })}
                 {manages && (
                   <Button
                     variant="ghost"
                     size="small"
                     pending={dismissing === t.runs[0].id}
-                    pendingLabel="Undoing…"
-                    title="Takes the dismissal back: a failure that still asks waits on you again"
+                    pendingLabel={tr("detail.undoing")}
+                    title={tr("detail.undoHelp")}
                     onClick={() => dismiss(t.runs[0], true)}
                   >
-                    Undo
+                    {tr("detail.undo")}
                   </Button>
                 )}
               </span>
             )}
             {!!t.waitingFor?.length && (
               <span>
-                Next run after{" "}
-                {t.waitingFor.map((n, i) => (
-                  <span key={n}>
-                    {i > 0 && (i === t.waitingFor!.length - 1 ? " and " : ", ")}
-                    <a href={`${github}/${t.repo}/issues/${n}`} target="_blank" rel="noreferrer">
-                      #{n}
-                    </a>
-                  </span>
-                ))}
+                {tx("detail.nextRunAfter", {
+                  issues: linkList(
+                    t.waitingFor.map((n) => (
+                      <a
+                        key={n}
+                        href={`${github}/${t.repo}/issues/${n}`}
+                        target="_blank"
+                        rel="noreferrer"
+                      >
+                        #{n}
+                      </a>
+                    )),
+                  ),
+                })}
               </span>
             )}
             {url && t.replyTo !== t.number && t.replyTo !== t.pr?.number && (
               <a href={url} target="_blank" rel="noreferrer">
-                Replies on #{t.replyTo}
+                {tr("detail.repliesOn", { number: t.replyTo! })}
               </a>
             )}
           </div>
           <ReviewRounds task={t} actions={reviewActions || undefined} />
           {reply && (thread || reply.id !== r?.id) && (
-            <section class={styles.reply} aria-label="Last reply">
-              <h3>Last reply</h3>
+            <section class={styles.reply} aria-label={tr("detail.lastReply")}>
+              <h3>{tr("detail.lastReply")}</h3>
               <p>{reply.summary}</p>
             </section>
           )}
@@ -557,7 +571,7 @@ export function Detail({
         </header>
       )}
       {more && r && (
-        <Sheet title="Run log" onClose={() => setMore(false)}>
+        <Sheet title={tr("detail.runLog")} onClose={() => setMore(false)}>
           <div class={styles.menu}>
             {url && (
               <a
@@ -567,7 +581,7 @@ export function Detail({
                 rel="noreferrer"
               >
                 <Icon.External size={18} />
-                Open on GitHub
+                {tr("detail.openGithub")}
               </a>
             )}
             <Button
@@ -577,7 +591,7 @@ export function Detail({
               icon={<Icon.Copy size={18} />}
               onClick={copyLog}
             >
-              Copy the log
+              {tr("detail.copyLog")}
             </Button>
             <Button
               variant="ghost"
@@ -589,7 +603,7 @@ export function Detail({
                 downloadText(`${r.id}.txt`, logText());
               }}
             >
-              Download as .txt
+              {tr("detail.download")}
             </Button>
           </div>
         </Sheet>
@@ -651,17 +665,17 @@ export function Detail({
             />
           ) : (
             <p class={styles.placeholder}>
-              Its log isn't yours to read: you don't have <code>logs:read</code> on {t.repo}.
+              {tx("detail.noLogs", { permission: <code>logs:read</code>, repo: t.repo })}
             </p>
           )}
         </div>
       ) : asked ? null : questioned ? (
-        <p class={styles.placeholder}>Waiting for answers to its open questions</p>
+        <p class={styles.placeholder}>{tr("detail.waitingAnswers")}</p>
       ) : t.state === "needs-input" ? (
         // Labelled for its open questions (an inbox run filed it, or someone wrote it so).
-        <p class={styles.placeholder}>Waiting for answers to its open questions on GitHub</p>
+        <p class={styles.placeholder}>{tr("detail.waitingAnswersGithub")}</p>
       ) : (
-        <p class={styles.placeholder}>Waiting for the first run of {titleOf(t)} to start…</p>
+        <p class={styles.placeholder}>{tr("detail.waitingFirstRun", { title: titleOf(t) })}</p>
       )}
     </div>
   );
@@ -677,13 +691,20 @@ function PrLink({ pr }: { pr: PullRequest }) {
       href={pr.url}
       target="_blank"
       rel="noreferrer"
-      title={
-        auto ? `Pull request #${pr.number}, merged by Deckhand with no human review` : undefined
-      }
+      title={auto ? prTitle(pr) : undefined}
     >
       <Icon.Branch size={14} />
-      {auto ? "Merged by Deckhand" : PR_NAMES[pr.state]}{" "}
+      {auto ? tr("detail.mergedByDeckhand") : tr(PR_NAMES[pr.state])}{" "}
       <span class={styles.mono}>#{pr.number}</span>
     </a>
   );
+}
+
+// "#3", "#3 and #4", "#3, #4 and #5": links joined as the language does (and() in i18n.ts).
+function linkList(links: ComponentChildren[]): ComponentChildren {
+  if (links.length < 2) return links[0];
+  const first = links
+    .slice(0, -1)
+    .flatMap((link, i) => (i > 0 ? [tr("list.comma"), link] : [link]));
+  return tx("list.and", { first, last: links.at(-1)! });
 }

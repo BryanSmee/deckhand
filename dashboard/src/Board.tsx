@@ -48,6 +48,8 @@ import {
   workLists,
 } from "./graphModel";
 import { typesOf, useDropZone } from "./hooks";
+// `tr`: t() where a task is called `t`.
+import { t as tr, tx } from "./i18n";
 import { useHeldKey, useShortcuts, withKey } from "./keys";
 import { formatRoute } from "./route";
 import { Lanes } from "./Lanes";
@@ -301,25 +303,31 @@ export function Board({
       if (onEdge(everyLine, h.key, node.key, h.side)) {
         const move = moveOnto(everyLine, h.key, node.key, h.side);
         if (!move) return null;
-        text = `Move #${h.number} ${move.after ? "after" : "before"} ${nodeRef(node, false, 0)} in line`;
+        const where = move.after ? "drag.moveAfter" : "drag.moveBefore";
+        text = tr(where, { number: h.number!, node: nodeRef(node, false, 0) });
       } else if (queuesAfter(h.key, node)) {
-        text = `Queue #${h.number} after ${nodeRef(node, false, 0)}: it leaves the line`;
+        text = tr("drag.leaveLine", { number: h.number!, node: nodeRef(node, false, 0) });
       } else return null;
       return { text, x: box.x, y: box.y >= 30 ? box.y - 30 : box.y + shape.h + 6 };
     }
     if (node && node.number === h.number) return null;
-    const ref = h.number ? `#${h.number}` : "the issue";
+    const ref = h.number ? `#${h.number}` : tr("drag.theIssue");
     const parent = h.what === "new" && h.number !== null && isParent(work.backlog, h.number);
     const box = node && shape.boxes.find((b) => b.key === node.key);
+    // Its open questions answered first: the same action, said after "Answer #31, then".
+    const answers = h.what !== "waits" && asked(h.number);
     let text: string;
-    if (node) text = `${parent ? "Lay out" : "Queue"} ${ref} after ${nodeRef(node, false, 0)}`;
-    else if (h.what === "waits") text = `Remove ${ref}'s wait`;
-    else if (h.what === "brainstorm") text = `Start work on ${ref}`;
-    else if (parent) text = `Lay out ${ref} and its sub-issues`;
-    else text = `Start ${ref}${picked.mode ? ` in ${picked.mode}` : ""}`;
-    if (h.what !== "waits" && asked(h.number)) {
-      text = `Answer ${ref}, then ${text[0].toLowerCase()}${text.slice(1).replace(` ${ref}`, "")}`;
-    }
+    if (node) {
+      const after = { ref, node: nodeRef(node, false, 0) };
+      if (parent) text = tr(answers ? "drag.answerLayOutAfter" : "drag.layOutAfter", after);
+      else text = tr(answers ? "drag.answerQueueAfter" : "drag.queueAfter", after);
+    } else if (h.what === "waits") text = tr("drag.removeWait", { ref });
+    else if (h.what === "brainstorm")
+      text = tr(answers ? "drag.answerStartWork" : "drag.startWork", { ref });
+    else if (parent) text = tr(answers ? "drag.answerLayOut" : "drag.layOut", { ref });
+    else if (picked.mode)
+      text = tr(answers ? "drag.answerStartIn" : "drag.startIn", { ref, mode: picked.mode });
+    else text = tr(answers ? "drag.answerStart" : "drag.start", { ref });
     if (box) return { text, x: box.x, y: box.y >= 30 ? box.y - 30 : box.y + shape.h + 6 };
     // Over a card's ghost, or under it near the top: not on it.
     if (h.look) {
@@ -359,9 +367,7 @@ export function Board({
       const brainstorm = !!Number(e.dataTransfer?.getData(BRAINSTORM_TYPE));
       const number = droppedIssue(e.dataTransfer, [BRAINSTORM_TYPE, ISSUE_TYPE], github, repo);
       if (!number) {
-        setNotice(
-          `That isn't a link to one of ${repo}'s issues: drag an issue's card from the work queue, or its link.`,
-        );
+        setNotice(tr("board.notALink", { repo }));
         return;
       }
       dropped(number, targetAt(e.clientX, e.clientY), brainstorm ? "brainstorm" : "new");
@@ -507,7 +513,7 @@ export function Board({
     <Field
       as="select"
       class={styles.startIn}
-      label="Start in"
+      label={tr("board.startIn")}
       hideLabel={!narrow}
       size={narrow ? "touch" : "small"}
       value={chosen}
@@ -523,18 +529,23 @@ export function Board({
   );
   const closed = (
     <Switch
-      label="Show closed"
-      title={withKey(
-        "Issues closed as completed or not planned, and merged pull requests",
-        "closed",
-      )}
+      label={tr("board.showClosed")}
+      title={withKey(tr("board.showClosedHelp"), "closed")}
       checked={showClosed}
       onChange={onShowClosed}
     />
   );
   const views = [
-    { value: "graph" as const, label: "Graph", title: withKey("Graph", "view") },
-    { value: "lanes" as const, label: "Lanes", title: withKey("Lanes", "view") },
+    {
+      value: "graph" as const,
+      label: tr("board.graph"),
+      title: withKey(tr("board.graph"), "view"),
+    },
+    {
+      value: "lanes" as const,
+      label: tr("board.lanes"),
+      title: withKey(tr("board.lanes"), "view"),
+    },
   ];
 
   const target = hover?.target ?? null;
@@ -543,7 +554,7 @@ export function Board({
       <div
         ref={canvas}
         class={`${styles.canvas} ${zone.over || drag.moving ? styles.over : ""} ${spaced ? styles.grab : ""} ${panning ? styles.panning : ""}`}
-        aria-label="What waits for what"
+        aria-label={tr("board.canvas")}
         onPointerDownCapture={pan}
         {...zone.handlers}
       >
@@ -576,13 +587,16 @@ export function Board({
   const lanes = (
     <div class={styles.lanes}>
       {!state ? (
-        <p class={styles.empty}>Loading…</p>
+        <p class={styles.empty}>{tr("graph.loading")}</p>
       ) : !nodes.length && hidden ? (
         <p class={styles.empty}>
-          Nothing open here.{" "}
-          <button type="button" class={styles.show} onClick={() => onShowClosed(true)}>
-            Show closed issues
-          </button>
+          {tx("graph.nothingOpen", {
+            show: (
+              <button type="button" class={styles.show} onClick={() => onShowClosed(true)}>
+                {tr("graph.showClosedIssues")}
+              </button>
+            ),
+          })}
         </p>
       ) : (
         <Lanes
@@ -602,7 +616,11 @@ export function Board({
   return (
     <div class={`${styles.board} ${narrow ? styles.phone : ""}`} ref={root}>
       {!narrow &&
-        header?.(startsAny ? <span class={styles.startInBox}>Start in {startIn}</span> : null)}
+        header?.(
+          startsAny ? (
+            <span class={styles.startInBox}>{tx("board.startInBox", { select: startIn })}</span>
+          ) : null,
+        )}
       {asking?.task.questions && (
         <QuestionsDialog
           asking={{ ...asking, task: { ...asking.task, questions: asking.task.questions } }}
@@ -647,7 +665,7 @@ export function Board({
             <div class={styles.phoneBar}>
               <Segmented
                 class={styles.phoneViews}
-                label="Board view"
+                label={tr("board.view")}
                 options={[views[1], views[0]]}
                 value={view}
                 onChange={onView}
@@ -655,7 +673,7 @@ export function Board({
               <IconButton
                 variant="ghost"
                 size="touch"
-                label="Board options"
+                label={tr("board.options")}
                 aria-haspopup="dialog"
                 aria-expanded={options}
                 icon={<Icon.More size={20} />}
@@ -664,15 +682,15 @@ export function Board({
             </div>
           ) : (
             <div class={styles.toolbar}>
-              <Segmented label="Board view" options={views} value={view} onChange={onView} />
+              <Segmented label={tr("board.view")} options={views} value={view} onChange={onView} />
               {closed}
               {view === "graph" && (
                 <span class={styles.zoom}>
                   <IconButton
                     variant="ghost"
                     size="small"
-                    label="Zoom out"
-                    title={withKey("Zoom out", "zoom", 1)}
+                    label={tr("board.zoomOut")}
+                    title={withKey(tr("board.zoomOut"), "zoom", 1)}
                     icon={<Icon.Minus size={14} />}
                     disabled={zoom <= ZOOM.min}
                     onClick={() => setZoom(clampZoom(zoom - ZOOM.step))}
@@ -681,17 +699,17 @@ export function Board({
                     variant="ghost"
                     size="small"
                     class={styles.percent}
-                    title="Back to 100%"
-                    aria-label={`Zoom ${Math.round(zoom * 100)}%: back to 100%`}
+                    title={tr("board.zoomReset")}
+                    aria-label={tr("board.zoomResetLabel", { percent: Math.round(zoom * 100) })}
                     onClick={() => setZoom(1)}
                   >
-                    {Math.round(zoom * 100)}%
+                    {tr("board.percent", { percent: Math.round(zoom * 100) })}
                   </Button>
                   <IconButton
                     variant="ghost"
                     size="small"
-                    label="Zoom in"
-                    title={withKey("Zoom in", "zoom", 0)}
+                    label={tr("board.zoomIn")}
+                    title={withKey(tr("board.zoomIn"), "zoom", 0)}
                     icon={<Icon.Plus size={14} />}
                     disabled={zoom >= ZOOM.max}
                     onClick={() => setZoom(clampZoom(zoom + ZOOM.step))}
@@ -699,10 +717,10 @@ export function Board({
                   <Button
                     variant="ghost"
                     size="small"
-                    title={withKey("Fit", "zoom", 2)}
+                    title={withKey(tr("board.fit"), "zoom", 2)}
                     onClick={fit}
                   >
-                    Fit
+                    {tr("board.fit")}
                   </Button>
                 </span>
               )}
@@ -737,7 +755,7 @@ export function Board({
         )}
       </div>
       {options && (
-        <Sheet title="Board options" onClose={() => setOptions(false)}>
+        <Sheet title={tr("board.options")} onClose={() => setOptions(false)}>
           {startsAny && startIn}
           {closed}
         </Sheet>

@@ -22,7 +22,7 @@ import {
   when,
   whenTitle,
 } from "./format";
-import { t } from "./i18n";
+import { locale, t } from "./i18n";
 import { useShortcuts, useShortcutsOn, withKey } from "./keys";
 import { CiStatus } from "./CiStatus";
 import { ReviewMarks } from "./ReviewLoop";
@@ -72,8 +72,8 @@ export function TaskList({
   const [shortcuts] = useShortcutsOn();
   const input = () => box.current?.querySelector("input");
   // The chips count what the search finds: a chip's count is the rows it shows.
-  const found = tasks.filter((t) => matchesSearch(t, query));
-  const visible = found.filter((t) => inChip(chip, t));
+  const found = tasks.filter((task) => matchesSearch(task, query));
+  const visible = found.filter((task) => inChip(chip, task));
   // Named as their tabs are.
   const labels = new Map(repoTabs(tasks).map((r) => [r.repo.toLowerCase(), r.label]));
 
@@ -125,7 +125,7 @@ export function TaskList({
               title={withKey(t("taskList.filter", { name: t(c.name) }), "filter", i)}
               class={styles.chip}
               pressed={c.id === chip}
-              count={found.filter((t) => inChip(c.id, t)).length}
+              count={found.filter((task) => inChip(c.id, task)).length}
               onClick={() => onChip(c.id)}
             >
               {t(c.name)}
@@ -135,12 +135,12 @@ export function TaskList({
       </div>
       {visible.length ? (
         <ul class={styles.rows}>
-          {visible.map((t) => (
-            <li key={t.key}>
+          {visible.map((task) => (
+            <li key={task.key}>
               <Row
-                task={t}
-                current={t.key === selected}
-                repo={showRepo ? (labels.get(t.repo.toLowerCase()) ?? t.repo) : null}
+                task={task}
+                current={task.key === selected}
+                repo={showRepo ? (labels.get(task.repo.toLowerCase()) ?? task.repo) : null}
                 {...{ onSelect, now }}
               />
             </li>
@@ -163,13 +163,13 @@ export function TaskList({
 
 // What a row's second line says the task is: its mode ("work"), or its kind when that says
 // more ("brainstorm", "bug report"), with the repo's own mode after it.
-function kindOf(t: Task): string | null {
-  if (t.kind === "issue" || t.kind === "pr") return t.mode;
-  return [kindName(t).toLowerCase(), modeOf(t)].filter(Boolean).join(" · ");
+function kindOf(task: Task): string | null {
+  if (task.kind === "issue" || task.kind === "pr") return task.mode;
+  return [kindName(task).toLocaleLowerCase(locale()), modeOf(task)].filter(Boolean).join(" · ");
 }
 
 function Row({
-  task: t,
+  task,
   current,
   repo,
   onSelect,
@@ -181,8 +181,8 @@ function Row({
   onSelect: (key: string) => void;
   now: number;
 }) {
-  const { tone, label } = taskStatus(t);
-  const kind = kindOf(t);
+  const { tone, label } = taskStatus(task);
+  const kind = kindOf(task);
   const parts = [
     repo && (
       <span key="repo" class={styles.repo}>
@@ -191,38 +191,43 @@ function Row({
     ),
     kind && <span key="kind">{kind}</span>,
     // A pull request's own task: its number already says it.
-    t.pr && !isPrTask(t) && (
+    task.pr && !isPrTask(task) && (
       <span key="pr">
-        <span title={prTitle(t.pr)}>{prName(t.pr)}</span>
-        <CiStatus pr={t.pr} class={styles.ci} />
+        <span title={prTitle(task.pr)}>{prName(task.pr)}</span>
+        <CiStatus pr={task.pr} class={styles.ci} />
       </span>
     ),
-    loopLine(t) && <span key="loop">{loopLine(t)}</span>,
+    loopLine(task) && <span key="loop">{loopLine(task)}</span>,
   ].filter(Boolean);
   return (
-    <button type="button" class={styles.row} aria-current={current} onClick={() => onSelect(t.key)}>
-      <StatusDot state={t.state} tone={tone} class={styles.dot} />
-      <span class={styles.title} title={t.title ?? undefined}>
-        {titleOf(t)}
+    <button
+      type="button"
+      class={styles.row}
+      aria-current={current}
+      onClick={() => onSelect(task.key)}
+    >
+      <StatusDot state={task.state} tone={tone} class={styles.dot} />
+      <span class={styles.title} title={task.title ?? undefined}>
+        {titleOf(task)}
       </span>
-      <span class={styles.when} title={whenTitle(t, now) ?? undefined}>
-        {when(t, now)}
+      <span class={styles.when} title={whenTitle(task, now) ?? undefined}>
+        {when(task, now)}
       </span>
       <span class={styles.sub}>
-        <span class={styles.number}>{numberOf(t)}</span>
+        <span class={styles.number}>{numberOf(task)}</span>
         {/* A pull request's own task: its CI beside its number. */}
-        {t.pr && isPrTask(t) && <CiStatus pr={t.pr} class={styles.ci} />}
+        {task.pr && isPrTask(task) && <CiStatus pr={task.pr} class={styles.ci} />}
         {/* Picked by auto-pickup: its mark beside the number, where an ellipsis can't hide it. */}
-        {t.autoPickup && <AutoMark class={styles.auto} />}
+        {task.autoPickup && <AutoMark class={styles.auto} />}
         {parts.map((p, i) => (
           <Fragment key={i}>
-            {(i > 0 || numberOf(t)) && " · "}
+            {(i > 0 || numberOf(task)) && " · "}
             {p}
           </Fragment>
         ))}
       </span>
       <span class={`${styles.state} ${toneClass(tone)}`}>{label}</span>
-      {isReady(t) && <ReviewMarks task={t} class={styles.left} />}
+      {isReady(task) && <ReviewMarks task={task} class={styles.left} />}
     </button>
   );
 }

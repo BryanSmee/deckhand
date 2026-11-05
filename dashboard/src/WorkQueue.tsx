@@ -25,7 +25,7 @@ import {
   QUEUED_TYPE,
   queuedDrag,
 } from "./dnd";
-import { issueList, plural, sameRepo, STATE_NAMES, when } from "./format";
+import { issueList, sameRepo, STATE_NAMES, when } from "./format";
 import {
   alreadyThere,
   type BrainstormCard,
@@ -35,6 +35,9 @@ import {
   waitable,
 } from "./graphModel";
 import { typesOf, useDropZone } from "./hooks";
+// `tr`: t() where a task is called `t`.
+import { locale, t as tr } from "./i18n";
+import type { Plain } from "./locales";
 import type { OrderMove, Task, WorkAction } from "./types";
 import { AutoMark } from "./ui/AutoMark";
 import { Button, IconButton } from "./ui/Button";
@@ -85,17 +88,13 @@ interface Row {
   actions: RowAction[];
 }
 
-// A tab's hint: what its cards' drags do.
-const HINTS: Record<QueueTab, string> = {
-  backlog:
-    "Drag onto the board to start · onto a card to queue after it · onto the Brainstorm tab to brainstorm.",
-  brainstorm:
-    "Drag onto the board to start work · onto a card to queue after it · onto the Backlog tab to stop.",
-  waiting:
-    "On the board, drag a waiting card away to end its wait, or onto another card to wait for that one.",
-  answers: "Drag onto the board to answer and start · onto a card to answer and queue after it.",
-  queued:
-    "The order they start in when a slot frees · drag above or below another card to move it · onto a card on the board to queue after it · onto the Backlog tab to take it out. Brainstorms start first.",
+// A tab's hint: what its cards' drags do (its key: read when shown).
+const HINTS: Record<QueueTab, Plain> = {
+  backlog: "queue.hintBacklog",
+  brainstorm: "queue.hintBrainstorm",
+  waiting: "queue.hintWaiting",
+  answers: "queue.hintAnswers",
+  queued: "queue.hintQueued",
 };
 
 interface Props {
@@ -232,9 +231,7 @@ export function WorkQueue({
     (e) => {
       const number = droppedIssue(e.dataTransfer, [ISSUE_TYPE], github, repo);
       if (!number) {
-        onNotice(
-          `That isn't a link to one of ${repo}'s issues: drag an issue's card from the backlog, or its link.`,
-        );
+        onNotice(tr("queue.notIssueLink", { repo }));
         return;
       }
       if (cards.some((c) => c.number === number && sameRepo(c.repo, repo))) return;
@@ -255,7 +252,6 @@ export function WorkQueue({
   };
   const queuedActions = (t: Task): RowAction[] => {
     const i = movers.indexOf(t);
-    const ref = `#${t.number}`;
     const still = moving || blocked;
     // First of the work runs of every repo shown: Run next has nothing to pass.
     const next = t.key === nextKey;
@@ -265,9 +261,9 @@ export function WorkQueue({
         ? []
         : [
             {
-              label: "Run next",
+              label: tr("queue.runNext"),
               shortcut: "start",
-              aria: `Run ${ref} next`,
+              aria: tr("queue.runNextAria", { number: t.number! }),
               // A phone's row: three icons leave its title some room.
               iconOnly: touch,
               icon: touch ? <Icon.ToTop size={16} /> : <Icon.Play size={11} />,
@@ -275,16 +271,16 @@ export function WorkQueue({
               disabled: still || next,
             },
             {
-              label: "Move up",
-              aria: `Move ${ref} up`,
+              label: tr("queue.moveUp"),
+              aria: tr("queue.moveUpAria", { number: t.number! }),
               iconOnly: true,
               icon: <Icon.ChevronUp size={touch ? 18 : 14} />,
               run: () => move({ key: t.key, before: movers[i - 1].key }),
               disabled: still || i === 0,
             },
             {
-              label: "Move down",
-              aria: `Move ${ref} down`,
+              label: tr("queue.moveDown"),
+              aria: tr("queue.moveDownAria", { number: t.number! }),
               iconOnly: true,
               icon: <Icon.ChevronDown size={touch ? 18 : 14} />,
               run: () => move({ key: t.key, after: movers[i + 1].key }),
@@ -297,8 +293,8 @@ export function WorkQueue({
       ...(waitable(t) && starts(t.mode)
         ? [
             {
-              label: "After…",
-              aria: `Queue ${ref} after…`,
+              label: tr("queue.after"),
+              aria: tr("queue.afterAria", { number: t.number! }),
               after: (after: number) => act({ action: "queue", number: t.number!, after }),
               disabled: still || busy,
             },
@@ -307,8 +303,8 @@ export function WorkQueue({
       ...(unqueueable(t) && manages
         ? [
             {
-              label: "Back to backlog",
-              aria: `Take ${ref} out of the queue, back to the backlog`,
+              label: tr("queue.toBacklog"),
+              aria: tr("queue.toBacklogAria", { number: t.number! }),
               // An icon beside the others on a wide screen, the row on one line; in the menu on
               // a phone.
               iconOnly: !touch,
@@ -331,14 +327,16 @@ export function WorkQueue({
   };
   const queuedRows: Row[] = line.map((t) => {
     const mode = t.mode && t.mode !== "work" ? t.mode : null;
-    const first = t.startsFirst ? "starts first" : null;
+    const first = t.startsFirst ? tr("queue.startsFirst") : null;
     const drags = !blocked && !moving && manages && (reorderable(t) || unqueueable(t));
     return {
       key: t.key,
       number: t.number!,
       title: t.title,
       href: taskUrl(t),
-      meta: [`${ordinal(t.position!)} in line`, mode, first].filter(Boolean).join(" · "),
+      meta: [tr("queue.inLine", { position: ordinal(t.position!) }), mode, first]
+        .filter(Boolean)
+        .join(" · "),
       auto: t.autoPickup,
       queued: true,
       drag: drags ? queuedDrag(t.key, t.number!) : undefined,
@@ -356,25 +354,28 @@ export function WorkQueue({
         number: i.number,
         title: i.title,
         href: i.url,
-        meta: i.subIssues ? `${plural(i.subIssues, "sub-issue")} · start lays them out` : "",
+        meta: i.subIssues ? tr("queue.subIssues", { count: i.subIssues }) : "",
         drag:
           starts(picked.mode) || (brainstorms && starts("brainstorm"))
-            ? dragOf(ISSUE_TYPE, i.number, i.url, { status: "Backlog", title: i.title ?? "" })
+            ? dragOf(ISSUE_TYPE, i.number, i.url, {
+                status: tr("queue.dragBacklog"),
+                title: i.title ?? "",
+              })
             : undefined,
         actions: [
           ...only(
             starts(picked.mode),
             {
-              label: "Start",
+              label: tr("queue.start"),
               shortcut: "start",
-              aria: `Start #${i.number}`,
+              aria: tr("queue.startAria", { number: i.number }),
               icon: <Icon.Play size={11} />,
               run: () => act({ action: parent ? "plan" : "start", number: i.number, ...picked }),
               disabled: off,
             },
             {
-              label: "After…",
-              aria: `Queue #${i.number} after…`,
+              label: tr("queue.after"),
+              aria: tr("queue.afterAria", { number: i.number }),
               after: (after: number) =>
                 act({ action: parent ? "plan" : "queue", number: i.number, after, ...picked }),
               disabled: off,
@@ -383,9 +384,9 @@ export function WorkQueue({
           ...(brainstorms && starts("brainstorm")
             ? [
                 {
-                  label: "Brainstorm",
+                  label: tr("queue.brainstormAction"),
                   shortcut: "brainstorm" as const,
-                  aria: `Brainstorm #${i.number}`,
+                  aria: tr("queue.brainstormAria", { number: i.number }),
                   run: () => act({ action: "start", number: i.number, mode: "brainstorm" }),
                   disabled: off,
                 },
@@ -396,7 +397,7 @@ export function WorkQueue({
     }),
     brainstorm: cards.map((c) => {
       const can = !blocked && !busy && movable(c);
-      const status = c.sending ?? (c.task ? STATE_NAMES[c.task.state] : "");
+      const status = c.sending ?? (c.task ? tr(STATE_NAMES[c.task.state]) : "");
       const time = !c.sending && c.task ? when(c.task, now) : "";
       return {
         key: c.key,
@@ -407,7 +408,7 @@ export function WorkQueue({
         drag:
           !blocked && movable(c) && (starts("work") || starts("stop"))
             ? dragOf(BRAINSTORM_TYPE, c.number, issueUrl(c.number), {
-                status: status || "Brainstorm",
+                status: status || tr(STATE_NAMES.brainstorm),
                 title: c.title ?? "",
               })
             : undefined,
@@ -415,23 +416,23 @@ export function WorkQueue({
           ...only(
             starts("work"),
             {
-              label: "Start work",
+              label: tr("queue.startWork"),
               shortcut: "start",
-              aria: `Start work on #${c.number}`,
+              aria: tr("queue.startWorkAria", { number: c.number }),
               icon: <Icon.Play size={11} />,
               run: () => act({ action: "start", number: c.number }),
               disabled: !can,
             },
             {
-              label: "After…",
-              aria: `Queue #${c.number} after…`,
+              label: tr("queue.after"),
+              aria: tr("queue.afterAria", { number: c.number }),
               after: (after: number) => act({ action: "queue", number: c.number, after }),
               disabled: !can,
             },
           ),
           ...only(starts("stop"), {
-            label: "Stop",
-            aria: `Stop #${c.number}'s brainstorm`,
+            label: tr("queue.stop"),
+            aria: tr("queue.stopAria", { number: c.number }),
             run: () => act({ action: "stop", number: c.number }),
             disabled: !can,
           }),
@@ -443,29 +444,29 @@ export function WorkQueue({
       number: t.number!,
       title: t.title,
       href: issueUrl(t.number!),
-      meta: `after ${issueList(t.waitingFor ?? [])}`,
+      meta: tr("when.after", { issues: issueList(t.waitingFor ?? []) }),
       actions: [
         // Its wait's mode, as moving it keeps.
         ...only(
           starts(t.mode),
           {
-            label: "Start now",
+            label: tr("queue.startNow"),
             shortcut: "start",
-            aria: `Start #${t.number} now`,
+            aria: tr("queue.startNowAria", { number: t.number! }),
             icon: <Icon.Play size={11} />,
             run: () => act({ action: "start", number: t.number! }),
             disabled: off,
           },
           {
-            label: "After…",
-            aria: `Queue #${t.number} after…`,
+            label: tr("queue.after"),
+            aria: tr("queue.afterAria", { number: t.number! }),
             after: (after: number) => act({ action: "queue", number: t.number!, after }),
             disabled: off,
           },
         ),
         ...only(manages, {
-          label: "Remove wait",
-          aria: `Remove #${t.number}'s wait`,
+          label: tr("queue.removeWait"),
+          aria: tr("queue.removeWaitAria", { number: t.number! }),
           run: () => act({ action: "dequeue", number: t.number! }),
           disabled: off,
         }),
@@ -478,26 +479,26 @@ export function WorkQueue({
         number: t.number!,
         title: t.title,
         href: issueUrl(t.number!),
-        meta: count ? `${plural(count, "open question")}` : "Open questions",
+        meta: count ? tr("queue.openQuestions", { count }) : tr("queue.openQuestionsUncounted"),
         drag:
           blocked || !starts(picked.mode)
             ? undefined
             : dragOf(ISSUE_TYPE, t.number!, issueUrl(t.number!), {
-                status: "Answer",
+                status: tr("queue.dragAnswer"),
                 title: t.title ?? "",
               }),
         actions: only(
           starts(picked.mode),
           {
-            label: "Answer",
+            label: tr("queue.answer"),
             shortcut: "start",
-            aria: `Answer #${t.number} and start it`,
+            aria: tr("queue.answerAria", { number: t.number! }),
             run: () => act({ action: "start", number: t.number!, ...picked }),
             disabled: off,
           },
           {
-            label: "Answer then queue…",
-            aria: `Answer #${t.number} then queue it after…`,
+            label: tr("queue.answerQueue"),
+            aria: tr("queue.answerQueueAria", { number: t.number! }),
             after: (after: number) => act({ action: "queue", number: t.number!, after, ...picked }),
             disabled: off,
           },
@@ -517,15 +518,15 @@ export function WorkQueue({
   };
   const hinted = rows[tab].length ? rows[tab].some((r) => r.drag) : drags[tab];
 
-  const LISTS: Record<QueueTab, { label: string; empty: string }> = {
+  const LISTS: Record<QueueTab, { label: Plain; empty: Plain }> = {
     backlog: {
-      label: "Open issues with no task",
-      empty: filter ? "No open issue matches." : "No open issue left to start.",
+      label: "queue.backlogList",
+      empty: filter ? "queue.backlogNoMatch" : "queue.backlogEmpty",
     },
-    brainstorm: { label: "Issues being brainstormed", empty: "No brainstorm going on." },
-    waiting: { label: "Waiting issues", empty: "No issue waits for another." },
-    answers: { label: "Issues waiting for answers", empty: "No issue waits for your answers." },
-    queued: { label: "Tasks waiting for a slot, in run order", empty: "Nothing waits for a slot." },
+    brainstorm: { label: "queue.brainstormList", empty: "queue.brainstormEmpty" },
+    waiting: { label: "queue.waitingList", empty: "queue.waitingEmpty" },
+    answers: { label: "queue.answersList", empty: "queue.answersEmpty" },
+    queued: { label: "queue.queuedList", empty: "queue.queuedEmpty" },
   };
 
   const button = (row: Row, a: RowAction, first: boolean, inMenu = false) => {
@@ -599,7 +600,7 @@ export function WorkQueue({
   };
 
   const card = (row: Row) => {
-    const name = row.title ?? `Issue #${row.number}`;
+    const name = row.title ?? tr("queue.untitled", { number: row.number });
     const text = (
       <div class={styles.text}>
         {row.href ? (
@@ -633,7 +634,13 @@ export function WorkQueue({
             <IconButton
               variant="ghost"
               size="touch"
-              label={`More for #${row.number}: ${rest.map((a) => a.label.toLowerCase()).join(", ")}`}
+              label={tr("queue.more", {
+                number: row.number,
+                // The page's language's rules, not the browser's default (Turkish İ).
+                actions: rest
+                  .map((a) => a.label.toLocaleLowerCase(locale()))
+                  .join(tr("list.comma")),
+              })}
               aria-haspopup="dialog"
               aria-expanded={opened}
               icon={<Icon.More size={18} />}
@@ -696,7 +703,7 @@ export function WorkQueue({
   return (
     <section
       class={`${styles.queue} ${touch ? styles.sheet : ""} ${touch && !open ? styles.closed : ""}`}
-      aria-label="Work queue"
+      aria-label={tr("queue.label")}
     >
       {touch && (
         <button
@@ -704,14 +711,14 @@ export function WorkQueue({
           class={styles.handle}
           aria-expanded={open}
           aria-controls={panelId}
-          aria-label={open ? "Collapse the work queue" : "Expand the work queue"}
+          aria-label={tr(open ? "queue.collapse" : "queue.expand")}
           onClick={() => setOpen(!open)}
         >
           <span />
         </button>
       )}
       <Tabs
-        label="Work queue"
+        label={tr("queue.label")}
         class={styles.tabs}
         selected={tab}
         onSelect={picking}
@@ -719,28 +726,33 @@ export function WorkQueue({
         tabs={[
           {
             id: "backlog",
-            label: "Backlog",
+            label: tr("queue.backlog"),
             count: count("backlog"),
             attrs: { ...stopZone.handlers, class: stopZone.over ? styles.over : undefined },
           },
           {
             id: "brainstorm",
-            label: "Brainstorm",
+            label: tr("queue.brainstorm"),
             count: count("brainstorm"),
             attrs: {
               ...brainstormZone.handlers,
               class: brainstormZone.over ? styles.over : undefined,
             },
           },
-          { id: "waiting", label: "Waiting", count: count("waiting") },
-          { id: "answers", label: "Answers", count: count("answers"), hot: counts.answers > 0 },
-          { id: "queued", label: "Queued", count: count("queued") },
+          { id: "waiting", label: tr("queue.waiting"), count: count("waiting") },
+          {
+            id: "answers",
+            label: tr("queue.answers"),
+            count: count("answers"),
+            hot: counts.answers > 0,
+          },
+          { id: "queued", label: tr("queue.queued"), count: count("queued") },
         ]}
       />
       <div
         id={panelId}
         role="tabpanel"
-        aria-label={list.label}
+        aria-label={tr(list.label)}
         class={`${styles.panel} ${zone?.over ? styles.over : ""}`}
         hidden={touch && !open}
         {...(zone?.handlers ?? {})}
@@ -752,38 +764,38 @@ export function WorkQueue({
         )}
         {blocked && (
           <Notice tone="err" class={styles.notice}>
-            {repo}'s .deckhand.yaml has errors: nothing starts until they are fixed.
+            {tr("queue.configErrors", { repo })}
           </Notice>
         )}
         {tab === "backlog" && work.error && !backlog && (
           <Notice tone="err" class={styles.notice}>
-            Can't read the issues ({work.error}).
+            {tr("queue.unreadable", { error: work.error })}
           </Notice>
         )}
         {tab === "backlog" && !touch && backlog && issues.length > 0 && (
           <Field
             class={styles.filter}
-            label="Filter the backlog"
+            label={tr("queue.filter")}
             hideLabel
             size="small"
             lead={<Icon.Search size={14} />}
-            placeholder={`Filter ${plural(issues.length, "open issue")}`}
+            placeholder={tr("queue.filterPlaceholder", { count: issues.length })}
             value={filter}
             onInput={(e) => setFilter(e.currentTarget.value)}
           />
         )}
         {tab === "backlog" && !backlog && !work.error ? (
-          <p class={styles.empty}>Loading…</p>
+          <p class={styles.empty}>{tr("queue.loading")}</p>
         ) : (
           (tab !== "backlog" || backlog) && (
-            <ul class={touch ? styles.rows : styles.list} aria-label={list.label}>
-              {!rows[tab].length && <li class={styles.empty}>{list.empty}</li>}
+            <ul class={touch ? styles.rows : styles.list} aria-label={tr(list.label)}>
+              {!rows[tab].length && <li class={styles.empty}>{tr(list.empty)}</li>}
               {rows[tab].map(card)}
             </ul>
           )
         )}
       </div>
-      {!touch && hinted && <p class={styles.hint}>{HINTS[tab]}</p>}
+      {!touch && hinted && <p class={styles.hint}>{tr(HINTS[tab])}</p>}
       {choosing && (
         <Chooser
           number={choosing.number}

@@ -1,5 +1,6 @@
 // What the board's drags carry: a work queue card (the backlog's, a brainstorm's), or a GitHub
 // link dragged from anywhere (WorkQueue.tsx, Board.tsx).
+import { t } from "./i18n";
 
 // A backlog card's payload: the issue's number (its link goes along, as text).
 export const ISSUE_TYPE = "application/x-deckhand-issue";
@@ -51,7 +52,7 @@ export const dragOf = (type: string, number: number, url: string, look: Look) =>
 export const queuedDrag = (key: string, number: number) => (e: DragEvent) => {
   e.dataTransfer?.setData(QUEUED_TYPE, key);
   if (e.dataTransfer) e.dataTransfer.effectAllowed = "move";
-  carried = { type: QUEUED_TYPE, number, key, status: "Queued", title: "" };
+  carried = { type: QUEUED_TYPE, number, key, status: t("state.queued"), title: "" };
 };
 
 // Its end, dropped or not.

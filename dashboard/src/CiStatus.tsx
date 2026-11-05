@@ -2,6 +2,7 @@
 // it failed, a green check when it passed; nothing without any run. Its title lists the runs.
 // As a link (the task header, the Overview), it opens the failed run, else the pull request's
 // Checks tab; in a row that is a button already (All's list), it is only an icon.
+import { t } from "./i18n";
 import * as Icon from "./ui/icons";
 import { Spinner } from "./ui/Spinner";
 import styles from "./CiStatus.module.css";
@@ -13,9 +14,9 @@ const MARKS: Record<CiRun["state"], string> = { failed: "✗", running: "…", p
 export function ciLabel(pr: PullRequest): string | null {
   const ci = pr.ci;
   if (!ci || ci.state === "none") return null;
-  if (ci.state !== "failed") return `CI ${ci.state}`;
+  if (ci.state !== "failed") return t(ci.state === "running" ? "ci.running" : "ci.passed");
   const names = ci.runs.filter((r) => r.state === "failed").map((r) => r.name);
-  return names.length ? `CI failed: ${names.join(", ")}` : "CI failed";
+  return names.length ? t("ci.failedRuns", { names: names.join(t("list.comma")) }) : t("ci.failed");
 }
 
 export function CiStatus({

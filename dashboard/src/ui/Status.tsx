@@ -1,13 +1,18 @@
 // A task's or run's state as a badge (its word and dot) or a dot, in its tone (format.ts
 // toneOf()). Colour is never alone: a dot sits next to the word, or names it to screen readers.
 import { RUN_NAMES, STATE_NAMES, type Tone, toneOf } from "../format";
+import { t } from "../i18n";
+import type { Plain } from "../locales";
 import type { RunStatus, TaskState } from "../types";
 import styles from "./Status.module.css";
 
 export type AnyState = TaskState | RunStatus;
 
-export const stateName = (state: AnyState) =>
-  (STATE_NAMES as Record<string, string>)[state] ?? RUN_NAMES[state as RunStatus] ?? state;
+// An unknown state (a newer listener's) as it is.
+export function stateName(state: AnyState): string {
+  const key = (STATE_NAMES as Record<string, Plain>)[state] ?? RUN_NAMES[state as RunStatus];
+  return key ? t(key) : state;
+}
 
 // What moves: a run going on, not one starting or stopping.
 const MOVING: readonly AnyState[] = ["working", "running"];

@@ -4,8 +4,6 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/preact";
 import { beforeAll, beforeEach, expect, test, vi } from "vitest";
 import type { RepoList } from "./api";
-import paletteStyles from "./Palette.module.css";
-import statusStyles from "./ui/Status.module.css";
 import type {
   AccessReport,
   AnalysisPreview,
@@ -28,9 +26,9 @@ let { Dashboard } = {} as typeof import("./App");
 let { makeCapabilities, makePolicyFile, makeState, makeChat, makeChats, mockApi } =
   {} as typeof import("./testUtils");
 let { t } = {} as typeof import("./i18n");
-let { keysShown, parts, unmarked, useMarked } = {} as typeof import("./testCatalog");
+let { english, keysShown, parts, strings, unmarked, useMarked } =
+  {} as typeof import("./testCatalog");
 let { CATALOGS } = {} as typeof import("./locales");
-let { PR_NAMES, STATE_NAMES } = {} as typeof import("./format");
 
 beforeAll(async () => {
   vi.resetModules();
@@ -38,22 +36,9 @@ beforeAll(async () => {
   ({ makeCapabilities, makePolicyFile, makeState, makeChat, makeChats, mockApi } =
     await import("./testUtils"));
   ({ t } = await import("./i18n"));
-  ({ keysShown, parts, unmarked, useMarked } = await import("./testCatalog"));
+  ({ english, keysShown, parts, strings, unmarked, useMarked } = await import("./testCatalog"));
   ({ CATALOGS } = await import("./locales"));
-  ({ PR_NAMES, STATE_NAMES } = await import("./format"));
 });
-
-// Every string in what the page was given.
-function strings(...values: unknown[]): string[] {
-  const found = new Set<string>();
-  const walk = (v: unknown) => {
-    if (typeof v === "string") found.add(v);
-    else if (Array.isArray(v)) v.forEach(walk);
-    else if (v && typeof v === "object") Object.values(v).forEach(walk);
-  };
-  values.forEach(walk);
-  return [...found];
-}
 
 // Keys (they aren't translated), names (the services', the first as the health alert writes it
 // at the start of its sentence, a language's own), what the browser
@@ -353,57 +338,43 @@ const show = (hash: string) => {
   return render(<Dashboard state={state} error={null} repos={list()} />).container;
 };
 
-// The English catalog's texts, in parts: never data, whether the routes' or the fixture's, so
-// one written inline again isn't taken for some.
-const english = () =>
-  new Set<string>(
-    Object.values(CATALOGS.en)
-      .flatMap((text) => (typeof text === "string" ? [text] : Object.values(text)))
-      .flatMap(parts),
-  );
-
-// A task's state and its pull request's, as format.ts names them on a badge and in the
-// palette, are the run pages' to move (#722). A key shown as it is fails first: unmarked() would
-// take it for an identifier.
+// A key shown as it is fails first: unmarked() would take it for an identifier.
 const left = (root: Element = document.body, more: readonly string[] = []) => {
   const keys = keysShown(root, Object.keys(CATALOGS.en));
   if (keys.length) return keys;
-  const own = english();
+  const own = english(CATALOGS.en);
   return unmarked(root, {
     data: strings([...given, ...prose])
       .flatMap(parts)
       .filter((part) => !own.has(part)),
     names: [...NAMES, ...more],
-    within: {
-      [`.${statusStyles.badge}, .${statusStyles.dot}, .${paletteStyles.state}`]: [
-        ...Object.values(STATE_NAMES),
-        ...Object.values(PR_NAMES),
-      ],
-    },
   });
 };
 
 test.each([
   ["Overview", "#/", null],
   ["Settings › Repositories", "#/settings/repositories", "acme/bad"],
+  // An effort's value, which the run pages' catalog writes too ("{count} high" findings).
   [
     "a repository's config",
     "#/settings/repositories/acme/app",
     "expected one of low, medium, high",
+    ["medium", "high"],
   ],
   // Rego's keywords, and the decisions' names breakable() cuts out of their rules'.
   [
     "its policies",
     "#/settings/repositories/acme/app/policies",
     "size.rego",
-    ["allow", "deny", "run", "fix", "link", "branch", "request"],
+    ["allow", "deny", "run", "fix", "link", "branch", "request", "review"],
   ],
   // A capability's name.
   ["its capabilities", "#/settings/repositories/acme/app/capabilities", "work", ["setup"]],
   ["Settings › Preferences", "#/settings/preferences", null],
   ["Settings › MCP clients", "#/settings/clients", "laptop"],
   // The GitHub permissions the App lacks, by GitHub's names.
-  ["Settings › Server", "#/settings/server", /alice/, ["actions", "checks", "read"]],
+  // An event's name too ("issues", which a node's waits write).
+  ["Settings › Server", "#/settings/server", /alice/, ["actions", "checks", "read", "issues"]],
   ["Settings › Access", "#/settings/access", "@carol"],
   ["Chats", "#/chats", null],
 ] as [string, string, string | RegExp | null, string[]?][])("%s", async (_, hash, shown, more) => {
@@ -449,7 +420,6 @@ test("New request: each kind's form", async () => {
     fireEvent.click(kinds.getByRole("button", { name: t(kind) }));
     if (title) expect(within(dialog).getByPlaceholderText(t(title))).toBeTruthy();
     else await within(dialog).findByText(/⟦ runs? match/);
-    // A run's kind, as runKindName() names it, is the run pages' (#722).
-    expect(left(dialog, ["Bug", "Work"])).toEqual([]);
+    expect(left(dialog)).toEqual([]);
   }
 });
