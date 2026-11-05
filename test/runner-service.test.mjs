@@ -991,6 +991,34 @@ test("the egress policy's questions fall back on the runner's last answer while 
   assert.equal(await runner.installing("dh-o-a-1"), null);
 });
 
+test("the egress policy's questions while the runner is away: one answer's lookups within one wait (#936)", async (t) => {
+  const backend = host();
+  const a = await copy(t, { store: fileStore(), backend });
+  // The client's own clock, which its pauses move on: the runner refuses at once once stopped.
+  let clock = 0;
+  const { runner } = client(a.url, {
+    now: () => clock,
+    sleep: async (ms) => (clock += ms),
+    policyWaitMs: 3000,
+  });
+  await runner.start(SPEC);
+  const at = await runner.locate("10.1.0.2");
+  assert.deepEqual(await runner.proxyAddresses(), ["10.0.0.3"]);
+  await a.service.stop({ graceMs: 100 });
+  // An answer of the egress policy, past the proxy's addresses' second: they, then the caller.
+  for (const [i, skip] of [2000, 1500, 5000].entries()) {
+    clock += skip;
+    const asked = clock;
+    assert.deepEqual(await runner.proxyAddresses(), ["10.0.0.3"]);
+    assert.deepEqual(await runner.locate("10.1.0.2"), at);
+    // An address with no last answer, in the same answer: away, at once.
+    await assert.rejects(runner.locate("10.1.0.99"), RunnerAway);
+    assert.equal(await runner.installing("dh-o-a-1"), null);
+    // Within one wait, below the proxy's 5 s for the whole answer.
+    assert.ok(clock - asked <= 3000, `question ${i}: ${clock - asked} ms`);
+  }
+});
+
 // Two copies on two nodes: each its own client of one Redis (#509), TEST_REDIS_URL's.
 test(
   "handover on Redis: two copies, each its own store client, the logs and starts shared",

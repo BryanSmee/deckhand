@@ -20,8 +20,11 @@ import { LOGIN_REFRESH_MARGIN_MS, MIN_REFRESH_MS } from "../lib/services.mjs";
 const RUN_WAIT_MS = 30 * 60_000;
 // The egress policy's lookups, which a sandbox's connection waits on: less than the proxy waits
 // for the policy's answer (proxy/proxy.mjs egressPolicy()), so that it hears the runner is away
-// rather than give up on the policy.
+// rather than give up on the policy. One answer may make several (the proxy's addresses, where
+// the caller is, its install): once one found the runner away, the next ones don't ask it for a
+// while (AWAY_MS), so that the answer as a whole stays within one wait.
 const POLICY_WAIT_MS = 3000;
+const AWAY_MS = 1000;
 // A log append's most.
 const APPEND_MAX = 4 * 1024 * 1024;
 // After a failed append, the next try.
@@ -95,9 +98,18 @@ export function createRunnerClient({
   // Each one bounded as a whole too: a runner that takes the connection and doesn't answer
   // (a copy gone without closing it) isn't waited on past that either.
   const asPolicy = as("orchestrator", { waitMs: policyWaitMs });
+  let awayAt = -Infinity;
   const policy = {
-    json: (method, url) =>
-      asPolicy.json(method, url, { signal: AbortSignal.timeout(policyWaitMs) }),
+    async json(method, url) {
+      if (now() - awayAt < AWAY_MS) throw new RunnerAway("the runner service is away");
+      try {
+        return await asPolicy.json(method, url, { signal: AbortSignal.timeout(policyWaitMs) });
+      } catch (error) {
+        // No answer at all (an answer's status is the runner's word): away.
+        if (error.status == null) awayAt = now();
+        throw error;
+      }
+    },
   };
   const models = as("models");
 

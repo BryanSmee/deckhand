@@ -484,7 +484,9 @@ test("providerError: a provider's failure, from the result or the endpoint's las
   const proxy =
     "Failed to authenticate. API Error: 403 Deckhand's egress proxy: only a running sandbox reaches the models service";
   assert.equal(providerError(failed(proxy)), null);
-  assert.equal(providerError(failed(proxy), 401), null);
+  assert.equal(providerError(failed(proxy), 200), null);
+  // The endpoint's own last answer, the provider's, still counts.
+  assert.equal(providerError(failed(proxy), 529), "overloaded (529)");
   for (const refused of [
     "unknown or finished run",
     "this run token is refused: expired",

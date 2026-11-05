@@ -2680,9 +2680,13 @@ mounts:
     assert.match(answered, /^200 /);
     assert.match(ctx.listener.output(), /Egress: models for \S+ waits for the runner/);
     assert.doesNotMatch(ctx.listener.output(), /Egress: refused models/);
-    // The runner restarting again: the copy's last answer stands meanwhile.
+    // The runner restarting again, as long: the copy's last answers stand meanwhile, each of
+    // its answers within the proxy's wait for one. Past the second the proxy's addresses are
+    // kept, so that each answer asks for them and for where the caller is.
+    await new Promise((resolve) => setTimeout(resolve, 1500));
     await ctx.stopRunner();
     const restarting = call();
+    await new Promise((resolve) => setTimeout(resolve, 6000));
     await ctx.startRunner();
     assert.match(await restarting, /^200 /);
     assert.doesNotMatch(ctx.listener.output(), /Egress: refused models/);

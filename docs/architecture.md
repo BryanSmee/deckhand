@@ -1465,7 +1465,9 @@ runs' inboxes are files of its own volume (`runner-data`'s `runs/` folder), whic
 broker service as they change (the broker serves them): two copies on several nodes need that
 folder shared. With Docker Compose, one copy runs: an update is a wait
 of the runner's calls, which the orchestrator waits for (30 minutes for a run's, 3 s, then the last
-answer, for the egress policy's questions about a sandbox's address and the proxy's). With no last
+answer, for the egress policy's questions about a sandbox's address and the proxy's; once one
+found it away, the next ones go by the last answers for a second, so that one answer of the
+policy waits 3 s at most, under the proxy's 5 s for it). With no last
 answer (an orchestrator copy that took over while the runner was away), the egress policy
 answers `503` rather than "no run there", and the proxy asks again, as for an orchestrator
 restarting (#936).

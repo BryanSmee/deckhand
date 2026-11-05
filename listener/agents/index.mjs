@@ -101,12 +101,14 @@ function statusReason(status) {
 
 // Why the provider failed a run, or null: what decides a fallback (FALLBACKS). From the
 // agent's result when it isn't ok (null: the agent gave none), then the last answer the
-// listener's endpoint got from the provider (`status`, anthropic.mjs and openai.mjs). None when
-// the result is Deckhand's own refusal (DECKHAND_REFUSALS): the provider wasn't asked.
+// listener's endpoint got from the provider (`status`, anthropic.mjs and openai.mjs). A result
+// that is Deckhand's own refusal (DECKHAND_REFUSALS) says nothing of the provider: only that
+// status counts then.
 export function providerError(result, status = null) {
   if (result?.ok) return null;
   const text = result?.text ?? "";
-  if (DECKHAND_REFUSALS.test(text)) return null;
+  // The endpoint's own status still counts: its last answer was the provider's.
+  if (DECKHAND_REFUSALS.test(text)) return statusReason(status);
   const code = Number(API_STATUS.exec(text)?.[1]);
   const found = PROVIDER_ERRORS.find(([pattern]) => pattern.test(text));
   if (found) return code ? `${found[1]} (${code})` : found[1];
