@@ -7,7 +7,7 @@
 // which outlives it), follows their output from where
 // the previous one stopped, and posts each reply once.
 import { randomUUID } from "node:crypto";
-import { renameSync, rmSync } from "node:fs";
+import { rmSync } from "node:fs";
 import { join } from "node:path";
 import { agentFor } from "./agents/index.mjs";
 import { parseKey, taskKey } from "./events.mjs";
@@ -15,7 +15,7 @@ import { RESEARCH } from "./modes.mjs";
 import { addRun, isRunState, writeEvent } from "./runlog.mjs";
 import { runLogContext } from "./runs.mjs";
 import { ambiguous, githubNames, respelled, spellings } from "./spelling.mjs";
-import { listDir, readJson } from "../lib/files.mjs";
+import { listDir, readJson, setAside } from "../lib/files.mjs";
 import { newLogContext } from "../lib/log.mjs";
 import { storable, values } from "../lib/store.mjs";
 import { countRun, newTask, noLongerAllowed } from "./tasks.mjs";
@@ -57,16 +57,6 @@ export const QUEUE_KEY = "queue";
 // Where each live run's state is in the store: `runs/<id>` (saveLive()), listed at the takeover.
 export const LIVE_PREFIX = "runs/";
 const liveKey = (id) => `${LIVE_PREFIX}${id}`;
-
-// Where moveLive() sets aside a logs/<run>.live.json that holds no run's state, no move reading
-// it again: <file>.bad, or <file>.bad.<n> beside one the operator hasn't removed yet, which a
-// rename would overwrite.
-function asideName(dir, file) {
-  const taken = new Set(listDir(dir));
-  let name = `${file}.bad`;
-  for (let n = 2; taken.has(name); n++) name = `${file}.bad.${n}`;
-  return name;
-}
 
 // What tells a queued comment apart, given when it is accepted (tasks.mjs accept()): a comment
 // both in the queue and in a run's saved state (a listener killed between the two writes) is the
@@ -161,8 +151,7 @@ export function createRestart(ctx) {
       const saved = readJson(path);
       if (!isRunState(saved)) {
         try {
-          const aside = asideName(ctx.logDir, file);
-          renameSync(path, join(ctx.logDir, aside));
+          const aside = setAside(ctx.logDir, file);
           log(`${file}: not a run's state, set aside as ${aside}`);
         } catch (err) {
           log(`${file}: not a run's state, left there: ${err.message}`);
