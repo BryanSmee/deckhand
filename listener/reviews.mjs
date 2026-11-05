@@ -139,36 +139,41 @@ export function parseReview(text, { allowed = "low", log = () => {} } = {}) {
     const read = readBlock(json);
     const fromBlock =
       read.block && settle({ summary: md.summary, ...read.block }, { allowed, sure: true });
-    // The markdown stricter than the block (blocking on a finding or a comment the block lacks,
-    // or asking for changes it doesn't): one of the two left something out, so the block is no
-    // surer than the markdown, read as when it doesn't validate.
-    const error =
-      read.error ??
-      (strictness(markdownAlone(md, read.block, allowed)) > strictness(fromBlock)
-        ? "the markdown blocks or requests changes where the block doesn't"
-        : null);
-    if (!error) return fromBlock;
-    log(`the review's verdict block doesn't validate (${error}): read from its markdown`);
+    // The markdown stricter than the block, read as it would be alone (blocking on a finding or
+    // a comment the block lacks, or asking for changes it doesn't): one of the two left something
+    // out, so the block is no surer than the markdown, read as when it doesn't validate.
+    const stricter =
+      read.block && strictness(markdownAlone(md, read.block, allowed)) > strictness(fromBlock);
+    if (read.block && !stricter) return fromBlock;
+    log(
+      stricter
+        ? "the review's verdict block says less than its markdown: read from its markdown"
+        : `the review's verdict block doesn't validate (${read.error}): read from its markdown`,
+    );
     // The model's `request-changes` stands, the block's or the markdown's: the block may be what
     // says changes are needed, and a reply that strayed from its format once may have again.
     if (blockVerdict(json) === "request-changes") md.said = "request-changes";
     md.doubtful = true;
   }
   if (md.rating === null || md.said === null) return null;
-  const { summary, findings, followUps, comments, rating, said, none, unsure, doubtful } = md;
-  // No finding is sure only when the Must fix section said `None.` and every line under it and
-  // Comments was read.
-  const sure = !doubtful && (findings.length > 0 || (none && !unsure));
-  return settle({ summary, findings, followUps, comments, rating }, { said, allowed, sure });
+  const { summary, findings, followUps, comments, rating, said } = md;
+  return settle(
+    { summary, findings, followUps, comments, rating },
+    { said, allowed, sure: markdownSure(md) },
+  );
 }
 
-// The markdown's review settled on its own, every doubt kept (`sure: false`: its
-// `request-changes` stands), to hold a verdict block to it: without its own verdict, it only
-// blocks on its items; without its own rating, the block's.
+// Whether the markdown's items were all read for sure (settle()): no finding is sure only when
+// the Must fix section said `None.` and every line under it and Comments was read.
+const markdownSure = ({ findings, none, unsure, doubtful }) =>
+  !doubtful && (findings.length > 0 || (none && !unsure));
+
+// The markdown's review settled as it would be alone, to hold a verdict block to it: without
+// its own verdict, it only blocks on its items; without its own rating, the block's.
 const markdownAlone = (md, block, allowed) =>
   settle(
     { ...md, rating: md.rating ?? block.rating },
-    { said: md.said ?? "comment", allowed, sure: false },
+    { said: md.said ?? "comment", allowed, sure: markdownSure(md) },
   );
 
 // How far a settled review stops the pull request: 2 blocking on its items (GitHub's
@@ -177,8 +182,9 @@ const strictness = (review) =>
   blocks(review, review.allowed) ? 2 : review.verdict === "request-changes" ? 1 : 0;
 
 // The review from its items, its rating capped and its verdict decided (parseReview()): `said`,
-// the model's verdict (a block's `verdict`, unless given), reads `comment` when it asked for changes on nothing blocking but
-// tolerated findings, or on no finding at all, and the items were all read for sure (`sure`).
+// the model's verdict (a block's `verdict`, unless given), reads `comment` when it asked for
+// changes on nothing blocking but tolerated findings, or on no finding at all, and the items
+// were all read for sure (`sure`).
 function settle(
   { summary, findings, followUps, comments, rating, verdict },
   { said = verdict, allowed, sure },

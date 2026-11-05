@@ -4246,7 +4246,10 @@ test("parseReview: the verdict block read first, the same review as its markdown
         "REQUEST_CHANGES",
       ],
     );
-    assert.match(disagree[0], /the markdown blocks or requests changes where the block doesn't/);
+    assert.match(
+      disagree[0],
+      /the review's verdict block says less than its markdown: read from its markdown/,
+    );
   }
   // Without findings in the markdown either, the verdict stays: one of the two is wrong.
   const bare = parseReview(
@@ -4265,7 +4268,10 @@ test("parseReview: the verdict block read first, the same review as its markdown
       ["request-changes", 4, 1, "REQUEST_CHANGES"],
       said,
     );
-    assert.match(lacking[0], /the markdown blocks or requests changes where the block doesn't/);
+    assert.match(
+      lacking[0],
+      /the review's verdict block says less than its markdown: read from its markdown/,
+    );
   }
   // A block that says as much as the markdown, or more: its own review, nothing logged.
   const same = [];
@@ -4279,6 +4285,21 @@ test("parseReview: the verdict block read first, the same review as its markdown
     log: (line) => same.push(line),
   });
   assert.deepEqual([more.verdict, more.rating, same], ["request-changes", 5, []]);
+  // Markdown and block agreeing on request-changes over nothing blocking: comment, as either
+  // alone reads, nothing logged. Tolerated medium findings, and Must fix None. with follow-ups.
+  const quiet = [];
+  const tolerant = parseReview(
+    `- **medium** \`a.mjs:1\`: an edge case.\n\nRating: 7/10\nVerdict: request-changes\n\n${block({ ...notes, comments: [], findings: [{ severity: "medium", path: "a.mjs", line: 1, text: "an edge case." }], rating: 7 })}`,
+    { allowed: "medium", log: (line) => quiet.push(line) },
+  );
+  assert.deepEqual([tolerant.verdict, reviewEvent(tolerant)], ["comment", "COMMENT"]);
+  const followUpsOnly = { ...notes, comments: [], rating: 9 };
+  const noneMd = `Fine.\n\n## Must fix\n\nNone.\n\n## Follow-ups\n\n- **Share the retry helper with the uploader** \`lib/upload.mjs:30\`: the same loop twice.\n- **Docs: the cache's limits**: nothing says how big it gets.\n\nRating: 9/10\nVerdict: request-changes`;
+  assert.equal(parseReview(noneMd).verdict, "comment");
+  const agreeing = parseReview(`${noneMd}\n\n${block(followUpsOnly)}`, {
+    log: (line) => quiet.push(line),
+  });
+  assert.deepEqual([agreeing.verdict, agreeing.followUps.length, quiet], ["comment", 2, []]);
   // A title's bold and a text's blank lines are dropped: the posted review reads them back.
   const styled = {
     ...notes,
