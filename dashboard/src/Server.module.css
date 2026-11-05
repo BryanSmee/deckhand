@@ -184,7 +184,7 @@
 /* The status card's note of a GitHub outage, in its tone. */
 .githubNote {
   display: inline-flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 6px;
   margin-top: 4px;
   color: var(--s-fg);
@@ -194,6 +194,7 @@
 
 .githubNote svg {
   flex: none;
+  margin-top: 3px;
 }
 
 .warn {

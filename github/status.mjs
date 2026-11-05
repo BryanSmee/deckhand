@@ -102,7 +102,7 @@ export function createGithubStatus({
       const reason =
         failure?.name === "TimeoutError" ? "timed out" : text(failure?.message, 200) || "failed";
       // Said once when it starts failing, not at every try.
-      if (failed === null) log(`GitHub's status: ${reason}, the last one kept`);
+      if (failed === null) log(`GitHub's status: ${reason}${last ? ", the last one kept" : ""}`);
       failed = reason;
     }
   }
