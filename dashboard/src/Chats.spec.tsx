@@ -102,6 +102,31 @@ test("the list opened from a repository: its Tasks go back to that repository", 
   await waitFor(() => expect(location.hash).toMatch(/^#\/acme\/api/));
 });
 
+test("g t and g b: back to the repository the list came from, the open chat's repository", async () => {
+  history.replaceState(null, "", "#/acme/api");
+  show(makeChats([makeChat()]));
+  const press = (key: string) => fireEvent.keyDown(document.body, { key });
+  await screen.findByRole("heading", { name: "acme/api", level: 1 });
+  history.replaceState(null, "", "#/chats");
+  window.dispatchEvent(new HashChangeEvent("hashchange"));
+  await screen.findByRole("heading", { name: "All repositories", level: 1 });
+  press("g");
+  press("t");
+  await waitFor(() => expect(location.hash).toMatch(/^#\/acme\/api(\?|$)/));
+  history.replaceState(null, "", "#/chats/0123456789abcdef");
+  window.dispatchEvent(new HashChangeEvent("hashchange"));
+  await screen.findByRole("heading", { name: "acme/app", level: 1 });
+  press("g");
+  press("t");
+  await waitFor(() => expect(location.hash).toMatch(/^#\/acme\/app(\?|$)/));
+  history.replaceState(null, "", "#/chats/0123456789abcdef");
+  window.dispatchEvent(new HashChangeEvent("hashchange"));
+  await screen.findByRole("heading", { name: "acme/app", level: 1 });
+  press("g");
+  press("b");
+  await waitFor(() => expect(location.hash).toBe("#/acme/app/board"));
+});
+
 test("a phone's top bar names the open chat's repository", async () => {
   vi.stubGlobal("matchMedia", () => ({
     matches: false,

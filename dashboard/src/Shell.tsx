@@ -73,8 +73,6 @@ interface Common {
   chats?: Chats | null;
   // The services' health (api/health): a dot by Deckhand's name when one is down or starting.
   health?: Health | null;
-  // On Chats, the open chat's repository (App.tsx): the title shown, as on its own pages.
-  chatRepo?: string | null;
 }
 
 interface SidebarProps extends Common {
@@ -456,7 +454,7 @@ export function PageHeader({
           label: "Tasks",
           icon: <Icon.Tasks size={14} />,
           href: back ? tasksOf(back) : allTasks,
-          title: withKey("Tasks", "tasks"),
+          title: withKey(back ? `Tasks of ${back}` : "Tasks", "tasks"),
         },
       ];
   // Chats are the user's own, on every repository: the same link from any of them.
@@ -516,6 +514,8 @@ interface TopBarProps extends Common {
   onRequest: (request: Request) => void;
   // The Tasks page's: opens or closes the list's search box.
   onSearch?: () => void;
+  // On Chats, the open chat's repository (App.tsx): the label shown, as on its own pages.
+  chatRepo?: string | null;
 }
 
 // The phone's top bar: the repository switcher, whose sheet lists the sidebar's repositories,

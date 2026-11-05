@@ -229,7 +229,6 @@ export function Dashboard({ state, error, repos, refresh, onOverview }: Props) {
     syncer,
     health: health.data,
     chats: chats.data,
-    chatRepo,
     onRequest: (kind: Request) => setRequest({ kind }),
   };
   const railed = onBoard ? boardRail : rail;
@@ -319,7 +318,11 @@ export function Dashboard({ state, error, repos, refresh, onOverview }: Props) {
         {wide ? (
           <Sidebar {...shell} repos={repos} rail={railed} onRail={selectRail} notify={notify} />
         ) : (
-          <TopBar {...shell} onSearch={onTasks && !task ? toggleSearch : undefined} />
+          <TopBar
+            {...shell}
+            chatRepo={chatRepo}
+            onSearch={onTasks && !task ? toggleSearch : undefined}
+          />
         )}
         <div class={styles.content}>
           {/* A repository's config has its own header, its way back included. */}
