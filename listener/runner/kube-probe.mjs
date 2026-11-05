@@ -153,7 +153,12 @@ export function peerPod({ pod, image, labels, pullSecret = null, gate = null, de
       name: "peer",
       image,
       command: ["node", "-e", PEER_SCRIPT],
-      readinessProbe: { exec: { command: ["node", "-e", PEER_READY] }, periodSeconds: 1 },
+      // node takes a moment to start on a busy node, within its 100m of CPU.
+      readinessProbe: {
+        exec: { command: ["node", "-e", PEER_READY] },
+        periodSeconds: 2,
+        timeoutSeconds: 5,
+      },
     },
   });
 }
@@ -372,7 +377,8 @@ export function createNetworkProbe({
         labels,
         pullSecret: secret,
         gate: gate.container({ proxy: proxyAt }),
-        deadlineMs: 2 * waitMs,
+        // Both waits, and a minute for the rest: its probe's verdict checks it outlived them.
+        deadlineMs: 2 * waitMs + 60_000,
       }),
     );
     try {
@@ -398,7 +404,22 @@ export function createNetworkProbe({
         proto: "tcp",
         reach: false,
       });
-      return await probeWith(list, id, secret, proxyAt, waitMs);
+      const problem = await probeWith(list, id, secret, proxyAt, waitMs);
+      if (problem) return problem;
+      // Out of reach proves a policy only if the peer still listened while the probe tried it:
+      // evicted, drained or past its deadline meanwhile, it would have refused anyone.
+      const after = await api.find(peerPath);
+      if (
+        !after ||
+        !ready(after) ||
+        after.status.podIP !== listening.status.podIP ||
+        after.metadata?.uid !== listening.metadata?.uid
+      ) {
+        throw new Error(
+          `its peer pod stopped listening before its probe pod ended (${after?.status?.phase ?? "removed"})`,
+        );
+      }
+      return null;
     } finally {
       await api
         .remove(peerPath, { gracePeriodSeconds: 0 })

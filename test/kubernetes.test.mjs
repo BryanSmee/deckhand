@@ -2077,8 +2077,9 @@ const PEER = `${PEER_IP}:8080`;
 // "/udp" after a UDP one), its pod ending `phase` (null: never). `targets()`: what the last
 // probe pod was asked to try; `probes()`: how many were made; `answers.reach` may change.
 // `gate`: { exitCode, said } when its network gate (kube-gate.mjs) ended so, past its deadline.
-// `peer`: the peer pod's status once it started, by default Ready at PEER_IP; `peerGate`, as
-// `gate`, for the peer's gate. `peers()`: the peer pods made.
+// `peer`: the peer pod's status once it started, by default Ready at PEER_IP; `peerLater`, its
+// status once the probe pod is made, by default the same; `peerGate`, as `gate`, for the peer's
+// gate. `peers()`: the peer pods made.
 // `services`, `slices`: the services' namespace's, by default CLUSTER_SERVICES' and CLUSTER_SLICES.
 function probed(
   t,
@@ -2094,6 +2095,7 @@ function probed(
       podIP: PEER_IP,
       conditions: [{ type: "Ready", status: "True" }],
     },
+    peerLater = peer,
     peerGate = null,
     metrics = null,
   } = {},
@@ -2148,8 +2150,10 @@ function probed(
                   { name: "network-gate", state: { terminated: { exitCode: failed.exitCode } } },
                 ],
               };
-            } else if (isPeer(pod)) pod.status = peer;
-            else if (phase) pod.status = { phase };
+            } else if (isPeer(pod)) {
+              const probing = [...s.objects.pods.values()].some((o) => isProbe(o) && !isPeer(o));
+              pod.status = probing ? peerLater : peer;
+            } else if (phase) pod.status = { phase };
           }
         },
       },
@@ -2437,7 +2441,7 @@ test("network probe: its peer pod, labelled as a sandbox too, listens and is Rea
   assert.equal(peer.spec.dnsPolicy, "None");
   assert.equal(peer.spec.volumes, undefined);
   // Gone by itself, should the runner stop before removing it: two probe pods' wait.
-  assert.equal(peer.spec.activeDeadlineSeconds, 2 * (config.kubernetes.pendingMs / 1000 + 60));
+  assert.equal(peer.spec.activeDeadlineSeconds, 2 * (config.kubernetes.pendingMs / 1000 + 60) + 60);
   // Its network gate first, as every pod of the sandboxes' namespace.
   assert.deepEqual(
     peer.spec.initContainers.map((c) => c.name),
@@ -2475,6 +2479,58 @@ test("network probe: a peer pod that never gets ready proves nothing; one whose 
   assert.ok(!probeIn(leaky.objects));
   await assert.rejects(leaky.runner.start(spec()), /still reached the Kubernetes API server/);
   assert.equal(leaky.peers().length, 1, "kept: a verdict");
+
+  // Ended before it was ready, or its gate never reached the egress proxy: nothing proven.
+  const blind = {
+    "its peer pod ended Failed before it was ready": { peer: { phase: "Failed" } },
+    "its peer pod never reached the egress proxy \\(10\\.96\\.0\\.11:3128\\) in 570 s, which sandboxes go out through":
+      {
+        peerGate: {
+          exitCode: 4,
+          said: "never reached the egress proxy (10.96.0.11:3128) in 570 s",
+        },
+      },
+  };
+  for (const [said, options] of Object.entries(blind)) {
+    const p = probed(t, options);
+    await assert.rejects(
+      p.runner.start(spec()),
+      new RegExp(
+        `couldn't check that the cluster enforces the sandboxes' NetworkPolicies: ${said}`,
+      ),
+    );
+    assert.equal(p.probes(), 0, "no probe pod without its peer");
+    assert.ok(!probeIn(p.objects), "the peer pod is removed");
+    await assert.rejects(p.runner.start(spec()), new RegExp(said));
+    assert.equal(p.peers().length, 2, "not kept: probed again");
+  }
+});
+
+test("network probe: a peer pod that stopped listening before the probe pod ended proves nothing", async (t) => {
+  const cases = {
+    Failed: { phase: "Failed" },
+    // Running still, though no longer Ready.
+    Running: { phase: "Running", podIP: PEER_IP, conditions: [{ type: "Ready", status: "False" }] },
+  };
+  for (const [phase, peerLater] of Object.entries(cases)) {
+    const p = probed(t, { peerLater });
+    await assert.rejects(
+      p.runner.start(spec()),
+      new RegExp(
+        `couldn't check that the cluster enforces the sandboxes' NetworkPolicies: its peer pod stopped listening before its probe pod ended \\(${phase}\\)`,
+      ),
+    );
+    assert.equal(p.probes(), 1);
+    assert.ok(!probeIn(p.objects), "both pods removed");
+    await assert.rejects(p.runner.start(spec()), /its peer pod stopped listening/);
+    assert.equal(p.probes(), 2, "not kept: probed again");
+  }
+  // A leak is a verdict whatever became of the peer.
+  const leaky = probed(t, {
+    peerLater: { phase: "Failed" },
+    reach: (target) => target === PROXY || target === "1.1.1.1:443",
+  });
+  await assert.rejects(leaky.runner.start(spec()), /reached a public address/);
 });
 
 test("network probe, with an engine: the proxy's engines' port is the proxy's, to be reached when its Service publishes it", async (t) => {
