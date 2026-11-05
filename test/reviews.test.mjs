@@ -4440,6 +4440,26 @@ test("parseReview: prompts/review.md's example reads from its block as from its 
   assert.equal(fromBlock.findings.length, 2);
 });
 
+test("parseReview: a reply wrapped whole in a fence reads as unwrapped, its summary without the fence", () => {
+  const prompt = readFileSync(new URL("../prompts/review.md", import.meta.url), "utf8");
+  const wrapped = /^(````markdown\n[^]*?^````)$/m.exec(prompt)[1];
+  const inner = wrapped.replace(/^````(?:markdown)?\n/gm, "");
+  const read = parseReview(wrapped);
+  assert.deepEqual(read, parseReview(inner));
+  assert.match(read.summary, /^One to three sentences/);
+  // Posted, nothing turns the rest of the review into a code block.
+  assert.doesNotMatch(reviewBody(read, "", "f"), /```/);
+  // Its markdown alone, the same: the closing fence after the verdict is no stray text, which
+  // would keep request-changes on `None.`.
+  const none = "Fine.\n\n## Must fix\n\nNone.\n\nRating: 9/10\nVerdict: request-changes";
+  for (const text of [`~~~\n${none}\n~~~\n`, `\n\`\`\`md\n${none}\n\`\`\``, `\`\`\`\n${none}`]) {
+    assert.deepEqual(parseReview(text), parseReview(none));
+  }
+  // A code block the summary opens with, closed before the review goes on, is its own.
+  const code = "```js\ncache.get(key);\n```\nAdds the cache.";
+  assert.equal(parseReview(`${code}\n\n${none}`).summary, `${code}\n\nFine.`);
+});
+
 test("parseReview: a verdict block that doesn't validate is logged, the markdown read, its request-changes kept", () => {
   const clean = "Fine.\n\n## Must fix\n\nNone.\n\nRating: 10/10\nVerdict: comment";
   const invalid = [

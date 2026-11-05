@@ -242,6 +242,24 @@ function settle(
   };
 }
 
+// `lines` without the fence a reply is wrapped whole in, as the prompt's example is (#933):
+// its opening line would start the summary, and the posted review would be a code block from
+// there on; its closing line, after the verdict, would read as stray text. A fence that opens
+// the reply and closes before its last line is the summary's own code block, and stays.
+function unwrapped(lines) {
+  const first = lines.findIndex((line) => line.trim());
+  const open = /^ {0,3}(`{3,}|~{3,})[^`]*$/.exec(lines[first] ?? "");
+  if (!open) return lines;
+  let close = first + 1;
+  while (close < lines.length) {
+    const fence = /^ {0,3}(`{3,}|~{3,})\s*$/.exec(lines[close]);
+    if (fence && fence[1][0] === open[1][0] && fence[1].length >= open[1].length) break;
+    close++;
+  }
+  if (lines.slice(close + 1).some((line) => line.trim())) return lines;
+  return lines.slice(first + 1, close);
+}
+
 // The opening line of the review's verdict block (prompts/review.md).
 const BLOCK_OPEN = /^ {0,3}(`{3,}|~{3,})\s*json\s+deckhand-review\s*$/i;
 
@@ -356,7 +374,7 @@ function blockVerdict(json) {
 // finding does. `none`: its Must fix section says `None.`; `unsure` and `doubtful`: what it
 // couldn't read, which keeps the model's `request-changes` (settle()).
 function readMarkdown(text) {
-  const lines = String(text ?? "").split(/\r?\n/);
+  const lines = unwrapped(String(text ?? "").split(/\r?\n/));
   const rating = /^\W*rating\W*\s*(\d{1,2}(?:\.\d)?)\s*\/\s*10\b/im.exec(text ?? "");
   const verdict = /^\W*verdict\W*\s*(approve|comment|request[- ]changes)\b/im.exec(text ?? "");
   const findings = [];
