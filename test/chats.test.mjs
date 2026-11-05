@@ -239,11 +239,20 @@ test("the access decision: a hidden repo is a 404, no runs:start:chat a 403 that
   Object.assign(task, { running: true, live: { open: true } });
   task.pending.splice(0);
   ctx.runs.push({ id: "run-1", key, chat: chat.id, status: "ok", startedAt: 1 });
-  // Undecided: the message refused, nothing stopped, the sweep neither.
+  // Undecided: the message refused, nothing stopped, the sweep neither; whether it can see the
+  // repo at all undecided too (a 503, not a hidden repo's 404).
   access.alice["runs:start:chat"] = "error";
   assert.equal((await refusal(chats.message("alice", chat.id, "next"))).status, 503);
   await chats.sweep();
+  access.alice["runs:start:chat"] = true;
+  access.alice.null = "error";
+  assert.deepEqual(await refusal(chats.message("alice", chat.id, "next")), {
+    status: 503,
+    message: "Whether you may do this (`runs:start:chat`) can't be decided now; try again later.",
+  });
+  assert.equal((await refusal(chats.create("alice", { repo: "org/repo" }))).status, 503);
   assert.deepEqual(calls.cancelled, []);
+  access.alice.null = true;
   // Its runs listed while its owner reads its logs.
   assert.equal((await chats.list("alice"))[0].runs.length, 1);
   access.alice["logs:read"] = false;
@@ -509,6 +518,32 @@ test("an idle chat whose inbox isn't known open (a restart): rested all the same
   clock.advance(30 * 60_000);
   assert.deepEqual(calls.rested, [task.name]);
   assert.equal(clock.timers.size, 0);
+});
+
+test("a restored chat that answered, its inbox not known open: a message rests it at once, and starts the next run", async (t) => {
+  const { chats, ctx, calls } = await setup(t);
+  const chat = await chats.create("alice", { repo: "org/repo", message: "hi" });
+  const task = ctx.tasks.get(chatKey(chat));
+  task.pending.splice(0);
+  Object.assign(task, { running: true, live: { open: false, result: {}, unanswered: [] } });
+  await chats.message("alice", chat.id, "still there?");
+  assert.deepEqual(calls.rested, [task.name]);
+  assert.deepEqual(calls.delivered, []);
+  // One still working on its answer: left alone, the message waits for it.
+  task.live = { open: false, result: null, unanswered: [] };
+  await chats.message("alice", chat.id, "and now?");
+  assert.deepEqual(calls.rested, [task.name]);
+});
+
+test("MAX_RUNNING_CHATS 0: no message is taken, as it would wait for good", async (t) => {
+  const { chats } = await setup(t, { env: { MAX_RUNNING_CHATS: "0" } });
+  const message = "No chat runs here: MAX_RUNNING_CHATS is 0.";
+  assert.deepEqual(await refusal(chats.create("alice", { repo: "org/repo", message: "hi" })), {
+    status: 409,
+    message,
+  });
+  const chat = await chats.create("alice", { repo: "org/repo" });
+  assert.deepEqual(await refusal(chats.message("alice", chat.id, "hi")), { status: 409, message });
 });
 
 test("a chat its owner can no longer reach: listed, so they can delete it, without its runs", async (t) => {

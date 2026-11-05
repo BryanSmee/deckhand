@@ -30,7 +30,7 @@ import { sandboxName } from "./repo-config.mjs";
 import { queueId } from "./restart.mjs";
 import { publicRun } from "./runlog.mjs";
 import { CHATS, newTask } from "./tasks.mjs";
-import { apiRoute, hidden, mustDo } from "./web.mjs";
+import { apiRoute, hidden, mustDo, undecided } from "./web.mjs";
 import { readJsonBody, Refused, refuse, send } from "../lib/http.mjs";
 
 // The store's key of the chats: all of them, as one value (the store lists no keys).
@@ -201,10 +201,13 @@ export function createChats(
     if (!repoAllowed(config, repo)) refuse(404, hidden(repo).error);
     if (ctx.permissions) {
       const sees = await ctx.permissions.decide(user, repo, null);
-      if (!sees.ok) {
-        if (sees.error) log(`Chats: ${repo}: hidden: ${accessRefusal(sees, user, null)}`);
-        refuse(404, hidden(repo).error);
+      // Undecided (a policy error, the policy service away): a 503, which stops nothing
+      // (message()), rather than a hidden repo's 404.
+      if (sees.error) {
+        log(`Chats: ${repo}: ${accessRefusal(sees, user, null)}`);
+        refuse(503, undecided(START).error);
       }
+      if (!sees.ok) refuse(404, hidden(repo).error);
       await mustDo(ctx.permissions, user, repo, START);
     }
     const name = await checks.nameOf(repo);
@@ -230,6 +233,7 @@ export function createChats(
       refuse(422, `The effort: one of ${EFFORTS.join(", ")}.`);
     }
     if (message !== null) textOf(message);
+    if (message !== null) runnable();
     const { settings, base, repo } = await checked(asked, user);
     const limit = settings.chatsPerUser ?? config.chatsPerUser;
     const kept = [...chats.values()].filter((chat) => own(chat, user)).length;
@@ -269,6 +273,11 @@ export function createChats(
     return chat;
   }
 
+  // MAX_RUNNING_CHATS 0: no chat runs, so a message would wait for good.
+  function runnable() {
+    if (config.maxRunningChats === 0) refuse(409, "No chat runs here: MAX_RUNNING_CHATS is 0.");
+  }
+
   function textOf(message) {
     if (typeof message !== "string" || !message.trim()) refuse(400, "An empty message.");
     if (message.length > MAX_TEXT) refuse(413, `A message holds ${MAX_TEXT} characters at most.`);
@@ -282,6 +291,7 @@ export function createChats(
   async function message(user, id, text) {
     const chat = mine(user, id);
     textOf(text);
+    runnable();
     if (busy.has(id)) refuse(409, "This chat is being reset: send it again in a moment.");
     let read;
     try {
@@ -323,8 +333,23 @@ export function createChats(
     ctx.saveQueue?.();
     if (!task.running) ctx.startLater(task);
     else if (ctx.deliverable(task) === task.pending.length) ctx.deliverLater(task);
+    else if (answeredClosed(task.live)) {
+      // A run restored with its inbox not known open (restart.mjs) that has answered: it takes
+      // no message, so it rests now (it lingers out) and the message starts the next one,
+      // rather than waiting for its idle time, which each message would push further.
+      ctx.rest(task);
+    }
     arm(chat);
   }
+
+  const answeredClosed = (live) =>
+    !!live &&
+    !live.open &&
+    !live.answered &&
+    !live.finishing &&
+    !live.cancelled &&
+    !!live.result &&
+    !live.unanswered?.length;
 
   // When the chat goes idle: CHAT_IDLE_MINUTES after its last message (`lastActiveAt`) or its
   // run's last answer, whichever came later. A message that waited for a slot has its answer

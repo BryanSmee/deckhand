@@ -182,11 +182,11 @@ async function fakeGitHub(files = {}) {
         res.setHeader("content-type", "application/gzip");
         return res.end(tarball);
       }
-      // Dashboard sign-in: the browser comes back as alice.
+      // Dashboard sign-in: the browser comes back as alice, or `files.login` when the test sets it.
       if (req.url === "/login/oauth/access_token") {
         return res.end(JSON.stringify({ access_token: "user-token" }));
       }
-      if (req.url === "/user") return res.end(JSON.stringify({ login: "alice" }));
+      if (req.url === "/user") return res.end(JSON.stringify({ login: files.login ?? "alice" }));
       // What a comment waits for ("/after #77"): the test sets its state, as JSON.
       const waitedFor = /^\/repos\/org\/repo\/issues\/(\d+)$/.exec(req.url);
       // A number: the status GitHub answers instead (a 5xx, a rate limit).
@@ -5463,23 +5463,28 @@ mounts:
   });
 
   test("a chat (#476): from the dashboard, a chat's sandbox, its messages to its inbox, nothing on GitHub, deleted", async (t) => {
-    // Sign-in goes to GITHUB_URL, the fake GitHub.
-    const listened = await listen(t, {}, (dir, github) => ({
+    // Sign-in goes to GITHUB_URL, the fake GitHub, as `files.login`.
+    const files = {};
+    const listened = await listen(t, files, (dir, github) => ({
       GITHUB_URL: github.url,
       MAX_RUNNING_CHATS: "1",
     }));
     const { dir, github, port, restart } = listened;
     const base = `http://127.0.0.1:${port}`;
-    const get = (path, cookie) =>
-      fetch(base + path, { redirect: "manual", headers: cookie ? { cookie } : {} });
-    const login = await get("/auth/login");
-    const to = new URL(login.headers.get("location"));
-    const state = login.headers.getSetCookie()[0].split(";")[0];
-    const back = await get(`/auth/callback?code=c&state=${to.searchParams.get("state")}`, state);
-    const session = back.headers
-      .getSetCookie()
-      .find((c) => c.startsWith("deckhand_session="))
-      .split(";")[0];
+    const get = (path, cookie, init = {}) =>
+      fetch(base + path, { redirect: "manual", headers: cookie ? { cookie } : {}, ...init });
+    const signIn = async (as) => {
+      files.login = as;
+      const login = await get("/auth/login");
+      const to = new URL(login.headers.get("location"));
+      const state = login.headers.getSetCookie()[0].split(";")[0];
+      const back = await get(`/auth/callback?code=c&state=${to.searchParams.get("state")}`, state);
+      return back.headers
+        .getSetCookie()
+        .find((c) => c.startsWith("deckhand_session="))
+        .split(";")[0];
+    };
+    const session = await signIn("alice");
     const api = (method, path, body) =>
       fetch(base + path, {
         method,
@@ -5543,6 +5548,24 @@ mounts:
     assert.ok(
       !github.requests.some((r) => r.method !== "GET" && /comments|reactions/.test(r.path)),
     );
+    // Its owner's alone: bob, allowed with every action on the repo (the fake opa's), doesn't
+    // reach it, see it, its run or its log, on the board or in /status.
+    const bob = await signIn("bob");
+    const [{ id: run }] = (await chat()).runs;
+    assert.equal((await get(`/api/runs/${run}/stream`, bob)).status, 404);
+    assert.equal((await get(`/api/chats/${id}`, bob)).status, 404);
+    assert.deepEqual((await (await get("/api/chats", bob)).json()).chats, []);
+    const theirs = await (await get("/api/state", bob)).json();
+    assert.deepEqual(theirs.tasks, []);
+    assert.ok(!JSON.stringify(theirs).includes(id));
+    const forwarded = { headers: { cookie: bob, "x-forwarded-for": "203.0.113.9" } };
+    const status = await (await get("/status", null, forwarded)).json();
+    assert.doesNotMatch(status.reasons.join("\n"), /chat/);
+    assert.equal(status.queued, 0);
+    // While its owner reads its log.
+    const own = await get(`/api/runs/${run}/stream`, session);
+    assert.equal(own.status, 200);
+    await own.body.cancel();
     // Deleted: its sandbox stopped, its volumes removed (those the fake docker has), the chat
     // gone.
     writeFileSync(join(dir, "volumes"), `${workspace}\n`);

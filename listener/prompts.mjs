@@ -513,7 +513,7 @@ const NEW_CONTAINER =
 
 // A chat that goes on after its sandbox stopped (chats.mjs): the clone was reset the same way.
 const CHAT_CONTAINER =
-  "The sandbox stopped while the user was away: this is a new container. The conversation is kept, and so are /workspace's commits and branches, but its uncommitted and untracked files were removed, and /tmp and the rest of the container's own files are new.";
+  "The sandbox stopped while the user was away: this is a new container. The conversation is kept, and so are /workspace's commits and branches, but its uncommitted and untracked files were removed, the default branch is checked out (`git branch` lists the branches you committed on), and /tmp and the rest of the container's own files are new.";
 
 // The run's first message, after its prompt: the comments. `started`: the session goes on.
 export function firstMessage({ mode, text, restored, started }) {
