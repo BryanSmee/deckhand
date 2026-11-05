@@ -11,6 +11,7 @@ import {
   createPolicies,
   knownAction,
   knownMode,
+  MAX_ACCESS,
   REPO_ACTIONS,
   SERVER_ACTIONS,
   STALE_LISTING_MS,
@@ -722,6 +723,39 @@ test("access: a repo's policies kept per default branch, a listed one and a read
   await policies.access("bob", listed);
   await policies.access("bob", "acme/api");
   assert.equal(listings(), 4);
+});
+
+test("access: the policy listings kept for MAX_ACCESS repositories at most, the one listed longest ago dropped first (#854)", async (t) => {
+  const names = Array.from({ length: MAX_ACCESS + 1 }, (_, i) => `acme/r${i}`);
+  const repos = Object.fromEntries(names.map((name) => [name, {}]));
+  const { github, calls } = fakeGithub(repos);
+  const engine = policyEngineOf(t, { readOperator: () => new Map() });
+  const clock = { now: 0 };
+  const policies = createPolicies({
+    config: {},
+    github,
+    service: localService(engine),
+    now: () => clock.now,
+  });
+  const info = (name) => ({ full_name: name, private: false, default_branch: "main" });
+  const listings = (name) =>
+    calls.filter((p) => p === `/repos/${name}/contents/.deckhand/policy`).length;
+  // r0 listed first, then again once its listing is 10 minutes old, after the others but one:
+  // the oldest listing is r1's.
+  await policies.access("bob", info("acme/r0"));
+  clock.now += 10 * 60_000;
+  for (const name of names.slice(1, -1)) await policies.access("bob", info(name));
+  await policies.access("bob", info("acme/r0"));
+  assert.equal(listings("acme/r0"), 2);
+  await policies.access("bob", info(names.at(-1)));
+  // Past access()'s own cache, the listings alone decide what GitHub is asked again.
+  clock.now += ACCESS_MS;
+  for (const name of ["acme/r0", "acme/r2", names.at(-1)]) {
+    await policies.access("bob", info(name));
+    assert.equal(listings(name), name === "acme/r0" ? 2 : 1, name);
+  }
+  await policies.access("bob", info("acme/r1"));
+  assert.equal(listings("acme/r1"), 2);
 });
 
 test("access: a repository's name is owner/repo, nothing GitHub's paths would read otherwise", async (t) => {
