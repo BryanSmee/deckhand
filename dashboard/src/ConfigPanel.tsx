@@ -689,7 +689,7 @@ function GrantCard({ grant }: { grant: Grant }) {
   }
   if (grant.allowProjects.length)
     lists.push(["allow_projects", grant.allowProjects.join(t("list.comma"))]);
-  lists.push(["limits", t("config.grantLimits", { cpus, memory, pids })]);
+  lists.push(["limits", t("config.grantLimits", { cpus, memory, pids: String(pids) })]);
   return (
     <div class={styles.card}>
       <ul class={styles.flags} aria-label={t("config.grantSwitches")}>
