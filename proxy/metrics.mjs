@@ -145,3 +145,6 @@ export function egressMetrics(registry = createRegistry(), { cache = null } = {}
     gateway: (target, status) => gateway.inc({ target, status: statusLabel(status) }),
   };
 }
+
+// Every metric its server declares, and test/metrics-services.test.mjs: egressMetrics()'s alone.
+export const declareMetrics = egressMetrics;

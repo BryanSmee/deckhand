@@ -7,6 +7,7 @@
 // ../listener/runner/kube-probe.mjs): a caller without one counts nothing. What only the acting
 // copy knows (its sandboxes, the probe's verdict) has no samples on the waiting one.
 import { AGENTS } from "../listener/agents/index.mjs";
+import { leaseMetric } from "../lib/metrics.mjs";
 
 // Seconds, for a sandbox's start (an image pulled, an agent installed: minutes) and an image's
 // build (a big one: tens of minutes).
@@ -165,3 +166,13 @@ export const startFailure = (error) =>
     : error?.status === 403
       ? "refused"
       : "error";
+
+// Every metric the runner's server declares (server.mjs), and test/metrics-services.test.mjs:
+// its own (runnerMetrics()'s arguments) and its lease, held while `active()`. → { counted:
+// runnerMetrics()'s hooks, leases: leaseMetric()'s }.
+export function declareMetrics(registry, { runner, sandboxes, active }) {
+  return {
+    counted: runnerMetrics(registry, { runner, sandboxes, active }),
+    leases: leaseMetric(registry, { runner: active }),
+  };
+}

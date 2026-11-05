@@ -4,7 +4,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createRegistry } from "../lib/metrics.mjs";
-import { runnerMetrics, startFailure } from "../runner/metrics.mjs";
+import { declareMetrics, runnerMetrics, startFailure } from "../runner/metrics.mjs";
 
 const samples = (text, name) =>
   text.split("\n").filter((line) => line.startsWith(name) && !line.startsWith("#"));
@@ -70,4 +70,16 @@ test("Docker's runner has no network probe's metrics", async () => {
   const metrics = runnerMetrics(registry, { runner: "docker", active: () => true });
   metrics.probed("isolated", 1);
   assert.ok(!(await registry.render()).includes("deckhand_network"));
+});
+
+test("declareMetrics: the runner's lease held while it acts, its takeovers counted", async () => {
+  const registry = createRegistry();
+  let active = false;
+  const { leases } = declareMetrics(registry, { runner: "docker", active: () => active });
+  assert.match(await registry.render(), /^deckhand_lease_held\{lease="runner"\} 0$/m);
+  active = true;
+  leases.taken();
+  const text = await registry.render();
+  assert.match(text, /^deckhand_lease_held\{lease="runner"\} 1$/m);
+  assert.match(text, /^deckhand_lease_takeovers_total\{lease="runner"\} 1$/m);
 });

@@ -72,3 +72,6 @@ export function policyMetrics(registry) {
     reload: (result) => reloads.inc({ result }),
   };
 }
+
+// Every metric its server declares, and test/metrics-services.test.mjs: policyMetrics()'s alone.
+export const declareMetrics = policyMetrics;

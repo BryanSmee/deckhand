@@ -8,7 +8,7 @@
 // (`/api/runs/:id/stream`), `other` for one edge doesn't serve, so no request makes a series.
 import { APP_EVENTS } from "../listener/github-app.mjs";
 import { SHOT_PATH } from "../lib/shots.mjs";
-import { OTHER } from "../lib/metrics.mjs";
+import { leaseMetric, OTHER } from "../lib/metrics.mjs";
 import { countKeys } from "../lib/store.mjs";
 
 // The events GitHub sends: the App's (APP_EVENTS), and those it sends every App unasked.
@@ -225,5 +225,15 @@ export function edgeMetrics(registry, { store, now = Date.now }) {
         open = false;
       };
     },
+  };
+}
+
+// Every metric edge's server declares (server.mjs), and test/metrics-services.test.mjs: its own
+// and the redeliveries' lease (`redeliveries()`: whether this copy polls). → { counted:
+// edgeMetrics()'s hooks, leases: leaseMetric()'s }.
+export function declareMetrics(registry, { store, redeliveries, now }) {
+  return {
+    counted: edgeMetrics(registry, { store, now }),
+    leases: leaseMetric(registry, { "edge/redeliveries": redeliveries }),
   };
 }
