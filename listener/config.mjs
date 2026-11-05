@@ -311,7 +311,7 @@ export function readConfigFile(env, read) {
 export function storeFolder(storeUrl, dir) {
   if (!String(storeUrl).startsWith("file:")) return null;
   const path = relative(resolve(dir), fileURLToPath(storeUrl));
-  if (path.startsWith("..") || isAbsolute(path)) return null;
+  if (path === ".." || path.startsWith(`..${sep}`) || isAbsolute(path)) return null;
   return path.split(sep)[0];
 }
 
@@ -331,11 +331,17 @@ export function dataToCheck(dir, folder, { list = listDir, exists = existsSync }
 
 // What a release before left in the data volume that nothing reads any more, once its moves are
 // done (#619): its entries but the store's folder and what the moves still take (`moving`: logs/,
-// shots/, the maps' files, for a later start). None with the store at the volume's root: every
-// entry is the store's then.
+// shots/, the maps' files, for a later start), and in logs/ what no move reads (a run log from
+// before the runner service, logs/<run>.log, say), as `logs/<name>`. None with the store at the
+// volume's root: every entry is the store's then.
 export function leftInData(dir, folder, moving, { list = listDir } = {}) {
   if (folder === "") return [];
-  return list(dir).filter((name) => name !== folder && !moving.has(name));
+  const left = list(dir).filter((name) => name !== folder && !moving.has(name));
+  const logs = folder === "logs" ? [] : list(join(dir, "logs"));
+  // The moves still read its .json files: the summaries and those kept (`.summary.json`,
+  // runlog.mjs moveSummaries()), the states and queues (`.live.json`, `.queued.json`, restart.mjs).
+  const stale = logs.filter((name) => !name.endsWith(".json"));
+  return [...left, ...stale.map((name) => `logs/${name}`)];
 }
 
 // The screenshots' folder of the data volume: one folder per run, which the orchestrator makes

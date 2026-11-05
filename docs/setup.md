@@ -1792,9 +1792,32 @@ and its copies go to any node. What changes for you:
   this release reads only from there: without it, those runs leave the dashboard's history and
   those comments are lost. Once it started, its log says what it moved, and the volume holds
   nothing but what it names as no longer read (`ls -A /data`); the next update of the
-  Deployment drops the mount. With kustomize, a patch in your overlay for that one update:
+  Deployment drops the mount. With kustomize, the claim and a patch for that one update, in an
+  overlay around yours: the `redis` component no longer renders the claim, so an apply that
+  prunes (`kubectl apply --prune`, Argo CD or Flux with pruning on) would delete it during the
+  update itself, before that start, and the patch would mount nothing. Rendered again, it stays
+  (around yours, as the component's deletion comes after the resources of its own overlay):
 
   ```yaml
+  # orchestrator-data.yaml: the claim as the release before made it, rendered again for this
+  # one update (your overlay's storage class, if it set one).
+  apiVersion: v1
+  kind: PersistentVolumeClaim
+  metadata:
+    name: orchestrator-data
+    namespace: deckhand
+  spec:
+    accessModes: [ReadWriteMany]
+    resources:
+      requests:
+        storage: 5Gi
+  ```
+
+  ```yaml
+  # kustomization.yaml, beside it: your overlay (with components/redis) as its resource.
+  resources:
+    - ../your-overlay
+    - orchestrator-data.yaml
   patches:
     # For the first start on this release alone: the old claim, mounted again (#619).
     - patch: |
@@ -1833,6 +1856,15 @@ and its copies go to any node. What changes for you:
   With Compose and your own Redis override, leave the `data` volume in its `volumes` for that
   start, and take it out after.
 
+  On Kubernetes, applying your own overlay again after that start, a pruning apply deletes the
+  claim: what you want then, the start having moved what it held. To keep it longer (or if you
+  prune and can't render it again), mark it before the update, for Argo CD or for Flux:
+
+  ```sh
+  kubectl -n deckhand annotate pvc orchestrator-data argocd.argoproj.io/sync-options=Prune=false
+  kubectl -n deckhand annotate pvc orchestrator-data kustomize.toolkit.fluxcd.io/prune=disabled
+  ```
+
 - **The older moves are gone**: a listener's `queue.json` (from before the store), its App's
   credentials (`app.json` with its key, `session.key`, `sessions.json`, `redeliveries.json`,
   handed to the github service and edge), its `reactions.json` (the github service's since
@@ -1849,14 +1881,17 @@ and its copies go to any node. What changes for you:
   `orchestrator-screenshots` claim is gone from the base and the chart
   (`persistence.sizes.orchestrator-screenshots`).
 - **What is left in `/data`**: once moved, the orchestrator removes the emptied `logs/` and
-  `shots/`, and names in its log anything else beside the store that nothing reads any more
-  (`/data holds <names>, which no longer is read: remove it`). Remove them then. Once the
+  `shots/`, and names in its log anything else beside the store that nothing reads any more, in
+  `logs/` too (a run log from before the runner service, `logs/<run>.log`), as in
+  `/data holds run-token.key, which no longer is read: remove it`. Remove them then. Once the
   orchestrator has started once on this release, the screenshots' volume can go, and with Redis
   its `data` volume too. Compose: `docker volume rm deckhand-screenshots`, and
   `docker volume rm <project>_data` (`docker volume ls` names it). Kubernetes:
-  `kubectl -n deckhand delete pvc orchestrator-screenshots`, and `orchestrator-data`. Kustomize
-  doesn't delete a claim by itself, and the chart's carry `helm.sh/resource-policy: keep`: a
-  `helm upgrade` leaves them too.
+  `kubectl -n deckhand delete pvc orchestrator-screenshots`, and `orchestrator-data`. A
+  `kubectl apply -k` without pruning doesn't delete a claim it no longer renders, and the
+  chart's carry `helm.sh/resource-policy: keep`: a `helm upgrade` leaves them too. An apply that
+  prunes deletes them (the screenshots' claim at the update: the release before moved what it
+  held at its own start, #609), but for a claim marked as above.
 - **A summary the store refuses at a run's end** is no longer kept in
   `logs/<run>.summary.json`: the run's end tries the store again every 5 seconds until it lands,
   the run keeping its sandbox, its state and its task meanwhile. A copy that stops first leaves

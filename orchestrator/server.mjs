@@ -1287,7 +1287,9 @@ const runEvents = createRunEvents({
       get logFile() {
         return (file ??= runnerClient.logs.open(id, { size: null }));
       },
-      // Once it has one: its end writes it, with this, or not yet.
+      // Once it has one: its end writes it, with this, or not yet. Tried once: the run's summary
+      // is in the store already (its end's, tried until it landed), and a late detail (its exit
+      // code) lost to a store away is logged, not worth holding anything for.
       save: () => record.finishedAt && saveSummary(store, record, { log, secrets: storeSecrets() }),
     };
   },

@@ -2979,6 +2979,46 @@ mounts:
     assert.doesNotMatch(ctx.listener.output(), /no longer is read/);
   });
 
+  // A run's end whose summary the store refuses (#619), its copy stopping meanwhile: the run left
+  // as it is, its sandbox and its state, the next copy ends it once: its summary saved, its
+  // sandbox and state gone, its reactions set, and no second reply.
+  test("a run's summary the store refuses as its copy stops: the next copy ends the run once", async (t) => {
+    const ctx = await holding(t);
+    const { dir, github } = ctx;
+    // A folder where the store writes the run's summary (its items a file each, keys/): the
+    // write refused, whoever runs the test.
+    const [{ id }] = liveStates(dir);
+    const blocked = join(dir, "store", "keys", fileName(`summaries/${id}`));
+    mkdirSync(blocked, { recursive: true });
+    writeFileSync(join(dir, "go"), "");
+    await ctx.listener.until(/saving the summary of /);
+    assert.equal(replies(github).length, 1);
+    const old = ctx.listener.child;
+    const { output } = await ctx.handOver({
+      // Taken again once the stopping copy is gone: it gave the run up.
+      between: async () => {
+        if (old.exitCode === null && !old.signalCode) {
+          await new Promise((resolve) => old.once("exit", resolve));
+        }
+        rmSync(blocked, { recursive: true });
+      },
+    });
+    assert.match(
+      output,
+      /its summary not saved as this copy stops: the run stays for the next one/,
+    );
+    await ctx.listener.until("done (ok)");
+    await settled(github, [99]);
+    await until(() => !liveStates(dir).length, "the run's state to go");
+    assert.equal(summary(dir)?.status, "ok");
+    assert.deepEqual(readdirSync(join(dir, "containers")), []);
+    assert.equal(replies(github).length, 1);
+    const rockets = github.requests.filter(
+      (r) => r.path === "/repos/org/repo/issues/comments/99/reactions" && /rocket/.test(r.body),
+    );
+    assert.equal(rockets.length, 1);
+  });
+
   // What a release before left in the data volume (#619): moved, its emptied folders removed, and
   // what nothing reads any more named for the operator, never the store nor what still moves.
   test("a data volume of a release before: moved, emptied, what is left named", async (t) => {
@@ -2989,14 +3029,22 @@ mounts:
       mkdirSync(join(data, "shots"));
       writeFileSync(join(data, "titles.json"), JSON.stringify({ "org/repo#5": "Five" }));
       writeFileSync(join(data, "run-token.key"), "old");
+      // A run log from before the runner service, whose move is gone, beside a summary moved.
+      writeFileSync(join(data, "logs", "org-repo-1-1000.log"), "{}\n");
+      writeFileSync(
+        join(data, "logs", "org-repo-2-1000.json"),
+        JSON.stringify({ id: "org-repo-2-1000", key: "org/repo#2", startedAt: Date.now() }),
+      );
       return { ORCHESTRATOR_DATA_DIR: data };
     });
     const line = await listener.until(/holds .*, which no longer is read/);
     assert.match(
       line,
-      /holds run-token\.key, which no longer is read: remove it \(docs\/setup\.md#upgrading-the-orchestrator-without-a-volume-619\)/,
+      /holds run-token\.key, logs\/org-repo-1-1000\.log, which no longer is read: remove them \(docs\/setup\.md#upgrading-the-orchestrator-without-a-volume-619\)/,
     );
-    assert.deepEqual(readdirSync(data).sort(), ["run-token.key", "store"]);
+    // shots/ emptied, removed; logs/ kept for what is left in it.
+    assert.deepEqual(readdirSync(data).sort(), ["logs", "run-token.key", "store"]);
+    assert.deepEqual(readdirSync(join(data, "logs")), ["org-repo-1-1000.log"]);
   });
 
   test("a listener killed mid-run: Claude answers meanwhile, the next one replies once", async (t) => {

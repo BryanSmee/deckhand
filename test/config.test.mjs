@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { constants, readFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import {
   ConfigError,
@@ -1021,6 +1021,9 @@ test("storeFolder: the store's folder in the data volume, the volume itself, or 
   assert.equal(storeFolder(url(), dir), "");
   assert.equal(storeFolder(pathToFileURL(resolve("elsewhere", "store")).href, dir), null);
   assert.equal(storeFolder(pathToFileURL(`${dir}-2`).href, dir), null);
+  assert.equal(storeFolder(pathToFileURL(dirname(dir)).href, dir), null);
+  // A folder whose name starts with "..", in it.
+  assert.equal(storeFolder(url("..store"), dir), "..store");
   assert.equal(storeFolder("redis://deckhand@redis:6379", dir), null);
   assert.equal(storeFolder("memory:", dir), null);
 });
@@ -1049,12 +1052,28 @@ test("dataToCheck: the whole volume, the store's folder alone, or nothing", () =
 test("leftInData: what nothing reads any more, never the store's nor what is still moving", () => {
   const dir = resolve("data-619");
   const moving = new Set(["logs", "shots", "titles.json"]);
-  const list = () => ["store", "logs", "shots", "titles.json", "run-token.key", "queue.json"];
-  assert.deepEqual(leftInData(dir, "store", moving, { list }), ["run-token.key", "queue.json"]);
+  const entries = {
+    [dir]: ["store", "logs", "shots", "titles.json", "run-token.key", "queue.json"],
+    // What no move reads any more (a run log from before the runner service) beside what they do.
+    [join(dir, "logs")]: [
+      "a-1.log",
+      "a-1.json",
+      "b-2.summary.json",
+      "c-3.live.json",
+      "d.queued.json",
+    ],
+  };
+  const list = (path) => entries[path] ?? [];
+  assert.deepEqual(leftInData(dir, "store", moving, { list }), [
+    "run-token.key",
+    "queue.json",
+    "logs/a-1.log",
+  ]);
   assert.deepEqual(leftInData(dir, null, moving, { list }), [
     "store",
     "run-token.key",
     "queue.json",
+    "logs/a-1.log",
   ]);
   // The store at the volume's root: its own files, never named.
   assert.deepEqual(leftInData(dir, "", moving, { list: () => ["state.json", "keys"] }), []);
