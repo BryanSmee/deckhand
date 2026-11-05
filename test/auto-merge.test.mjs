@@ -52,13 +52,15 @@ const PR = {
   html_url: "https://github.com/org/repo/pull/5",
   user: { login: "deckhand-app[bot]", type: "Bot" },
   head: { sha: "sha-1", repo: { full_name: "org/repo" } },
+  base: { ref: "main" },
   mergeable_state: "clean",
   changed_files: 1,
 };
 
 // A fake GitHub with a mergeable pull request; `over` changes what it answers: `pr` (or
 // `pulls`, successive answers), `info` (the repo), `files`, `runs` (Actions), `issueLabels`,
-// `merge` (the merge's status), `pullStatus` (GET of the pull request failing), `filesStatus`
+// `merge` (the merge's status), `behind` (the commits `main` has that the head doesn't; a status
+// when GitHub can't compare them, `compareStatus`), `pullStatus` (GET of the pull request failing), `filesStatus`
 // (GET of its files failing), `filesFail` (the next reads of its files failing, a count).
 function fakeGitHub(over = {}) {
   const calls = [];
@@ -92,6 +94,10 @@ function fakeGitHub(over = {}) {
       if (over.runsStatus) return new Response("{}", { status: over.runsStatus });
       const runs = over.runs ?? [{ name: "CI", status: "completed", conclusion: "success" }];
       return Response.json({ workflow_runs: runs });
+    }
+    if (method === "GET" && /^\/repos\/org\/repo\/compare\/main\.\.\.[^/?]+\?per_page=1$/.test(p)) {
+      if (over.compareStatus) return new Response("{}", { status: over.compareStatus });
+      return Response.json({ status: "ahead", behind_by: over.behind ?? 0 });
     }
     if (method === "GET" && p === "/repos/org/repo/issues/12") {
       return Response.json({ labels: over.issueLabels ?? [] });
@@ -332,6 +338,18 @@ test("auto-merge: each gate refuses with a comment", async (t) => {
     [{ pr: { mergeable_state: "dirty" } }, /`mergeable_state: dirty`/],
     [{ pr: { mergeable_state: "behind" } }, /`mergeable_state: behind`/],
     [{ pr: { mergeable_state: "blocked" } }, /`mergeable_state: blocked`/],
+    // Behind its base with GitHub still saying `clean` (no branch protection, #778).
+    [
+      { behind: 3 },
+      /its branch is 3 commits behind `main`, which its checks didn't run with: update the branch\./,
+    ],
+    [{ behind: 1 }, /its branch is 1 commit behind `main`/],
+    // At once, its checks still going: none finishing brings the base's commits in.
+    [
+      { behind: 2, runs: [{ name: "CI", status: "in_progress", conclusion: null }] },
+      /its branch is 2 commits behind `main`/,
+    ],
+    [{ compareStatus: 404 }, /it can't be compared with `main`/],
     [
       { pr: { mergeable_state: "unstable" } },
       /a check or commit status on sha-1 that isn't a GitHub Actions run is pending or failing/,
@@ -675,6 +693,7 @@ test("decisions: each one a policy was asked for is kept for the task's page", a
     { name: "Merge method squash allowed", passed: true },
     { name: "No trusted file changed", passed: true },
     { name: "Cleanly mergeable", passed: true },
+    { name: "Up to date with main", passed: true },
     { name: "Checks green", passed: true },
   ]);
   // And the input the rules saw, as evaluated.

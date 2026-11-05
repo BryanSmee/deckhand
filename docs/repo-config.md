@@ -929,6 +929,8 @@ Follow-ups and notes never block a merge.
   Actions run passed means a check or commit status that isn't an Actions run (an external
   CI, a bot's status) is pending or failing: the App can't read those, so that refuses too,
   saying so;
+- its branch isn't behind its base (`GET /compare`), even without branch protection: its
+  checks didn't run with the base's latest commits. Refused at once;
 - last, the operator's and the repository's [policies](#policies) (`deny_merge`): any message
   refuses the merge, and the comment quotes it.
 
