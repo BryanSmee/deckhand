@@ -727,6 +727,33 @@ test("a repo's config: the policies that apply, with their text; none without an
   assert.deepEqual(bare, { files: [], errors: [], warnings: [] });
 });
 
+test("a repo's config: the access actions its rules name that nobody knows, unless they don't compile (#765)", async () => {
+  const asked = [];
+  let errors = [];
+  const policies = {
+    describe: async () => ({ files: [], errors, warnings: ["a.rego: said"], policies: new Map() }),
+    accessNameWarnings: async (repo, base) => {
+      asked.push([repo, base]);
+      return ["`deny_access` of the repository's policies names `logz:read`"];
+    },
+  };
+  const { api } = apiSetup({ first: [info("org/app")], configured: ["org/app"], policies });
+  const shown = async () => (await call(api, "GET", "/api/repos/org/app/config")).body.policies;
+  assert.deepEqual((await shown()).warnings, [
+    "a.rego: said",
+    "deny_access of the repository's policies names logz:read",
+  ]);
+  assert.deepEqual(asked, [["org/app", "main"]]);
+  // An ignored rule compiles all the same: still asked.
+  errors = [
+    { file: "a.rego", row: 1, message: "ignored", text: "a.rego:1: ignored", ignored: true },
+  ];
+  assert.equal((await shown()).warnings.length, 2);
+  errors = [{ file: "a.rego", row: 1, message: "eof", text: "a.rego:1: eof" }];
+  assert.deepEqual((await shown()).warnings, ["a.rego: said"]);
+  assert.equal(asked.length, 2);
+});
+
 test("a repo's config: what each mode's runs get, the file that decided it, what stops them", async () => {
   const fake = capabilityPolicies({
     denies: ({ mode }) =>

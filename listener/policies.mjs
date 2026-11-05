@@ -763,18 +763,20 @@ export function createPolicies({
     }
   }
 
-  // The actions `layers`' access rules name that Deckhand doesn't have (knownAction()), for the
-  // config checks (#765): a misspelled deny takes nothing away, unseen otherwise. Only evaluating
-  // the rules says them: on each allowed login (or one nobody has, with none), on `repo` (its
-  // name: private and public) and server-wide (the operator's layer alone: a repository's rules
-  // count only on it). A repository's allow rules are ignored (compile() says so): not read.
-  // Without `operator`, its rules aren't asked, only `layers.repo`'s. Each name said once; the
-  // policies failing, nothing (the compile check says why).
-  async function accessActionWarnings(layers, repo = null, { operator = true } = {}) {
-    // Deckhand's every action alone: nothing to say, without a call.
-    if (operator && (await everyAction({ repo: new Map(), ...layers }))) {
-      return [];
-    }
+  // accessActionWarnings()'s answers, by both layers' digests, the inputs' repository and the
+  // logins asked: the config panel asks on every load. ACCESS_MS, as access()'s.
+  const actionsKept = new Map();
+
+  // The actions the access rules of the layers `read()` gives ({ operator, repo }: policiesFor()'s)
+  // name that Deckhand doesn't have (knownAction()), for the config checks (#765): a misspelled
+  // deny takes nothing away, unseen otherwise. Only evaluating the rules says them: on each
+  // allowed login (or one nobody has, with none), on `repo` (its name: private and public) and
+  // server-wide (the operator's layer alone: a repository's rules count only on it). A
+  // repository's allow rules are ignored (compile() says so): not read. Without `operator`, its
+  // rules aren't asked, only the repository's. Each name said once; the policies failing,
+  // nothing (the compile check says why). The service's operator layer not the one read:
+  // read again, once, as access() does.
+  async function accessActionWarnings(read, repo = null, { operator = true } = {}) {
     const logins = [...new Set((config?.users ?? []).map((u) => String(u).toLowerCase()))].slice(
       0,
       MAX_CHECKED_LOGINS,
@@ -795,25 +797,56 @@ export function createPolicies({
       }
     }
     if (!Object.keys(inputs).length) return [];
-    const said = await evaluateSets("access", layers, inputs, { operator });
-    if (said.error) return [];
-    const warnings = new Set();
-    for (const result of Object.values(said.results)) {
-      for (const layer of ["operator", "repo"]) {
-        const rules = result[layer];
-        if (!rules) continue;
-        if (layer === "operator") {
-          for (const action of rules.allow.keys()) {
-            if (!knownAction(action)) warnings.add(unknownAction("allow_access", action, layer));
+    for (let attempt = 0; ; attempt++) {
+      let layers;
+      try {
+        layers = await read();
+      } catch {
+        return [];
+      }
+      // Deckhand's every action alone: nothing to say, without a call.
+      if (operator && (await everyAction({ repo: new Map(), ...layers }))) return [];
+      const key = JSON.stringify([
+        layerDigest(layers.operator ?? new Map()),
+        layerDigest(layers.repo ?? new Map()),
+        operator,
+        where,
+        logins,
+      ]);
+      const kept = actionsKept.get(key);
+      if (kept && now() - kept.at < ACCESS_MS) return [...kept.said];
+      const said = await evaluateSets("access", layers, inputs, { operator });
+      if (said.mismatch && attempt === 0) {
+        knownOwn = null;
+        continue;
+      }
+      if (said.error) return [];
+      const warnings = new Set();
+      for (const result of Object.values(said.results)) {
+        for (const layer of ["operator", "repo"]) {
+          const rules = result[layer];
+          if (!rules) continue;
+          if (layer === "operator") {
+            for (const action of rules.allow.keys()) {
+              if (!knownAction(action)) warnings.add(unknownAction("allow_access", action, layer));
+            }
+          }
+          for (const d of rules.deny) {
+            if (!knownAction(d.action)) warnings.add(unknownAction("deny_access", d.action, layer));
           }
         }
-        for (const d of rules.deny) {
-          if (!knownAction(d.action)) warnings.add(unknownAction("deny_access", d.action, layer));
-        }
       }
+      if (actionsKept.size >= MAX_ACCESS) actionsKept.delete(actionsKept.keys().next().value);
+      actionsKept.set(key, { at: now(), said: [...warnings] });
+      return [...warnings];
     }
-    return [...warnings];
   }
+
+  // The actions `repo`'s policies on `ref` (its default branch) and the operator's name that
+  // Deckhand doesn't have, on that repository and server-wide (accessActionWarnings()): what the
+  // config panel says beside describe()'s warnings (repos.mjs policyView()).
+  const accessNameWarnings = (repo, ref) =>
+    accessActionWarnings(() => policiesFor(repo, ref), repo);
 
   // grants()'s answers, by the operator's layer (its digest) and the repository: the same files
   // give the same answer, so an edit is asked again at once. GRANTS_MS bounds a rule reading the
@@ -1327,7 +1360,7 @@ export function createPolicies({
       const bots = botsReviewed(operator.get(BOT_REVIEWS));
       const actions = checked.errors.length
         ? []
-        : await accessActionWarnings({ operator: files, repo: new Map() });
+        : await accessActionWarnings(async () => ({ operator: await defaults(), repo: new Map() }));
       return { ...checked, warnings: [...checked.warnings, ...(bots ? [bots] : []), ...actions] };
     } catch (error) {
       return { errors: [error.message ?? String(error)], warnings: [] };
@@ -1350,7 +1383,11 @@ export function createPolicies({
     // an ignored rule compiles all the same.
     const actions = errors.some((e) => !e.ignored)
       ? []
-      : await accessActionWarnings({ operator: under, repo: own }, repo, { operator: false });
+      : await accessActionWarnings(
+          async () => ({ operator: await defaults().catch(() => under), repo: own }),
+          repo,
+          { operator: false },
+        );
     return {
       errors: errors.map((e) => e.text),
       warnings: [...warnings, ...shadowing(own, under), ...actions],
@@ -1404,8 +1441,6 @@ export function createPolicies({
     ]);
     const review = operator.find((f) => f.name === BOT_REVIEWS);
     const bots = review && botsReviewed(review.text);
-    const broken = [...errors, ...up.errors, ...down.errors].some((e) => !e.ignored);
-    const actions = broken ? [] : await accessActionWarnings(policies, repo);
     return {
       files: files.map(({ text, ...f }) => ({ ...f, rules: rulesOf(text), ...shown(text) })),
       errors: [...errors, ...up.errors, ...down.errors],
@@ -1414,7 +1449,6 @@ export function createPolicies({
         ...down.warnings,
         ...shadowing(policies.repo, policies.operator),
         ...(bots ? [bots] : []),
-        ...actions,
       ],
       policies,
     };
@@ -1446,6 +1480,7 @@ export function createPolicies({
     deny,
     decide,
     capabilityRules,
+    accessNameWarnings,
     evaluateCapabilities,
     grants,
     access,

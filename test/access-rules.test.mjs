@@ -720,7 +720,11 @@ deny_access contains {"action": "runs:manage", "reason": "spelled right"}
         },
       },
     };
-    const { policies } = realAccess(t, { operator, repos, config: { users: ["Alice", "bob"] } });
+    const { policies, asked } = realAccess(t, {
+      operator,
+      repos,
+      config: { users: ["Alice", "bob"] },
+    });
     const said = (rule, action, layer) =>
       new RegExp(
         `^\`${rule}\` of the ${layer} policies names \`${RegExp.escape(action)}\`, which isn't an action Deckhand knows`,
@@ -747,16 +751,28 @@ deny_access contains {"action": "runs:manage", "reason": "spelled right"}
       start.warnings.find((w) => /run:start/.test(w)),
       /it takes nothing away$/,
     );
-    // The config panel of a repository: the binding's too, and the repository's deny that only
-    // applies were it public.
-    const described = await policies.describe("acme/api", "main");
+    // The config panel of a repository (repos.mjs policyView()): the binding's too, and the
+    // repository's deny that only applies were it public. describe() doesn't evaluate them: the
+    // dry run doesn't show its warnings.
+    assert.equal(
+      (await policies.describe("acme/api", "main")).warnings.filter((w) =>
+        w.includes("isn't an action Deckhand knows"),
+      ).length,
+      0,
+    );
+    const before = asked();
+    const panel = await policies.accessNameWarnings("acme/api", "main");
+    assert.equal(asked(), before + 1);
     matching(
-      described.warnings,
+      panel,
       said("allow_access", "task:read", "operator's"),
       said("allow_access", "tsks:read", "operator's"),
       said("deny_access", "run:start:work", "operator's"),
       said("deny_access", "logz:read", "repository's"),
     );
+    // Kept for the same files: the panel's next load asks nothing.
+    assert.deepEqual(await policies.accessNameWarnings("acme/api", "main"), panel);
+    assert.equal(asked(), before + 1);
     // The onboarding check: the repository's own rules alone.
     const checked = await policies.checkRepo("acme/api", "main");
     assert.deepEqual(checked.errors, []);
