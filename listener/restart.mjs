@@ -94,6 +94,54 @@ function pick({ repo, id, kind, number, name, base, discussionId, settings, owne
 // end its queue's write or its state's removal (removeLive()).
 export const QUEUE_RETRY_MS = 5000;
 
+// How often a run's end that still waits for the store is logged again (endWait()).
+export const ENDING_LOG_MS = 10 * 60_000;
+
+// A run's end waiting for the store (#821): its summary (runs.mjs summarySaved()), or the queue
+// and its state's removal (removeLive()). Such a run holds its task and a parallel slot until
+// the store takes the write, which a store refusing it for good (a summary file it can't write,
+// a Redis ACL without the key) never does: the run is kept in `ctx.endsWaiting` (run id →
+// { key, what, since, tries, error }), which the orchestrator's /ready and its warnings on the
+// dashboard's status page say (endsWaitingWarnings()), and logged again every ENDING_LOG_MS.
+// Not given up: a store away for an hour is the same refusal, and the run's summary is kept
+// nowhere else (#619). → { failed(error), done() }, failed() at each refusal, done() once the
+// write landed or the copy leaves the run to the next one.
+export function endWait(ctx, live, what) {
+  const now = () => (ctx.now ?? Date.now)();
+  const waits = (ctx.endsWaiting ??= new Map());
+  let entry = null;
+  return {
+    failed(error) {
+      const at = now();
+      if (!entry) {
+        entry = { key: live.key, what, since: at, tries: 0, error: null, loggedAt: at };
+        waits.set(live.id, entry);
+      }
+      entry.tries++;
+      if (error) entry.error = String(error.message ?? error).slice(0, 200);
+      if (at - entry.loggedAt < (ctx.endingLogMs ?? ENDING_LOG_MS)) return;
+      entry.loggedAt = at;
+      const minutes = Math.round((at - entry.since) / 60_000);
+      ctx.log(
+        `${live.key}: ${what} still not saved, ${entry.tries} tries in ${minutes} min${entry.error ? ` (${entry.error})` : ""}: the run holds its task and a parallel slot until the store takes it`,
+      );
+    },
+    done() {
+      if (entry && waits.get(live.id) === entry) waits.delete(live.id);
+      entry = null;
+    },
+  };
+}
+
+// The runs whose end waits for the store (endWait()), a line each, for the orchestrator's
+// warnings on the dashboard's status page (health.mjs).
+export function endsWaitingWarnings(ctx, now = Date.now()) {
+  return [...(ctx.endsWaiting?.values() ?? [])].map((e) => {
+    const minutes = Math.max(1, Math.round((now - e.since) / 60_000));
+    return `${e.key}: its end waits for the store (${e.what}, ${minutes} min${e.error ? `: ${e.error}` : ""}), holding its task and a parallel slot`;
+  });
+}
+
 // How long a start waits for the runner to say whether the restored runs' inboxes are open.
 export const RESTORE_WAIT_MS = 10_000;
 
@@ -529,22 +577,32 @@ export function createRestart(ctx) {
       return new Promise((resolve) => setTimeout(() => resolve(true), retryMs).unref?.());
     };
     let said = false;
-    while (!(await saveQueue())) {
-      if (!said) log(`${live.key}: its state stays until the queue is saved with what it put back`);
-      said = true;
-      if (!(await again("saving the queue"))) return false;
-    }
-    for (;;) {
-      try {
-        await ctx.store.delete(liveKey(live.id));
-        // A file of the release before it was moved from, whose tokens the broker service may
-        // not have had yet: the run is over, they name nothing.
-        forgetMoved(live.id);
-        return true;
-      } catch (error) {
-        log(`${live.key}: removing its state: ${error.stack ?? error}`);
-        if (!(await again("removing its state"))) return false;
+    let wait = endWait(ctx, live, "the queue");
+    try {
+      while (!(await saveQueue())) {
+        if (!said)
+          log(`${live.key}: its state stays until the queue is saved with what it put back`);
+        said = true;
+        wait.failed();
+        if (!(await again("saving the queue"))) return false;
       }
+      wait.done();
+      wait = endWait(ctx, live, "its state's removal");
+      for (;;) {
+        try {
+          await ctx.store.delete(liveKey(live.id));
+          // A file of the release before it was moved from, whose tokens the broker service may
+          // not have had yet: the run is over, they name nothing.
+          forgetMoved(live.id);
+          return true;
+        } catch (error) {
+          log(`${live.key}: removing its state: ${error.stack ?? error}`);
+          wait.failed(error);
+          if (!(await again("removing its state"))) return false;
+        }
+      }
+    } finally {
+      wait.done();
     }
   }
 

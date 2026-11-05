@@ -1897,7 +1897,10 @@ and its copies go to any node. What changes for you:
   held at its own start, #609), but for a claim marked as above.
 - **A summary the store refuses at a run's end** is no longer kept in
   `logs/<run>.summary.json`: the run's end tries the store again every 5 seconds until it lands,
-  the run keeping its sandbox, its state and its task meanwhile. A copy that stops first leaves
+  the run keeping its sandbox, its state, its task and its parallel slot meanwhile (the status
+  page lists it among the orchestrator's warnings, `/ready` counts it as `ending`, #821: a
+  store that refuses it for good, a file it can't write or a Redis ACL without `summaries/`,
+  shows there until fixed, and the next try then ends the run). A copy that stops first leaves
   the run as it is, for the next copy to end again. Those a release before left are moved at
   the next start.
 - **At start**, the orchestrator checks that it can write the whole `/data` only while a

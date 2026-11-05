@@ -4,7 +4,8 @@
 // are kept CACHE_MS, so that many dashboards open don't each probe every service. What it
 // says never holds a service's URL or what it answered beyond its start, version and warnings
 // (what it said of its setup at start: its blobs taking Redis's memory, ../lib/blobs.mjs; the
-// runner's log segments waiting for blob storage, ../runner/logs.mjs).
+// runner's log segments waiting for blob storage, ../runner/logs.mjs; the orchestrator's own
+// runs whose end waits for the store, restart.mjs endWait()).
 import { SERVICES } from "../lib/services.mjs";
 
 export const TIMEOUT_MS = 2000;
@@ -16,7 +17,8 @@ export const CACHE_MS = 10_000;
 export const STARTING_MS = 5 * 60_000;
 
 // `urls`: service → its URL, its copies comma-separated (a service without one is left out);
-// `self`: { name, startedAt, version } of the service asking, which reports itself unprobed.
+// `self`: { name, startedAt, version, warnings?() } of the service asking, which reports itself
+// unprobed.
 // `fetch` and `now`: the tests'.
 export function createHealth({
   urls,
@@ -98,12 +100,16 @@ export function createHealth({
   async function run() {
     const found = new Map((await Promise.all(probed.map(probe))).map((s) => [s.name, s]));
     const checkedAt = now();
+    // Its own warnings, as they are now (runs whose end waits for the store, restart.mjs
+    // endWait()).
+    const warnings = (self.warnings?.() ?? []).slice(0, MAX_WARNINGS);
     found.set(self.name, {
       name: self.name,
       state: stateOf(self.startedAt, checkedAt),
       startedAt: self.startedAt,
       version: self.version,
       checkedAt,
+      ...(warnings.length && { warnings }),
     });
     // In the services' order (../lib/services.mjs), whichever answered first.
     return { checkedAt, services: SERVICES.filter((n) => found.has(n)).map((n) => found.get(n)) };

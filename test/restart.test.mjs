@@ -6,7 +6,13 @@ import { test } from "node:test";
 import { createBroker } from "../listener/broker.mjs";
 import { board } from "../listener/board.mjs";
 import { createPulls } from "../listener/pulls.mjs";
-import { createRestart, LIVE_PREFIX, QUEUE_KEY, savedCapabilities } from "../listener/restart.mjs";
+import {
+  createRestart,
+  endsWaitingWarnings,
+  LIVE_PREFIX,
+  QUEUE_KEY,
+  savedCapabilities,
+} from "../listener/restart.mjs";
 import { createTasks, newTask } from "../listener/tasks.mjs";
 import { ambiguous, respellMap, respelled, spellings } from "../listener/spelling.mjs";
 import { openLog, SUMMARIES, summaryKey } from "../listener/runlog.mjs";
@@ -1326,10 +1332,52 @@ test("a run's end the queue couldn't be written for: tried again until it lands,
   await ended;
   assert.equal(await savedRun(store, "r1"), null);
   assert.equal(task.running, false);
+  assert.equal(ctx.endsWaiting.size, 0);
   assert.deepEqual(
     (await store.get(QUEUE_KEY))["org/repo#1"].pending.map((i) => i.queueId),
     ["q-1"],
   );
+});
+
+// #821: a store that refuses a run's end for good (an unwritable file, a Redis ACL) holds its
+// task and slot as long as it does: said, not given up.
+test("a run's end that waits for the store: on /ready's and the status page's list while it waits, logged again now and then, off it once written", async (t) => {
+  const { ctx, down, ended, lines } = await endWhileStoreDown(t, { summary: true });
+  let now = 1_000_000;
+  const since = now;
+  ctx.now = () => now;
+  // Its first refusal was before the clock: its entry is the first one's.
+  const entry = ctx.endsWaiting.get("r1");
+  Object.assign(entry, { since, loggedAt: since });
+  assert.equal(entry.key, "org/repo#1");
+  assert.equal(entry.what, "its summary");
+  assert.equal(entry.error, "disk full");
+  assert.deepEqual(endsWaitingWarnings(ctx, since + 3 * 60_000), [
+    "org/repo#1: its end waits for the store (its summary, 3 min: disk full), holding its task and a parallel slot",
+  ]);
+  // Not each try: once ENDING_LOG_MS have gone by since it last said so.
+  const still = () => lines.filter((line) => /still not saved/.test(line));
+  const tries = entry.tries;
+  await until(() => entry.tries >= tries + 2, { what: "two more tries" });
+  assert.deepEqual(still(), []);
+  now += 10 * 60_000;
+  await until(() => still().length === 1, { what: "the end said again" });
+  assert.match(
+    still()[0],
+    /^org\/repo#1: its summary still not saved, \d+ tries in 10 min \(disk full\)/,
+  );
+  down.on = false;
+  assert.equal(await ended, true);
+  assert.equal(ctx.endsWaiting.size, 0);
+  assert.deepEqual(endsWaitingWarnings(ctx), []);
+});
+
+test("a run's end the queue or its state's removal waits for: listed as such, and off the list once its copy leaves it to the next", async (t) => {
+  const { ctx, ended } = await endWhileStoreDown(t);
+  assert.equal(ctx.endsWaiting.get("r1").what, "the queue");
+  ctx.stopping = true;
+  await ended;
+  assert.equal(ctx.endsWaiting.size, 0);
 });
 
 test("a copy that stops while its run's end can't write the queue: the next has the comment once, and no run", async (t) => {

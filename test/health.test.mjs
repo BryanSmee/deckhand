@@ -99,6 +99,20 @@ test("up, starting under 5 minutes, up at 5 minutes exactly; the orchestrator it
   assert.equal(calls.length, 4);
 });
 
+test("the orchestrator's own warnings, as they are at each check: its runs whose end waits for the store", async () => {
+  let warnings = ["org/repo#1: its end waits for the store"];
+  const clock = { now: NOW };
+  const health = createHealth({
+    urls: {},
+    self: { name: "orchestrator", startedAt: 0, version: "dev", warnings: () => warnings },
+    now: () => clock.now,
+  });
+  assert.deepEqual((await health.check()).services[0].warnings, warnings);
+  warnings = [];
+  clock.now += CACHE_MS;
+  assert.equal("warnings" in (await health.check()).services[0], false);
+});
+
 test("down: a timeout, a refused connection, a 503, ok false; the reason never its URL or body", async () => {
   const { health } = harness(
     {

@@ -196,13 +196,19 @@ export const isRunState = (saved) => Boolean(saved?.id && saved.task && saved.re
 // What loadRuns() lists a finished run with, in the store: without the operator's `secrets`, a
 // GitHub token or a private key its text may hold (lib/store.mjs storable()), rather than
 // refused whole. A store that fails (Redis away a moment) is logged: the caller tries again, as
-// the orchestrator keeps nothing anywhere else (#619). → whether the store took it.
-export async function saveSummary(store, record, { log = console.error, secrets = [] } = {}) {
+// the orchestrator keeps nothing anywhere else (#619), and `failed(error)` hears why. → whether
+// the store took it.
+export async function saveSummary(
+  store,
+  record,
+  { log = console.error, secrets = [], failed = () => {} } = {},
+) {
   try {
     await store.set(summaryKey(record.id), storable(record, secrets));
     return true;
   } catch (error) {
     log(`${record.key}: saving the summary of ${record.id}: ${error.message}`);
+    failed(error);
     return false;
   }
 }
