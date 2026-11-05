@@ -2867,6 +2867,8 @@ function followUpSetup(
     comments = [],
     existing = [],
     refuse = [],
+    // Titles whose issue's POST throws (the connection lost).
+    throws = [],
     failReads = 0,
     later = null,
     label = 422,
@@ -2916,11 +2918,16 @@ function followUpSetup(
       return new Response("{}", { status: label });
     if (method === "POST" && path === "/repos/org/repo/issues") {
       if (refuse.includes(body.title)) return new Response("{}", { status: 410 });
+      if (throws.includes(body.title)) throw new Error("socket hang up");
       // Listed with the label from then on, as GitHub would.
       existing.push({ number: next, title: body.title });
       return Response.json({ number: next++, created_at: created }, { status: 201 });
     }
     if (method === "GET" && path === "/repos/org/repo/pulls/5" && pull) return Response.json(pull);
+    // A follow-up issue as it is now (the Review tab's findings()).
+    const one = /^\/repos\/org\/repo\/issues\/(\d+)$/.exec(path);
+    const issue = method === "GET" && one && existing.find((i) => i.number === Number(one[1]));
+    if (issue) return Response.json({ state: "open", ...issue });
     return new Response("{}", { status: 404 });
   };
   const s = setup(t, yaml, {
@@ -3009,6 +3016,172 @@ test("follow-ups: filed as labelled issues once the pull request is merged, link
   // Redelivered: nothing twice.
   assert.equal(await s.merged(), null);
   assert.equal(s.filed().length, 2);
+});
+
+// The pull request #5 GET /pulls/5 reads, open: merge() merges it, by `by`.
+function openPull() {
+  const pull = {
+    number: 5,
+    merged_at: null,
+    merged_by: null,
+    base: { repo: { html_url: "https://github.com/org/repo", default_branch: "trunk" } },
+  };
+  const merge = (by) => Object.assign(pull, { merged_at: "2026-11-02T10:00:00Z", merged_by: by });
+  return { pull, merge };
+}
+
+test("findings (#625): the last review's sections for the Review tab, then the follow-ups' issues once merged", async (t) => {
+  const { pull, merge } = openPull();
+  const s = followUpSetup(t, {
+    posted: [postedBody(HIGH_ONE), postedBody(SECTIONS)],
+    existing: [{ number: 7, title: "Docs: the cache's limits", state: "closed" }],
+    pull,
+  });
+  // Its round as recorded at the commit it reviewed (a maintainer's); nothing filed yet.
+  await s.record(SECTIONS, { head: "sha-2" });
+  const before = await s.reviews.findings("org/repo", 5);
+  assert.equal(before.url, "https://github.com/org/repo/pull/5#pullrequestreview-2");
+  assert.deepEqual(
+    [before.verdict, before.rating, before.head, before.round, before.manual, before.allowed],
+    ["request-changes", 8, "sha-2", 0, true, "low"],
+  );
+  assert.equal(before.blob, "https://github.com/org/repo/blob/sha-2");
+  assert.deepEqual(before.findings, [
+    {
+      path: "lib/cache.mjs",
+      line: 9,
+      text: "an off-by-one in the log line. Fix: count from 1.",
+      severity: "low",
+      tolerated: false,
+    },
+  ]);
+  assert.deepEqual(
+    before.followUps.map((f) => [f.title, f.path, f.line, f.filing, f.issue]),
+    [
+      ["Share the retry helper with the uploader", "lib/upload.mjs", 30, "after-merge", undefined],
+      ["Docs: the cache's limits", null, null, "after-merge", undefined],
+    ],
+  );
+  assert.equal(before.followUps[0].text, "the same loop twice.\nBoth back off the same way.");
+  assert.deepEqual(
+    before.comments.map((c) => [c.blocking, c.line]),
+    [
+      [true, 20],
+      [false, 3],
+    ],
+  );
+  assert.equal(before.merged, null);
+  // Merged by a person: one filed, one linked, each with its state.
+  merge({ login: "alice" });
+  assert.deepEqual(await s.merged(), [40]);
+  const after = await s.reviews.findings("org/repo", 5);
+  assert.deepEqual(after.merged, {
+    at: Date.parse("2026-11-02T10:00:00Z"),
+    by: "alice",
+    deckhand: false,
+  });
+  assert.deepEqual(
+    after.followUps.map((f) => [f.filing, f.issue]),
+    [
+      ["issue", { number: 40, state: "open", url: "https://github.com/org/repo/issues/40" }],
+      ["issue", { number: 7, state: "closed", url: "https://github.com/org/repo/issues/7" }],
+    ],
+  );
+  // Recorded by title, never the follow-ups' text.
+  const entry = s.reviews.entry("org/repo", 5);
+  assert.deepEqual(entry.followUpIssues, [
+    { title: "share the retry helper with the uploader", issue: 40 },
+    { title: "docs: the cache's limits", issue: 7 },
+  ]);
+  assert.doesNotMatch(JSON.stringify(entry), /same loop twice/);
+});
+
+test("findings: a refused filing, Deckhand's merge, the repo's tolerance, follow-ups off, no review", async (t) => {
+  const { pull, merge } = openPull();
+  const s = followUpSetup(t, {
+    posted: [postedBody(SECTIONS)],
+    refuse: ["Docs: the cache's limits"],
+    pull,
+  });
+  await s.record(SECTIONS);
+  merge({ login: "deckhand-app[bot]" });
+  await s.merged();
+  const found = await s.reviews.findings("org/repo", 5);
+  assert.deepEqual(
+    found.followUps.map((f) => f.filing),
+    ["issue", "failed"],
+  );
+  assert.equal(found.merged.deckhand, true);
+  // max_allowed_severity: medium tolerates a medium finding, not a high one; low never blocks.
+  const tolerant = followUpSetup(t, {
+    posted: [postedBody(MESSAGE)],
+    yaml: "review:\n  on: manual\n  max_allowed_severity: medium\n  follow_ups: false\n",
+    pull: openPull().pull,
+  });
+  const read = await tolerant.reviews.findings("org/repo", 5);
+  assert.equal(read.allowed, "medium");
+  assert.deepEqual(
+    read.findings.map((f) => [f.severity, f.tolerated]),
+    [
+      ["high", false],
+      ["medium", true],
+      ["low", false],
+    ],
+  );
+  assert.deepEqual([read.followUps, read.comments], [[], []]);
+  const off = followUpSetup(t, {
+    posted: [postedBody(SECTIONS)],
+    yaml: "review:\n  on: manual\n  follow_ups: false\n",
+    pull: openPull().pull,
+  });
+  assert.deepEqual(
+    (await off.reviews.findings("org/repo", 5)).followUps.map((f) => f.filing),
+    ["off", "off"],
+  );
+  // No review of the App's, or no such pull request: null.
+  const none = followUpSetup(t, { pull: openPull().pull });
+  assert.equal(await none.reviews.findings("org/repo", 5), null);
+  assert.equal(await none.reviews.findings("org/repo", 6), null);
+});
+
+test("findings: a filing stopped midway, one skipped at the merge, a config that can't be read", async (t) => {
+  // The second issue's POST throws: the first one stays filed, the other wasn't.
+  const midway = openPull();
+  const s = followUpSetup(t, {
+    posted: [postedBody(SECTIONS)],
+    throws: ["Docs: the cache's limits"],
+    pull: midway.pull,
+  });
+  await s.record(SECTIONS);
+  midway.merge({ login: "alice" });
+  await assert.rejects(s.merged(), /socket hang up/);
+  const filings = async (setup) =>
+    (await setup.reviews.findings("org/repo", 5)).followUps.map((f) => f.filing);
+  assert.deepEqual(await filings(s), ["issue", "not-filed"]);
+  // Reviews off at the merge: nothing filed it, and nothing will.
+  let read = parseRepoConfig("other: 1\n", config);
+  const skip = openPull();
+  const skipped = followUpSetup(t, {
+    posted: [postedBody(SECTIONS)],
+    pull: skip.pull,
+    later: () => read,
+  });
+  await skipped.record(SECTIONS);
+  skip.merge({ login: "alice" });
+  assert.equal(await skipped.merged(), null);
+  // Its config as read now: still no review block, off; reviews on again, not filed.
+  assert.deepEqual(await filings(skipped), ["off", "off"]);
+  read = parseRepoConfig("review:\n  on: manual\n", config);
+  assert.deepEqual(await filings(skipped), ["not-filed", "not-filed"]);
+  // Unreadable now: said so, never "off", merged or not.
+  read = { settings: config, errors: ["line 1: what is this"] };
+  assert.deepEqual(await filings(skipped), ["unread", "unread"]);
+  const open = followUpSetup(t, {
+    posted: [postedBody(SECTIONS)],
+    pull: openPull().pull,
+    later: () => read,
+  });
+  assert.deepEqual(await filings(open), ["unread", "unread"]);
 });
 
 test("follow-ups: none counted, nothing read; a refused issue is left out", async (t) => {

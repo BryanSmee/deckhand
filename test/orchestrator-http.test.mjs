@@ -441,3 +441,50 @@ test("api/state: a task's pull request in its fix loop has its review from the s
     ["queued", "checks", 3, 1],
   );
 });
+
+test("api/review (#625): the last review's findings for a repo the login sees, 404 otherwise", async (t) => {
+  const asked = [];
+  const findings = { verdict: "comment", findings: [{ text: "<b>a hole</b>" }] };
+  const ctx = oneRun({
+    config: { maxParallel: 3, users: ["alice", "dave"], repos: ["org/repo", "org/other"] },
+    permissions: permissionsOf({ alice: { "org/repo": VIEWER } }),
+    reviews: {
+      findings: async (repo, number) => {
+        asked.push([repo, number]);
+        if (number === 9) throw new Error("GitHub GET: 502");
+        return number === 3 ? findings : null;
+      },
+    },
+  });
+  const url = await serveHttp(t, ctx);
+  const get = (query, user = "alice") =>
+    fetch(`${url}/api/review?${query}`, { headers: { "x-user": user } });
+  const ok = await get("repo=org/repo&number=3");
+  assert.equal(ok.status, 200);
+  assert.deepEqual(await ok.json(), findings);
+  // None on that pull request, a repo alice doesn't see, one outside the allowlist, nonsense:
+  // the same 404, and only the first asks GitHub.
+  for (const query of [
+    "repo=org/repo&number=4",
+    "repo=org/other&number=3",
+    "repo=org/elsewhere&number=3",
+    "repo=org/repo&number=x",
+    "repo=../x&number=3",
+  ]) {
+    assert.equal((await get(query)).status, 404, query);
+  }
+  assert.equal((await get("repo=org/repo&number=3", "dave")).status, 404);
+  assert.equal((await fetch(`${url}/api/review?repo=org/repo&number=3`)).status, 401);
+  assert.deepEqual(asked, [
+    ["org/repo", 3],
+    ["org/repo", 4],
+  ]);
+  // GitHub failing: a 502 that says to try again, logged.
+  const failed = await get("repo=org/repo&number=9");
+  assert.equal(failed.status, 502);
+  assert.match((await failed.json()).error, /try again/);
+  // The findings stay out of api/state.
+  const state = await fetch(`${url}/api/state`, { headers: { "x-user": "alice" } });
+  assert.equal(state.status, 200);
+  assert.doesNotMatch(await state.text(), /a hole/);
+});

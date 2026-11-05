@@ -416,6 +416,15 @@ its head commit (`head`, from its deliveries, `synchronize` included, the start-
 Sync: `pulls.mjs`): the dashboard marks a review outdated when the loop is over and the last
 round's `head` differs (`reviewOutdated()`).
 
+Its **Review** tab (`ReviewTab.tsx`) reads `GET /api/review?repo=<owner/repo>&number=<pr>`
+(`http.mjs`, `reviews.mjs` `findings()`) when it opens, and again when the task's
+`review.history` or its pull request's state changes: the App's latest review read back from
+GitHub with the repo's tolerance, as Fix reads it, its follow-ups with the issues
+`fileFollowUps()` filed or found for them (`followUpIssues`, by title, and `followUpsRefused`
+in the store's `reviews`) and their state now, and who merged it. Never in `api/state` nor the
+store: the findings are long, and a model wrote them. A repo the user may not see the tasks of
+(`tasks:read`) answers `404`, as a pull request without such a review does.
+
 A failed or interrupted task stops asking for attention (Waiting on you, the Failed tile, the
 Error chip, its repository card's "failed" count) once its issue is closed or its pull request
 merged or closed: what can't run again shouldn't ask to. It keeps its state, runs and page.

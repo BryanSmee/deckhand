@@ -337,6 +337,29 @@ export function createHttp(ctx) {
     log,
   });
 
+  // GET /api/review?repo=<owner/repo>&number=<pr>: the last review the App posted on that pull
+  // request, its findings read from GitHub now (reviews.mjs findings()), for the task page's
+  // Review tab. As a run's log: 404 for a repo `user` may not see the tasks of, as for a pull
+  // request without one, so neither says the other exists.
+  async function reviewOf(res, user, params) {
+    const repo = params.get("repo") ?? "";
+    const number = Number(params.get("number"));
+    const none = () => sendJson(res, { error: "No review of Deckhand's on it." }, 404);
+    if (!/^[\w.-]+\/[\w.-]+$/.test(repo) || !Number.isSafeInteger(number) || number < 1) {
+      return none();
+    }
+    if (!ctx.reviews?.findings || !repoAllowed(config, repo)) return none();
+    if (!(await seeing(user, [repo], TASKS))(repo)) return none();
+    let found;
+    try {
+      found = await ctx.reviews.findings(repo, number);
+    } catch (error) {
+      log(`api/review ${repo}#${number}: ${error.message ?? error}`);
+      return sendJson(res, { error: "GitHub couldn't be read: try again." }, 502);
+    }
+    return found ? sendJson(res, found) : none();
+  }
+
   // The dashboard's API that edge passes on (GET), for its signed-in `user`.
   async function serveDashboard(req, res, user) {
     const url = new URL(req.url, "http://localhost");
@@ -374,6 +397,7 @@ export function createHttp(ctx) {
         },
       );
     }
+    if (url.pathname === "/api/review") return reviewOf(res, user, url.searchParams);
     const match = /^\/api\/runs\/([\w.-]+)\/stream$/.exec(url.pathname);
     const run = match && ctx.runsById.get(match[1]);
     // Asked again each second while it streams: an access taken away ends it.

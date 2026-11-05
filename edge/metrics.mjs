@@ -90,6 +90,7 @@ const ROUTES = [
   ["/api/server", "/api/server"],
   ["/api/health", "/api/health"],
   ["/api/sync", "/api/sync"],
+  ["/api/review", "/api/review"],
   ["/api/runs/:id/stream", /^\/api\/runs\/[\w.-]+\/stream$/],
   ["/api/repos", "/api/repos"],
   ["/api/repos/refresh", "/api/repos/refresh"],
