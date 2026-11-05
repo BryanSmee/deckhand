@@ -1198,9 +1198,11 @@ export function fakeDocker({
       case "volume inspect":
         if (!volumes.has(last)) return missing;
         if (args.includes("--format")) {
+          // The labels the template names, in its order.
           const labels = volumes.get(last);
-          const value = (key) => labels[`deckhand.${key}`] ?? "";
-          return ok(["owner", "engine", "role"].map(value).join("|"));
+          const format = args[args.indexOf("--format") + 1];
+          const keys = [...format.matchAll(/index \.Labels "([^"]+)"/g)].map((m) => m[1]);
+          return ok(keys.map((key) => labels[key] ?? "").join("|"));
         }
         return ok("[]");
       case "volume rm":

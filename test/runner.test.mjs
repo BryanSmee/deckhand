@@ -15,6 +15,7 @@ import {
   LINE_CUT,
   MAX_LINE,
 } from "../listener/runner/docker.mjs";
+import { PrefixClash } from "../listener/runner/deployment.mjs";
 import { SANDBOX_USER } from "../listener/sandbox-spec.mjs";
 import { parseCidr } from "../lib/subnets.mjs";
 import { fakeDocker, scriptEnv, tempDir } from "./helpers.mjs";
@@ -1015,6 +1016,29 @@ test("start: session volumes made with this deployment's labels, an existing one
   assert.ok(!volumes.has("dh-cache"));
   const made = calls.findIndex((c) => c.args.slice(0, 2).join(" ") === "volume create");
   assert.ok(made < calls.findIndex((c) => c.args[0] === "run"));
+});
+
+test("claimPrefix: the prefix's marker volume, made once, refused to another deployment (#858)", async () => {
+  const { r, volumes } = runner();
+  await r.claimPrefix("a1");
+  assert.deepEqual(volumes.get("dh-deployment"), {
+    "deckhand.owner": "dh",
+    "deckhand.role": "deployment",
+    "deckhand.deployment": "a1",
+  });
+  // The same deployment again (its other copy, a restart): claimed, the volume as it was.
+  await r.claimPrefix("a1");
+  // Another deployment of that prefix: `docker volume create` keeps the first one's labels.
+  await assert.rejects(r.claimPrefix("b2"), (error) => {
+    assert.ok(error instanceof PrefixClash);
+    assert.match(error.message, /NAME_PREFIX dh is another deployment's on this engine/);
+    assert.match(error.message, /docker volume rm dh-deployment/);
+    return true;
+  });
+  assert.equal(volumes.get("dh-deployment")["deckhand.deployment"], "a1");
+  // A volume of that name that isn't a marker: refused too.
+  volumes.set("dh-deployment", {});
+  await assert.rejects(r.claimPrefix("a1"), PrefixClash);
 });
 
 test("removeSessions: this deployment's session volumes and unlabelled ones, never another's (#813)", async () => {

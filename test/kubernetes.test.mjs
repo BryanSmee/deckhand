@@ -25,6 +25,7 @@ import {
   selects,
 } from "../listener/runner/kubernetes.mjs";
 import { LINE_CUT, MAX_LINE } from "../listener/runner/lines.mjs";
+import { PrefixClash } from "../listener/runner/deployment.mjs";
 import { SANDBOX_USER } from "../listener/sandbox-spec.mjs";
 import { tempDir } from "./helpers.mjs";
 
@@ -1780,6 +1781,44 @@ test("removeSessions: a chat's session claims, never another deployment's or one
     "dh-o-a-chat-x-light-claude",
     "dh-o-a-chat-x-light-codex",
   ]);
+});
+
+test("claimPrefix: the prefix's marker Secret, made once, refused to another deployment (#858)", async (t) => {
+  // Another copy makes it between the look and the create: its 409 reads it again.
+  let race = null;
+  const { runner, objects } = setup(t, {
+    fail: ({ method, path }) => {
+      if (!race || method !== "POST" || !path.endsWith("/secrets")) return null;
+      objects.secrets.set("dh-deployment", { metadata: { name: "dh-deployment", labels: race } });
+      race = null;
+      return Response.json({ message: "already exists" }, { status: 409 });
+    },
+  });
+  await runner.claimPrefix("a1");
+  assert.deepEqual(objects.secrets.get("dh-deployment").metadata.labels, {
+    "deckhand.owner": "dh",
+    "deckhand.role": "deployment",
+    "deckhand.deployment": "a1",
+  });
+  assert.equal(objects.secrets.get("dh-deployment").data, undefined);
+  // The same deployment again (its other copy, a restart): claimed.
+  await runner.claimPrefix("a1");
+  // Another deployment of that prefix: refused, saying what to do.
+  await assert.rejects(runner.claimPrefix("b2"), (error) => {
+    assert.ok(error instanceof PrefixClash);
+    assert.match(error.message, /NAME_PREFIX dh is another deployment's on the namespace runs/);
+    assert.match(error.message, /kubectl -n runs delete secret dh-deployment/);
+    return true;
+  });
+  // A Secret of that name that isn't a marker: refused too.
+  objects.secrets.set("dh-deployment", { metadata: { name: "dh-deployment" } });
+  await assert.rejects(runner.claimPrefix("a1"), PrefixClash);
+  objects.secrets.clear();
+  race = { "deckhand.owner": "dh", "deckhand.role": "deployment", "deckhand.deployment": "a1" };
+  await runner.claimPrefix("a1");
+  race = { "deckhand.owner": "dh", "deckhand.role": "deployment", "deckhand.deployment": "b2" };
+  objects.secrets.clear();
+  await assert.rejects(runner.claimPrefix("a1"), PrefixClash);
 });
 
 test("hasSession, address and proxyAddresses", async (t) => {

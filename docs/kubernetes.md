@@ -749,9 +749,12 @@ Two settings, which may name one namespace (the default) or two:
 
 - **The sandboxes' namespace** (`KUBERNETES_NAMESPACE`, by default the runner's own): the
   sandbox pods, the agents' install pods and the caches' checks, the runs' Secrets, the
-  sessions', agents' and caches' claims, and the sandboxes' NetworkPolicies. Nothing else
-  runs there, so it can enforce Pod Security `restricted`
-  (`pod-security.kubernetes.io/enforce: restricted` on the namespace), a last line should a
+  sessions', agents' and caches' claims, and the sandboxes' NetworkPolicies. The runner also
+  keeps a Secret there, `<NAME_PREFIX>-deployment`, labelled `deckhand.role: deployment`. It
+  holds no data, only the deployment's ID in a label: it claims the prefix for this deployment
+  ([the runner service](security.md#the-runner-service)). Each deployment sharing the namespace
+  needs a `NAME_PREFIX` of its own. Nothing else runs there, so it can enforce Pod Security
+  `restricted` (`pod-security.kubernetes.io/enforce: restricted` on the namespace), a last line should a
   pod's own spec ever be wrong.
 - **The services' namespace** (`KUBERNETES_SERVICES_NAMESPACE`, by default the sandboxes'):
   every service (edge, the orchestrator, the runner itself, the broker, the github, models

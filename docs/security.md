@@ -643,7 +643,14 @@ a chat's reset or deletion (`DELETE /sessions/<name>?task=<key>`): the key must 
 `chatSandbox()`), with no sandbox of that name left, and only that sandbox's session volumes
 labelled as this deployment's sessions (`deckhand.owner`, `deckhand.role=session`; on Docker,
 one without labels, made before session volumes had them, goes by its name alone): an issue's
-are never removed. None can name a container's
+are never removed. Those labels name the deployment by its prefix (`NAME_PREFIX`), so a runner
+first claims its prefix on the engine, or in the sandboxes' namespace
+(`listener/runner/deployment.mjs`). It does this with a marker: a volume, or a Secret,
+`<prefix>-deployment`, labelled with an ID that the deployment keeps in the runner's store. The
+first runner to claim the prefix makes the marker, and the marker never changes after that. A
+runner whose ID isn't the marker's takes no call (503), says why in its log and its `/health`,
+and asks again at the next call. So two deployments that share a prefix on one engine can't
+reach each other's sandboxes, volumes or networks: the second one doesn't run at all. None can name a container's
 image, mounts or capabilities beyond a sandbox spec
 (`listener/sandbox-spec.mjs`), which the runner turns into Docker's options: `--cap-drop ALL`, `no-new-privileges`, the operator's limits and a user. And it
 checks the spec again first, against the grants folder it reads itself and the operator's

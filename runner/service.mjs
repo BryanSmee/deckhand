@@ -28,6 +28,7 @@ import { serviceGuard } from "../lib/service-token.mjs";
 import { LOGIN_REFRESH_MARGIN_MS, LOGIN_REFRESH_MS, MIN_REFRESH_MS } from "../lib/services.mjs";
 import { antigravity } from "../listener/agents/antigravity.mjs";
 import { agentFor } from "../listener/agents/index.mjs";
+import { deploymentId, PrefixClash } from "../listener/runner/deployment.mjs";
 import { SANDBOX_USER } from "../listener/sandbox-spec.mjs";
 import { createEvents } from "./events.mjs";
 import {
@@ -224,6 +225,9 @@ export function createRunnerService({
   health = healthInfo(),
   // The runner's metrics' hooks (metrics.mjs runnerMetrics()), or none: starts that failed.
   metrics = null,
+  // The deployment's prefix claimed (../listener/runner/deployment.mjs): the backend's, with
+  // the ID in the store. None without one (the tests' fakes).
+  claim = runner.claimPrefix ? async () => runner.claimPrefix(await deploymentId(store)) : null,
 }) {
   const guard = serviceGuard({
     service: "runner",
@@ -240,6 +244,30 @@ export function createRunnerService({
 
   // A stale epoch refused (lib/fence.mjs).
   const fence = createFence({ store, service: "runner", now });
+
+  // The prefix claimed once (#858): until then, no call is taken and no event watched, as the
+  // labels this runner goes by may be another deployment's. A failure is tried again at the
+  // next call, so a marker removed takes effect without a restart; a clash is logged once, and
+  // shown in /health.
+  let claimed = claim ? null : Promise.resolve();
+  let clash = null;
+  function claimOnce() {
+    claimed ??= claim().then(
+      () => {
+        if (clash) log("Runner: the prefix is this deployment's again");
+        clash = null;
+      },
+      (error) => {
+        claimed = null;
+        if (error instanceof PrefixClash) {
+          if (clash !== error.message) (log.error ?? log)(error.message);
+          clash = error.message;
+        }
+        throw new Refused(503, `the runner can't tell its sandboxes apart: ${error.message}`);
+      },
+    );
+    return claimed;
+  }
 
   // This deployment's sandbox of that name, as the backend lists them (by its own labels:
   // `deckhand.owner`, `deckhand.run`), or null: what the orchestrator may stop, follow or remove.
@@ -266,7 +294,7 @@ export function createRunnerService({
   // on Kubernetes) and reads the store once per run not seen before: fine every 15 s or so, not
   // for a scraper asking every second.
   async function sandboxes() {
-    if (!lease.active() || stopping) return null;
+    if (!lease.active() || stopping || clash) return null;
     const list = (await runner.list()).filter((s) => s.running);
     const runs = new Set(list.map((s) => s.run));
     for (const run of engines.keys()) if (!runs.has(run)) engines.delete(run);
@@ -624,7 +652,11 @@ export function createRunnerService({
       // Closed log segments waiting for blob storage, while they can't move: Redis filling up.
       // From memory: a probe never waits on the store.
       const waiting = waitingWarning(logs.moves?.waiting());
-      const warnings = [...(health.warnings ?? []), ...(waiting ? [waiting] : [])];
+      const warnings = [
+        ...(health.warnings ?? []),
+        ...(waiting ? [waiting] : []),
+        ...(clash ? [clash] : []),
+      ];
       return sendJson(res, healthAnswer({ ...health, warnings }, { active: lease.active() }));
     }
     // The readiness probe's: only the copy that acts takes calls (Kubernetes' Service).
@@ -637,6 +669,7 @@ export function createRunnerService({
       const caller = guard(req);
       if (!lease.active()) throw new Refused(503, "not the active runner: its other copy is");
       if (stopping) throw new Refused(503, "stopping: its other copy takes over");
+      await claimOnce();
       const found = table.find(({ match }) => match(req.method, url.pathname));
       const params = found?.match(req.method, url.pathname);
       if (caller === "orchestrator" && !UNFENCED.has(found?.key)) await fence(req);
@@ -678,12 +711,15 @@ export function createRunnerService({
       runner.leased?.();
       logs.moves?.start();
       clearInterval(watching);
-      watching = setInterval(
-        () => events.watch().catch((error) => log(`Run events: ${error.message}`)),
-        watchMs,
-      );
+      // Its problem (a clash) logged by claimOnce() already.
+      const watch = () =>
+        claimOnce().then(
+          () => events.watch().catch((error) => log(`Run events: ${error.message}`)),
+          () => {},
+        );
+      watching = setInterval(watch, watchMs);
       watching.unref?.();
-      return events.watch().catch((error) => log(`Run events: ${error.message}`));
+      return watch();
     },
     deactivate() {
       logs.moves?.stop();
