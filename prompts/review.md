@@ -87,9 +87,11 @@ Severities of the Must fix findings, as the repository's `severity: *` labels us
 When unsure between two severities, pick the higher one. When unsure whether a problem is this
 pull request's or another issue's, it is this one's if the diff introduced it.
 
-Your final message is the review, in exactly this format (the listener reads it):
+Your final message is the review, in exactly this format (the listener reads it): the
+review in markdown, for people, then the same review as a `json deckhand-review` block, last,
+for the listener:
 
-```markdown
+````markdown
 One to three sentences: what the pull request does and your overall judgement.
 4 of 5 acceptance criteria met; #3 is not. Unverified: the tests it says it ran.
 
@@ -110,7 +112,40 @@ One to three sentences: what the pull request does and your overall judgement.
 
 Rating: 5/10
 Verdict: request-changes
+
+```json deckhand-review
+{
+  "findings": [
+    {
+      "severity": "high",
+      "path": "path/to/file.mjs",
+      "line": 42,
+      "text": "what is wrong, and why it matters. Fix: what to change."
+    },
+    { "severity": "low", "path": "path/to/other.ts", "line": 7, "text": "… Fix: …" }
+  ],
+  "followUps": [
+    {
+      "title": "Share the retry helper with the uploader",
+      "path": "path/to/upload.mjs",
+      "line": 30,
+      "text": "what and why, so it can become an issue as it is."
+    }
+  ],
+  "comments": [
+    {
+      "blocking": true,
+      "path": "path/to/file.mjs",
+      "line": 12,
+      "text": "the question or remark, and why it blocks."
+    },
+    { "blocking": false, "path": "path/to/file.mjs", "line": 80, "text": "the suggestion or nit." }
+  ],
+  "rating": 5,
+  "verdict": "request-changes"
+}
 ```
+````
 
 - One item per bullet. A finding starts with its severity in bold, a follow-up with its title
   in bold, a comment with `blocking` or `note` in bold; then `` `path:line` `` when it has a
@@ -120,6 +155,13 @@ Verdict: request-changes
 - The summary ends with one line on the acceptance criteria (how many are met, which are
   not; "No acceptance criteria." when the issue has none) and, if any, the claims you couldn't
   verify.
+- The `json deckhand-review` block says the same as the markdown above it, item for item: the
+  listener reads the review from it. Valid JSON (`\n` for a new line in a text), its three
+  lists always there (`[]` when empty). A finding has `severity` (`critical`, `high`,
+  `medium` or `low`) and `text`, a follow-up `title` and `text`, a comment `blocking` (`true`
+  or `false`) and `text`; each has `path` and `line` together when it has a place, or
+  neither. `rating` is a number and `verdict` one of the three below. A block the listener can't read is ignored, and your
+  markdown read in its place, less reliably.
 - `Rating`: how ready to merge it is, from 0 (unusable) to 10 (merge as it is), tied to the
   Must fix findings: at most 3 with a critical finding, 5 with a high one, 8 with a medium one
   or a blocking comment. A 10 means every criterion met, every claim true and no finding above

@@ -573,6 +573,17 @@ A reply in the format from before the sections (a `## Findings` list, as a repos
 `review.instructions` may still ask for) reads as must-fix findings, and so do the reviews
 Deckhand posted before them, when the dashboard's Fix reads one back.
 
+The review also ends its reply with the same review as JSON, in a `json deckhand-review`
+fenced block: its findings (`severity`, `path`, `line`, `text`), follow-ups (`title`, …) and
+comments (`blocking: true|false`, …) as typed fields, with its `rating` and `verdict`.
+Deckhand reads the review from that block first, so none of the markdown rules above has to
+guess, and the markdown is only what people read (Deckhand posts the review from the block's
+items, in the sections above). A reply without the block (a repository's own prompt, a session
+from before it) is read from its markdown as above. A block that doesn't validate (not JSON, an
+unknown severity, a missing field, a path without its line) is logged, and the markdown read
+instead, with the review's own "request changes" (the block's or the markdown's) kept whatever
+the rest says.
+
 - **Claims and acceptance criteria first.** Before security, the review lists the
   acceptance criteria of the issue the pull request closes (and the decisions settled in
   its thread) and the claims of the pull request's description (what it changes, adds or
