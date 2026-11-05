@@ -1021,6 +1021,16 @@ test("MCP: a claim's run tools (#597): its output, messages, question and end, u
   await tool("claim", { machine, agent: "codex", model: "gpt-5", protocol: 1 }, MACHINE);
   const unknown = await tool("claim", { machine, agent: "gpt-7" }, MACHINE);
   assert.equal(unknown.isError, true);
+  // How it runs (#599), as the machine reports it: the reply's footer says it, so a word each.
+  const setup = { agentVersion: "2.1.3", sandbox: true, permissionMode: "acceptEdits" };
+  await tool("claim", { machine, ...setup, suggestedSettings: false }, MACHINE);
+  for (const odd of [
+    { permissionMode: "@alice" },
+    { agentVersion: "2.1 [x](https://example.com)" },
+    { sandbox: "yes" },
+  ]) {
+    assert.equal((await tool("claim", { machine, ...odd }, MACHINE)).isError, true);
+  }
   // A protocol this copy doesn't speak: the driver is told to update.
   const newer = await tool("post_events", { machine, run: "r1", lines: [], protocol: 2 }, MACHINE);
   assert.equal(newer.isError, true);
@@ -1090,7 +1100,16 @@ test("MCP: a claim's run tools (#597): its output, messages, question and end, u
   );
   assert.match(work.content[0].text, /deckhand:machine/);
   assert.deepEqual(asked, [
-    ["claim", { agent: "codex", model: "gpt-5", effort: null }],
+    ["claim", { agent: "codex", model: "gpt-5", effort: null, setup: null }],
+    [
+      "claim",
+      {
+        agent: null,
+        model: null,
+        effort: null,
+        setup: { version: "2.1.3", sandbox: true, permissionMode: "acceptEdits", suggested: false },
+      },
+    ],
     ["post", "r1", 1, 0],
     ["post", "r1", 1, 9],
     ["next", "r1", 2],

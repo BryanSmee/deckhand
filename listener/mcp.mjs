@@ -316,6 +316,26 @@ const TOOL_SPECS = [
         },
         model: { type: "string", description: "Its model, for the run's record." },
         effort: { type: "string", description: "Its effort, for the run's record." },
+        // How it runs (#599), as the machine reports it: the run's record, the dashboard and
+        // the reply's footer say it, never checked.
+        agentVersion: {
+          type: "string",
+          description: "The agent's version (`claude --version`'s number: 2.1.3), for the run's record.",
+        },
+        sandbox: {
+          type: "boolean",
+          description:
+            "Whether the agent's own sandbox is on (Claude Code's sandbox.enabled), as the machine reports it.",
+        },
+        permissionMode: {
+          type: "string",
+          description: "The agent's permission mode (acceptEdits, dontAsk…), as the machine reports it.",
+        },
+        suggestedSettings: {
+          type: "boolean",
+          description:
+            "Whether the agent runs with the settings the driver generates from the work (its suggested settings), or its owner's own alone.",
+        },
         protocol: PROTOCOL,
       },
       ["machine"],
@@ -789,6 +809,7 @@ export function createMcp({ source, version = "dev", now = Date.now, log = () =>
       agent: optionalString(args, "agent"),
       model: optionalString(args, "model")?.slice(0, 100) ?? null,
       effort: optionalString(args, "effort")?.slice(0, 40) ?? null,
+      setup: setupOf(args),
     };
     if (reported.agent !== null && !Object.hasOwn(AGENTS, reported.agent)) {
       throw new BadArguments(`\`agent\` is one of ${Object.keys(AGENTS).join(", ")}.`);
@@ -1253,6 +1274,34 @@ function optionalStrings(args, name) {
     throw new BadArguments(`\`${name}\` is a list of strings.`);
   }
   return value;
+}
+
+// How a claim's agent runs, as its driver reports it (#599): { version, sandbox, permissionMode,
+// suggested }, each null when not said; null when none is. The App posts them in the reply's
+// footer: a version and a mode in a few safe characters, no markdown nor mention.
+const SETUP_WORD = /^[A-Za-z0-9][A-Za-z0-9._+-]{0,39}$/;
+
+function setupOf(args) {
+  const word = (name) => {
+    const value = optionalString(args, name);
+    if (value !== null && !SETUP_WORD.test(value)) {
+      throw new BadArguments(`\`${name}\`: letters, digits, ".", "_", "+" and "-", 40 at most.`);
+    }
+    return value;
+  };
+  const flag = (name) => {
+    const value = args[name];
+    if (value === undefined || value === null) return null;
+    if (typeof value !== "boolean") throw new BadArguments(`\`${name}\` is true or false.`);
+    return value;
+  };
+  const setup = {
+    version: word("agentVersion"),
+    sandbox: flag("sandbox"),
+    permissionMode: word("permissionMode"),
+    suggested: flag("suggestedSettings"),
+  };
+  return Object.values(setup).some((v) => v !== null) ? setup : null;
 }
 
 // The run tools' protocol the driver says it speaks, one this copy still takes.
