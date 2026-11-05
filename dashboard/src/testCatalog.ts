@@ -61,42 +61,57 @@ function texts(root: Element): { text: string; on: Element }[] {
   return found;
 }
 
-const escape = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-// `words` taken out of `text` where they stand as whole words: "request" leaves "requests".
-function without(text: string, words: readonly string[]): string {
-  const longest = words.filter((w) => w.trim()).sort((a, b) => b.length - a.length);
-  if (!longest.length) return text;
-  const any = longest.map(escape).join("|");
-  return text.replace(new RegExp(`(?<![\\p{L}\\p{N}])(?:${any})(?![\\p{L}\\p{N}])`, "gu"), " ");
-}
-
 // Identifiers (rule names, files, paths, addresses), in the data as in the page.
 const verbatim = (text: string) => text.replace(/[\w.:-]*(?:[_/]|\.\w)[\w.:/-]*/g, " ");
 
-// The texts under `root` that still hold a word outside the marks, once `data` is taken out:
-// what the page shows of its own (task titles, repositories, names, keys) isn't the
-// dashboard's to translate, nor are identifiers (`allow_run`, `.deckhand/policy/`). `within`
-// gives more data, taken out only under the elements a selector matches.
+// A text's parts between the marks and the punctuation that joins what the page shows ("acme/app ·
+// #12", "(Ctrl Shift C)"): each is the dashboard's own unless it is data as a whole.
+const parts = (text: string) =>
+  verbatim(text)
+    .split(/⟦[^⟧]*⟧|[·,;:()[\]“”"…—–|+]+/)
+    .map((part) => part.trim())
+    .filter((part) => /\p{L}{2,}/u.test(part));
+
+// The texts under `root` that still hold a word outside the marks: a part that is neither a
+// whole piece of `data` (what the page was given: task titles, repositories, what the API
+// answered) nor made of `names` alone (keys, product names, what the browser writes of a
+// date). Identifiers (`allow_run`, `.deckhand/policy/`) aren't the dashboard's to translate
+// either. `within` gives more data, taken only under the elements a selector matches.
 export function unmarked(
   root: Element,
-  data: readonly string[] = [],
-  within: Record<string, readonly string[]> = {},
+  {
+    data = [],
+    names = [],
+    within = {},
+  }: {
+    data?: readonly string[];
+    names?: readonly string[];
+    within?: Record<string, readonly string[]>;
+  } = {},
 ): string[] {
-  const words = data.map(verbatim);
+  const given = new Set(data.flatMap(parts));
+  const named = new Set(names);
+  const isName = (part: string) =>
+    part.split(/\s+/).every((word) => named.has(word) || !/\p{L}/u.test(word));
   return texts(root)
     .filter(({ text, on }) => {
-      const scoped = Object.entries(within).flatMap(([selector, more]) =>
-        on.closest(selector) ? more.map(verbatim) : [],
+      const scoped = new Set(
+        Object.entries(within).flatMap(([selector, more]) =>
+          on.closest(selector) ? more.flatMap(parts) : [],
+        ),
       );
-      const rest = without(verbatim(text.replace(/⟦[^⟧]*⟧/g, " ")), [...words, ...scoped]);
-      return /\p{L}{2,}/u.test(rest);
+      return parts(text).some((part) => !given.has(part) && !scoped.has(part) && !isName(part));
     })
     .map(({ text }) => text);
 }
+
+const escape = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 // The texts under `root` that show one of `keys` as it is: a key passed on where its text
 // was meant (unmarked() takes it for an identifier).
 export const keysShown = (root: Element, keys: readonly string[]): string[] =>
   texts(root)
     .map(({ text }) => text)
-    .filter((text) => keys.some((key) => without(text, [key]) !== text));
+    .filter((text) =>
+      keys.some((key) => new RegExp(`(?<![\\w.])${escape(key)}(?![\\w.])`).test(text)),
+    );

@@ -65,7 +65,8 @@ export function windowText(plan: PlanUsage, w: PlanWindow, now: number): string 
     percent: percent(w.used),
   });
   const notes = windowNotes(plan, w, now);
-  return notes ? t("ui.planLine", { used, notes }) : used;
+  // One list with its notes, so the line and the bars' separate notes join alike.
+  return [used, notes].filter(Boolean).join(t("list.comma"));
 }
 
 function Bar({ plan, w, now }: { plan: PlanUsage; w: PlanWindow; now: number }) {

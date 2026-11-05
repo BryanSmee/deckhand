@@ -28,7 +28,6 @@ export const ui = {
   "ui.planPercent": "{n} %",
   "ui.planUsed": "{plan} {window}: {percent} used",
   // The usage, then its notes (the ones below, joined as a list).
-  "ui.planLine": "{used}, {notes}",
   "ui.planStale": "read before its last reset, so no longer current",
   "ui.planLimitedUntil": "limit reached until {time}",
   "ui.planResets": "resets {time}",

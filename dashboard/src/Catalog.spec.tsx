@@ -28,7 +28,7 @@ let { makeCapabilities, makePolicyFile, makeState, makeChat, makeChats, mockApi 
   {} as typeof import("./testUtils");
 let { keysShown, unmarked, useMarked } = {} as typeof import("./testCatalog");
 let { CATALOGS } = {} as typeof import("./locales");
-let { STATE_NAMES } = {} as typeof import("./format");
+let { PR_NAMES, STATE_NAMES } = {} as typeof import("./format");
 
 beforeAll(async () => {
   vi.resetModules();
@@ -37,7 +37,7 @@ beforeAll(async () => {
     await import("./testUtils"));
   ({ keysShown, unmarked, useMarked } = await import("./testCatalog"));
   ({ CATALOGS } = await import("./locales"));
-  ({ STATE_NAMES } = await import("./format"));
+  ({ PR_NAMES, STATE_NAMES } = await import("./format"));
 });
 
 // Every string in what the page was given.
@@ -294,19 +294,39 @@ beforeEach(() => {
 
 const show = (hash: string) => {
   history.replaceState(null, "", hash);
-  const state = makeState({ inboxes: INBOXES });
+  // Titles no dashboard text could be mistaken for.
+  const fixture = makeState({ inboxes: INBOXES });
+  const state = {
+    ...fixture,
+    tasks: fixture.tasks.map((task) => ({ ...task, title: `Xyzzy ${task.number}` })),
+  };
   given.push(state);
   return render(<Dashboard state={state} error={null} repos={list()} />).container;
 };
 
-// A task's state, as format.ts names it on its badge and in the palette, is the run pages' to
-// move (#722). A key shown as it is fails first: unmarked() would take it for an identifier.
+// The English catalog's texts: never data, so one written inline again isn't taken for some.
+const english = () =>
+  new Set<string>(
+    Object.values(CATALOGS.en).flatMap((text) =>
+      typeof text === "string" ? [text] : Object.values(text),
+    ),
+  );
+
+// A task's state and its pull request's, as format.ts names them on a badge and in the
+// palette, are the run pages' to move (#722). A key shown as it is fails first: unmarked() would take it for an identifier.
 const left = (root: Element = document.body, more: readonly string[] = []) => {
   const keys = keysShown(root, Object.keys(CATALOGS.en));
   if (keys.length) return keys;
-  return unmarked(root, [...NAMES, ...more, ...strings(given)], {
-    [`.${statusStyles.badge}, .${statusStyles.dot}, .${paletteStyles.state}`]:
-      Object.values(STATE_NAMES),
+  const catalog = english();
+  return unmarked(root, {
+    data: strings(given).filter((text) => !catalog.has(text)),
+    names: [...NAMES, ...more],
+    within: {
+      [`.${statusStyles.badge}, .${statusStyles.dot}, .${paletteStyles.state}`]: [
+        ...Object.values(STATE_NAMES),
+        ...Object.values(PR_NAMES),
+      ],
+    },
   });
 };
 

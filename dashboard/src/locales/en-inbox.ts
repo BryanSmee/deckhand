@@ -38,6 +38,14 @@ export const inbox = {
   "taskList.noMatch": "No task matches “{query}”",
   "taskList.noneInState": "Nothing in this state",
 
+  // The task list's chips (format.ts CHIPS)
+  "chips.all": "All",
+  "chips.running": "Running",
+  "chips.input": "Needs you",
+  "chips.review": "Ready",
+  "chips.done": "Done",
+  "chips.error": "Error",
+
   // Sync with GitHub
   "sync.upToDate": "Up to date with GitHub",
   "sync.synced": "Synced: {done}",
@@ -48,12 +56,4 @@ export const inbox = {
   "sync.pulls": { one: "{count} pull request updated", other: "{count} pull requests updated" },
   "sync.conflicts": { one: "{count} rebase run started", other: "{count} rebase runs started" },
   "sync.failed": "Couldn't sync ({error})",
-
-  // The task list's chips (format.ts CHIPS)
-  "chips.all": "All",
-  "chips.running": "Running",
-  "chips.input": "Needs you",
-  "chips.review": "Ready",
-  "chips.done": "Done",
-  "chips.error": "Error",
 } as const;
