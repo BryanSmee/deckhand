@@ -339,7 +339,7 @@ run starting): that issue is left alone, and remembered until the orchestrator r
 start the orchestrator also reads the App's settings (`GET /app`) and logs a warning naming any
 event of `APP_EVENTS` it isn't subscribed to.
 
-With the repo's `wait_for_answers` (on by default, `docs/repo-config.md`), the label holds work
+With the repo's `wait_for_answers` (on by default, `docs/repo-config/issues.md`), the label holds work
 back. `tasks.mjs` `admit()` reads it from the comment's payload: a trigger comment with no text
 besides its command lines (`saysMore()`), asking for work or one of the repo's own modes, on an
 issue labelled for its body's questions that its ticked boxes don't all answer (and whose last

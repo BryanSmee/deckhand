@@ -48,7 +48,7 @@
 // An item added to a project (v2) is a `project` on its content (issue #454), over GraphQL only
 // (github-graphql.mjs addProjectV2ItemById): its project must be one the operator's grants list
 // for the repository (`allow_projects`), whatever the policies say.
-// Format of the policies' input: ../docs/repo-config.md#the-github-input.
+// Format of the policies' input: ../docs/repo-config/policy-inputs.md#the-github-input.
 import { randomUUID } from "node:crypto";
 import { branchAllowed } from "./broker.mjs";
 import { ISSUES_WRITE } from "./github-app.mjs";

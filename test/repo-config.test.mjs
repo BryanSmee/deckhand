@@ -185,7 +185,7 @@ test("`preview`, removed (#574): ignored with its own warning, whatever its valu
     const { settings, errors, warnings } = parseRepoConfig(`preview: ${value}\n`, config);
     assert.deepEqual(errors, [], value);
     assert.deepEqual(warnings, [
-      "preview: removed, ignored (a GitHub webhook does this now, see docs/repo-config.md)",
+      "preview: removed, ignored (a GitHub webhook does this now, see docs/repo-config/issues.md)",
     ]);
     assert.equal("preview" in settings, false);
   }

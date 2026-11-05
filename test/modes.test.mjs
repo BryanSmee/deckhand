@@ -127,8 +127,11 @@ function allowedActions(text) {
 
 // It checks that the actions are named, not under which kind of target: the rows are prose
 // ("its pull requests: the same but `link`, and …"), which a parser would have to follow.
-test("docs/repo-config.md's table names each mode's file and every action it allows", () => {
-  const docs = readFileSync(new URL("../docs/repo-config.md", import.meta.url), "utf8");
+test("docs/repo-config/policy-inputs.md's table names each mode's file and every action it allows", () => {
+  const docs = readFileSync(
+    new URL("../docs/repo-config/policy-inputs.md", import.meta.url),
+    "utf8",
+  );
   const input = docs.slice(docs.indexOf("### The GitHub input"));
   const table = input.slice(
     input.indexOf("| Mode "),

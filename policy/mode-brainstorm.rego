@@ -1,6 +1,6 @@
 # Deckhand's default for brainstorms and their wrap-up (`/stop`), which read the code and the
 # issues and answer, without a branch or the repository's setup
-# (docs/repo-config.md#the-default-policies): what their sandbox gets (`allow_capabilities`) and
+# (docs/repo-config/policies.md#the-default-policies): what their sandbox gets (`allow_capabilities`) and
 # what they write to GitHub (`allow_github`). A grants folder's policy/mode-brainstorm.rego
 # replaces it.
 package deckhand

@@ -13,7 +13,7 @@ import { Alert, Search } from "./ui/icons";
 import { Card } from "./ui/Surface";
 import styles from "./Access.module.css";
 
-const DOCS = "https://github.com/BryanSmee/deckhand/blob/main/docs/repo-config.md#access";
+const DOCS = "https://github.com/BryanSmee/deckhand/blob/main/docs/repo-config/policies.md#access";
 
 // What each action lets the user do, for the chips' titles: keys, written when shown.
 const ACTIONS: Record<string, Plain> = {

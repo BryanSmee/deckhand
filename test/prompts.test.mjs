@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { test } from "node:test";
 import { READ_PERMISSIONS } from "../listener/github-app.mjs";
 import { isApart, isFresh, kindOf } from "../listener/modes.mjs";
 import {
+  CONFIG_PAGES,
   compactTables,
   firstMessage,
   handoffMessage,
@@ -304,12 +305,22 @@ test("the onboarding prompt fits one environment string (TASK_PROMPT), its refer
   assert.match(text, /## Reference: `\.deckhand\.yaml`/);
   // The policies' inputs left out, pointed to; what comes after them kept.
   assert.doesNotMatch(text, /### The (run|merge|GitHub) input/);
-  assert.match(text, /The policies' inputs, field by field, are in docs\/repo-config\.md/);
+  assert.match(
+    text,
+    /The policies' inputs, field by field, are in docs\/repo-config\/policy-inputs\.md/,
+  );
   assert.match(text, /### The default policies/);
   // How a review's reply is read, left out the same way, with its own pointer (#662).
   assert.doesNotMatch(text, /How a review's items are read|A block that doesn't validate/);
-  assert.match(text, /How Deckhand reads a review's reply \([^)]*\) is in docs\/repo-config\.md/);
+  assert.match(
+    text,
+    /How Deckhand reads a review's reply \([^)]*\) is in docs\/repo-config\/reviews\.md/,
+  );
   assert.match(text, /- \*\*A plausibility bar for findings\.\*\*/);
+  // The default policies' rules on single writes, left out too: the rules themselves kept.
+  assert.doesNotMatch(text, /#### (Reactions|Review threads|Assignees and milestones)/);
+  assert.match(text, /reactions, review threads, [^.]* are in docs\/repo-config\/policies\.md/);
+  assert.match(text, /#### review\.rego/);
   assert.doesNotMatch(text, /onboarding: (skip|end)/);
   assert.equal(
     compactTables(
@@ -317,6 +328,40 @@ test("the onboarding prompt fits one environment string (TASK_PROMPT), its refer
     ),
     "| Key | Default |\n| --- | --- |\n| `users` | none |\nprose  |  kept",
   );
+});
+
+test("the onboarding prompt reads every config reference page, in order, as the orchestrator's image has them", () => {
+  // Every page of docs/repo-config/ is in the list, the index first.
+  const folder = readdirSync(new URL("../docs/repo-config/", import.meta.url)).filter((f) =>
+    f.endsWith(".md"),
+  );
+  assert.deepEqual(
+    [...CONFIG_PAGES].sort(),
+    ["docs/repo-config.md", ...folder.map((f) => `docs/repo-config/${f}`)].sort(),
+  );
+  assert.equal(CONFIG_PAGES[0], "docs/repo-config.md");
+  // The image copies each one where the prompt reads it: one left out stops the orchestrator.
+  const dockerfile = readFileSync(new URL("../orchestrator/Dockerfile", import.meta.url), "utf8");
+  for (const page of CONFIG_PAGES) {
+    const dir = page.slice(0, page.lastIndexOf("/") + 1);
+    const copied = [...dockerfile.matchAll(/^COPY (.+) (\S+)$/gm)].some(
+      ([, from, to]) =>
+        to === dir && from.split(" ").some((f) => f === page || (f.endsWith("/") && f === dir)),
+    );
+    assert.ok(copied, page);
+  }
+  // Their titles in the prompt, in that order, and each page's text.
+  const text = promptFor(issue, { mode: "onboarding", settings, config, grant });
+  const titles = CONFIG_PAGES.slice(0, -1).map((page) =>
+    text.indexOf(
+      readFileSync(new URL(`../${page}`, import.meta.url), "utf8").match(/^# .*$/m)[0] + "\n",
+    ),
+  );
+  assert.ok(
+    titles.every((at, i) => at > 0 && (i === 0 || at > titles[i - 1])),
+    String(titles),
+  );
+  assert.ok(text.indexOf("are in docs/repo-config/policy-inputs.md") > titles.at(-1));
 });
 
 test("prompts: a work run is told the projects the operator grants, none: nothing", () => {

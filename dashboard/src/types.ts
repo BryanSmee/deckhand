@@ -191,7 +191,7 @@ export interface PolicyDecision {
   // The built-in gates checked before the policies, in order ("Checks green"…); absent on
   // decisions kept before they were (listener/decisions.mjs).
   gates?: PolicyGate[];
-  // The input the rules saw, redacted (docs/repo-config.md#the-merge-input): only on the
+  // The input the rules saw, redacted (docs/repo-config/policy-inputs.md#the-merge-input): only on the
   // task's newest 3 decisions. Null when it was too big even cut.
   input?: Record<string, unknown> | null;
   // The input was cut to fit: its changed files first, then the review's findings, the checks.

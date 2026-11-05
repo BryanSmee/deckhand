@@ -1,5 +1,5 @@
 # Deckhand's default capabilities for analyses of past runs (the dashboard's Analyze), which read
-# the runs' digest and the code (docs/repo-config.md#capabilities). A grants folder's
+# the runs' digest and the code (docs/repo-config/policies.md#capabilities). A grants folder's
 # policy/mode-analyze.rego replaces it.
 package deckhand
 

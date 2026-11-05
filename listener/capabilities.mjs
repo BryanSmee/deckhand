@@ -6,7 +6,7 @@
 // and the operator's grant gives it if a grant gates it. Then checked here, in code, whatever a
 // policy says: each capability's dependencies, and the risky combinations. One function,
 // outcomeOf(), says what a run gets: runs start with it (preparation.mjs), and the repository's
-// config page shows it for each mode (repos.mjs). Format: ../docs/repo-config.md#capabilities.
+// config page shows it for each mode (repos.mjs). Format: ../docs/repo-config/policies.md#capabilities.
 import { BUILT_IN, customMode, MODES, RESEARCH } from "./modes.mjs";
 import { GRANTS, grantCheck, grantsBy, notGranted, ungranted } from "./grants.mjs";
 import { POLICY_DIR } from "./policies.mjs";
@@ -122,7 +122,7 @@ export const RISKY = [
 // Every name an allow or deny rule may give: another one is a mistake the config check says.
 export const KNOWN = new Set([...NAMES, ...RISKY.map((r) => r.name)]);
 
-// What the policies read (docs/repo-config.md#capabilities). `repo`: { name, private
+// What the policies read (docs/repo-config/policies.md#capabilities). `repo`: { name, private
 // }, private null when unknown; `issue`: the number of its issue or pull request; `reason`: why
 // the listener started it itself ("review-fix", "ci-fix", "conflict", "review"…), null for a
 // comment's; `fork`: whether a fork's pull request's comments started it; `trigger`: what a
