@@ -59,6 +59,22 @@ const SERVICES = {
   egress: { server: "proxy/proxy.mjs", module: "./metrics.mjs", declare: (r) => egress(r) },
 };
 
+// A file's code without its line comments. Approximate: a `//` in a string ("http://…") cuts the
+// rest of its line too, which only these checks read.
+const uncommented = (text) => text.replace(/\/\/.*$/gm, "");
+
+// What a file imports by name: [name it exports, the module], `name as alias` by its name.
+function imports(text) {
+  const named = [];
+  for (const [, list, from] of text.matchAll(/import\s*\{([^}]*)\}\s*from\s*"([^"]+)"/g)) {
+    for (const specifier of list.split(",")) {
+      const name = specifier.trim().split(/\s+as\s+/)[0];
+      if (name) named.push([name, from]);
+    }
+  }
+  return named;
+}
+
 // The services' code, but for the bundled graphql-js: [path, text without its comments].
 function sources() {
   const dirs = ["lib", "listener", "edge", "orchestrator", "runner", "broker", "github", "models"];
@@ -67,7 +83,7 @@ function sources() {
     for (const entry of readdirSync(join(repo, dir), { recursive: true })) {
       const path = String(entry);
       if (!path.endsWith(".mjs") || /node_modules|vendor/.test(path)) continue;
-      files.push([posix(join(dir, path)), read(dir, path).replace(/\/\/.*$/gm, "")]);
+      files.push([posix(join(dir, path)), uncommented(read(dir, path))]);
     }
   }
   return files;
@@ -161,28 +177,41 @@ test("every service's metric names are its own, but for what all of them share",
 });
 
 // What the tests above build is what the servers declare: each server calls its own
-// declareMetrics(), and nothing outside the metrics.mjs files declares a metric or calls what
-// declares them (a builder: `…Metric(s)`, buildInfo) but through it and startMetrics().
+// declareMetrics(), and nothing outside the metrics.mjs files declares a metric, or calls or
+// imports what declares them (a builder: `…Metric(s)`, buildInfo), under its name or another,
+// but startMetrics() and the server's own declareMetrics().
 test("every server declares its metrics through its own declareMetrics() alone", () => {
-  for (const [service, { server, module }] of Object.entries(SERVICES)) {
-    const text = read(server).replace(/\/\/.*$/gm, "");
+  const servers = new Map(Object.values(SERVICES).map(({ server, module }) => [server, module]));
+  for (const [server, module] of servers) {
+    const text = uncommented(read(server));
     assert.match(text, /\bdeclareMetrics\(/, `${server}: calls declareMetrics()`);
-    const imported = new RegExp(
-      `import \\{[^}]*\\bdeclareMetrics\\b[^}]*\\} from "${RegExp.escape(module)}"`,
+    const own = imports(text).filter(
+      ([name, from]) => name === "declareMetrics" && from === module,
     );
-    assert.match(text, imported, `${service}: its declareMetrics() from ${module}`);
+    assert.equal(own.length, 1, `${server}: its declareMetrics() from ${module}`);
   }
-  const builder = /\b([a-zA-Z]\w*Metrics?|buildInfo)\(/g;
+  const builder = /^(?:[a-zA-Z]\w*Metrics?|buildInfo)$/;
+  const called = /\b([a-zA-Z]\w*Metrics?|buildInfo)\(/g;
   const declaring = /\.(?:counter|gauge|histogram)\(\s*"deckhand_/;
   const allowed = new Set(["declareMetrics", "startMetrics"]);
   for (const [path, text] of sources()) {
     if (path.endsWith("/metrics.mjs")) continue;
     assert.doesNotMatch(text, declaring, `${path}: a metric declared outside a metrics.mjs`);
-    const called = [...text.matchAll(builder)].map(([, name]) => name);
+    const calls = [...text.matchAll(called)].map(([, name]) => name);
     assert.deepEqual(
-      called.filter((name) => !allowed.has(name)),
+      calls.filter((name) => !allowed.has(name)),
       [],
       `${path}: builders called`,
+    );
+    // A builder under another name: imported, whatever it is called here.
+    const imported = imports(text)
+      .filter(([name]) => builder.test(name) && name !== "startMetrics")
+      .filter(([name, from]) => name !== "declareMetrics" || servers.get(path) !== from);
+    assert.deepEqual(imported, [], `${path}: builders imported`);
+    assert.doesNotMatch(
+      text,
+      /import\s*\*\s*as\s+\w+\s+from\s*"[^"]*metrics\.mjs"/,
+      `${path}: a metrics module imported whole`,
     );
   }
 });
