@@ -91,9 +91,8 @@ const chatsShown = (can: Can, chats: Chats | null | undefined) =>
 const chatsHref = formatRoute({ repo: null, task: null, run: null, page: "chats" });
 
 export function Sidebar(props: SidebarProps) {
-  const { state, route, repos, rail, onRail, onRequest, notify, health = null, chats } = props;
-  const can = useCan();
-  const requests = menuRequests(can);
+  const { state, route, repos, rail, onRail, onRequest, notify, health = null } = props;
+  const requests = menuRequests(useCan());
   const counts = repoCounts(state?.tasks ?? [], route.repo);
   const waiting = needingYou(repos?.repos ?? null, state?.tasks ?? []);
   const toggle = (
@@ -127,20 +126,6 @@ export function Sidebar(props: SidebarProps) {
       {rail && <span class={styles.rule} />}
       <RepoLinks counts={counts} route={route} rail={rail} />
       <div class={styles.bottom}>
-        {chatsShown(can, chats) && (
-          <NavItem
-            href={chatsHref}
-            icon={<Icon.Talk size={rail ? 17 : 16} />}
-            label="Chats"
-            current={route.page === "chats"}
-            extra={
-              <span class={styles.kept} title="The chats you keep, of the most you may">
-                {chats!.chats.length} of {chats!.limit}
-              </span>
-            }
-            rail={rail}
-          />
-        )}
         {repos && (
           <NavItem
             href={formatRoute({ repo: null, task: null, run: null, page: "settings" })}
@@ -416,18 +401,23 @@ export function PageHeader({
   github,
   needs = 0,
   state = null,
+  chats = null,
   children,
 }: {
   route: Route;
   github: string;
   needs?: number;
   state?: State | null;
+  // api/chats: Chats among the views, with how many the user keeps of the most they may.
+  chats?: Chats | null;
   children?: ComponentChildren;
 }) {
+  const can = useCan();
   const settings = route.page === "settings";
-  const repo = settings ? null : route.repo;
+  const chatting = route.page === "chats";
+  const repo = settings || chatting ? null : route.repo;
   // The board is one repository's: All has the Overview instead.
-  const views: Segment<"overview" | "tasks" | "board">[] = repo
+  const views: Segment<"overview" | "tasks" | "board" | "chats">[] = repo
     ? [
         {
           value: "tasks",
@@ -460,11 +450,31 @@ export function PageHeader({
           title: withKey("Tasks", "tasks"),
         },
       ];
-  const view = isOverview(route) ? "overview" : route.page === "board" ? "board" : "tasks";
+  // Chats are the user's own, on every repository: the same link from any of them.
+  if (chatsShown(can, chats)) {
+    views.push({
+      value: "chats",
+      label: "Chats",
+      icon: <Icon.Talk size={14} />,
+      href: chatsHref,
+      extra: (
+        <span class={styles.kept} title="The chats you keep, of the most you may">
+          {chats!.chats.length} of {chats!.limit}
+        </span>
+      ),
+    });
+  }
+  const view = chatting
+    ? "chats"
+    : isOverview(route)
+      ? "overview"
+      : route.page === "board"
+        ? "board"
+        : "tasks";
   return (
     <header class={`${styles.header} ${settings ? styles.tabbed : ""}`}>
       <div class={styles.title}>
-        <h1>{settings ? "Settings" : (repo ?? "All repositories")}</h1>
+        <h1>{settings ? "Settings" : chatting ? "Chats" : (repo ?? "All repositories")}</h1>
         {repo && (
           <a
             class={styles.github}
@@ -480,7 +490,7 @@ export function PageHeader({
       </div>
       {settings && <SettingsTabs route={route} count={needs} class={styles.headerTabs} />}
       {!settings && <Segmented label="View" options={views} value={view} />}
-      {!settings && !repo && (
+      {!settings && !chatting && !repo && (
         <span class={styles.hint}>The board is per repository: open one to plan its work.</span>
       )}
       {!settings && state && (

@@ -48,12 +48,14 @@ function show(list: Chats, routes: Parameters<typeof mockApi>[0] = {}) {
   return api;
 }
 
-test("the list: the chats with how many the user keeps, the sidebar's link, a chat opened", async () => {
+test("the list: the chats with how many the user keeps, Chats among the views, a chat opened", async () => {
   show(makeChats([makeChat(), makeChat({ id: "fedcba9876543210", title: "Try the build" })]));
-  const nav = await screen.findByRole("link", { name: /Chats\s*2 of 4/ });
+  const views = await screen.findByRole("group", { name: "View" });
+  const nav = await within(views).findByRole("link", { name: /Chats\s*2 of 4/ });
+  expect(screen.getByRole("heading", { name: "Chats", level: 1 })).toBeTruthy();
   expect(nav.getAttribute("aria-current")).toBe("page");
   const list = screen.getByRole("complementary", { name: "Your chats" });
-  expect(within(list).getByRole("heading", { name: /Chats\s*2 of 4/ })).toBeTruthy();
+  expect(within(list).getByRole("heading", { name: /Your chats\s*2 of 4/ })).toBeTruthy();
   fireEvent.click(within(list).getByRole("link", { name: /Try the build/ }));
   await waitFor(() => expect(location.hash).toBe("#/chats/fedcba9876543210"));
   const chat = await screen.findByRole("region", { name: "Try the build" });

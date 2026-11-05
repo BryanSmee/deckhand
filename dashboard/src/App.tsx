@@ -313,13 +313,13 @@ export function Dashboard({ state, error, repos, refresh, onOverview }: Props) {
         )}
         <div class={styles.content}>
           {/* A repository's config has its own header, its way back included. */}
-          {/* Chats have theirs in their list. */}
-          {wide && !(onBoard && route.repo) && !(onSettings && route.config) && !onChats && (
+          {wide && !(onBoard && route.repo) && !(onSettings && route.config) && (
             <PageHeader
               route={route}
               github={github}
               needs={needingYou(repos?.repos ?? null, tasks)}
               state={state}
+              chats={chats.data}
             />
           )}
           {overview ? (
@@ -344,7 +344,7 @@ export function Dashboard({ state, error, repos, refresh, onOverview }: Props) {
                 view={wide ? view : phoneView}
                 onView={selectView}
                 header={(controls) => (
-                  <PageHeader route={route} github={github} state={state}>
+                  <PageHeader route={route} github={github} state={state} chats={chats.data}>
                     {controls}
                   </PageHeader>
                 )}

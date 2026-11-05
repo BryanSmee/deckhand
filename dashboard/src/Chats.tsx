@@ -127,14 +127,14 @@ function ChatsList({
   return (
     <div class={styles.list}>
       <div class={styles.listHead}>
-        <h1 class={styles.heading}>
-          Chats
+        <h2 class={styles.heading}>
+          Your chats
           {list && (
             <span class={styles.kept} title="The chats you keep, of the most you may">
               {keptText(list)}
             </span>
           )}
-        </h1>
+        </h2>
         <Button
           variant="primary"
           size="small"
