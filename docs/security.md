@@ -2340,9 +2340,10 @@ by default).
 
 The runner's volume (`runner-data`, its `/data`) holds its store: the runs' logs (redacted as
 above), their events, the newest orchestrator epoch it saw and its lease; nothing that signs or
-opens anything. The `runs` volume holds each run's inbox (the comments it got, their authors'
-text), the egress proxy's CA certificate and a run analysis's digest. Whoever reads them reads
-what the dashboard shows of the runs.
+opens anything. Its `runs/` folder holds each running run's inbox (the comments it got, their
+authors' text), the egress proxy's CA certificate and a run analysis's digest, which the broker
+has a copy of for the sandbox, both removed when the run ends. Whoever reads them reads what the
+dashboard shows of the runs.
 
 ## The dashboard's actions
 
@@ -3149,20 +3150,22 @@ message it, read its logs and answer its requests (see
   model, effort, title, permissions profile and times), and its messages not delivered yet in
   the store's queue, as any queued comment: whoever reads the store reads them
   ([Edge's and the orchestrator's data](#edges-and-the-orchestrators-data)).
-- **Its clone and its agent's session**, in volumes of its own, named after its task's sandbox
-  (`<repo>#chat-<id>`'s), never an issue's: kept between its sandbox's starts, gone at a reset
+- **Its clone and its agent's session**, in volumes of its own, named after the sandbox of its task
+  (`<repo>#chat-<id>`), never an issue's: kept between its sandbox's starts, gone at a reset
   or a deletion, which the runner does for a chat's key alone
   ([The runner service](#the-runner-service)).
 - **Its conversation**, in its runs' logs and summaries (the runner's volume and the
   orchestrator's store, redacted as any run's), and the messages its sandbox got in its inbox
-  (the `runs` volume, the broker's store). Its latest run's log stays while the chat is kept,
+  (the runner's volume, `runner-data`, its `runs/` folder, and the broker's store), both removed
+  when that run ends. Its latest run's log stays while the chat is kept,
   past `LOG_RETENTION_DAYS`; a deletion removes all of them.
 - **Its requests for more permissions**, in the broker's store for two hours at most and in the
   orchestrator's (`permission-requests`, its agent's reason redacted) until a day after their
-  answer.
+  answer, or until the chat is deleted.
 
 Nothing of it goes to GitHub: a chat posts no comment, reaction or label, and its answers stay in
-its log.
+its log. Its conversation still leaves the deployment the way any run's does: to the agent's API,
+through the models service, and to whatever host its profile lets its sandbox reach.
 
 ## Research runs
 
