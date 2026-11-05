@@ -411,3 +411,25 @@ test("a user who may start no chat but keeps some: the Chats link all the same",
   );
   expect(await screen.findByRole("link", { name: /Chats\s*1 of 4/ })).toBeTruthy();
 });
+
+test("Permissions: the chat's menu opens its permissions panel (#478)", async () => {
+  history.replaceState(null, "", "#/chats/0123456789abcdef");
+  const asked: string[] = [];
+  show(makeChats([makeChat()]), {
+    "api/chats/0123456789abcdef/permissions": ({ url }) => {
+      asked.push(url);
+      return {
+        profile: { github: "read", capabilities: null, hosts: null, mounts: null },
+        ceiling: { capabilities: [], hosts: ["pypi.org"], mounts: [], github: [] },
+        effective: { github: "read", capabilities: ["pull"], hosts: ["pypi.org"], mounts: [] },
+        errors: [],
+        running: false,
+      };
+    },
+  });
+  fireEvent.click(await screen.findByRole("button", { name: "Chat menu" }));
+  fireEvent.click(screen.getByRole("menuitem", { name: "Permissions…" }));
+  const dialog = screen.getByRole("dialog");
+  expect(await within(dialog).findByText("pypi.org")).toBeTruthy();
+  expect(asked).toEqual(["api/chats/0123456789abcdef/permissions"]);
+});

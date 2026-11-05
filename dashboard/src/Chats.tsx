@@ -7,6 +7,7 @@
 import { useEffect, useRef, useState } from "preact/hooks";
 import { type NewChat, type Polled, createChat, deleteChat, resetChat } from "./api";
 import { CHAT_STATES, chatState } from "./chatModel";
+import { ChatPermissions } from "./ChatPermissions";
 import { Conversation } from "./Conversation";
 import { ago } from "./format";
 import { formatRoute } from "./route";
@@ -196,7 +197,7 @@ function ChatView({
   onDeleted: () => void;
 }) {
   const state = CHAT_STATES[chatState(chat)];
-  const [asking, setAsking] = useState<"reset" | "delete" | null>(null);
+  const [asking, setAsking] = useState<MenuPick | null>(null);
   const picks = [chat.agent, chat.model, chat.effort && `${chat.effort} effort`].filter(Boolean);
   return (
     <section class={styles.chat} aria-label={chat.title ?? "New chat"}>
@@ -226,7 +227,23 @@ function ChatView({
         <ChatMenu touch={touch} onPick={setAsking} />
       </header>
       <Conversation chat={chat} now={now} touch={touch} onChat={onChat} />
-      {asking && (
+      {asking === "permissions" && (
+        <Dialog
+          wide
+          // The panel has its own heading and explanation: the chat it is for, here.
+          title={chat.title ?? "New chat"}
+          sub={chat.repo}
+          onClose={() => setAsking(null)}
+          actions={
+            <Button variant="ghost" onClick={() => setAsking(null)}>
+              Close
+            </Button>
+          }
+        >
+          <ChatPermissions chatId={chat.id} />
+        </Dialog>
+      )}
+      {(asking === "reset" || asking === "delete") && (
         <ConfirmDialog
           chat={chat}
           what={asking}
@@ -242,15 +259,12 @@ function ChatView({
   );
 }
 
-// The chat's menu: Reset and Delete, each asked first (ConfirmDialog). Escape, Tab or a click
+// What the chat's menu opens: its permissions (ChatPermissions.tsx, #478), or Reset or Delete.
+type MenuPick = "permissions" | "reset" | "delete";
+
+// The chat's menu: Permissions, then Reset and Delete, each asked first (ConfirmDialog). Escape, Tab or a click
 // elsewhere closes it (ui/popup.ts); arrows move through it.
-function ChatMenu({
-  touch,
-  onPick,
-}: {
-  touch?: boolean;
-  onPick: (what: "reset" | "delete") => void;
-}) {
+function ChatMenu({ touch, onPick }: { touch?: boolean; onPick: (what: MenuPick) => void }) {
   const [open, setOpen] = useState(false);
   const box = useRef<HTMLDivElement>(null);
   const button = () => box.current?.querySelector<HTMLElement>("[aria-haspopup]");
@@ -269,7 +283,7 @@ function ChatMenu({
       all[(at + (e.key === "ArrowDown" ? 1 : -1) + all.length) % all.length]?.focus();
     },
   });
-  const pick = (what: "reset" | "delete") => {
+  const pick = (what: MenuPick) => {
     // Focus back on the menu's button: the dialog gives it back there once closed.
     button()?.focus();
     setOpen(false);
@@ -288,6 +302,16 @@ function ChatMenu({
       />
       {open && (
         <div class={styles.menu} role="menu" aria-label="Chat menu">
+          <button
+            type="button"
+            role="menuitem"
+            tabIndex={-1}
+            class={styles.menuItem}
+            onClick={() => pick("permissions")}
+          >
+            <Icon.Settings size={15} />
+            Permissions…
+          </button>
           <button
             type="button"
             role="menuitem"
