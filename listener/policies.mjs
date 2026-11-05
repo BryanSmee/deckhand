@@ -863,7 +863,9 @@ export function createPolicies({
           res = { error };
         }
         if (!res.ok) {
-          const why = res.error?.message ?? res.error ?? `GitHub GET /repos/${name}: ${res.status}`;
+          const why = res.error
+            ? String(res.error?.message ?? res.error)
+            : `GitHub GET /repos/${name}: ${res.status}`;
           // A GitHub hiccup (transient()): what it last said, up to STALE_LISTING_MS old, as
           // listing()'s `stale` keeps the listing, so that it refuses nothing (#785). Its `at`
           // stays: a failed read never extends it. Not kept, forgotten by a push, or an answer
