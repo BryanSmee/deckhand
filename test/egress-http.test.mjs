@@ -8,6 +8,7 @@ import { test } from "node:test";
 import { createEgressHttp, taskWhere } from "../listener/egress-http.mjs";
 import { createBroker } from "../listener/broker.mjs";
 import { refused } from "../listener/egress.mjs";
+import { RunnerAway } from "../runner/client.mjs";
 import { testConfig } from "./helpers.mjs";
 
 // Two running tasks, A and B, on networks net-a and net-b: A's sandbox and its engine, B's
@@ -107,6 +108,26 @@ test("egress: only the proxy may ask", async (t) => {
   const ask = await policyServer(t, { ...ctx, config: testConfig(), log: () => {} });
   // The test isn't the proxy (10.0.0.9): refused, whatever it asks.
   assert.deepEqual(await ask("10.1.0.2", "github.com"), { allowed: false });
+});
+
+test("egress: a caller not among the proxy's last addresses, the runner away: a 503, not a refusal (#936)", async (t) => {
+  const { ctx } = twoRuns();
+  const logged = [];
+  // A proxy recreated while the runner hands over: its address isn't in the last list, and the
+  // fresh one can't be had.
+  ctx.runner.proxyAddresses = async ({ fresh } = {}) => {
+    if (fresh) throw new RunnerAway("the egress proxy's addresses: the runner service is away");
+    return ["10.0.0.9"];
+  };
+  const config = testConfig();
+  config.policyPort = 0;
+  const server = createEgressHttp({ ...ctx, config, log: (l) => logged.push(l) }).listen();
+  await once(server, "listening");
+  t.after(() => server.close());
+  const res = await fetch(`http://127.0.0.1:${config.policyPort}/egress?ip=10.1.0.2&host=models`);
+  assert.equal(res.status, 503);
+  assert.deepEqual(await res.json(), { allowed: false, reason: "runner_away" });
+  assert.ok(logged.includes("Egress: models for 10.1.0.2 waits for the runner"));
 });
 
 // --- Kubernetes: the builder, install pods and init containers ----------------------------------
@@ -276,6 +297,54 @@ test("egress: the services' names only for a run's sandbox or engine the proxy f
     });
   }
   assert.ok(logged.includes("Egress: refused broker for 10.1.0.2"));
+});
+
+test("egress: the runner away with no earlier answer: a 503 the proxy asks again after, never no_run (#936)", async (t) => {
+  const config = testConfig();
+  const broker = createBroker({});
+  const logged = [];
+  let away = true;
+  const ctx = {
+    config,
+    broker,
+    log: (line) => logged.push(line),
+    runner: {
+      proxyAddresses: async () => ["127.0.0.1"],
+      locate: async (ip) => {
+        if (away) throw new RunnerAway(`where ${ip} is: the runner service didn't answer`);
+        return ip === "10.1.0.2" ? { sandbox: "net-a", name: "a" } : null;
+      },
+      installing: async () => false,
+    },
+    images: { egressFor: async () => null },
+    tasks: new Map([
+      [
+        "org/a#1",
+        {
+          name: "a",
+          repo: "org/a",
+          id: "1",
+          live: { id: broker.register("org/a"), sandbox: "net-a", hosts: ["github.com"] },
+        },
+      ],
+    ]),
+  };
+  ctx.config.policyPort = 0;
+  const server = createEgressHttp(ctx).listen();
+  await once(server, "listening");
+  t.after(() => server.close());
+  const ask = (ip, host) =>
+    fetch(`http://127.0.0.1:${config.policyPort}/egress?ip=${ip}&host=${host}&forward=1`);
+  const waiting = await ask("10.1.0.2", "models");
+  assert.equal(waiting.status, 503);
+  assert.deepEqual(await waiting.json(), { allowed: false, reason: "runner_away" });
+  assert.ok(logged.includes("Egress: models for 10.1.0.2 waits for the runner"));
+  assert.ok(!logged.some((line) => line.startsWith("Egress: refused")));
+  // The runner back: the same question goes through.
+  away = false;
+  const answered = await ask("10.1.0.2", "models");
+  assert.equal(answered.status, 200);
+  assert.equal((await answered.json()).allowed, true);
 });
 
 test("egress: a question between a run's engine start and its sandbox's refuses none of that sandbox's hosts (#517)", async (t) => {

@@ -8,7 +8,9 @@
 //
 // The runner away (updating, handing over to its other copy) is waited for, not taken for a
 // failure: lib/service-client.mjs tries again. The egress policy's questions wait less, and fall
-// back on the runner's last answer: a sandbox's calls go on while the runner updates.
+// back on the runner's last answer: a sandbox's calls go on while the runner updates. With no
+// answer to fall back on (an orchestrator copy that just took over), where an address is says
+// so (RunnerAway) rather than "nowhere": the policy has the proxy ask again (#936).
 import { randomBytes } from "node:crypto";
 import { serviceClient } from "../lib/service-client.mjs";
 import { LOGIN_REFRESH_MARGIN_MS, MIN_REFRESH_MS } from "../lib/services.mjs";
@@ -16,8 +18,13 @@ import { LOGIN_REFRESH_MARGIN_MS, MIN_REFRESH_MS } from "../lib/services.mjs";
 // What the orchestrator waits for the runner, for the calls a run's life needs: an update of
 // the runner, a slow pull of its image. A run doesn't fail for it.
 const RUN_WAIT_MS = 30 * 60_000;
-// The egress policy's lookups, which a sandbox's connection waits on.
-const POLICY_WAIT_MS = 10_000;
+// The egress policy's lookups, which a sandbox's connection waits on: less than the proxy waits
+// for the policy's answer (proxy/proxy.mjs egressPolicy()), so that it hears the runner is away
+// rather than give up on the policy. One answer may make several (the proxy's addresses, where
+// the caller is, its install): once one found the runner away, the next ones don't ask it for a
+// while (AWAY_MS), so that the answer as a whole stays within one wait.
+const POLICY_WAIT_MS = 3000;
+const AWAY_MS = 1000;
 // A log append's most.
 const APPEND_MAX = 4 * 1024 * 1024;
 // After a failed append, the next try.
@@ -25,6 +32,13 @@ const APPEND_RETRY_MS = 5000;
 // The longest pause between two tries of a call (../lib/service-client.mjs maxRetryMs's
 // default): what the login's refresh keeps of its lease for the last one.
 const REFRESH_RETRY_MAX_MS = 5000;
+
+// The runner couldn't tell where an address is, and no earlier answer says: not "no sandbox
+// there" (#936).
+export class RunnerAway extends Error {}
+
+// No answer from the runner (not there, a timeout, RunnerAway): an answer's status is its word.
+const isAway = (error) => error?.status == null;
 
 const path = (...parts) => parts.map((p) => encodeURIComponent(p)).join("/");
 
@@ -84,7 +98,21 @@ export function createRunnerClient({
   const orchestrator = as("orchestrator", { epoch, waitMs: runWaitMs });
   // The egress policy's lookups (runner/service.mjs UNFENCED): as the orchestrator, without its
   // epoch, so an orchestrator stopping still has them answered.
-  const policy = as("orchestrator", { waitMs: policyWaitMs });
+  // Each one bounded as a whole too: a runner that takes the connection and doesn't answer
+  // (a copy gone without closing it) isn't waited on past that either.
+  const asPolicy = as("orchestrator", { waitMs: policyWaitMs });
+  let awayAt = -Infinity;
+  const policy = {
+    async json(method, url) {
+      if (now() - awayAt < AWAY_MS) throw new RunnerAway("the runner service is away");
+      try {
+        return await asPolicy.json(method, url, { signal: AbortSignal.timeout(policyWaitMs) });
+      } catch (error) {
+        if (isAway(error)) awayAt = now();
+        throw error;
+      }
+    },
+  };
   const models = as("models");
 
   // --- Sandboxes ----------------------------------------------------------------------------
@@ -204,12 +232,19 @@ export function createRunnerClient({
       else known.delete(ip);
       return at;
     } catch (error) {
-      if (!known.has(ip)) log(`Where ${ip} is: ${error.message}`);
-      return known.get(ip) ?? null;
+      if (known.has(ip)) return known.get(ip);
+      log(`Where ${ip} is: ${error.message}`);
+      // An answer with a status is the runner's word (a broken token, its backend failing): no
+      // place, as before; no answer at all, it can't tell.
+      if (!isAway(error)) return null;
+      throw new RunnerAway(`where ${ip} is: ${error.message}`, { cause: error });
     }
   }
 
-  // Asked on each of the broker's calls: kept a second, as the runner keeps them longer.
+  // Asked on each of the broker's calls: kept a second, as the runner keeps them longer. The
+  // runner away and never answered yet (a copy that just took over), or asked `fresh` (the
+  // caller isn't among the last ones, a proxy recreated): RunnerAway, as for locate(), never the
+  // last list that didn't have it.
   let proxyAt = -Infinity;
   async function proxyAddresses({ fresh = false } = {}) {
     if (!fresh && now() - proxyAt < 1000) return proxy;
@@ -221,6 +256,9 @@ export function createRunnerClient({
       proxyAt = now();
     } catch (error) {
       log(`The egress proxy's addresses: ${error.message}`);
+      if (isAway(error) && (fresh || proxyAt === -Infinity)) {
+        throw new RunnerAway(`the egress proxy's addresses: ${error.message}`, { cause: error });
+      }
     }
     return proxy;
   }

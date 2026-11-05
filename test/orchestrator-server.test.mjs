@@ -1256,11 +1256,15 @@ describe("listener", options, () => {
     const serviceToken = (sub, aud) => `Bearer ${signServiceToken({ sub, aud }, brokerKey)}`;
     // The runner stopped (SIGTERM unless said otherwise) and another started on the same store,
     // with `more` settings: the listener carries on with it.
-    const restartRunner = async ({ signal = "SIGTERM", ...more } = {}) => {
+    const stopRunner = async (signal = "SIGTERM") => {
       const { child } = runner;
+      if (child.exitCode !== null || child.signalCode) return;
       const exited = new Promise((resolve) => child.on("exit", resolve));
-      if (child.exitCode === null && !child.signalCode) child.kill(signal);
+      child.kill(signal);
       await exited;
+    };
+    const restartRunner = async ({ signal = "SIGTERM", ...more } = {}) => {
+      await stopRunner(signal);
       await startRunner(more);
     };
     return {
@@ -1284,6 +1288,9 @@ describe("listener", options, () => {
       send,
       restart,
       restartRunner,
+      // The runner stopped, then started again apart: for a while with none at all.
+      stopRunner,
+      startRunner,
       handOver,
       serviceToken,
       githubService,
@@ -2643,6 +2650,46 @@ mounts:
     const [push, opened] = await pushAndOpen(ctx);
     assert.match(push, /^403 [^]*only a running sandbox reaches the github service/);
     assert.match(opened, /^403 /);
+  });
+
+  test("a sandbox's models calls go through while the orchestrator hands over and the runner restarts (#936)", async (t) => {
+    const ctx = await holding(t, undefined, (dir, github) => ({
+      CLAUDE_CODE_OAUTH_TOKEN: "sk-ant-oat01-operator",
+      ANTHROPIC_BASE_URL: github.url,
+    }));
+    const secret = readFileSync(join(ctx.dir, "run-token"), "utf8").trim();
+    const runEnv = readFileSync(join(ctx.dir, "run-env"), "utf8");
+    const agentToken = agentTokenIn(runEnv, "CLAUDE_CODE_OAUTH_TOKEN", secret);
+    const call = async () => {
+      const res = await fetch(`http://127.0.0.1:${ctx.proxyPort}/anthropic/v1/messages?beta=true`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${agentToken}` },
+        body: "{}",
+      });
+      return `${res.status} ${await res.text()}`;
+    };
+    await ctx.handOver();
+    await ctx.listener.until("picked up deckhand-org-repo-12-0e9572aae2 again");
+    // The next copy has never been asked about the sandbox's address, and the runner is away
+    // longer than the proxy waits for one answer: it waits, it isn't told "no run there".
+    await ctx.stopRunner();
+    const during = call();
+    await new Promise((resolve) => setTimeout(resolve, 6000));
+    await ctx.startRunner();
+    const answered = await during;
+    assert.match(answered, /^200 /);
+    assert.match(ctx.listener.output(), /Egress: models for \S+ waits for the runner/);
+    assert.doesNotMatch(ctx.listener.output(), /Egress: refused models/);
+    // The runner restarting again, as long: the copy's last answers stand meanwhile, each of
+    // its answers within the proxy's wait for one. Past the second the proxy's addresses are
+    // kept, so that each answer asks for them and for where the caller is.
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+    await ctx.stopRunner();
+    const restarting = call();
+    await new Promise((resolve) => setTimeout(resolve, 6000));
+    await ctx.startRunner();
+    assert.match(await restarting, /^200 /);
+    assert.doesNotMatch(ctx.listener.output(), /Egress: refused models/);
   });
 
   test("a run token renewed after a takeover: the broker's event has the next copy redact it by value (#617)", async (t) => {

@@ -1223,7 +1223,9 @@ changes: a run whose provider fails ends with an error, as before.
 overloaded (529), rate limited (429), a usage limit or quota reached (402, a plan's limit, no
 credit left), invalid or expired credentials (401, 403), or a server error (5xx), in its
 message or as the last answer Deckhand got from the provider. A failing test, a task the
-agent gave up on or any other error ends the run as before. A plan's usage limit
+agent gave up on, Deckhand's own refusal (its egress proxy's, or the models service's for the
+run's token: another credential wouldn't get past it either) or any other error ends the run as
+before. A plan's usage limit
 counts: with a Claude plan first and its API key (`claude@anthropic:key`) or OpenRouter after
 it, runs go on, paid per token, only on the entries you list.
 
