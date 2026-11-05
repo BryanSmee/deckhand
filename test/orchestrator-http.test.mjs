@@ -302,6 +302,37 @@ test("access: the repo's users, once read, leave a login out of api/state and th
   assert.equal((await get("/api/runs/org-repo-pr-3-1000/stream")).status, 404);
 });
 
+test("access (#783): api/state asks about the repos as last listed, a log stream reads its own", async (t) => {
+  const info = { full_name: "org/repo", private: true, default_branch: "main" };
+  const permissions = permissionsOf(
+    { alice: { "org/repo": ["*"] } },
+    { infoOf: (repo) => (repo.toLowerCase() === "org/repo" ? info : null) },
+  );
+  const ctx = oneRun({ permissions });
+  ctx.status = (shows) => ({ shown: shows("org/repo") });
+  const url = await serveHttp(t, ctx);
+  const get = (path) => fetch(url + path, { headers: { "x-user": "alice" } });
+  const state = await (await get("/api/state")).json();
+  assert.deepEqual(
+    state.tasks.map((task) => task.key),
+    ["org/repo#pr-3"],
+  );
+  assert.ok(permissions.asked.length);
+  assert.ok(permissions.asked.every(([, repo]) => repo === info || repo === null));
+  // /status too: what it shows of the repos.
+  permissions.asked.length = 0;
+  assert.deepEqual(await (await get("/status")).json(), { shown: true });
+  assert.ok(permissions.asked.length);
+  assert.ok(permissions.asked.every(([, repo]) => repo === info));
+  // The stream guards the logs on its own: asked by name, read as a single decision is.
+  permissions.asked.length = 0;
+  const open = await get("/api/runs/org-repo-pr-3-1000/stream");
+  assert.equal(open.status, 200);
+  await open.text();
+  assert.ok(permissions.asked.length);
+  assert.ok(permissions.asked.every(([, repo]) => repo === "org/repo"));
+});
+
 test("access (#731): a login with no action: its totals only, 403 server-wide, no Sync, /status filtered", async (t) => {
   const synced = [];
   const checked = [];

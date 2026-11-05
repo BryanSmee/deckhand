@@ -751,8 +751,13 @@ policies.checkOperator().then(({ errors, warnings }) => {
 });
 
 // Who may do what where (#731): the access decision, which every dashboard route, comment,
-// auto-pickup and requested reviewer asks, the repos' `users` as last read narrowing it.
-const permissions = createPermissions({ policies, usersOf: repoReads.usersOf });
+// auto-pickup and requested reviewer asks, the repos' `users` as last read narrowing it; the
+// filters over every repo give it the repos as last listed, rather than reading each (#783).
+const permissions = createPermissions({
+  policies,
+  usersOf: repoReads.usersOf,
+  infoOf: repoList.infoOf,
+});
 
 // The names of the board's lanes: one a maintainer typed, or a parent's title (lanes.mjs).
 const lanes = createLanes({

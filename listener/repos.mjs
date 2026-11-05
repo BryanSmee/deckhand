@@ -119,6 +119,10 @@ export function createRepoList({
   let listedAt = 0;
   // The repos' names as last listed, for what can't wait for a listing (http.mjs state()).
   let listedNames = [];
+  // What GitHub said of each, by its name in lower case, for access() (infoOf()), and when it
+  // answered: what it says is used LIST_MS at most, never cleared by a later listing alone.
+  let listedInfos = new Map();
+  let infosAt = -Infinity;
   // The installations as last listed, [{ account, url, missing }]: the Manage App links.
   let installed = [];
   // installation id → what it lacked when last warned about ("" for nothing).
@@ -159,6 +163,8 @@ export function createRepoList({
     }
     infos.sort((a, b) => a.full_name.localeCompare(b.full_name));
     listedNames = infos.map((r) => r.full_name);
+    listedInfos = new Map(infos.map((r) => [r.full_name.toLowerCase(), r]));
+    infosAt = now();
     return infos;
   }
 
@@ -279,15 +285,22 @@ export function createRepoList({
 
   // A delivery said this repo's config may have changed (a push to its default branch), or,
   // without a repo, which repos are installed did.
+  // What infoOf() said goes too: what GitHub says of the repo (or of them all) is read again.
   function refresh(repo) {
-    if (repo) configs.delete(repo.toLowerCase());
-    else listing = null;
+    if (repo) {
+      configs.delete(repo.toLowerCase());
+      listedInfos.delete(repo.toLowerCase());
+    } else {
+      listing = null;
+      listedInfos = new Map();
+    }
   }
 
   // The dashboard's Refresh on the list: a delivery may have been missed, everything is read
   // again.
   function refreshAll() {
     listing = null;
+    listedInfos = new Map();
     configs.clear();
   }
 
@@ -324,6 +337,27 @@ export function createRepoList({
   // [] before the first listing.
   const listed = () => [...new Set([...listedNames, ...[...configs.values()].map((k) => k.repo)])];
 
+  // What GitHub said of `repo` when the installations were last listed, as policies.mjs access()
+  // takes it: { full_name, private, default_branch }, or null: not listed (or GitHub gave no
+  // default branch), its push or an installation's delivery since (refresh()), or listed LIST_MS
+  // ago or more, which lists them again meanwhile (nothing else may: api/state and /status don't).
+  // The dashboard's filters over every repo ask access() with it (permissions.mjs which(),
+  // dashboard()): with the name alone each would read the repo from GitHub (#783); with null,
+  // they do, as before.
+  function infoOf(repo) {
+    if (now() - infosAt >= LIST_MS) {
+      repos().catch(() => {});
+      return null;
+    }
+    const info = typeof repo === "string" ? listedInfos.get(repo.toLowerCase()) : null;
+    if (!info || typeof info.default_branch !== "string" || !info.default_branch) return null;
+    return {
+      full_name: info.full_name,
+      private: info.private,
+      default_branch: info.default_branch,
+    };
+  }
+
   return {
     list,
     get,
@@ -332,6 +366,7 @@ export function createRepoList({
     refreshAll,
     names,
     listed,
+    infoOf,
     usersOf,
     known,
     autoPickup,
@@ -415,6 +450,8 @@ export function createRepoApi({
       (await permissions.which(
         user,
         all.map((r) => r.repo),
+        null,
+        { listed: true },
       ));
     const rows = seen ? all.filter((r) => seen.has(r.repo.toLowerCase())) : all;
     const configured = rows.filter((r) => r.status === "configured").map((r) => r.repo);
