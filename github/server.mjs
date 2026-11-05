@@ -130,7 +130,7 @@ const port = Number(env.PORT || 8080);
 server.listen(port, () => {
   const held = app.info();
   log(
-    `Deckhand github service on :${server.address().port}, ${held.configured ? `App ${held.slug}` : "no App yet (the listener's /setup, or its key handed over)"}`,
+    `Deckhand github service on :${server.address().port}, ${held.configured ? `App ${held.slug}` : "no App yet (edge's /setup)"}`,
   );
 });
 // Its keys and tokens, asked for until the broker answers; calls wait for them meanwhile.

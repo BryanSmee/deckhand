@@ -1,8 +1,7 @@
 // The GitHub App as the github service holds it (#502): its credentials, the private key with
 // them, in APP_DIR/app.json, the service's own volume (or Secret), never the store nor another
-// service's. They come either from /setup's manifest conversion, which the service makes itself
-// (convert(): the key never leaves it, the listener gets the rest), or from a listener that held
-// them before this service (handOver(), once: the listener then removes its key).
+// service's. They come from /setup's manifest conversion, which the service makes itself
+// (convert(): the key never leaves it, edge gets the rest).
 import { createHash } from "node:crypto";
 import { rmSync } from "node:fs";
 import { join } from "node:path";
@@ -58,19 +57,6 @@ export function createAppHolder({
     return { configured: true, id, slug, client_id, owner, html_url, bot_id, ...app.identity() };
   }
 
-  // A listener's App from before this service: taken when the service has none, or the same
-  // App's (its key replaced). → { status, message } when refused, else null.
-  function handOver(credentials) {
-    if (!credentials?.pem || !credentials.id) return { status: 400, message: "no App's key" };
-    const held = app?.credentials;
-    if (held && String(held.id) !== String(credentials.id)) {
-      return { status: 409, message: `the github service holds another App (id ${held.id})` };
-    }
-    save(credentials);
-    log(`GitHub App ${credentials.slug ?? credentials.id}: its key handed over by the listener`);
-    return null;
-  }
-
   // /setup's manifest code → the App's credentials but its key, which only this service keeps.
   // → { status, message } when GitHub refused it, or the service has an App already.
   async function convert(code) {
@@ -100,7 +86,7 @@ export function createAppHolder({
     return { credentials: rest };
   }
 
-  return { get: () => app, info, handOver, convert };
+  return { get: () => app, info, convert };
 }
 
 // GitHub's answer to /setup's manifest code → the App's credentials, its key and edge's secrets

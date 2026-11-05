@@ -5,7 +5,7 @@
 // copies: auth.test.mjs.
 import assert from "node:assert/strict";
 import { createHmac } from "node:crypto";
-import { readFileSync, writeFileSync } from "node:fs";
+import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { activePassive } from "../lib/active.mjs";
@@ -193,21 +193,16 @@ test("a delivery a copy died taking is taken again a minute on; one being taken,
 // Edge's internal port, the orchestrator calling it with its service token.
 async function internal(
   t,
-  { store = openStore("memory:"), dir = tempDir(t), redeliveries, handOver = null, log } = {},
+  { store = openStore("memory:"), dir = tempDir(t), redeliveries, log } = {},
 ) {
   const key = testKey();
   const app = createEdgeApp({ dir });
-  const handedOver = [];
   const server = createEdgeInternal({
     store,
     app,
     keys: new Map([[key.kid, key.publicKey]]),
     bound: networkCallers("orchestrator=127.0.0.0/8"),
     redeliveries: redeliveries ?? createRedeliveries({ store, app: () => null }),
-    handOver: async (body) => {
-      if (handOver) await handOver(body);
-      handedOver.push(body);
-    },
     sleep: (ms) => new Promise((resolve) => setTimeout(resolve, Math.min(ms, 20))),
     ...(log && { log }),
   });
@@ -217,7 +212,7 @@ async function internal(
   const as = (sub) => async () => `Bearer ${signServiceToken({ sub, aud: "edge" }, key)}`;
   const client = createEdgeClient({ urls: url, token: as("orchestrator"), waitMs: 1000 });
   t.after(() => client.stop());
-  return { url, app, store, client, as, handedOver };
+  return { url, app, store, client, as };
 }
 
 test("CI deliveries: only what the orchestrator reads, allowed repos only, one waiting per commit until it is read", async (t) => {
@@ -383,58 +378,22 @@ test("the dashboard's from tags: edge's, which the orchestrator's posts and chec
   assert.equal(postOf(node(forged), "deckhand-x", verify).author, "deckhand-x[bot]");
 });
 
-test("a listener's App handed over: taken once with its sessions, another App refused", async (t) => {
-  const dir = tempDir(t);
-  const { client, handedOver } = await internal(t, { dir });
-  const sessionKey = Buffer.alloc(32, 7).toString("base64");
-  const body = { credentials: { ...CREDENTIALS, pem: "x" }, sessionKey, epochs: { alice: 2 } };
-  assert.deepEqual(await client.handOver(body), publicPart(CREDENTIALS));
-  assert.equal(JSON.parse(readFileSync(join(dir, "app.json"), "utf8")).pem, undefined);
-  assert.deepEqual(handedOver, [body]);
-  // Asked again (a lost answer): the same App's, nothing replaced.
-  await client.handOver(body);
-  assert.equal(handedOver.length, 1);
-  await assert.rejects(client.handOver({ credentials: { ...CREDENTIALS, id: 6 } }), {
-    status: 409,
-  });
-  // The same App with another webhook secret, or another OAuth client: never replaced by the
-  // orchestrator, which holds no secret of edge's.
-  for (const changed of [{ webhook_secret: "x".repeat(32) }, { client_secret: "other" }]) {
-    await assert.rejects(client.handOver({ credentials: { ...CREDENTIALS, ...changed } }), {
-      status: 409,
-    });
-  }
-  const kept = JSON.parse(readFileSync(join(dir, "app.json"), "utf8"));
-  assert.equal(kept.webhook_secret, SECRET);
-  assert.equal(kept.client_secret, "cs");
-});
-
-test("a handover whose sessions fail to move takes nothing: asked again, they move then", async (t) => {
-  const dir = tempDir(t);
-  let fail = true;
+test("a call that fails on edge's internal port: said as an error, under the orchestrator's request", async (t) => {
   const lines = [];
   const log = createLogger({ service: "edge", env: {}, write: (line) => lines.push(line) });
-  const { client, handedOver, app } = await internal(t, {
-    dir,
-    log,
-    handOver: async () => {
-      if (fail) throw new Error("the store is away");
+  const redeliveries = {
+    scan: async () => {
+      throw new Error("the store is away");
     },
-  });
-  const body = { credentials: CREDENTIALS, sessionKey: null, epochs: { alice: 2 } };
+  };
+  const { client } = await internal(t, { log, redeliveries });
   await withLogContext({ request: "from-the-orchestrator" }, () =>
-    assert.rejects(client.handOver(body), { status: 500 }),
+    assert.rejects(client.scan(), { status: 500 }),
   );
   // Said as an error (#547), under the orchestrator's request.
   const failed = lines.map((l) => JSON.parse(l)).find((l) => /the store is away/.test(l.msg));
   assert.equal(failed.level, "error");
   assert.equal(failed.request, "from-the-orchestrator");
-  // Not taken: the orchestrator keeps the listener's files and asks again.
-  assert.equal(app.get(), null);
-  fail = false;
-  assert.deepEqual(await client.handOver(body), publicPart(CREDENTIALS));
-  assert.deepEqual(handedOver, [body]);
-  assert.equal(app.get().webhook_secret, SECRET);
 });
 
 test("two copies: the redeliveries' poller runs on the one holding its lease, then on the other", async (t) => {
@@ -557,6 +516,4 @@ test("two copies on one volume: the App one of them was set up with, the other h
   assert.equal(two.get().webhook_secret, SECRET);
   assert.equal(two.get().pem, undefined);
   assert.deepEqual(two.secrets(), [SECRET, "cs"]);
-  // Another App, handed over to the other copy: refused there too.
-  assert.equal(two.takeOver({ ...CREDENTIALS, id: 6 })?.status, 409);
 });

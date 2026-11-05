@@ -6,8 +6,6 @@
 //   POST /events/ack           { ids }: handled, never read again
 //   GET  /app                  the App's public parts (app.mjs publicPart()), and where the
 //                              dashboard is: what the orchestrator names in its links
-//   PUT  /app                  a listener's App, from its data volume: { credentials, sessionKey,
-//                              epochs }, taken once (app.mjs takeOver())
 //   POST /from-tags            { items: [{ user, text }] } → { tags }: the dashboard's "from"
 //                              lines' tags (../listener/discussions.mjs fromLine()), which the key
 //                              derived from the webhook secret signs: the orchestrator holds none
@@ -30,7 +28,6 @@ export const ROUTES = {
   "GET /events": ["orchestrator"],
   "POST /events/ack": ["orchestrator"],
   "GET /app": ["orchestrator"],
-  "PUT /app": ["orchestrator"],
   "POST /from-tags": ["orchestrator"],
   "POST /redeliveries/scan": ["orchestrator"],
 };
@@ -52,15 +49,13 @@ const MAX_TAGS = 1000;
 
 // `app`: app.mjs createEdgeApp()'s; `keys`: the broker's public keys ({ get(kid) });
 // `bound`: lib/service-token.mjs networkCallers()'s, or null on Kubernetes; `redeliveries`:
-// ../listener/redeliveries.mjs's; `handOver({ sessionKey, epochs })`: what a listener's App
-// brings beside it, taken with it.
+// ../listener/redeliveries.mjs's.
 export function createEdgeInternal({
   store,
   app,
   keys,
   bound,
   redeliveries,
-  handOver = async () => {},
   log = () => {},
   now = Date.now,
   sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
@@ -117,17 +112,6 @@ export function createEdgeInternal({
       return sendJson(res, { acked });
     }
     if (route === "GET /app") return sendJson(res, app.info());
-    if (route === "PUT /app") {
-      const body = (await readJsonBody(req, MAX_BODY)) ?? {};
-      const refused = app.refusal(body.credentials);
-      if (refused) throw new Refused(refused.status, refused.message);
-      // What signs and ends its sessions, only with the App it came with, and before it: never
-      // replacing a key edge's own sign-ins were made with, and asked again whole should it
-      // fail (the App not taken yet, the orchestrator asks again).
-      if (!app.get()) await handOver(body);
-      app.takeOver(body.credentials);
-      return sendJson(res, app.info());
-    }
     if (route === "POST /from-tags") {
       const { items } = (await readJsonBody(req, MAX_BODY)) ?? {};
       if (!Array.isArray(items) || items.length > MAX_TAGS) throw new Refused(400, "items?");

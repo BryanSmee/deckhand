@@ -15,7 +15,7 @@
 //     the listener's reactions (PUT /reactions), and the events the orchestrator reads (GET
 //     /events, POST /events/ack): pushes, a run's notes, the pull requests runs changed;
 //   - the App itself: its public parts (GET /app), /setup's manifest conversion (POST
-//     /app/manifest), a listener's key from before this service (PUT /app);
+//     /app/manifest);
 //   - the runner's repos' tarballs and blobs (build contexts, image tags).
 //
 // Each route names its callers (ROUTES, ../lib/service-token.mjs serviceGuard()). The
@@ -96,8 +96,7 @@ export const ROUTES = {
   "GET /as-installation/:id/*": READERS,
   // The App.
   "GET /app": READERS,
-  // A listener's key, which the orchestrator has its data volume of; /setup's conversion, edge's.
-  "PUT /app": WRITER,
+  // /setup's conversion, edge's.
   "POST /app/manifest": ["edge"],
   // The runs, as the orchestrator decided them, and what they did.
   "PUT /runs/:id": WRITER,
@@ -626,12 +625,7 @@ export function createGithubService({
         app.get().asInstallation(id, req.method, m[2] + url.search),
       );
     }
-    if (path === "/app") {
-      if (req.method === "GET") return sendJson(res, app.info());
-      const refused = app.handOver(await readJsonBody(req, 64 * 1024));
-      if (refused) throw new Refused(refused.status, refused.message);
-      return sendJson(res, app.info());
-    }
+    if (path === "/app") return sendJson(res, app.info());
     if (path === "/app/manifest") {
       const { code } = (await readJsonBody(req, 64 * 1024)) ?? {};
       const made = await app.convert(code);
