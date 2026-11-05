@@ -2290,10 +2290,10 @@ its store there is none. It holds nothing that signs deliveries or sessions, nor
 (the broker answers those, #617); whoever reads it reads the queue and what the runs did. The
 files holding what people wrote are the owner's only (`0600`):
 
-| File               | What                                                                                                                                                                                  |
-| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `store/state.json` | the store's keys: the queued comments, with their authors; each running run's state (`runs/<id>`, gone once it's over); its lease and fencing epoch; the deliveries it handled        |
-| `store/keys/`      | the runs' summaries and the items of its maps (a file each, a folder per map): their comments' text, the comments waiting for other issues (`/after`) and their authors, issue titles |
+| File               | What                                                                                                                                                                                                                                                               |
+| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `store/state.json` | the store's keys: the queued comments, with their authors; each running run's state (`runs/<id>`, gone once it's over); its lease and fencing epoch; the deliveries it handled; the users' chats and their agents' requests for more permissions ([Chats](#chats)) |
+| `store/keys/`      | the runs' summaries and the items of its maps (a file each, a folder per map): their comments' text, the comments waiting for other issues (`/after`) and their authors, issue titles                                                                              |
 
 What the orchestrator kept in files of its own before (the waits' comments, the queue, the live
 runs' states, the runs' summaries with the text of the comments a run acted on, #615–#619) is in
@@ -2340,9 +2340,10 @@ by default).
 
 The runner's volume (`runner-data`, its `/data`) holds its store: the runs' logs (redacted as
 above), their events, the newest orchestrator epoch it saw and its lease; nothing that signs or
-opens anything. The `runs` volume holds each run's inbox (the comments it got, their authors'
-text), the egress proxy's CA certificate and a run analysis's digest. Whoever reads them reads
-what the dashboard shows of the runs.
+opens anything. Its `runs/` folder holds each running run's inbox (the comments it got, their
+authors' text), the egress proxy's CA certificate and a run analysis's digest, which the broker
+has a copy of for the sandbox, both removed when the run ends. Whoever reads them reads what the
+dashboard shows of the runs.
 
 ## The dashboard's actions
 
@@ -3140,6 +3141,31 @@ It holds no token: it calls the broker with the run token, as `deckhand-inbox` d
 - **The reason is shown, not trusted.** What the agent writes in `reason` is put on one line,
   cut to 200 characters and redacted (your agents' credentials, token shapes), as the
   policies' messages are, and the dashboard shows it as text: never HTML, never Markdown.
+
+**Where its data lives.** A chat is its owner's alone, from start to end: only they list it,
+message it, read its logs and answer its requests (see
+[The dashboard's actions](#the-dashboards-actions)). What it keeps:
+
+- **The chat itself**, in the orchestrator's store (`chats`: its owner, repository, agent,
+  model, effort, title, permissions profile and times), and its messages not delivered yet in
+  the store's queue, as any queued comment: whoever reads the store reads them
+  ([Edge's and the orchestrator's data](#edges-and-the-orchestrators-data)).
+- **Its clone and its agent's session**, in volumes of its own, named after the sandbox of its task
+  (`<repo>#chat-<id>`), never an issue's: kept between its sandbox's starts, gone at a reset
+  or a deletion, which the runner does for a chat's key alone
+  ([The runner service](#the-runner-service)).
+- **Its conversation**, in its runs' logs and summaries (the runner's volume and the
+  orchestrator's store, redacted as any run's), and the messages its sandbox got in its inbox
+  (the runner's volume, `runner-data`, its `runs/` folder, and the broker's store), both removed
+  when that run ends. Its latest run's log stays while the chat is kept,
+  past `LOG_RETENTION_DAYS`; a deletion removes all of them.
+- **Its requests for more permissions**, in the broker's store for two hours at most and in the
+  orchestrator's (`permission-requests`, its agent's reason redacted) until a day after their
+  answer, or until the chat is deleted.
+
+Nothing of it goes to GitHub: a chat posts no comment, reaction or label, and its answers stay in
+its log. Its conversation still leaves the deployment the way any run's does: to the agent's API,
+through the models service, and to whatever host its profile lets its sandbox reach.
 
 ## Research runs
 
