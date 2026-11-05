@@ -267,9 +267,12 @@ export const REQUEST_KINDS = ["host", "github", "engine", "mount"];
 
 // What the agent is told of a request beyond the ceiling: refused without asking the chat's
 // owner (#479's decision), who couldn't approve it anyway. Only the operator's grants folder
-// (and the policies, the repository's config) widen it.
+// (and the policies, the repository's config) widen it; a reason that comes from a setting
+// (NO_ENGINE) says so instead, as no grant changes it (#885).
 const BEYOND =
   "That is beyond what this chat may get: only Deckhand's operator widens it, in their grants folder";
+const BEYOND_SETTING =
+  "That is beyond what this chat may get: only Deckhand's operator changes it, in their deployment's settings";
 
 // A request `{ kind, value }` of a chat's run, against `ceiling` (ceilingOf()'s, now), the chat's
 // saved `profile` (null for the default) and what its sandbox has (`live`: { hosts, mounts,
@@ -330,7 +333,10 @@ export function requestVerdict({ kind, value }, { ceiling, profile, live }) {
   }
   if (kind === "engine") {
     const row = ceiling.capabilities.find((c) => c.name === "docker");
-    if (!row?.allowed) return beyond(`the container engine: ${row?.reason ?? "not offered"}`);
+    if (!row?.allowed) {
+      const why = `the container engine: ${row?.reason ?? "not offered"}`;
+      return row?.reason === NO_ENGINE ? beyond(why, null, BEYOND_SETTING) : beyond(why);
+    }
     if (live.engine) return given("this sandbox has a container engine already");
     const adds = { capabilities: withNeeds("docker", ceiling) };
     const has =
@@ -365,10 +371,11 @@ export function requestVerdict({ kind, value }, { ceiling, profile, live }) {
 
 const invalid = (why) => ({ verdict: "invalid", message: `Refused: ${why}.` });
 const given = (why) => ({ verdict: "given", message: `Granted: ${why}.` });
-// `key`: the grants file's key that would give it, said to the agent.
-const beyond = (why, key = null) => ({
+// `key`: the grants file's key that would give it, said to the agent; `widen`: who widens it,
+// and where.
+const beyond = (why, key = null, widen = BEYOND) => ({
   verdict: "beyond",
-  message: `Refused: ${why}. ${BEYOND}${key ? ` (\`${key}\`)` : ""}. Don't ask again: tell the user if it matters, and carry on without it.`,
+  message: `Refused: ${why}. ${widen}${key ? ` (\`${key}\`)` : ""}. Don't ask again: tell the user if it matters, and carry on without it.`,
 });
 
 // `name` and the capabilities it needs, that the ceiling allows, in the catalogue's order.
