@@ -9,6 +9,7 @@ import { posix } from "node:path";
 import { AGENTS } from "./agents/index.mjs";
 import { EFFORTS, MODEL_NAME, SPEEDS } from "./events.mjs";
 import { list, normalize } from "./config.mjs";
+import { machineLabel } from "./machines.mjs";
 import { customMode, PICKED_MODES, RESERVED_MODES } from "./modes.mjs";
 import { FILES_DIR, SCREENSHOT_DIR } from "./runner/inbox.mjs";
 import { isMap, parseYaml } from "../lib/yaml.mjs";
@@ -349,6 +350,35 @@ function parseChats(value, { key, settings, config, fail }) {
   if (n === undefined || n === null) return;
   if (!Number.isInteger(n) || n < 0) return fail("chats.per_user", "expected a whole number");
   settings.chatsPerUser = Math.min(n, config.chatsPerUser);
+}
+
+// `machines: true`, or `machines: { labels: [unreal] }`: its tasks may run on its users' own
+// machines (machines.mjs), with the operator's `machines` grant too; `labels` narrows them to
+// the machines that have one of these. → settings.machines: null (off), or { labels } (null:
+// any label). Every key is checked: a mistyped one would offer more machines than meant.
+function parseMachines(value, { key, settings, fail }) {
+  if (typeof value === "boolean") {
+    settings.machines = value ? { labels: null } : null;
+    return;
+  }
+  if (!isMap(value)) return fail(key, "expected true, false or { labels: [...] }");
+  let ok = true;
+  for (const other of Object.keys(value)) {
+    if (other !== "labels") {
+      ok = false;
+      fail(`machines.${other}`, "unknown key (expected labels)");
+    }
+  }
+  const labels = value.labels;
+  if (labels === undefined || labels === null) {
+    if (ok) settings.machines = { labels: null };
+    return;
+  }
+  const kept = Array.isArray(labels) ? labels.map(machineLabel) : [];
+  if (!kept.length || kept.includes(null)) {
+    return fail("machines.labels", 'expected a list of labels (letters, digits, ".", "_" and "-")');
+  }
+  if (ok) settings.machines = { labels: [...new Set(kept)] };
 }
 
 // The projects (v2) the listener puts the repo's issues on, and the option of their field (by
@@ -823,6 +853,27 @@ export const KEYS = {
         ? `not moved: the operator's grants don't list ${missing.map((p) => p.project).join(", ")} in allow_projects`
         : null;
       return row(projectsText(value), note);
+    },
+  },
+  // Its users' own machines (machines.mjs): not refused when ungranted, as nothing runs there
+  // then; the row says so.
+  machines: {
+    field: "machines",
+    default: null,
+    parse: parseMachines,
+    display: ({ value, grant, known, row, unknown }) => {
+      const text = !value
+        ? "off"
+        : value.labels
+          ? `machines labelled ${value.labels.join(", ")}`
+          : "any machine";
+      if (value && !known) return unknown(text);
+      return row(
+        text,
+        value && !grant.allowMachines
+          ? "offered to none: the operator's policies don't grant machines"
+          : null,
+      );
     },
   },
   // One row per mode: only the repo's file defines them.

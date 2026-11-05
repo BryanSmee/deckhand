@@ -69,6 +69,7 @@ const NOTHING = {
   allowWorkflows: false,
   allowWorkflowSecrets: false,
   allowAutoMerge: false,
+  allowMachines: false,
   grantFiles: [],
   mounts: [],
   allowProjects: [],
@@ -98,6 +99,7 @@ mounts:
     allowWorkflows: false,
     allowWorkflowSecrets: false,
     allowAutoMerge: false,
+    allowMachines: false,
     grantFiles: [],
     allowProjects: [],
     limits: { cpus: "4", memory: "4g", pids: 4096 },
@@ -631,6 +633,7 @@ test("the yes-or-no grants: the operator's policies', each a field of the grant 
     "branch_docker_images",
     "docker",
     "dockerfile",
+    "machines",
     "research",
     "workflow_secrets",
     "workflows",
@@ -895,6 +898,7 @@ test(
       "workflows",
     ]);
     assert.deepEqual(said.denied, []);
+    assert.deepEqual([...(await policies.grants("your-org/your-game")).granted], ["machines"]);
     assert.deepEqual([...(await policies.grants("your-org/other")).granted], []);
   },
 );

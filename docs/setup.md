@@ -500,7 +500,22 @@ so they ask before calling them:
 | `rerun`    | A task's last run again (`runId`), when it failed, was interrupted or stopped: the dashboard's **Rerun**                                                                                                                                                                                                                          |
 | `schedule` | An issue of `repo` (`number`) as dragging it on the graph does, or the task page's **Stop**: `action` `start`, `queue` (waits for issue `after`), `plan` (a parent issue and its sub-issues, after `after` if given), `dequeue` (stops waiting) or `cancel` (stops its run or drops its queued comments; `pr` for a pull request) |
 
-A client gets both scopes by default; the sign-in page lists them, and a client asking for
+A machine's driver asks for the `deckhand:machine` scope, which no client gets unless it asks
+for it: its tools register one of your own computers to take Deckhand's tasks (machines, #594;
+only their registration so far). An agent then runs there on its own, with your files,
+credentials and network: Deckhand suggests settings and enforces none there.
+
+| Tool                 | What it does                                                                                                                                                                                           |
+| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `register_machine`   | Registers a machine (`name`, unique among yours; `labels`; `capacity`, 1 by default; `repos`, `owner/name` or `owner/*`), or again under the same name: its id, and the repositories offered to it now |
+| `heartbeat`          | Says the machine (`machine`, its id) is there, every 30 s: it is online while its last heartbeat is under 90 s old                                                                                     |
+| `unregister_machine` | Removes the machine, as its **Remove** in Settings › MCP clients does                                                                                                                                  |
+
+A repository is offered to a machine only when the operator's policies grant it `machines`
+([security.md](security.md#the-grants)) and its `.deckhand.yaml` has a `machines:` block
+([repo-config.md](repo-config.md#machines)), and only where you may start runs.
+
+A client gets `deckhand:read` and `deckhand:work` by default; the sign-in page lists them, and a client asking for
 `deckhand:read` alone gets the read tools only. What the dashboard refuses (an issue running
 already, a run that didn't fail, an action your access lacks) is the tool's error, with the
 dashboard's message.

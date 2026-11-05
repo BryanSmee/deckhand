@@ -1,11 +1,13 @@
 // Settings › MCP clients (#481): the MCP clients signed in as you (Claude Code, Codex, an
 // editor…), from GET api/mcp/clients, which edge answers itself (edge/oauth.mjs), with Revoke.
 // A client connects by itself, at this Deckhand's /mcp: it signs you in with GitHub and asks
-// you to allow it. Signing out everywhere (Preferences) ends them all too.
+// you to allow it. Signing out everywhere (Preferences) ends them all too. Below them, your
+// machines (Machines.tsx), which a client with the deckhand:machine scope registers.
 import { useState } from "preact/hooks";
 import { postJson, usePolled } from "./api";
 import { ago } from "./format";
 import type { McpClients } from "./types";
+import { Machines } from "./Machines";
 import { Button } from "./ui/Button";
 import styles from "./Clients.module.css";
 
@@ -76,6 +78,7 @@ export function Clients({ now = Date.now }: { now?: () => number }) {
           </div>
         ))}
       </section>
+      <Machines now={now} />
     </div>
   );
 }

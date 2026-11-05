@@ -82,6 +82,7 @@ import { createHistory, forgottenShots, noteUnnamedShots } from "../listener/his
 import { createInputs } from "../listener/inputs.mjs";
 import { createOnboarding, createOnboardingStore } from "../listener/onboarding.mjs";
 import { createLinkedBranches } from "../listener/linked-branch.mjs";
+import { createMachines } from "../listener/machines.mjs";
 import { createPermissions } from "../listener/permissions.mjs";
 import { createPolicies } from "../listener/policies.mjs";
 import { operatorPolicies } from "../lib/policy-files.mjs";
@@ -274,6 +275,7 @@ const MAPS = {
   brainstorms: {},
   decisions: {},
   picks: {},
+  machines: {},
 };
 const store = openStore(storeUrl, {
   password: env.REDIS_PASSWORD,
@@ -1020,6 +1022,23 @@ ctx.workApi = createWorkApi({
   permissions,
   publicUrl,
   fromTags,
+  log,
+});
+
+// The users' own machines (machines.mjs, #595), registered through edge's /mcp: the
+// repositories offered to one are those that opt in, with the operator's `machines` grant, a
+// `machines:` block in their default branch's .deckhand.yaml, and its owner's access.
+ctx.machines = createMachines({
+  machines: maps.maps.machines,
+  config,
+  repoNames: () => (ctx.app ? repoList.names() : []),
+  granted: async (repo) => {
+    const said = await policies.grants(repo);
+    if (said.error) throw new Error(`its grants can't be decided: ${said.error}`);
+    return said.granted.has("machines");
+  },
+  settings: (repo) => repoSettings(repo, repoList.infoOf(repo)?.default_branch),
+  mayRun: async (owner, repo) => (await permissions.decide(owner, repo, "runs:start:work")).ok,
   log,
 });
 

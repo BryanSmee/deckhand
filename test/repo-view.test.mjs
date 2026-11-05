@@ -259,3 +259,27 @@ test("settings: every key the file takes has its row, or a table of its own", ()
     );
   }
 });
+
+test("settings: machines, said as offered to none without the grant", () => {
+  assert.deepEqual(byKey(view("").settings, "machines"), {
+    key: "machines",
+    value: "off",
+    source: "operator",
+    note: null,
+  });
+  const yaml = "machines:\n  labels: [unreal]\n";
+  assert.deepEqual(byKey(view(yaml).settings, "machines"), {
+    key: "machines",
+    value: "machines labelled unreal",
+    source: "repo",
+    note: "offered to none: the operator's policies don't grant machines",
+  });
+  const granted = view("machines: true\n", {}, "org/app", ["machines"]);
+  assert.deepEqual(byKey(granted.settings, "machines"), {
+    key: "machines",
+    value: "any machine",
+    source: "repo",
+    note: null,
+  });
+  assert.equal(granted.grant.allowMachines, true);
+});

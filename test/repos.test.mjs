@@ -1056,6 +1056,7 @@ test("GET config: raw text, errors, warnings and what runs get; its row updated"
     allowWorkflows: false,
     allowWorkflowSecrets: false,
     allowAutoMerge: false,
+    allowMachines: false,
     hosts: ["registry.npmjs.org"],
     cachedHosts: [],
     mounts: [],
