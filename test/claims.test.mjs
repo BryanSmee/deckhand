@@ -608,3 +608,75 @@ test("Deckhand's own item whose route can't be read is tried a few times, then g
   );
   assert.equal(t.task()?.pending.length ?? 0, 0);
 });
+
+test("a claim checks its comments again: one whose author left the repo's users isn't in the work, given back or not", async () => {
+  const { t, ctx } = bench();
+  const desk = t.register("alice", "Desk");
+  await t.say("alice", "Deckhand\n/machine Desk\nGo.");
+  await t.say("bob", "Also the menu.", { id: 101 });
+  ctx.claims.deliverHeld("alice", KEY);
+  t.ready();
+  const first = await ctx.claims.claim("alice", desk);
+  assert.match(first.message, /Also the menu\./);
+  // Its lease runs out; meanwhile bob leaves the repo's `users`.
+  t.clock += LEASE_MS;
+  ctx.claims.expire();
+  const narrowed = parseRepoConfig("machines: true\nusers: [alice]", ctx.config).settings;
+  ctx.repoSettings = async () => ({ settings: narrowed, errors: [] });
+  t.ready();
+  const again = await ctx.claims.claim("alice", desk);
+  assert.equal(again.message.split("\n\n")[0], "Go.");
+  assert.doesNotMatch(again.message, /menu/);
+  assert.deepEqual(t.settled.at(-1), [101, "refused"]);
+  assert.deepEqual(
+    t.task().claim.items.map((i) => i.author),
+    ["alice"],
+  );
+});
+
+test("a claim whose task its owner moves while its work is read takes nothing, and leaves the route as moved", async () => {
+  const { t, ctx } = bench();
+  const desk = t.register("alice", "Desk");
+  await t.say("alice", "Deckhand\n/machine Desk");
+  t.ready();
+  const read = ctx.repoSettings;
+  let open;
+  const gate = new Promise((resolve) => (open = resolve));
+  ctx.repoSettings = async (...args) => {
+    ctx.repoSettings = read;
+    await gate;
+    return read(...args);
+  };
+  const claiming = ctx.claims.claim("alice", desk);
+  await new Promise((resolve) => setImmediate(resolve));
+  await t.say("alice", "/machine none", { id: 101 });
+  open();
+  assert.equal(await claiming, null);
+  assert.equal(t.task().claim, null);
+  assert.equal(poolOf(t.task()), "shared");
+  assert.equal(ctx.claims.view(t.task()), null);
+  assert.equal(ctx.claims.kept({ ...t.task().pending[0], kind: "issue" }), null);
+});
+
+test("a claim whose machine is removed while its work is read writes no route back to it", async () => {
+  const { t, ctx } = bench();
+  const desk = t.register("alice", "Desk");
+  await t.say("alice", "Deckhand\n/machine Desk");
+  t.ready();
+  const read = ctx.repoSettings;
+  let open;
+  const gate = new Promise((resolve) => (open = resolve));
+  ctx.repoSettings = async (...args) => {
+    ctx.repoSettings = read;
+    await gate;
+    return read(...args);
+  };
+  const claiming = ctx.claims.claim("alice", desk);
+  await new Promise((resolve) => setImmediate(resolve));
+  ctx.machines.remove("alice", desk);
+  open();
+  assert.equal(await claiming, null);
+  assert.equal(t.task().claim, null);
+  assert.equal(poolOf(t.task()), "machines");
+  assert.equal(ctx.claims.view(t.task()).machine, null);
+});

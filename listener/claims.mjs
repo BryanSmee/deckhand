@@ -37,7 +37,8 @@ import { startAction } from "./permissions.mjs";
 import { firstMessage, promptFor } from "./prompts.mjs";
 import { CONFIG_FILE } from "./repo-config.mjs";
 import { taskId } from "./spelling.mjs";
-import { MACHINES, SHARED, isMachinePool, machinePool, poolOf } from "./tasks.mjs";
+import { startedBy } from "./run-policy.mjs";
+import { MACHINES, SHARED, isMachinePool, machinePool, noLongerAllowed, poolOf } from "./tasks.mjs";
 import { Refused } from "../lib/http.mjs";
 
 // How long a claim waits for work before it answers there is none: under the proxies' idle
@@ -306,12 +307,26 @@ export function createClaims(
       const byName = !route.machine && lower(m.name) === lower(route.want);
       if (route.via === "label" && !route.machine && !labels.includes(route.want)) continue;
       if (!route.machine && !byName && !labels.includes(lower(route.want))) continue;
-      const items = [...task.pending];
-      const work = await workOf(task, items, route, m);
+      const queued = [...task.pending];
+      const { settings } = await ctx.repoSettings(task.repo, task.base);
+      // Checked again as a sandbox run's are (runs.mjs dropRefused()), restored or given back
+      // ones included.
+      const refused = await refusals(task, queued, settings);
+      const items = queued.filter((item) => !refused.has(item));
+      const work = items.length ? await workOf(task, items, route, m, settings) : null;
       // Claimed meanwhile (another claim of the machine), its comments taken, or moved by its
       // owner (`/machine`) while its work was read.
-      if (task.running || !task.ready || task.pending[0] !== items[0]) continue;
+      if (task.running || !task.ready || task.pending[0] !== queued[0]) continue;
       if (routed(task) !== route) continue;
+      if (refused.size) {
+        task.pending = task.pending.filter((item) => !refused.has(item));
+        for (const [item, why] of refused) {
+          log(`${keyOf(task)}: a queued comment dropped: ${why}`);
+          ctx.track?.(ctx.settle(item, "refused"));
+        }
+        ctx.saveQueue?.();
+      }
+      if (!work) continue;
       if (claimsOf(m.id).length >= m.capacity) return null;
       take(task, route, m, items, work);
       return work;
@@ -348,9 +363,28 @@ export function createClaims(
 
   // What a claim returns: the work as a sandbox run gets it (its prompt and first message), for
   // the owner's agent on the machine.
-  async function workOf(task, items, route, m) {
+  // `items` whose author may no longer run them here: item → why. Their author out of
+  // ALLOWED_USERS or the repo's `users`, or refused `runs:start:<mode>` by the access decision.
+  // A decision that fails refuses nothing, as for a sandbox's (runs.mjs dropRefused()).
+  async function refusals(task, items, settings) {
+    const refused = new Map();
+    await Promise.all(
+      items.map(async (item) => {
+        const gone = noLongerAllowed(config, item, settings);
+        if (gone) return refused.set(item, gone);
+        if (!ctx.permissions || !startedBy(item)) return;
+        const action = startAction(item.mode);
+        const said = await ctx.permissions.decide(startedBy(item), task.repo, action);
+        if (!said.ok && !said.error) {
+          refused.set(item, `${startedBy(item)} may no longer start ${action} here`);
+        }
+      }),
+    );
+    return refused;
+  }
+
+  async function workOf(task, items, route, m, settings) {
     const key = keyOf(task);
-    const { settings } = await ctx.repoSettings(task.repo, task.base);
     const mode = items.at(-1).mode;
     const own = customMode(settings, mode);
     // Not on the default branch: the mode's own prompt without them.

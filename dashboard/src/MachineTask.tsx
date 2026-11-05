@@ -11,7 +11,8 @@ import type { Task } from "./types";
 import { Button } from "./ui/Button";
 import styles from "./MachineTask.module.css";
 
-// "Runs on @alice's machines labelled unreal: none online", "… : on Desk".
+// "Runs on @alice's machines labelled unreal: waiting for one of them to claim it", "Claimed by
+// @alice's Desk".
 export function MachineFact({ task: t }: { task: Task }) {
   const m = t.machine;
   if (!m) return null;

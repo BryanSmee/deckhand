@@ -503,7 +503,8 @@ export function createTasks(ctx) {
       }
     }
     if (route?.refused) {
-      log(`${key}: not queued, ${route.refused}`);
+      // Deckhand's own item (a loop's step) named: nothing else says it wasn't queued.
+      log(`${key}: not queued${item.reason ? ` (${item.reason})` : ""}, ${route.refused}`);
       // Its reply was posted once, for the labelling (claims.mjs routeFor()): its 👀 off.
       if (person) await ctx.settle(item, "refused");
       return null;

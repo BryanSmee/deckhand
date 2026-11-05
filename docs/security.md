@@ -2341,7 +2341,10 @@ client, and no sandbox service, run token or git gateway is on the machine.
   operator's. Only the owner's comments reach its runs: another user's are held on the task,
   shown on the dashboard to those who see the task, until the owner delivers or drops them
   (`POST /api/held/<repo>/<n>/deliver|drop`, the owner's alone). Deckhand's own items (a review's
-  fix round, a CI fix, a rebase) are delivered. Pushes are the owner's own git's; the App writes
+  fix round, a CI fix, a rebase, and the review of the issue's own pull request, which is the
+  issue's task) are delivered: the whole loop runs on the machine. Every comment a claim takes
+  is checked again first, as a sandbox run's are: one whose author left `ALLOWED_USERS` or the
+  repository's `users`, or may no longer start its mode, is dropped. Pushes are the owner's own git's; the App writes
   what it writes for any run (#597, #598).
 - **What Deckhand doesn't enforce**: anything on the machine. An agent runs there on its own,
   with the owner's files, credentials and network; Deckhand suggests settings for it and
