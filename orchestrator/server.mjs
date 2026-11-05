@@ -596,6 +596,15 @@ function publicUrl() {
 // The App's calls as the repo's installation, REST and GraphQL (github.mjs).
 const { github, graphql } = createGitHub(() => ctx.app);
 
+// With the file store, the items a release before kept in its state file go to their own files
+// first (#691), and those it kept right in its keys/ folder to their prefix's folder (#773), now
+// that its copy is gone: one still acting would delete none of them. Before the runs' summaries
+// and the maps are read from there.
+const apartMoved = await persist("Moving the store's items to their own files", () =>
+  store.moveApart?.(),
+);
+if (apartMoved) log(`The store: ${apartMoved} item(s) moved to their own files, a folder per map`);
+
 // The runs are listed from their summaries in the store, where those a release before #618 kept
 // in logs/ go first (runlog.mjs).
 await moveSummaries(logDir, store, { log, secrets: storeSecrets() });
@@ -612,12 +621,6 @@ for (const run of ctx.runs) ctx.runsById.set(run.id, run);
 // comments they hold written without a secret (storable()); where one change writes such a map
 // and the queue, the two writes go in the order that leaves a comment somewhere after a crash
 // between them (waits.mjs releasing() and hold(), brainstorms.mjs end()).
-// With the file store, the items a release before kept in its state file go to their own files
-// first (#691), now that its copy is gone: one still acting would delete none of them.
-const apartMoved = await persist("Moving the maps' items out of the store's state file", () =>
-  store.moveApart?.(),
-);
-if (apartMoved) log(`The store: ${apartMoved} item(s) moved out of its state file, a file each`);
 maps = await persist("Reading the orchestrator's maps from the store", () =>
   storeMaps(store, MAPS, {
     dir: config.dataDir,
