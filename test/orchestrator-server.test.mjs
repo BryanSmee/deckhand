@@ -4202,12 +4202,26 @@ allow_capabilities contains "read:pulls"
       html_url: "https://github.com/org/repo/pull/13",
       user: { login: "deckhand-x[bot]", type: "Bot" },
       head: { sha: "head-1", ref: "issue-12-fix", repo: { full_name: "org/repo" } },
+      base: { ref: "trunk", repo: { full_name: "org/repo", default_branch: "trunk" } },
+    };
+    // Another task's pull request, clean when it opened: the merge makes it conflict, and no
+    // delivery says so (#747).
+    const other = {
+      number: 20,
+      body: "Closes #18",
+      state: "open",
+      draft: true,
+      labels: [],
+      mergeable: true,
+      mergeable_state: "clean",
+      head: { sha: "head-9", ref: "issue-18-other", repo: { full_name: "org/repo" } },
     };
     // CI still going when the review ends: the merge waits for it. No review.fix: this review
     // decides the merge, and may have medium findings.
     const files = {
       ".deckhand.yaml": "review:\n  on: ready\n  merge: true\n  max_allowed_severity: medium\n",
       "pull:13": JSON.stringify(pr),
+      "pull:20": JSON.stringify({ ...other, mergeable: false, mergeable_state: "dirty" }),
       runs: JSON.stringify({
         workflow_runs: [{ name: "CI", status: "in_progress", conclusion: null }],
       }),
@@ -4216,9 +4230,21 @@ allow_capabilities contains "read:pulls"
       // The fake repository says nothing of its visibility: public, so `public`.
       writeGrants(dir, ["auto_merge_public"]);
       writeFileSync(join(dir, "result"), "Fine.\n\nRating: 9/10\nVerdict: approve\n");
-      return {};
+      return { CONFLICT_MERGE_DELAY_MS: "0" };
     });
     await listener.until(/WARN policy\/grants\.rego in the grants folder grants auto-merge/);
+    await send(
+      {
+        action: "opened",
+        installation: { id: 7 },
+        repository: { full_name: "org/repo", default_branch: "trunk" },
+        pull_request: other,
+        sender: { login: "deckhand-x[bot]", type: "Bot" },
+      },
+      "pull_request",
+    );
+    await listener.until("org/repo#18: pull request #20 draft");
+    assert.equal((await storedMap(dir, "pulls"))["org/repo#18"].conflict, false);
     await send(
       {
         action: "ready_for_review",
@@ -4263,6 +4289,11 @@ allow_capabilities contains "read:pulls"
     );
     assert.match(JSON.parse(said.body).body, /No human reviewed this pull request/);
     await listener.until("org/repo#pr-13: merged at head-1 (squash), auto-merge");
+    // Merged into the default branch: the other one's conflict read again.
+    await until(
+      async () => (await storedMap(dir, "pulls"))["org/repo#18"].conflict === true,
+      "the other pull request's conflict read again",
+    );
   });
 
   test("review.ci: the review waits for CI, a failure starts a CI fix run instead", async (t) => {
@@ -4749,6 +4780,41 @@ allow_capabilities contains "read:pulls"
       /^TASK_MESSAGE=This pull request conflicts with `trunk`/m,
     );
     await listener.until("done (ok)");
+  });
+
+  test("conflicts: a merge into the default branch reads the dashboard's conflict again, watcher or not (#747)", async (t) => {
+    const open = {
+      number: 13,
+      state: "open",
+      mergeable: true,
+      mergeable_state: "clean",
+      labels: [],
+      head: { sha: "head-1", ref: "issue-12-fix", repo: { full_name: "org/repo" } },
+      base: { ref: "trunk", sha: "old" },
+    };
+    // No `conflicts` in the repo's config: only the dashboard asks.
+    const files = {
+      "pull:13": JSON.stringify({ ...open, mergeable: false, mergeable_state: "dirty" }),
+    };
+    const { dir, send, listener } = await listen(t, files, { CONFLICT_MERGE_DELAY_MS: "0" });
+    await send(
+      {
+        action: "opened",
+        installation: { id: 7 },
+        repository: { full_name: "org/repo", default_branch: "trunk" },
+        pull_request: { ...open, body: "Closes #12", draft: true },
+        sender: { login: "deckhand-x[bot]", type: "Bot" },
+      },
+      "pull_request",
+    );
+    await listener.until("org/repo#12: pull request #13 draft");
+    assert.equal((await storedMap(dir, "pulls"))["org/repo#12"].conflict, false);
+    // Another one merged into trunk: #13 conflicts now, at the same head, and no delivery says it.
+    await send(mergedPull(), "pull_request");
+    await until(
+      async () => (await storedMap(dir, "pulls"))["org/repo#12"].conflict === true,
+      "the conflict read again",
+    );
   });
 
   test("/after: a run on #77 ending asks GitHub about #77 only", async (t) => {

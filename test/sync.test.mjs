@@ -125,5 +125,5 @@ test("a user's Sync reads every open pull request's CI again; the one at start, 
   });
   await sync.sync(null);
   await sync.sync("alice");
-  assert.deepEqual(asked, [{ allCi: false }, { allCi: true }]);
+  assert.deepEqual(asked, [{ all: false }, { all: true }]);
 });
