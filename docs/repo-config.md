@@ -2081,7 +2081,8 @@ label, unless an allowed user ticked an option of every question:
   lines at most) starts nothing: the App replies that the issue has open questions, points
   to the dashboard's form, and the label stays. A trigger comment with text is the answer:
   the label comes off and the run starts. Its author needs `runs:manage` for that too:
-  without it, the comment is held back as a trigger line alone.
+  without it, the comment is held back as a trigger line alone, its reply saying that the
+  answers need someone with that action.
 - A comment waiting for other issues (`/after`) whose last one is done keeps waiting until
   the questions are answered (the label is removed, or every box ticked), then starts by
   itself.

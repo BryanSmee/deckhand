@@ -91,6 +91,7 @@ test("wait_for_answers: a trigger line alone is held back, with a reply saying h
   assert.deepEqual(g.queued(), []);
   assert.ok(g.logs.includes(HELD), g.logs.join("\n"));
   assert.equal(g.replies.length, 1);
+  assert.match(g.replies[0], /A trigger comment with the answers starts the run with them/);
   assert.match(g.replies[0], /^#12 has open questions: nothing starts until they are answered\./);
   assert.match(
     g.replies[0],
@@ -129,7 +130,34 @@ test("wait_for_answers: text from an author without runs:manage is no answer: he
     g.logs.join("\n"),
   );
   assert.ok(g.logs.includes(HELD), g.logs.join("\n"));
-  assert.match(g.replies[0], /^#12 has open questions/);
+  assert.equal(g.replies.length, 1);
+  assert.match(g.replies[0], /^#12 has open questions: nothing starts until they are answered\./);
+  // Not "a trigger comment with the answers starts it": theirs didn't, and their answers
+  // elsewhere wouldn't either.
+  assert.match(g.replies[0], /Your answers don't count: answering them needs the `runs:manage`/);
+  assert.match(
+    g.replies[0],
+    /Once someone who has it answers them in a comment or \[on the dashboard\]/,
+  );
+  assert.doesNotMatch(g.replies[0], /A trigger comment with the answers starts/);
+  assert.deepEqual(g.settled, [[99, "needs-input"]]);
+});
+
+test("wait_for_answers: runs:manage that can't be decided refuses the answers as much", async () => {
+  const permissions = {
+    decide: async (login, repo, action) =>
+      action === "runs:manage" ? { ok: false, error: "boom" } : { ok: true },
+  };
+  const g = gate("", { permissions });
+  await g.say("Deckhand\n1. The first one");
+  assert.deepEqual(g.queued(), []);
+  assert.ok(
+    g.logs.includes(
+      "org/repo#12: its answers refused, alice's runs:manage can't be decided (boom)",
+    ),
+    g.logs.join("\n"),
+  );
+  assert.match(g.replies[0], /Your answers don't count/);
   assert.deepEqual(g.settled, [[99, "needs-input"]]);
 });
 
