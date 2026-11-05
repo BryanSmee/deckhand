@@ -44,8 +44,8 @@ const chatRun = (partial: Partial<Run> = {}): Run => ({
 // The page over a listener whose api/chats answers `list` (changed by the POSTs' handlers).
 function show(list: Chats, routes: Parameters<typeof mockApi>[0] = {}) {
   const api = mockApi({ "api/chats": () => list, ...routes });
-  render(<Dashboard state={state} error={null} />);
-  return api;
+  const { unmount } = render(<Dashboard state={state} error={null} />);
+  return Object.assign(api, { unmount });
 }
 
 test("the list: the chats with how many the user keeps, Chats among the views, a chat opened", async () => {
@@ -160,13 +160,39 @@ test("New chat on a repository's page: that repository first; one on another ope
   expect(screen.getByRole("heading", { name: "acme/api", level: 1 })).toBeTruthy();
 });
 
-test("another repository's chat under a repository's chats: no such chat there", async () => {
+test("another repository's chat under a repository's chats: opened on its own repository's", async () => {
   history.replaceState(null, "", "#/acme/app/chats/fedcba9876543210");
   show(makeChats([makeChat({ id: "fedcba9876543210", repo: "acme/api", title: "Elsewhere" })]));
+  await waitFor(() => expect(location.hash).toBe("#/acme/api/chats/fedcba9876543210"));
+  expect(await screen.findByRole("region", { name: "Elsewhere" })).toBeTruthy();
+  expect(screen.getByRole("heading", { name: "acme/api", level: 1 })).toBeTruthy();
+});
+
+test("a chat that isn't there, under a repository's chats: no such chat on it", async () => {
+  history.replaceState(null, "", "#/acme/app/chats/fedcba9876543210");
+  show(makeChats([makeChat()]));
   expect(
     await screen.findByText("No such chat on acme/app: it was deleted, or it isn't yours."),
   ).toBeTruthy();
-  expect(screen.queryByRole("region", { name: "Elsewhere" })).toBeNull();
+  expect(location.hash).toBe("#/acme/app/chats/fedcba9876543210");
+});
+
+test("the repository shown on Chats is the one the dashboard reopens on", async () => {
+  history.replaceState(null, "", "#/acme/app/chats");
+  const first = show(makeChats([makeChat()]));
+  await screen.findByRole("heading", { name: "acme/app", level: 1 });
+  expect(localStorage.getItem("deckhand.tab")).toBe("acme/app");
+  first.unmount();
+  // Open on: the last repository (Preferences' default), from an empty address.
+  history.replaceState(null, "", "#");
+  const again = show(makeChats([makeChat()]));
+  await waitFor(() => expect(location.hash).toMatch(/^#\/acme\/app(\?|$)/));
+  again.unmount();
+  // Every repository's chats: All, reopened on the Overview.
+  history.replaceState(null, "", "#/chats");
+  show(makeChats([makeChat()]));
+  await screen.findByRole("heading", { name: "All repositories", level: 1 });
+  expect(localStorage.getItem("deckhand.tab")).toBe("");
 });
 
 test("a phone: the top bar names the repository, its Chats tab stays on it; All's on All's tasks", async () => {

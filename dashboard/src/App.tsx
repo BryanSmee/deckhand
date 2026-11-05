@@ -178,6 +178,16 @@ export function Dashboard({ state, error, repos, refresh, onOverview }: Props) {
   // The user's chats: polled often on their page, else now and then for the sidebar's count,
   // or read once for a user who may start none (api.ts useChats()).
   const chats = useChats(onChats, canFrom(state?.access).anywhere("chat"));
+  // Another repository's chat under a repository's chats (an old link): its own repository's.
+  const elsewhere =
+    (onChats &&
+      route.repo &&
+      route.chat &&
+      chats.data?.chats.find((c) => c.id === route.chat && !sameRepo(c.repo, route.repo))) ||
+    null;
+  useEffect(() => {
+    if (elsewhere) go({ ...route, repo: elsewhere.repo }, true);
+  }, [elsewhere?.repo]);
   const overview = isOverview(route);
   useEffect(() => onOverview?.(overview), [overview]);
   // The address takes the sidebar's spelling, so links copied from it are the canonical ones.
