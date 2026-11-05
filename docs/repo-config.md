@@ -1652,7 +1652,9 @@ installations of the accounts owning a repository the login sees. A comment, an 
 only when its author has `runs:start:<mode>` for the mode it resolves to (else nothing starts,
 and nothing is said, as for an author outside the repository's `users`), `/cancel` and an
 `/after none` alone need `runs:manage`, an `/after` with a start the start's action, and `/mode policy`
-`tasks:read` (each refused without a word); queued work is checked again before it runs (a decision that fails then drops nothing). An auto-pickup label starts work only
+`tasks:read` (each refused without a word), and a comment or ticked boxes answering an issue's
+open questions `runs:manage`, as the dashboard's answers (refused, the label stays, its ticks
+answer nothing for `wait_for_answers`, and nothing is said); queued work is checked again before it runs (a decision that fails then drops nothing). An auto-pickup label starts work only
 when whoever added it, and whoever edited the issue since, have `runs:start:work`. A reviewer
 `review.request` names is requested only with `tasks:read`. A repository where a login has no
 action at all is hidden from it everywhere: the repositories list, the tasks, inboxes, lanes and
@@ -2047,7 +2049,9 @@ off: they answered. Ticking the boxes in the section answers too: once every que
 option ticked (`- [x]`), the label comes off as for a comment, and unticking them puts it
 back. A free-text question (no options) still needs a comment. Only an allowed user's ticks
 answer: those of the App's bot (a run ticking its own picks) or of someone not allowed leave
-the label on. A run that stopped to ask goes on the same way when an allowed user ticks an
+the label on. An answer, a comment's or ticks', also needs the [`runs:manage`](#access) action
+there, as the dashboard's answers do: a viewer's leaves the label on and is no answer for
+`wait_for_answers` (nothing is said). A run that stopped to ask goes on the same way when an allowed user ticks an
 option of every question in its reply (the boxes it came ticked with are the agent's). With
 `wait_for_answers: true` (the default), work doesn't start on an issue while it carries the
 label, unless an allowed user ticked an option of every question:

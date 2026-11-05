@@ -938,6 +938,91 @@ test("applyInput: the label and the list follow the change, by the repo's own us
   assert.match(aside.calls.at(-1)[1], /org\/repo#pr-9: label put back/);
 });
 
+test("applyInput: an answer needs runs:manage, as the dashboard's; refused or not decided, nothing moves", async () => {
+  const change = { repo: "org/repo", key: "org/repo#3", number: 3, base: "main", label: false };
+  // `answers`: login → decide()'s answer for runs:manage; anything else asked fails the test.
+  const withAccess = (answers) => {
+    const input = inputCtx();
+    input.ctx.permissions = {
+      decide: async (login, repo, action) => {
+        input.calls.push(["decide", login, repo, action]);
+        return answers[login];
+      },
+    };
+    return input;
+  };
+  const access = {
+    bob: { ok: true, error: null },
+    vic: { ok: false, error: null },
+    eve: { ok: false, error: "policy service away" },
+  };
+  const settings = { users: ["bob", "vic", "eve"], trigger: "deckhand", waitForAnswers: true };
+  // A member's comment answers: the label comes off, held-back comments go on.
+  const member = withAccess(access);
+  member.ctx.repoSettings = async () => ({ settings, errors: [] });
+  await applyInput(member.ctx, {
+    ...change,
+    by: "bob",
+    track: false,
+    comment: "Yes.",
+    answered: true,
+  });
+  assert.deepEqual(
+    member.calls.filter(([what]) => what !== "log"),
+    [
+      ["decide", "bob", "org/repo", "runs:manage"],
+      ["label", 3, false],
+      ["track", "org/repo#3", false],
+      ["answered", 3],
+    ],
+  );
+  // A viewer's comment: nothing moves, nothing is said.
+  const viewer = withAccess(access);
+  viewer.ctx.repoSettings = async () => ({ settings, errors: [] });
+  await applyInput(viewer.ctx, {
+    ...change,
+    by: "vic",
+    track: false,
+    comment: "Yes.",
+    answered: true,
+  });
+  assert.deepEqual(viewer.calls.slice(1), [
+    ["skip", "org/repo#3: answer refused: vic has no runs:manage here"],
+  ]);
+  // Their ticks: kept as ignored, so wait_for_answers doesn't take them for answers either.
+  const ticks = withAccess(access);
+  ticks.ctx.repoSettings = async () => ({ settings, errors: [] });
+  await applyInput(ticks.ctx, { ...change, by: "vic", track: false, ticked: true, answered: true });
+  assert.deepEqual(
+    ticks.calls.slice(1).map(([what, , ignored]) => [what, ignored]),
+    [
+      ["update", true],
+      ["skip", undefined],
+    ],
+  );
+  // A decision that fails refuses as much, the log saying it couldn't be decided.
+  const failed = withAccess(access);
+  failed.ctx.repoSettings = async () => ({ settings, errors: [] });
+  await applyInput(failed.ctx, {
+    ...change,
+    by: "eve",
+    track: false,
+    ticked: true,
+    answered: true,
+  });
+  assert.deepEqual(failed.calls.at(-2), ["update", "org/repo#3", true]);
+  assert.match(
+    failed.calls.at(-1)[1],
+    /eve's runs:manage can't be decided \(policy service away\)/,
+  );
+  // Asking again (the boxes unticked) is no answer: nothing is asked.
+  const asks = withAccess(access);
+  asks.ctx.repoSettings = async () => ({ settings, errors: [] });
+  await applyInput(asks.ctx, { ...change, label: true, by: "vic", track: true });
+  assert.deepEqual(asks.calls[0], ["label", 3, true]);
+  assert.equal(asks.calls.filter(([what]) => what === "decide").length, 0);
+});
+
 const ticked = (a, b) =>
   `## Open questions\n\n1. **A**: which?\n   - [${a}] X (recommended)\n   - [ ] Y\n2. B?\n   - [ ] Z\n   - [${b}] W`;
 
