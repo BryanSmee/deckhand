@@ -2060,6 +2060,7 @@ test("remove: never a pod or a Secret of the namespace that isn't this deploymen
 // The network probe (kube-probe.mjs): its pods (one name each), and what the cluster around it
 // has.
 const isProbe = (pod) => Boolean(pod?.metadata?.annotations?.["deckhand.probe"]);
+const isPeer = (pod) => pod?.metadata?.annotations?.["deckhand.probe"] === "peer";
 const probeIn = (objects) => [...objects.pods.values()].find(isProbe);
 const CLUSTER_SERVICES = {
   broker: {
@@ -2088,11 +2089,17 @@ const CLUSTER_SLICES = [
   },
 ];
 const PROXY = "10.96.0.11:3128";
+// The probe's peer pod, as it listens (kube-probe.mjs PEER_PORT).
+const PEER_IP = "10.244.1.50";
+const PEER = `${PEER_IP}:8080`;
 
 // A runner whose network probe answers `reach(target)` for each of its targets ("host:port",
 // "/udp" after a UDP one), its pod ending `phase` (null: never). `targets()`: what the last
 // probe pod was asked to try; `probes()`: how many were made; `answers.reach` may change.
 // `gate`: { exitCode, said } when its network gate (kube-gate.mjs) ended so, past its deadline.
+// `peer`: the peer pod's status once it started, by default Ready at PEER_IP; `peerLater`, its
+// status once the probe pod is made, by default the same; `peerGate`, as `gate`, for the peer's
+// gate. `peers()`: the peer pods made.
 // `services`, `slices`: the services' namespace's, by default CLUSTER_SERVICES' and CLUSTER_SLICES.
 function probed(
   t,
@@ -2103,6 +2110,13 @@ function probed(
     services = CLUSTER_SERVICES,
     slices = CLUSTER_SLICES,
     gate = null,
+    peer = {
+      phase: "Running",
+      podIP: PEER_IP,
+      conditions: [{ type: "Ready", status: "True" }],
+    },
+    peerLater = peer,
+    peerGate = null,
     metrics = null,
   } = {},
 ) {
@@ -2112,11 +2126,11 @@ function probed(
     {},
     {
       get: (_, name) =>
-        String(name).startsWith("dh-network-probe-")
+        String(name).startsWith("dh-network-")
           ? ({ container }) =>
               new Response(
                 container === "network-gate"
-                  ? `${gate.said}\n`
+                  ? `${(isPeer(s.objects.pods.get(name)) ? peerGate : gate).said}\n`
                   : `${JSON.stringify(asked(s.objects.pods.get(name)).map((t) => answers.reach(t)))}\n`,
               )
           : undefined,
@@ -2148,13 +2162,17 @@ function probed(
           s.clock.at += ms;
           for (const pod of s.objects.pods.values()) {
             if (!isProbe(pod)) continue;
-            if (gate) {
+            const failed = isPeer(pod) ? peerGate : gate;
+            if (failed) {
               pod.status = {
                 phase: "Failed",
                 initContainerStatuses: [
-                  { name: "network-gate", state: { terminated: { exitCode: gate.exitCode } } },
+                  { name: "network-gate", state: { terminated: { exitCode: failed.exitCode } } },
                 ],
               };
+            } else if (isPeer(pod)) {
+              const probing = [...s.objects.pods.values()].some((o) => isProbe(o) && !isPeer(o));
+              pod.status = probing ? peerLater : peer;
             } else if (phase) pod.status = { phase };
           }
         },
@@ -2162,7 +2180,7 @@ function probed(
     },
   );
   for (const [name, svc] of Object.entries(services)) s.objects.services.set(name, svc);
-  const made = () => s.bodies.filter(isProbe);
+  const made = () => s.bodies.filter((pod) => isProbe(pod) && !isPeer(pod));
   return {
     ...s,
     answers,
@@ -2171,6 +2189,7 @@ function probed(
     probes: () => made().length,
     targets: () => asked(made().at(-1)),
     probePod: () => made().at(-1),
+    peers: () => s.bodies.filter(isPeer),
   };
 }
 
@@ -2196,7 +2215,15 @@ test("network probe: reaching the egress proxy alone, runs start; the verdict ke
     "10.96.0.10:53/udp",
     "10.96.0.1:443",
     "1.1.1.1:443",
+    PEER,
   ]);
+  assert.match(p.peers()[0].metadata.name, /^dh-network-peer-[0-9a-f]{8}$/);
+  assert.equal(
+    p.peers()[0].metadata.name.slice(-8),
+    p.probePod().metadata.name.slice(-8),
+    "one probe, one name",
+  );
+  assert.ok(!p.objects.pods.has(p.peers()[0].metadata.name), "the peer pod is removed");
   // The registry's host, BuildKit's (with a registry) and Redis's, as the runner resolves them.
   assert.deepEqual(p.looked, ["registry.example.com", "buildkitd", "redis.data"]);
   assert.match(p.logged.join("\n"), /Network probe: a sandbox reaches the egress proxy alone/);
@@ -2225,6 +2252,7 @@ test("network probe: a service, Redis, the registry, the cluster's DNS, the API 
     "10.96.0.10:53/udp": /reached the cluster's DNS \(10\.96\.0\.10:53\/udp\)/,
     "10.96.0.1:443": /reached the Kubernetes API server \(10\.96\.0\.1:443\)/,
     "1.1.1.1:443": /reached a public address \(1\.1\.1\.1:443\)/,
+    [PEER]: /reached another pod labelled as a sandbox \(10\.244\.1\.50:8080\)/,
   };
   for (const [leak, said] of Object.entries(cases)) {
     const p = probed(t, {
@@ -2339,7 +2367,7 @@ test("network probe: a gate that never reached the egress proxy proves nothing: 
 
 test("network probe: a leftover older than any probe is removed, a younger one (the other copy's, mid-handover) left alone", async (t) => {
   const p = probed(t);
-  const left = (name, at) =>
+  const left = (name, at, kind = "network") =>
     p.objects.pods.set(name, {
       metadata: {
         name,
@@ -2349,15 +2377,20 @@ test("network probe: a leftover older than any probe is removed, a younger one (
           "deckhand.run": "network-probe",
           "deckhand.role": "sandbox",
         },
-        annotations: { "deckhand.probe": "network" },
+        annotations: { "deckhand.probe": kind },
       },
       status: { phase: "Running" },
     });
   left("dh-network-probe-old", p.clock.at - 60 * 60_000);
+  left("dh-network-peer-old", p.clock.at - 60 * 60_000, "peer");
   left("dh-network-probe-other", p.clock.at - 1000);
+  // Its peer made before it, as long as a probe pod may wait ago: still the other copy's probe.
+  left("dh-network-peer-other", p.clock.at - (config.kubernetes.pendingMs + 60_000), "peer");
   await p.runner.start(spec());
   assert.ok(!p.objects.pods.has("dh-network-probe-old"));
+  assert.ok(!p.objects.pods.has("dh-network-peer-old"));
   assert.ok(p.objects.pods.has("dh-network-probe-other"));
+  assert.ok(p.objects.pods.has("dh-network-peer-other"));
 });
 
 test("network probe: a probe pod that fails or never ends refuses the run, is removed, and is tried again", async (t) => {
@@ -2414,6 +2447,110 @@ test("network probe: its pod is labelled as a sandbox, meets Pod Security restri
     seccompProfile: { type: "RuntimeDefault" },
   });
   assert.deepEqual(container.command.slice(0, 2), ["node", "-e"]);
+});
+
+test("network probe: its peer pod, labelled as a sandbox too, listens and is Ready once it answers, from inside it", async (t) => {
+  const p = probed(t);
+  await p.runner.start(spec());
+  const [peer] = p.peers();
+  assert.deepEqual(peer.metadata.labels, p.probePod().metadata.labels);
+  assert.deepEqual(peer.metadata.annotations, { "deckhand.probe": "peer" });
+  assert.deepEqual(restrictedProblems(peer), []);
+  assert.equal(peer.spec.automountServiceAccountToken, false);
+  assert.equal(peer.spec.enableServiceLinks, false);
+  assert.equal(peer.spec.dnsPolicy, "None");
+  assert.equal(peer.spec.volumes, undefined);
+  // Gone by itself, should the runner stop before removing it: two probe pods' wait.
+  assert.equal(peer.spec.activeDeadlineSeconds, 2 * (config.kubernetes.pendingMs / 1000 + 60) + 60);
+  // Its network gate first, as every pod of the sandboxes' namespace.
+  assert.deepEqual(
+    peer.spec.initContainers.map((c) => c.name),
+    ["network-gate"],
+  );
+  const [container] = peer.spec.containers;
+  assert.match(container.command.join(" "), /^node -e .*createServer.*listen\(8080\)/);
+  // An exec probe on its loopback, not the kubelet's TCP probe from the node.
+  assert.equal(container.readinessProbe.tcpSocket, undefined);
+  assert.match(container.readinessProbe.exec.command.join(" "), /connect\(8080, "127\.0\.0\.1"\)/);
+  assert.equal(container.env, undefined);
+});
+
+test("network probe: a peer pod that never gets ready proves nothing; one whose gate still reached the API server is a verdict", async (t) => {
+  const pending = probed(t, { peer: { phase: "Pending" }, kubernetes: { pendingMs: 60_000 } });
+  await assert.rejects(
+    pending.runner.start(spec()),
+    /couldn't check that the cluster enforces the sandboxes' NetworkPolicies: its peer pod didn't get ready within 2 min \(Pending\)/,
+  );
+  assert.equal(pending.probes(), 0, "no probe pod without its peer");
+  assert.ok(!probeIn(pending.objects), "the peer pod is removed");
+  await assert.rejects(pending.runner.start(spec()), /its peer pod didn't get ready/);
+  assert.equal(pending.peers().length, 2, "not kept: probed again");
+
+  const leaky = probed(t, {
+    peerGate: {
+      exitCode: 3,
+      said: "still reached the Kubernetes API server (10.96.0.1:443) after 570 s",
+    },
+  });
+  await assert.rejects(
+    leaky.runner.start(spec()),
+    /doesn't enforce the sandboxes' NetworkPolicies: a pod labelled as a sandbox still reached the Kubernetes API server \(10\.96\.0\.1:443\) after 570 s/,
+  );
+  assert.ok(!probeIn(leaky.objects));
+  await assert.rejects(leaky.runner.start(spec()), /still reached the Kubernetes API server/);
+  assert.equal(leaky.peers().length, 1, "kept: a verdict");
+
+  // Ended before it was ready, or its gate never reached the egress proxy: nothing proven.
+  const blind = {
+    "its peer pod ended Failed before it was ready": { peer: { phase: "Failed" } },
+    "its peer pod never reached the egress proxy \\(10\\.96\\.0\\.11:3128\\) in 570 s, which sandboxes go out through":
+      {
+        peerGate: {
+          exitCode: 4,
+          said: "never reached the egress proxy (10.96.0.11:3128) in 570 s",
+        },
+      },
+  };
+  for (const [said, options] of Object.entries(blind)) {
+    const p = probed(t, options);
+    await assert.rejects(
+      p.runner.start(spec()),
+      new RegExp(
+        `couldn't check that the cluster enforces the sandboxes' NetworkPolicies: ${said}`,
+      ),
+    );
+    assert.equal(p.probes(), 0, "no probe pod without its peer");
+    assert.ok(!probeIn(p.objects), "the peer pod is removed");
+    await assert.rejects(p.runner.start(spec()), new RegExp(said));
+    assert.equal(p.peers().length, 2, "not kept: probed again");
+  }
+});
+
+test("network probe: a peer pod that stopped listening before the probe pod ended proves nothing", async (t) => {
+  const cases = {
+    Failed: { phase: "Failed" },
+    // Running still, though no longer Ready.
+    Running: { phase: "Running", podIP: PEER_IP, conditions: [{ type: "Ready", status: "False" }] },
+  };
+  for (const [phase, peerLater] of Object.entries(cases)) {
+    const p = probed(t, { peerLater });
+    await assert.rejects(
+      p.runner.start(spec()),
+      new RegExp(
+        `couldn't check that the cluster enforces the sandboxes' NetworkPolicies: its peer pod stopped listening before its probe pod ended \\(${phase}\\)`,
+      ),
+    );
+    assert.equal(p.probes(), 1);
+    assert.ok(!probeIn(p.objects), "both pods removed");
+    await assert.rejects(p.runner.start(spec()), /its peer pod stopped listening/);
+    assert.equal(p.probes(), 2, "not kept: probed again");
+  }
+  // A leak is a verdict whatever became of the peer.
+  const leaky = probed(t, {
+    peerLater: { phase: "Failed" },
+    reach: (target) => target === PROXY || target === "1.1.1.1:443",
+  });
+  await assert.rejects(leaky.runner.start(spec()), /reached a public address/);
 });
 
 test("network probe, with an engine: the proxy's engines' port is the proxy's, to be reached when its Service publishes it", async (t) => {
