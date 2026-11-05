@@ -9,6 +9,7 @@ import { useState } from "preact/hooks";
 import { sendAnswers } from "./api";
 import { isPrTask } from "./format";
 import { useSubmit } from "./hooks";
+import { t } from "./i18n";
 import type { Answers, Questions as Asked, Task, WorkResult } from "./types";
 import { Button } from "./ui/Button";
 import { OptionCard } from "./ui/Choice";
@@ -41,7 +42,7 @@ interface Options {
   onSent: (message: string) => void;
 }
 
-export function useAnswers({ task: t, questions: q, submit, then, onSent }: Options) {
+export function useAnswers({ task, questions: q, submit, then, onSent }: Options) {
   const items = q.items;
   const [answers, setAnswers] = useState<Answer[]>(() => initial(q));
   const [text, setText] = useState("");
@@ -61,22 +62,24 @@ export function useAnswers({ task: t, questions: q, submit, then, onSent }: Opti
   const unsendable = empty || (!!then && open > 0);
 
   const send = async () => {
-    if (unsendable || sending || t.number === null) return;
+    if (unsendable || sending || task.number === null) return;
     // A pull request's own task ("#pr-12"): one that closes an issue is the issue's.
-    const which = { number: t.number, ...(isPrTask(t) ? { pr: true } : {}) };
+    const which = { number: task.number, ...(isPrTask(task) ? { pr: true } : {}) };
     const body: Answers = items ? { ...which, answers } : { ...which, text };
     const result = await run(body);
     if (result.error) return;
     setAnswers(initial(q));
     setText("");
-    onSent(result.message ?? "Answers sent.");
+    onSent(result.message ?? t("questions.sent"));
   };
 
   const hint =
     then && open > 0
-      ? `Answer every question to ${then} it (${open} left).`
+      ? t(then === "start" ? "questions.answerToStart" : "questions.answerToQueue", {
+          count: open,
+        })
       : !then && !empty && open > 0
-        ? `${open} left blank: ${q.source === "run" ? "the run sees which" : "it keeps waiting for them"}`
+        ? t(q.source === "run" ? "questions.blankRun" : "questions.blankIssue", { count: open })
         : null;
 
   const fields = (
@@ -93,14 +96,16 @@ export function useAnswers({ task: t, questions: q, submit, then, onSent }: Opti
                 {item.options.map((o, n) => (
                   <OptionCard
                     key={n}
-                    name={`${t.key} q${i}`}
+                    name={`${task.key} q${i}`}
                     checked={answers[i]?.options.includes(n)}
                     // A click, not a change: picked again, it takes the pick back.
                     onClick={() => pick(i, n)}
                     label={
                       <span>
                         {o.label}
-                        {o.recommended && <span class={styles.pick}>Recommended</span>}
+                        {o.recommended && (
+                          <span class={styles.pick}>{t("questions.recommended")}</span>
+                        )}
                       </span>
                     }
                   />
@@ -109,10 +114,14 @@ export function useAnswers({ task: t, questions: q, submit, then, onSent }: Opti
             )}
             <Field
               as="textarea"
-              label={`${item.options.length ? "Note on" : "Answer to"} question ${i + 1}`}
+              label={t(item.options.length ? "questions.noteOn" : "questions.answerTo", {
+                n: i + 1,
+              })}
               hideLabel
               rows={item.options.length ? 1 : 2}
-              placeholder={item.options.length ? "Another answer, or a note" : "Your answer"}
+              placeholder={t(
+                item.options.length ? "questions.notePlaceholder" : "questions.answerPlaceholder",
+              )}
               value={answers[i]?.text ?? ""}
               onInput={(e) => set(i, { text: e.currentTarget.value })}
             />
@@ -123,10 +132,10 @@ export function useAnswers({ task: t, questions: q, submit, then, onSent }: Opti
           <div class={styles.raw}>{q.raw}</div>
           <Field
             as="textarea"
-            label="Answers"
+            label={t("questions.answers")}
             hideLabel
             rows={4}
-            placeholder="Answer them here, as you would in a comment"
+            placeholder={t("questions.rawPlaceholder")}
             value={text}
             onInput={(e) => setText(e.currentTarget.value)}
           />
@@ -147,16 +156,18 @@ interface Props {
 
 // On the task's page: its own form, under the task's head.
 export function Questions({
-  task: t,
+  task,
   questions: q,
   onSent,
-  submit = (body) => sendAnswers(t.repo, body),
+  submit = (body) => sendAnswers(task.repo, body),
 }: Props) {
-  const form = useAnswers({ task: t, questions: q, submit, onSent });
+  const form = useAnswers({ task, questions: q, submit, onSent });
   return (
     <form
       class={styles.form}
-      aria-label="Open questions"
+      aria-label={t("questions.title")}
+      // What the task page's `a` shortcut finds (Detail.tsx): not its label, which is translated.
+      data-questions
       onSubmit={(e) => {
         e.preventDefault();
         void form.send();
@@ -169,9 +180,9 @@ export function Questions({
       }}
     >
       <h2 class={styles.heading}>
-        Open questions
+        {t("questions.title")}
         <span class={styles.source}>
-          {q.source === "run" ? "from its last run" : "in the issue"}
+          {t(q.source === "run" ? "questions.fromRun" : "questions.inIssue")}
         </span>
       </h2>
       {form.fields}
@@ -187,9 +198,9 @@ export function Questions({
           size="small"
           disabled={form.unsendable}
           pending={form.sending}
-          pendingLabel="Sending…"
+          pendingLabel={t("questions.sending")}
         >
-          Send answers
+          {t("questions.send")}
         </Button>
         {form.hint && <span class={styles.hint}>{form.hint}</span>}
       </div>

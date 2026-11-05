@@ -5,10 +5,11 @@
 import type { JSX, RefObject } from "preact";
 import type { Target } from "./Chooser";
 import type { Look } from "./dnd";
-import { kindName, numberOf, plural, shortRepo, shorten } from "./format";
+import { kindName, numberOf, shortRepo, shorten } from "./format";
 import type { NodeDrag } from "./graphHooks";
 import type { Layout } from "./graphLayout";
 import { type GraphNode, LOUD, moving, ordinal, TONES } from "./graphModel";
+import { t, tx } from "./i18n";
 import { formatRoute } from "./route";
 import type { Edge, Task } from "./types";
 import { StatusDot, toneClass } from "./ui/Status";
@@ -51,16 +52,19 @@ export const asks = (n: GraphNode): n is GraphNode & { task: Task } =>
 export const nodeHref = (n: GraphNode, repo: string | null, github: string) =>
   n.task ? formatRoute({ repo, task: n.key, run: null }) : `${github}/${n.repo}/issues/${n.number}`;
 
-// Its name for screen readers: "#24 Its title: Waiting, waits for 2 issues".
+// Its name for screen readers: "#24 Its title: Waiting, waits for 2 issues", one text with
+// its details (each starting ", ") as a placeholder.
 export function nodeLabel(n: GraphNode, waits: number): string {
   const count = n.task?.questions?.items?.length;
-  return (
-    `${nodeRef(n, false, 0)} ${n.title ?? ""}`.trim() +
-    `: ${n.status}` +
-    (n.position ? `, ${ordinal(n.position)} in line` : "") +
-    (count ? `, ${plural(count, "question")}` : "") +
-    (waits ? `, waits for ${plural(waits, "issue")}` : "")
-  );
+  const details =
+    (n.position ? t("graph.labelInLine", { place: ordinal(n.position) }) : "") +
+    (count ? t("graph.labelQuestions", { count }) : "") +
+    (waits ? t("graph.labelWaits", { count: waits }) : "");
+  return t("graph.nodeLabel", {
+    node: `${nodeRef(n, false, 0)} ${n.title ?? ""}`.trim(),
+    status: n.status,
+    details,
+  });
 }
 
 // A node's classes for its look: its tone, a border when it needs looking at, dimmed when
@@ -81,7 +85,11 @@ export function lookClasses(n: GraphNode, s: Record<string, string>): string {
 export function PlaceBadge({ n, class: className }: { n: GraphNode; class: string }) {
   if (!n.position) return null;
   return (
-    <span class={className} aria-hidden="true" title={`${ordinal(n.position)} in line to start`}>
+    <span
+      class={className}
+      aria-hidden="true"
+      title={t("graph.placeTitle", { place: ordinal(n.position) })}
+    >
       {ordinal(n.position)}
     </span>
   );
@@ -141,7 +149,7 @@ export function GraphNodeView({
   justDragged,
   handlers,
 }: Props) {
-  const title = n.title ?? `${kindName(n)} ${nodeRef(n, false, 0)}`;
+  const title = n.title ?? t("graph.untitled", { kind: kindName(n), ref: nodeRef(n, false, 0) });
   return (
     <a
       href={href}
@@ -149,7 +157,7 @@ export function GraphNodeView({
       data-card
       data-number={n.number ?? undefined}
       aria-label={nodeLabel(n, waits)}
-      title={`${title} (${n.status})`}
+      title={t("graph.nodeTitle", { title, status: n.status })}
       class={`${styles.node} ${lookClasses(n, styles)} ${extra}`}
       // Placed with a transform, which slides (Graph.module.css) when the place changes.
       style={{ transform: `translate(${x}px, ${y}px)`, width: `${w}px`, height: `${h}px` }}
@@ -284,16 +292,19 @@ export function GraphDrawing({
   onAsk,
 }: DrawingProps) {
   const message = loading ? (
-    <p class={styles.empty}>Loading…</p>
+    <p class={styles.empty}>{t("graph.loading")}</p>
   ) : !nodes.length && hidden ? (
     <p class={styles.empty}>
-      Nothing open here.{" "}
-      <button type="button" class={styles.show} onClick={() => onShowClosed(true)}>
-        Show closed issues
-      </button>
+      {tx("graph.nothingOpen", {
+        show: (
+          <button type="button" class={styles.show} onClick={() => onShowClosed(true)}>
+            {t("graph.showClosedIssues")}
+          </button>
+        ),
+      })}
     </p>
   ) : !nodes.length ? (
-    <p class={styles.empty}>No issues here yet. Drop one here to start it.</p>
+    <p class={styles.empty}>{t("graph.empty")}</p>
   ) : null;
   // A drag's ghost and what letting go does, over the drawing.
   const dragged = (
@@ -342,7 +353,7 @@ export function GraphDrawing({
         class={styles.drawing}
         style={{ width: `${width}px`, height: `${height}px`, transform: `scale(${zoom})` }}
         role="list"
-        aria-label={`Issues of ${repo}`}
+        aria-label={t("graph.issuesOf", { repo })}
       >
         <svg
           class={styles.arrows}

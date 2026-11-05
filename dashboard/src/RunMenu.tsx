@@ -5,6 +5,7 @@
 import type { ComponentChildren } from "preact";
 import { useLayoutEffect, useRef, useState } from "preact/hooks";
 import { dayTime, duration, runName } from "./format";
+import { t, tx } from "./i18n";
 import type { Run } from "./types";
 import { Count } from "./ui/Count";
 import * as Icon from "./ui/icons";
@@ -57,12 +58,12 @@ export function RunMenu({ runs, current, onPick, now, touch }: Props) {
           setOpen(!open);
         }}
       >
-        All runs <Count n={runs.length} />
+        {t("runMenu.all")} <Count n={runs.length} />
         <Icon.ChevronDown size={14} class={styles.chevron} />
       </button>
       {open &&
         (touch ? (
-          <Sheet title="All runs" onClose={() => setOpen(false)}>
+          <Sheet title={t("runMenu.all")} onClose={() => setOpen(false)}>
             {list}
           </Sheet>
         ) : (
@@ -146,7 +147,7 @@ function RunList({ runs, current, now, touch, onPick }: Props & { onPick: (id: s
     <div
       ref={list}
       role="listbox"
-      aria-label="All runs, newest first"
+      aria-label={t("runMenu.list")}
       class={`${styles.list} ${touch ? styles.touch : ""}`}
       onKeyDown={onKeyDown}
     >
@@ -166,11 +167,13 @@ function RunList({ runs, current, now, touch, onPick }: Props & { onPick: (id: s
           <span class={styles.text}>
             <span class={styles.name}>
               {runName(x)}
-              {x.speed === "fast" && " · fast"}
+              {x.speed === "fast" && ` · ${t("detail.fast")}`}
             </span>{" "}
             <span class={styles.when}>
-              {dayTime(x.startedAt, now, false)} ·{" "}
-              <span class={styles.took}>{duration(x, now)}</span>
+              {tx("runMenu.when", {
+                when: dayTime(x.startedAt, now, false),
+                took: <span class={styles.took}>{duration(x, now)}</span>,
+              })}
             </span>
           </span>
           <span class={styles.check}>{x.id === current && <Icon.Check size={14} />}</span>

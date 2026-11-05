@@ -1,0 +1,87 @@
+// English texts of the board's work queue (WorkQueue.tsx): spread into the catalog (en.ts).
+export const queue = {
+  // WorkQueue.tsx: the board's work queue, its tabs and what each says when empty.
+  "queue.label": "Work queue",
+  "queue.collapse": "Collapse the work queue",
+  "queue.expand": "Expand the work queue",
+  "queue.backlog": "Backlog",
+  "queue.brainstorm": "Brainstorm",
+  "queue.waiting": "Waiting",
+  "queue.answers": "Answers",
+  "queue.queued": "Queued",
+  "queue.backlogList": "Open issues with no task",
+  "queue.backlogNoMatch": "No open issue matches.",
+  "queue.backlogEmpty": "No open issue left to start.",
+  "queue.brainstormList": "Issues being brainstormed",
+  "queue.brainstormEmpty": "No brainstorm going on.",
+  "queue.waitingList": "Waiting issues",
+  "queue.waitingEmpty": "No issue waits for another.",
+  "queue.answersList": "Issues waiting for answers",
+  "queue.answersEmpty": "No issue waits for your answers.",
+  "queue.queuedList": "Tasks waiting for a slot, in run order",
+  "queue.queuedEmpty": "Nothing waits for a slot.",
+  "queue.loading": "Loading…",
+  "queue.configErrors": "{repo}'s .deckhand.yaml has errors: nothing starts until they are fixed.",
+  "queue.unreadable": "Can't read the issues ({error}).",
+  "queue.notIssueLink":
+    "That isn't a link to one of {repo}'s issues: drag an issue's card from the backlog, or its link.",
+  "queue.filter": "Filter the backlog",
+  "queue.filterPlaceholder": {
+    one: "Filter {count} open issue",
+    other: "Filter {count} open issues",
+  },
+
+  // A tab's hint: what its cards' drags do.
+  "queue.hintBacklog":
+    "Drag onto the board to start · onto a card to queue after it · onto the Brainstorm tab to brainstorm.",
+  "queue.hintBrainstorm":
+    "Drag onto the board to start work · onto a card to queue after it · onto the Backlog tab to stop.",
+  "queue.hintWaiting":
+    "On the board, drag a waiting card away to end its wait, or onto another card to wait for that one.",
+  "queue.hintAnswers":
+    "Drag onto the board to answer and start · onto a card to answer and queue after it.",
+  "queue.hintQueued":
+    "The order they start in when a slot frees · drag above or below another card to move it · onto a card on the board to queue after it · onto the Backlog tab to take it out. Brainstorms start first.",
+
+  // A card: its name without a title, the line under it, its status while dragged.
+  "queue.untitled": "Issue #{number}",
+  "queue.inLine": "{position} in line",
+  "queue.startsFirst": "starts first",
+  "queue.subIssues": {
+    one: "{count} sub-issue · start lays them out",
+    other: "{count} sub-issues · start lays them out",
+  },
+  "queue.openQuestions": { one: "{count} open question", other: "{count} open questions" },
+  "queue.openQuestionsUncounted": "Open questions",
+  "queue.dragBacklog": "Backlog",
+  "queue.dragAnswer": "Answer",
+  "queue.more": "More for #{number}: {actions}",
+
+  // A card's buttons, and their names when the label doesn't say which issue.
+  "queue.runNext": "Run next",
+  "queue.runNextAria": "Run #{number} next",
+  "queue.moveUp": "Move up",
+  "queue.moveUpAria": "Move #{number} up",
+  "queue.moveDown": "Move down",
+  "queue.moveDownAria": "Move #{number} down",
+  "queue.after": "After…",
+  "queue.afterAria": "Queue #{number} after…",
+  "queue.toBacklog": "Back to backlog",
+  "queue.toBacklogAria": "Take #{number} out of the queue, back to the backlog",
+  "queue.start": "Start",
+  "queue.startAria": "Start #{number}",
+  "queue.brainstormAction": "Brainstorm",
+  "queue.brainstormAria": "Brainstorm #{number}",
+  "queue.startWork": "Start work",
+  "queue.startWorkAria": "Start work on #{number}",
+  "queue.stop": "Stop",
+  "queue.stopAria": "Stop #{number}'s brainstorm",
+  "queue.startNow": "Start now",
+  "queue.startNowAria": "Start #{number} now",
+  "queue.removeWait": "Remove wait",
+  "queue.removeWaitAria": "Remove #{number}'s wait",
+  "queue.answer": "Answer",
+  "queue.answerAria": "Answer #{number} and start it",
+  "queue.answerQueue": "Answer then queue…",
+  "queue.answerQueueAria": "Answer #{number} then queue it after…",
+} as const;

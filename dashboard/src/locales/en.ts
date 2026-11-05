@@ -6,11 +6,15 @@
 // or pull request's reads as GitHub writes it ("#1234"). A page's texts may sit in a file of
 // their own (en-<area>.ts), spread in below.
 import { app } from "./en-app";
+import { board } from "./en-board";
 import { chats } from "./en-chats";
 import { config } from "./en-config";
+import { detail } from "./en-detail";
 import { inbox } from "./en-inbox";
+import { log } from "./en-log";
 import { overview } from "./en-overview";
 import { policies } from "./en-policies";
+import { queue } from "./en-queue";
 import { repos } from "./en-repos";
 import { request } from "./en-request";
 import { ui } from "./en-ui";
@@ -25,6 +29,96 @@ export const en = {
   "time.today": "today {time}",
   "time.yesterday": "yesterday {time}",
   "time.dayTime": "{date}, {time}",
+
+  "time.minutes": "{min} min",
+  "time.hoursMinutes": "{h} h {min} min",
+  "time.daysHours": "{d} d {h} h",
+
+  "state.scheduled": "Scheduled",
+  "state.buildingImage": "Building image",
+  "state.working": "Working",
+  "state.stopping": "Stopping",
+  "state.queued": "Queued",
+  "state.inReview": "In review",
+  "state.waiting": "Waiting",
+  "state.brainstorm": "Brainstorm",
+  "state.idleBrainstorm": "Idle brainstorm",
+  "state.needsInput": "Needs input",
+  "state.done": "Done",
+  "state.error": "Error",
+  "state.interrupted": "Interrupted",
+  "state.cancelled": "Stopped",
+
+  "run.running": "Running",
+  "run.ok": "Done",
+  "run.needsInput": "Needs input",
+  "run.error": "Error",
+  "run.interrupted": "Interrupted",
+  "run.cancelled": "Stopped",
+
+  "pr.draft": "Draft",
+  "pr.ready": "Ready for review",
+  "pr.merged": "Merged",
+  "pr.closed": "Closed",
+  "pr.nameDraft": "Draft #{number}",
+  "pr.nameReady": "PR #{number}",
+  "pr.nameMerged": "merged #{number}",
+  "pr.nameClosed": "closed #{number}",
+  "pr.nameAutoMerged": "merged by Deckhand #{number}",
+  "pr.titleDraft": "Pull request #{number}: draft",
+  "pr.titleReady": "Pull request #{number}: ready for review",
+  "pr.titleMerged": "Pull request #{number}: merged",
+  "pr.titleClosed": "Pull request #{number}: closed",
+  "pr.titleAutoMerged": "Pull request #{number}, merged by Deckhand with no human review",
+
+  "loop.checks": "Review · waiting for checks",
+  "loop.ci": "Review · waiting for CI",
+  "loop.ciFix": "Review · fixing CI",
+  "loop.first": "Review · first review",
+  "loop.roundOf": "Review · round {round} of {rounds}",
+  "loop.round": "Review · round {round}",
+
+  "ready.ciFailed": "CI failed",
+  "ready.conflict": "Conflict",
+  "ready.findingsLeft": "Findings left",
+  "ready.outdated": "Reviewed before last push",
+  "ready.waitingCi": "Waiting for CI",
+
+  "kind.pr": "Pull request",
+  "kind.discussion": "Discussion",
+  "kind.brainstorm": "Brainstorm",
+  "kind.idea": "Idea",
+  "kind.bug": "Bug report",
+  "kind.research": "Research",
+  "kind.issue": "Issue",
+
+  "runKind.work": "Work",
+  "runKind.bug": "Bug",
+  "runKind.onboarding": "Onboarding",
+  "runKind.analyze": "Analysis",
+  "runKind.review": "Review",
+
+  "runName.review": "Review",
+  "runName.start": "Start",
+  "runName.continue": "Continue",
+  "runName.restore": "Restore",
+  "runName.wrapUp": "Wrap-up",
+  "runName.run": "Run",
+  "runName.reviewFix": "Review fix",
+  "runName.reviewFixOf": "Review fix {round}/{rounds}",
+  "runName.ciFix": "CI fix",
+  "runName.ciFixOf": "CI fix {round}/{rounds}",
+  "runName.conflict": "Conflict",
+
+  "task.untitled": "{kind} #{number}",
+  "task.prNumber": "PR #{number}",
+
+  "when.updated": "Updated {updated}",
+  "when.updatedLastRun": "Updated {updated} · last run started {started}",
+  "when.reply": "reply on #{number}",
+  "when.after": "after {issues}",
+  "when.idleIn": "idle in {min} min",
+  "when.since": "since {ago}",
 
   "list.and": "{first} and {last}",
   "list.comma": ", ",
@@ -45,6 +139,10 @@ export const en = {
     one: "{count} blocking comment",
     other: "{count} blocking comments",
   },
+  "review.critical": { one: "{count} critical", other: "{count} critical" },
+  "review.high": { one: "{count} high", other: "{count} high" },
+  "review.medium": { one: "{count} medium", other: "{count} medium" },
+  "review.low": { one: "{count} low", other: "{count} low" },
   "review.notes": { one: "{count} note", other: "{count} notes" },
   "review.followUps": { one: "{count} follow-up", other: "{count} follow-ups" },
   "review.noFindings": "no findings",
@@ -170,4 +268,8 @@ export const en = {
   ...config,
   ...policies,
   ...ui,
+  ...board,
+  ...queue,
+  ...detail,
+  ...log,
 } as const;

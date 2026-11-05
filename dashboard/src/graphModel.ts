@@ -1,6 +1,9 @@
 // The graph page's model: what each issue looks like, and where it goes: the graph, or the
 // work queue's Brainstorm tab (brainstormsOf()). Where each node is drawn: graphLayout.ts.
 import { inChip, STATE_NAMES, taskStatus, type Tone } from "./format";
+// `tr`: t() where a task is called `t`.
+import { locale, t as tr } from "./i18n";
+import type { Plain } from "./locales";
 import type { Backlog, Blocker, Edge, OrderMove, Pending, PullRequest, Task } from "./types";
 
 // What a node looks like: the graph's own families, not the list's (format.ts toneOf()).
@@ -27,22 +30,14 @@ export const TONES: Record<Look, Tone> = {
 // Those whose node has a border in its tone: they need looking at.
 export const LOUD: Look[] = ["run", "input", "talk", "ready", "err"];
 
-// The legend: a tone each, in the reference's order.
-export const LOOKS: { tone: Tone; name: string; means: string }[] = [
-  { tone: "run", name: "Running", means: "being worked on" },
-  { tone: "input", name: "Needs you", means: "questions to answer, or a brainstorm's turn" },
-  {
-    tone: "ready",
-    name: "Ready for review",
-    means: "CI passed, no conflict, review loop clean",
-  },
-  { tone: "err", name: "Error", means: "failed: what waits for it keeps waiting" },
-  {
-    tone: "idle",
-    name: "Waiting",
-    means: "for a blocker, queued, or nothing started; faded: closed as completed, not merged",
-  },
-  { tone: "done", name: "Merged", means: "its pull request is merged" },
+// The legend: a tone each, in the reference's order. Keys, read when the legend is drawn.
+export const LOOKS: { tone: Tone; name: Plain; means: Plain }[] = [
+  { tone: "run", name: "graph.lookRunning", means: "graph.lookRunningMeans" },
+  { tone: "input", name: "graph.lookInput", means: "graph.lookInputMeans" },
+  { tone: "ready", name: "graph.lookReady", means: "graph.lookReadyMeans" },
+  { tone: "err", name: "graph.lookError", means: "graph.lookErrorMeans" },
+  { tone: "idle", name: "graph.lookWaiting", means: "graph.lookWaitingMeans" },
+  { tone: "done", name: "graph.lookMerged", means: "graph.lookMergedMeans" },
 ];
 
 // A run going on it: its dot pulses. Not a review loop's wait, which runs too.
@@ -52,12 +47,12 @@ export const moving = (n: Pick<GraphNode, "look" | "task">) =>
 
 // What a node or card says while an action on it is on its way.
 export function pendingName(p: Pick<Pending, "action">): string {
-  if (p.action === "start") return "Starting…";
-  if (p.action === "queue") return "Queueing…";
-  if (p.action === "plan") return "Laying out…";
-  if (p.action === "dequeue") return "Removing its wait…";
-  if (p.action === "cancel") return "Back to the backlog…";
-  return "Stopping…";
+  if (p.action === "start") return tr("graph.starting");
+  if (p.action === "queue") return tr("graph.queueing");
+  if (p.action === "plan") return tr("graph.layingOut");
+  if (p.action === "dequeue") return tr("graph.removingWait");
+  if (p.action === "cancel") return tr("graph.backToBacklog");
+  return tr("graph.stopping");
 }
 
 // An issue in the graph: a task on the board, or an issue one of them waits for.
@@ -109,18 +104,18 @@ export function lookOf(t: Looked): Look {
 
 function statusOf(look: Look, t: Looked) {
   // Merged with no human review: the graph says so, for a maintainer looking for them later.
-  if (look === "done") return t.pr?.autoMerged ? "Merged by Deckhand" : "Merged";
-  if (look === "implemented") return "Implemented";
+  if (look === "done") return tr(t.pr?.autoMerged ? "graph.mergedByDeckhand" : "graph.merged");
+  if (look === "implemented") return tr("graph.implemented");
   if (look === "input" && t.state === "needs-input" && t.pr?.state === "ready")
-    return "Needs input, PR ready";
+    return tr("graph.inputPrReady");
   // The list's word: its ready pull request's, unless a run fails, asks or is on its way.
   if (t.state && t.pr?.state === "ready" && !LIVE.includes(t.state)) {
     return statusAsListed({ ...t, state: t.state }).label;
   }
-  if (t.closed === "not_planned") return "Closed, not planned";
+  if (t.closed === "not_planned") return tr("graph.notPlanned");
   // "Done" in the list: its last run replied, which isn't implemented.
-  if (t.state === "done") return "Run done";
-  return t.state ? STATE_NAMES[t.state] : "Open";
+  if (t.state === "done") return tr("graph.runDone");
+  return t.state ? tr(STATE_NAMES[t.state]) : tr("graph.open");
 }
 
 // Never on the graph: inbox runs and discussions have no pull request and no "/after"; the
@@ -289,7 +284,7 @@ export function graphOf(
       kind: t.kind,
       title: t.title,
       look,
-      status: action ? pendingName(action) : sending ? "Sending…" : statusOf(look, t),
+      status: action ? pendingName(action) : sending ? tr("graph.sending") : statusOf(look, t),
       closed: t.closed,
       position: !sending && t.state === "queued" ? (t.position ?? null) : null,
       // Not on the board yet: nothing to open.
@@ -333,10 +328,22 @@ export function graphOf(
 export const waitsForAnswers = (t: Task) =>
   inChip("input", t) && (t.kind === "issue" || t.kind === "brainstorm");
 
-// "1st", "2nd", "3rd", "4th", "11th", "21st".
+// "1st", "2nd", "3rd", "4th", "11th", "21st": by the locale's ordinal forms.
+// Every form Intl.PluralRules has a key, so a language whose ordinals use `zero` or `many` can
+// fill them; English writes those as `other`.
+const ORDINALS = {
+  zero: "graph.ordinalZero",
+  one: "graph.ordinalOne",
+  two: "graph.ordinalTwo",
+  few: "graph.ordinalFew",
+  many: "graph.ordinalMany",
+  other: "graph.ordinalOther",
+} as const satisfies Record<Intl.LDMLPluralRule, string>;
+const ordinalRules = new Map<string, Intl.PluralRules>();
 export function ordinal(n: number): string {
-  const teen = n % 100 >= 11 && n % 100 <= 13;
-  return `${n}${(!teen && ["th", "st", "nd", "rd"][n % 10]) || "th"}`;
+  const at = locale();
+  if (!ordinalRules.has(at)) ordinalRules.set(at, new Intl.PluralRules(at, { type: "ordinal" }));
+  return tr(ORDINALS[ordinalRules.get(at)!.select(n)], { n });
 }
 
 // Whether a queued task moves in the run order: not a brainstorm, which starts first anyway.

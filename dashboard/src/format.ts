@@ -1,5 +1,6 @@
 // Names, groups and times the views share.
-import { and, locale, t } from "./i18n";
+// `tr`: t() where a task is called `t`.
+import { and, locale, t, t as tr } from "./i18n";
 import type { Plain } from "./locales";
 import type {
   Auth,
@@ -17,21 +18,22 @@ import type {
   TaskState,
 } from "./types";
 
-export const STATE_NAMES: Record<TaskState, string> = {
-  scheduled: "Scheduled",
-  "building-image": "Building image",
-  working: "Working",
-  stopping: "Stopping",
-  queued: "Queued",
-  "in-review": "In review",
-  waiting: "Waiting",
-  brainstorm: "Brainstorm",
-  "idle-brainstorm": "Idle brainstorm",
-  "needs-input": "Needs input",
-  done: "Done",
-  error: "Error",
-  interrupted: "Interrupted",
-  cancelled: "Stopped",
+// Each table holds keys, translated where they show (t(STATE_NAMES.done)), as AUTH_NAMES does.
+export const STATE_NAMES: Record<TaskState, Plain> = {
+  scheduled: "state.scheduled",
+  "building-image": "state.buildingImage",
+  working: "state.working",
+  stopping: "state.stopping",
+  queued: "state.queued",
+  "in-review": "state.inReview",
+  waiting: "state.waiting",
+  brainstorm: "state.brainstorm",
+  "idle-brainstorm": "state.idleBrainstorm",
+  "needs-input": "state.needsInput",
+  done: "state.done",
+  error: "state.error",
+  interrupted: "state.interrupted",
+  cancelled: "state.cancelled",
 };
 
 // A run's Claude credential (Run.auth): its tag, and the variable it comes from.
@@ -41,20 +43,20 @@ export const AUTH_NAMES: Record<Auth, { label: Plain; variable: string }> = {
   gateway: { label: "auth.gateway", variable: "ANTHROPIC_AUTH_TOKEN" },
 };
 
-export const RUN_NAMES: Record<RunStatus, string> = {
-  running: "Running",
-  ok: "Done",
-  "needs-input": "Needs input",
-  error: "Error",
-  interrupted: "Interrupted",
-  cancelled: "Stopped",
+export const RUN_NAMES: Record<RunStatus, Plain> = {
+  running: "run.running",
+  ok: "run.ok",
+  "needs-input": "run.needsInput",
+  error: "run.error",
+  interrupted: "run.interrupted",
+  cancelled: "run.cancelled",
 };
 
-export const PR_NAMES: Record<PrState, string> = {
-  draft: "Draft",
-  ready: "Ready for review",
-  merged: "Merged",
-  closed: "Closed",
+export const PR_NAMES: Record<PrState, Plain> = {
+  draft: "pr.draft",
+  ready: "pr.ready",
+  merged: "pr.merged",
+  closed: "pr.closed",
 };
 
 // The state chips: each groups states. A task waiting for other issues ("/after") is on its
@@ -63,6 +65,7 @@ export const PR_NAMES: Record<PrState, string> = {
 // state, whatever the task's: what waits for the maintainer's review. A run someone stopped
 // is over, not failed. A pull request in its review-and-fix loop is still on its way: ready once
 // the loop ends.
+// A chip's name is its key (t(chip.name)).
 export const CHIPS = [
   { id: "all", name: "chips.all", states: null },
   {
@@ -108,14 +111,22 @@ export const inLoop = (t: Pick<Task, "review">) => !!t.review && LOOPING.include
 export function loopLine(t: Pick<Task, "review">): string | null {
   const r = t.review;
   if (!r || !inLoop(t)) return null;
-  if (r.loop === "checks") return "Review · waiting for checks";
-  if (r.loop === "ci") return "Review · waiting for CI";
-  if (r.loop === "ci-fix") return "Review · fixing CI";
-  if (!r.round) return "Review · first review";
-  return r.rounds ? `Review · round ${r.round} of ${r.rounds}` : `Review · round ${r.round}`;
+  if (r.loop === "checks") return tr("loop.checks");
+  if (r.loop === "ci") return tr("loop.ci");
+  if (r.loop === "ci-fix") return tr("loop.ciFix");
+  if (!r.round) return tr("loop.first");
+  return r.rounds
+    ? tr("loop.roundOf", { round: r.round, rounds: r.rounds })
+    : tr("loop.round", { round: r.round });
 }
 
 const SEVERITIES = ["critical", "high", "medium", "low"] as const;
+const SEVERITY_KEYS = {
+  critical: "review.critical",
+  high: "review.high",
+  medium: "review.medium",
+  low: "review.low",
+} as const;
 
 // A review's points, every finding weighed by its severity (not only the blocking ones), and a
 // blocking comment as a medium finding (it caps the rating as one does); notes and follow-ups
@@ -148,7 +159,7 @@ export function findingsLeft(task: Pick<Task, "review">): string | null {
   let left = last.blocking - comments;
   for (const s of SEVERITIES) {
     const n = Math.min(last.counts[s] ?? 0, left);
-    if (n) parts.push(`${n} ${s}`);
+    if (n) parts.push(t(SEVERITY_KEYS[s], { count: n }));
     left -= n;
     if (!left) break;
   }
@@ -210,7 +221,9 @@ export const shortSha = (sha: string) => sha.slice(0, 7);
 // A review's findings by severity, then its comments and follow-ups: "1 critical · 3 high",
 // "1 low · 1 blocking comment · 2 notes · 1 follow-up", "no findings".
 export function roundCounts(r: ReviewRound): string {
-  const parts = SEVERITIES.filter((s) => r.counts[s]).map((s) => `${r.counts[s]} ${s}`);
+  const parts = SEVERITIES.filter((s) => r.counts[s]).map((s) =>
+    t(SEVERITY_KEYS[s], { count: r.counts[s]! }),
+  );
   const { blocking = 0, notes = 0 } = r.comments ?? {};
   if (blocking) parts.push(t("review.blockingComments", { count: blocking }));
   if (notes) parts.push(t("review.notes", { count: notes }));
@@ -252,10 +265,10 @@ export function matchesSearch(t: Task, query: string): boolean {
 // commit came after the last review; null when none of these. What its badge says instead.
 export function notClean(t: Pick<Task, "pr" | "review">): string | null {
   if (!isReady(t)) return null;
-  if (t.pr?.ci?.state === "failed" || t.review?.loop === "ci-failed") return "CI failed";
-  if (t.pr?.conflict) return "Conflict";
-  if (findingsLeft(t)) return "Findings left";
-  if (reviewOutdated(t)) return "Reviewed before last push";
+  if (t.pr?.ci?.state === "failed" || t.review?.loop === "ci-failed") return tr("ready.ciFailed");
+  if (t.pr?.conflict) return tr("ready.conflict");
+  if (findingsLeft(t)) return tr("ready.findingsLeft");
+  if (reviewOutdated(t)) return tr("ready.outdated");
   return null;
 }
 
@@ -301,12 +314,12 @@ export function taskStatus(t: Pick<Task, "state" | "pr" | "review">): {
   label: string;
 } {
   const tone = toneOf(t.state);
-  const label = STATE_NAMES[t.state];
+  const label = tr(STATE_NAMES[t.state]);
   // Queued or waiting: a run is on its way to its pull request, which says nothing yet.
   if (tone !== "idle" || t.state === "queued" || t.state === "waiting") return { tone, label };
   if (t.pr?.state === "merged") return { tone: "done", label };
   if (t.pr?.state !== "ready") return { tone, label };
-  return readyStatus(t) ?? { tone: "run", label: "In review" };
+  return readyStatus(t) ?? { tone: "run", label: tr(STATE_NAMES["in-review"]) };
 }
 
 export const taskTone = (t: Pick<Task, "state" | "pr" | "review">) => taskStatus(t).tone;
@@ -317,14 +330,14 @@ export function readyStatus(t: Pick<Task, "pr" | "review">): { tone: Tone; label
   if (!isReady(t)) return null;
   const why = notClean(t);
   if (why) return { tone: "input", label: why };
-  if (t.pr?.ci?.state === "running") return { tone: "run", label: "Waiting for CI" };
-  return { tone: "ready", label: PR_NAMES.ready };
+  if (t.pr?.ci?.state === "running") return { tone: "run", label: tr("ready.waitingCi") };
+  return { tone: "ready", label: tr(PR_NAMES.ready) };
 }
 
 export const isLive = (t: Task) =>
   ["scheduled", "building-image", "working", "stopping"].includes(t.state);
 
-const KIND_NAMES: Record<string, string> = { pr: "Pull request", discussion: "Discussion" };
+const KIND_NAMES: Record<string, Plain> = { pr: "kind.pr", discussion: "kind.discussion" };
 // The listener's own modes (MODES in listener/modes.mjs, which a test keeps
 // in step): the kind already names them, only the repo's own modes are shown.
 export const BUILT_IN_MODES = [
@@ -343,25 +356,25 @@ export const BUILT_IN_MODES = [
 ];
 
 export function kindName(t: Pick<Task, "kind">): string {
-  if (t.kind === "brainstorm") return "Brainstorm";
-  if (t.kind === "idea") return "Idea";
-  if (t.kind === "bug") return "Bug report";
-  if (t.kind === "research") return "Research";
-  return KIND_NAMES[t.kind ?? ""] ?? "Issue";
+  if (t.kind === "brainstorm") return tr("kind.brainstorm");
+  if (t.kind === "idea") return tr("kind.idea");
+  if (t.kind === "bug") return tr("kind.bug");
+  if (t.kind === "research") return tr("kind.research");
+  return tr(KIND_NAMES[t.kind ?? ""] ?? "kind.issue");
 }
 
 // A run's kind as an analysis picks them (its `taskMode`): the task kinds' names, shorter for
 // a bug, and the listener's own modes. A repo's own mode as it is.
-const RUN_KIND_NAMES: Record<string, string> = {
-  work: "Work",
-  bug: "Bug",
-  onboarding: "Onboarding",
-  analyze: "Analysis",
-  review: "Review",
+const RUN_KIND_NAMES: Record<string, Plain> = {
+  work: "runKind.work",
+  bug: "runKind.bug",
+  onboarding: "runKind.onboarding",
+  analyze: "runKind.analyze",
+  review: "runKind.review",
 };
 
 export function runKindName(kind: string): string {
-  if (RUN_KIND_NAMES[kind]) return RUN_KIND_NAMES[kind];
+  if (Object.hasOwn(RUN_KIND_NAMES, kind)) return t(RUN_KIND_NAMES[kind]);
   return ["brainstorm", "idea", "discussion", "research"].includes(kind)
     ? kindName({ kind: kind as Kind })
     : kind;
@@ -418,17 +431,30 @@ export function modeOf(t: Pick<Task, "kind" | "mode">): string | null {
 // A pull request in a row's line: "Draft #34", "PR #33" (ready), "merged #30"; and what
 // that means, as its tooltip.
 export function prName(pr: PullRequest): string {
-  const auto = pr.state === "merged" && pr.autoMerged;
-  const word = auto
-    ? "merged by Deckhand"
-    : { draft: "Draft", ready: "PR", merged: "merged", closed: "closed" }[pr.state];
-  return `${word} #${pr.number}`;
+  const { number } = pr;
+  if (pr.state === "merged" && pr.autoMerged) return t("pr.nameAutoMerged", { number });
+  const key = PR_NAME_KEYS[pr.state];
+  return t(key, { number });
 }
 
+const PR_NAME_KEYS = {
+  draft: "pr.nameDraft",
+  ready: "pr.nameReady",
+  merged: "pr.nameMerged",
+  closed: "pr.nameClosed",
+} as const;
+const PR_TITLE_KEYS = {
+  draft: "pr.titleDraft",
+  ready: "pr.titleReady",
+  merged: "pr.titleMerged",
+  closed: "pr.titleClosed",
+} as const;
+
 export function prTitle(pr: PullRequest): string {
+  const { number } = pr;
   return pr.state === "merged" && pr.autoMerged
-    ? `Pull request #${pr.number}, merged by Deckhand with no human review`
-    : `Pull request #${pr.number}: ${PR_NAMES[pr.state].toLowerCase()}`;
+    ? t("pr.titleAutoMerged", { number })
+    : t(PR_TITLE_KEYS[pr.state], { number });
 }
 
 // The repo's own mode, if any: "audit".
@@ -438,13 +464,13 @@ export function ownMode(mode: string | null | undefined): string | null {
 
 // What a task is called: its title, or its kind and number until the title is known.
 export function titleOf(t: Task): string {
-  return t.title ?? `${kindName(t)} #${t.number ?? "?"}`;
+  return t.title ?? tr("task.untitled", { kind: kindName(t), number: t.number ?? "?" });
 }
 
 // "#12", "PR #3": the number as GitHub shows it.
 export function numberOf(t: Pick<Task, "number" | "kind">): string {
   if (t.number === null) return "";
-  return t.kind === "pr" ? `PR #${t.number}` : `#${t.number}`;
+  return t.kind === "pr" ? tr("task.prNumber", { number: t.number }) : `#${t.number}`;
 }
 
 // `base`: the listener's GitHub (api/state's githubUrl), GitHub Enterprise's included.
@@ -498,7 +524,9 @@ export function versionUrl({ version, source }: Pick<ServerInfo, "version" | "so
 export function duration(r: Run, now: number): string {
   const ms = (r.finishedAt ?? now) - r.startedAt;
   const min = Math.round(ms / 6000) / 10;
-  return min < 60 ? `${min} min` : `${Math.floor(min / 60)} h ${Math.round(min % 60)} min`;
+  return min < 60
+    ? t("time.minutes", { min })
+    : t("time.hoursMinutes", { h: Math.floor(min / 60), min: Math.round(min % 60) });
 }
 
 // What a row says besides its state: how long, until when, or how long ago.
@@ -509,9 +537,11 @@ export function when(t: Task, now: number): string {
 // The full time behind when()'s "… ago", and its last run's start; null when it says another.
 export function whenTitle(t: Task, now: number): string | null {
   if (ownWhen(t, now) !== null || !t.updatedAt) return null;
-  const updated = `Updated ${dayTime(t.updatedAt, now)}`;
+  const updated = dayTime(t.updatedAt, now);
   const last = t.runs[0];
-  return last ? `${updated} · last run started ${dayTime(last.startedAt, now)}` : updated;
+  return last
+    ? tr("when.updatedLastRun", { updated, started: dayTime(last.startedAt, now) })
+    : tr("when.updated", { updated });
 }
 
 // A live, queued, waiting or brainstorm row's own text; null for the others, which say when
@@ -519,12 +549,14 @@ export function whenTitle(t: Task, now: number): string | null {
 function ownWhen(t: Task, now: number): string | null {
   const last = t.runs[0];
   if (isLive(t) && last) return duration(last, now);
-  if (t.state === "queued") return t.replyTo ? `reply on #${t.replyTo}` : "";
-  if (t.state === "waiting" && t.waitingFor?.length) return `after ${issueList(t.waitingFor)}`;
+  if (t.state === "queued") return t.replyTo ? tr("when.reply", { number: t.replyTo }) : "";
+  if (t.state === "waiting" && t.waitingFor?.length)
+    return tr("when.after", { issues: issueList(t.waitingFor) });
   if (t.state === "brainstorm" && t.deadline) {
-    return `idle in ${Math.max(0, Math.ceil((t.deadline - now) / 60000))} min`;
+    return tr("when.idleIn", { min: Math.max(0, Math.ceil((t.deadline - now) / 60000)) });
   }
-  if (t.state === "idle-brainstorm" && t.deadline) return `since ${ago(t.deadline, now)}`;
+  if (t.state === "idle-brainstorm" && t.deadline)
+    return tr("when.since", { ago: ago(t.deadline, now) });
   return null;
 }
 
@@ -535,14 +567,21 @@ export function issueList(numbers: number[]): string {
 
 // "Continue", "Wrap-up"…: what a run did, for its button in the run history.
 export function runName(r: Run): string {
-  const own = r.taskMode === "review" ? "Review" : ownMode(r.taskMode);
-  const what = { start: "Start", continue: "Continue", restore: "Restore", "wrap-up": "Wrap-up" }[
-    r.mode ?? ""
-  ];
-  const fix = r.round && (r.rounds ?? 1) > 1 ? `Review fix ${r.round}/${r.rounds}` : "Review fix";
-  const ci = r.round && (r.rounds ?? 1) > 1 ? `CI fix ${r.round}/${r.rounds}` : "CI fix";
-  const why = { conflict: "Conflict", "review-fix": fix, "ci-fix": ci }[r.reason ?? ""] ?? null;
-  return [why, own, what ?? "Run"].filter(Boolean).join(" · ");
+  const own = r.taskMode === "review" ? t("runName.review") : ownMode(r.taskMode);
+  const what = (
+    {
+      start: "runName.start",
+      continue: "runName.continue",
+      restore: "runName.restore",
+      "wrap-up": "runName.wrapUp",
+    } as const
+  )[r.mode ?? ""];
+  const of = r.round && (r.rounds ?? 1) > 1 ? { round: r.round, rounds: r.rounds! } : null;
+  const fix = of ? t("runName.reviewFixOf", of) : t("runName.reviewFix");
+  const ci = of ? t("runName.ciFixOf", of) : t("runName.ciFix");
+  const why =
+    { conflict: t("runName.conflict"), "review-fix": fix, "ci-fix": ci }[r.reason ?? ""] ?? null;
+  return [why, own, t(what ?? "runName.run")].filter(Boolean).join(" · ");
 }
 
 // GitHub's repo names ignore case: Owner/Repo and owner/repo are the same repo, which the

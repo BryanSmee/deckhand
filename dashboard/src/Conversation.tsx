@@ -318,8 +318,8 @@ function TurnView({
           class={styles.fold}
           title={
             turn.current
-              ? t("chats.phaseNow", { phase: PHASE_TITLES[turn.phase] })
-              : PHASE_TITLES[turn.phase]
+              ? t("chats.phaseNow", { phase: t(PHASE_TITLES[turn.phase]) })
+              : t(PHASE_TITLES[turn.phase])
           }
           tone={turn.failed ? "err" : turn.current ? "run" : "done"}
           pulse={turn.current}

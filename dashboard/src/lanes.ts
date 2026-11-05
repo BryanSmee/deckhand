@@ -1,6 +1,7 @@
 // The board's lanes' names (issue #306): each chain of waiting issues is a lane (the Lanes
 // view, the phone board, Ctrl K), named from what the listener knows of its issues
 // (State.lanes, listener/lanes.mjs), else after its first issue.
+import { t } from "./i18n";
 import type { LaneLabel, LaneSource } from "./types";
 
 export interface LaneName {
@@ -33,7 +34,7 @@ export function laneName(keys: string[], labels: Record<string, LaneLabel> = {})
 export function fallbackName(keys: string[]): string {
   if (!keys.length) return "";
   const first = `#${keys[0].slice(keys[0].lastIndexOf("#") + 1).replace(/^pr-/, "")}`;
-  return keys.length > 1 ? `${first} and ${keys.length - 1} more` : first;
+  return keys.length > 1 ? t("lanes.andMore", { first, count: keys.length - 1 }) : first;
 }
 
 // The lanes of the board's `nodes`: each group of issues linked by `edges` ("/after"), in the

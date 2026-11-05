@@ -66,11 +66,13 @@ function texts(root: Element): { text: string; on: Element }[] {
 const verbatim = (text: string) => text.replace(/[\w.:-]*(?:[_/]|[.:]\w)[\w.:/-]*/g, " ");
 
 // A text's parts between the marks and the punctuation that joins what the page shows ("acme/app ·
-// #12", "(Ctrl Shift C)"): each is the dashboard's own unless it is data as a whole.
+// #12", "(Ctrl Shift C)"), numbers and signs at their start left out: each is the dashboard's
+// own unless it is data as a whole.
 export const parts = (text: string) =>
   verbatim(text)
     .split(/⟦[^⟧]*⟧|\{\w+\}|[·,;:()[\]“”"…—–|+]+/)
-    .map((part) => part.trim())
+    // Without the number and signs it starts with: "#22 Fix the queue" shows the title.
+    .map((part) => part.replace(/^[^\p{L}]+/u, "").trim())
     .filter((part) => /\p{L}{2,}/u.test(part));
 
 // The texts under `root` that still hold a word outside the marks: a part that is neither a
@@ -93,7 +95,8 @@ export function unmarked(
   const given = new Set(data.flatMap(parts));
   const named = new Set(names);
   const isName = (part: string) =>
-    part.split(/\s+/).every((word) => named.has(word) || !/\p{L}/u.test(word));
+    // A single letter is a key ("Shift S"), as parts() leaves one alone out.
+    part.split(/\s+/).every((word) => named.has(word) || !/\p{L}{2,}/u.test(word));
   return texts(root)
     .filter(({ text, on }) => {
       const scoped = new Set(
@@ -116,3 +119,24 @@ export const keysShown = (root: Element, keys: readonly string[]): string[] =>
     .filter((text) =>
       keys.some((key) => new RegExp(`(?<![\\w.])${escape(key)}(?![\\w.])`).test(text)),
     );
+
+// Every string in what a page was given (a state, the API's answers), for unmarked()'s `data`.
+export function strings(...values: unknown[]): string[] {
+  const found = new Set<string>();
+  const walk = (v: unknown) => {
+    if (typeof v === "string") found.add(v);
+    else if (Array.isArray(v)) v.forEach(walk);
+    else if (v && typeof v === "object") Object.values(v).forEach(walk);
+  };
+  values.forEach(walk);
+  return [...found];
+}
+
+// The English catalog's texts, in parts: never data, whether a route's or the fixture's, so one
+// written inline again isn't taken for some.
+export const english = (catalog: (typeof Locales.CATALOGS)["en"]) =>
+  new Set<string>(
+    Object.values(catalog)
+      .flatMap((text) => (typeof text === "string" ? [text] : Object.values(text)))
+      .flatMap(parts),
+  );

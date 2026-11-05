@@ -2,6 +2,8 @@
 // often the run came back to it, each as items (a message, a tool call with its output, an
 // image build step, the cached steps together…), what each item can be searched by, and the
 // log as plain text for Copy and Download.
+import { t } from "./i18n";
+import type { Plain } from "./locales";
 import { sections as phaseSections } from "./phases";
 import type { Entry, Phase, StepStatus } from "./types";
 
@@ -94,12 +96,13 @@ export interface LogSection {
   current: boolean;
 }
 
-export const PHASE_TITLES: Record<Phase, string> = {
-  setup: "Setup",
-  image: "Image build",
-  work: "Work",
-  push: "Push and pull request",
-  "wrap-up": "Wrap-up",
+// Each phase's title's key, translated where it shows.
+export const PHASE_TITLES: Record<Phase, Plain> = {
+  setup: "log.phase.setup",
+  image: "log.phase.image",
+  work: "log.phase.work",
+  push: "log.phase.push",
+  "wrap-up": "log.phase.wrapUp",
 };
 
 export type Filter = "all" | "messages" | "tools" | "errors";
@@ -306,9 +309,10 @@ export function clock(seconds: number): string {
 }
 
 // What a call or a step says of its time: "12s", "⏱ 0:42" while it runs, "4m 05s, unfinished".
-export function timeLabel(t: Timing): string {
-  if (t.state === "running") return `⏱ ${clock(t.seconds)}`;
-  return shortDuration(t.seconds) + (t.state === "unfinished" ? ", unfinished" : "");
+export function timeLabel(time: Timing): string {
+  if (time.state === "running") return `⏱ ${clock(time.seconds)}`;
+  const took = shortDuration(time.seconds);
+  return time.state === "unfinished" ? t("log.unfinished", { time: took }) : took;
 }
 
 // The texts an item shows, which search reads, in the order it shows them; an MCP call's full
@@ -382,7 +386,7 @@ export function search(list: LogSection[], query: string, filter: Filter): Searc
 export function plainText(list: LogSection[]): string {
   const lines: string[] = [];
   for (const s of list) {
-    lines.push(`== ${PHASE_TITLES[s.phase]} ==`);
+    lines.push(`== ${t(PHASE_TITLES[s.phase])} ==`);
     for (const item of s.items) {
       switch (item.kind) {
         case "tool":
@@ -403,7 +407,7 @@ export function plainText(list: LogSection[]): string {
           lines.push(`› ${item.text}`);
           break;
         case "message":
-          lines.push(`You: ${item.text}`);
+          lines.push(t("log.youSaid", { text: item.text }));
           break;
         case "result":
           lines.push(`${resultTitle(item)}\n${item.text}`);
@@ -421,13 +425,14 @@ const indent = (text: string) => text.replace(/^/gm, "    ");
 
 export const resultTitle = (r: { status: string; minutes: number }) =>
   r.status === "error"
-    ? "Failed"
-    : `${r.status === "ok" ? "Done" : "Needs input"} in ${r.minutes} min`;
+    ? t("log.resultFailed")
+    : t(r.status === "ok" ? "log.resultDone" : "log.resultNeedsInput", { min: r.minutes });
 
 // "6s", "2m 14s", "1h 3m".
 export function shortDuration(seconds: number): string {
   const s = Math.round(seconds);
-  if (s < 60) return `${s}s`;
-  if (s < 3600) return `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, "0")}s`;
-  return `${Math.floor(s / 3600)}h ${Math.floor((s % 3600) / 60)}m`;
+  if (s < 60) return t("log.seconds", { s });
+  if (s < 3600)
+    return t("log.minutesSeconds", { m: Math.floor(s / 60), s: String(s % 60).padStart(2, "0") });
+  return t("log.hoursMinutes", { h: Math.floor(s / 3600), m: Math.floor((s % 3600) / 60) });
 }
