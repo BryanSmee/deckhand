@@ -8,8 +8,9 @@
 // outcomeOf(), says what a run gets: runs start with it (preparation.mjs), and the repository's
 // config page shows it for each mode (repos.mjs). Format: ../docs/repo-config.md#capabilities.
 import { BUILT_IN, customMode, MODES, RESEARCH } from "./modes.mjs";
-import { GRANTS, notGranted, ungranted } from "./grants.mjs";
+import { GRANTS, grantCheck, grantsBy, notGranted, ungranted } from "./grants.mjs";
 import { POLICY_DIR } from "./policies.mjs";
+import { personStarted, runTrigger } from "./run-policy.mjs";
 
 // The catalogue: each capability's name, the capabilities it needs (`needs`), the
 // .deckhand.yaml keys that ask for it (`config`, settings fields: repo-config.mjs) and the
@@ -151,6 +152,52 @@ export function capabilitiesInput({
     trigger: trigger ?? null,
     command: command ?? null,
   };
+}
+
+// The input of a run started by `item`, its queue's last (tasks.mjs): as the run input says
+// it, the comment's command apart (`deny_run`'s, run-policy.mjs runInput()).
+export const runInput = ({ repo, mode, issue = null, item, fork }) =>
+  capabilitiesInput({
+    repo,
+    mode,
+    issue,
+    reason: item.reason,
+    fork,
+    trigger: personStarted(item) ? runTrigger(item) : null,
+    command: item.trigger ?? null,
+  });
+
+// What a run of `mode` started by `item` gets (outcomeOf()), decided by the policies on `base`
+// of its repo, with its config (`settings`) and the operator's grant: the one decision both a
+// run's start (preparation.mjs capabilitiesOf()) and a chat's panel (chats.mjs ceiling()) make,
+// so the ceiling the panel shows is what the next run gets (#835). `unforked`: also asked with
+// the run as not a fork's (a pull request that couldn't be looked up). → { input, outcome,
+// check: grantCheck()'s, unforkedPush: whether, not a fork's, it would push }, or { error:
+// the policies' } or { grantsError: grantCheck()'s, which can't be read }.
+export async function runOutcome(
+  { config, policies },
+  { repo, base, settings, mode, issue = null, item, fork, unforked = false },
+) {
+  const input = runInput({ repo, mode, issue, item, fork });
+  const inputs = { run: input, ...(unforked && fork && { unforked: { ...input, fork: false } }) };
+  const said = policies
+    ? await policies.capabilityRules(repo.name, base, inputs)
+    : { error: "no policies to decide them" };
+  if (said.error) return { error: said.error };
+  // Grants that can't be read stop the run as they always did, before what they gate.
+  const check = await grantCheck(config, repo.name, settings, { granted: grantsBy(policies) });
+  if (check.error) return { grantsError: check };
+  const outcomeFor = (key) =>
+    outcomeOf({
+      rules: said.results[key],
+      custom: input.custom_mode,
+      settings,
+      grant: check.grant,
+      repo,
+      mode,
+    });
+  const unforkedPush = !!inputs.unforked && outcomeFor("unforked").used.includes("push");
+  return { input, outcome: outcomeFor("run"), check, unforkedPush };
 }
 
 // What the config asks for: a capability with a config side is used only when one of its keys

@@ -15,16 +15,15 @@ import {
   runnerRefusal,
 } from "./access.mjs";
 import { agentFor } from "./agents/index.mjs";
-import { capabilitiesInput, listed, outcomeOf } from "./capabilities.mjs";
+import { listed, runOutcome } from "./capabilities.mjs";
 import { mandatoryHosts, operatorHosts } from "./egress.mjs";
 import { headInRepo } from "./events.mjs";
 import { getJson, paginate } from "./github.mjs";
-import { grantCheck, grantsBy } from "./grants.mjs";
+import { grantsBy } from "./grants.mjs";
 import { imageRef } from "./images.mjs";
 import { handoffMessage } from "./prompts.mjs";
 import { reviewThread } from "./reviews.mjs";
 import { ceilingOf, leftOut, narrowProfile } from "./profiles.mjs";
-import { personStarted, runTrigger } from "./run-policy.mjs";
 import { buildOutput, enterPhase } from "./runlog.mjs";
 import { operatorSecrets, redact } from "./secrets.mjs";
 import { isChat } from "./tasks.mjs";
@@ -133,7 +132,7 @@ export function createPreparation(ctx) {
     };
   }
 
-  // What the run gets (capabilities.mjs outcomeOf()), decided by the policies on its repo's
+  // What the run gets (capabilities.mjs runOutcome()), decided by the policies on its repo's
   // default branch, with its config and the operator's grant: kept on its live state (saved
   // with it) and in its tokens (broker.mjs grant()), and said in its log. A broken dependency,
   // a risky combination the operator doesn't allow or a policy error stops it with a reply.
@@ -147,47 +146,29 @@ export function createPreparation(ctx) {
   async function capabilitiesOf(task, items, settings, fork, note, unread = null) {
     const { live } = task;
     const agent = agentOf(task);
-    const last = items.at(-1) ?? {};
     const repo = { name: task.repo, private: await isPrivate(task.repo) };
-    const input = capabilitiesInput({
+    // Asked once with the run as a fork's and not, when it might not be one.
+    const decided = await runOutcome(ctx, {
       repo,
+      base: task.base,
+      settings,
       mode: live.mode,
       issue: task.number,
-      reason: last.reason,
+      item: items.at(-1) ?? {},
       fork,
-      // As the run input says it (`deny_run`'s), the comment's command apart.
-      trigger: personStarted(last) ? runTrigger(last) : null,
-      command: last.trigger ?? null,
+      unforked: !!unread,
     });
-    // Asked once with the run as a fork's and not, when it might not be one.
-    const inputs = { run: input, ...(unread && fork && { unforked: { ...input, fork: false } }) };
-    const said = ctx.policies
-      ? await ctx.policies.capabilityRules(task.repo, task.base, inputs)
-      : { error: "no policies to decide them" };
-    if (said.error) {
+    if (decided.error) {
       throw new RunError(
-        `${cantRun(agent)}: its capabilities couldn't be decided (${said.error}). The repository's config page on the dashboard shows the policies' errors.`,
+        `${cantRun(agent)}: its capabilities couldn't be decided (${decided.error}). The repository's config page on the dashboard shows the policies' errors.`,
       );
     }
-    // Grants that can't be read stop the run as they always did, before what they gate.
-    const check = await grantCheck(config, task.repo, settings, {
-      granted: grantsBy(ctx.policies),
-    });
-    if (check.error) {
-      log(`${task.repo}: ${check.error.message}`);
-      throw new RunError(`${cantRun(agent)}: ${grantsRefusal(check)}.`);
+    if (decided.grantsError) {
+      log(`${task.repo}: ${decided.grantsError.error.message}`);
+      throw new RunError(`${cantRun(agent)}: ${grantsRefusal(decided.grantsError)}.`);
     }
-    const outcomeFor = (key) =>
-      outcomeOf({
-        rules: said.results[key],
-        custom: input.custom_mode,
-        settings,
-        grant: check.grant,
-        repo,
-        mode: live.mode,
-      });
-    if (inputs.unforked && outcomeFor("unforked").used.includes("push")) throw unread;
-    const outcome = outcomeFor("run");
+    if (decided.unforkedPush) throw unread;
+    const { outcome, check } = decided;
     for (const warning of outcome.warnings) note(`Capabilities: ${warning}`);
     if (outcome.errors.length) {
       throw new RunError(
