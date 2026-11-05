@@ -49,6 +49,8 @@ export const SCOPE = "deckhand:machine";
 // Held the same as listener/machines.mjs's by test/machine-driver.test.mjs.
 export const WARNING =
   "An agent will run on this machine on its own, with your files, credentials and network. Deckhand suggests settings for it and enforces none: what it may do there is up to you.";
+// What claim takes as a version or a permission mode (listener/mcp.mjs SETUP_WORD).
+const SETUP_WORD = /^[A-Za-z0-9][A-Za-z0-9._+-]{0,39}$/;
 // Where Claude Code has a sandbox (macOS, Linux and WSL2, which Node sees as Linux).
 export const SANDBOXED = new Set(["darwin", "linux"]);
 // A post_events call: 1000 lines and 1 MB at most (listener/mcp.mjs); a little under, for the
@@ -266,6 +268,9 @@ export function readConfig(text, { home, base, platform = process.platform }) {
   // Claude Code's own flag for it, too: a run that skips every check isn't one Deckhand starts.
   if (/^bypass/i.test(permissionMode) || /skip/i.test(permissionMode)) {
     problems.push("permission_mode: never bypassPermissions (an unattended agent asks or refuses)");
+  } else if (!SETUP_WORD.test(permissionMode)) {
+    // As claim takes it (listener/mcp.mjs SETUP_WORD), which would refuse every claim.
+    problems.push("permission_mode: one of Claude Code's modes (acceptEdits, dontAsk, plan…)");
   }
   const claude = raw.claude ?? "claude";
   const command = typeof claude === "string" ? [claude] : claude;
@@ -396,7 +401,8 @@ export function settingsFor({
   const on = sandbox && SANDBOXED.has(platform);
   const denied = [
     ...credentialPaths(home, platform),
-    ...deny.map((path) => ({ path, dir: true })),
+    // The owner's own: a file or a folder, which may not be there yet, so ruled as both.
+    ...deny.map((path) => ({ path, dir: null })),
     ...(driverHome ? [{ path: driverHome, dir: true }] : []),
   ];
   const rule = (path, isDir = true) => rulePath(path, { home, platform, dir: isDir });
@@ -412,7 +418,12 @@ export function settingsFor({
       disableBypassPermissionsMode: "disable",
       additionalDirectories: paths.map((x) => x.path),
       deny: [
-        ...denied.flatMap((d) => [`Read(${rule(d.path, d.dir)})`, `Edit(${rule(d.path, d.dir)})`]),
+        ...denied.flatMap((d) =>
+          (d.dir === null ? [false, true] : [d.dir]).flatMap((isDir) => [
+            `Read(${rule(d.path, isDir)})`,
+            `Edit(${rule(d.path, isDir)})`,
+          ]),
+        ),
         ...readOnly.map((x) => `Edit(${rule(x.path)})`),
       ],
     },
@@ -663,7 +674,7 @@ export function createDriver({
 
   // What claim reports of how its runs run (listener/mcp.mjs setupOf()).
   const setup = {
-    ...(agentVersion && { agentVersion }),
+    ...(agentVersion && SETUP_WORD.test(agentVersion) && { agentVersion }),
     ...(sandbox !== null && { sandbox }),
     permissionMode: config.permissionMode,
     suggestedSettings: config.suggestedSettings,
@@ -700,8 +711,8 @@ export function createDriver({
     } catch (error) {
       log(`heartbeat: ${error.message}`);
       if (error instanceof ToolError && !stopping) {
-        // Removed from the dashboard, or another refusal: registered again, its runs over.
-        for (const run of runs.values()) run.cancel("the machine was registered again");
+        // Removed from the dashboard, or another refusal: registered again. Its runs go on: the
+        // next heartbeat's claims stop those that ended (all of them, for a machine removed).
         await register().catch((e) => log(`register_machine: ${e.message}`));
       }
     }

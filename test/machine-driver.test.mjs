@@ -74,6 +74,11 @@ sandbox: true
     /never bypassPermissions/,
   );
   assert.throws(() => readConfig("repos: [o/r]\nsandbox: maybe", where), /sandbox: true or false/);
+  // A mode claim would refuse: said at start, not at each claim.
+  assert.throws(
+    () => readConfig("repos: [o/r]\npermission_mode: accept edits", where),
+    /permission_mode: one of Claude Code's modes/,
+  );
   assert.throws(() => readConfig("name: x\nrepo: [o/r]", where), /repo: not a setting.*repos:/);
 });
 
@@ -135,6 +140,9 @@ test("suggested settings, POSIX: the run's folder writable, extra paths, credent
     "Read(~/.git-credentials)",
     "Read(~/.docker/config.json)",
     "Read(~/.config/gh/**)",
+    // The owner's own `deny`, a file or a folder: both.
+    "Read(~/secrets)",
+    "Edit(~/secrets)",
     "Read(~/secrets/**)",
     "Read(~/.deckhand-machine/**)",
     // A read-only extra path: no edit there.
