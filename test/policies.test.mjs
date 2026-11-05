@@ -277,7 +277,7 @@ test("builtInPolicies: Deckhand's policy/*.rego, each in package deckhand; no fo
   for (const [name, text] of own) {
     assert.match(
       name,
-      /^(access(-roles)?|allow|review|run|gh-[a-z0-9-]+|mode-[a-z]+)\.rego$/,
+      /^(access(-roles)?|allow|review|run|machines|gh-[a-z0-9-]+|mode-[a-z]+)\.rego$/,
       name,
     );
     // A feature allowed everywhere (gh-checks.rego) ships its file for its docs and its name
@@ -1333,6 +1333,8 @@ test("mergeInput: what deny_merge reads", () => {
     fixes: 2,
     runs: [{ name: "CI", status: "completed", conclusion: "success", id: 1 }],
     bot: "deckhand-app[bot]",
+    // Opened from alice's machine's push (#598).
+    external: "alice",
     now: () => Date.parse("2026-10-26T10:00:00Z"),
   });
   assert.deepEqual(doc, {
@@ -1344,6 +1346,7 @@ test("mergeInput: what deny_merge reads", () => {
       author: "Deckhand-App[bot]",
       author_type: "Bot",
       deckhand: true,
+      external: "alice",
       title: "Add a thing",
       labels: ["bug"],
       base: "main",

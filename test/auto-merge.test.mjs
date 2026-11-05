@@ -2,7 +2,7 @@
 // run, and that each pull request gets one decision; the policies of the reviews and fix runs
 // that lead to it (`deny_review`, `deny_fix`).
 import assert from "node:assert/strict";
-import { writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { parseRepoConfig } from "../listener/repo-config.mjs";
@@ -18,7 +18,10 @@ import {
   reviewLoop,
   trustedFile,
 } from "../listener/reviews.mjs";
+import { allowOnly, builtInPolicies } from "../policy-service/engine.mjs";
+import { opaBinary } from "../policy-service/opa.mjs";
 import {
+  hasOpa,
   localService,
   policyEngine,
   policyEngineOf,
@@ -117,6 +120,7 @@ function setup(
     busy = () => false,
     policies,
     runOf,
+    externalOf,
     ...over
   } = {},
 ) {
@@ -140,6 +144,7 @@ function setup(
     merged: (repo, pr) => merged.push(pr.number),
     policies,
     runOf,
+    externalOf,
     decided: (repo, pr, entry) => decided.push({ repo, pr: pr.number, ...entry }),
     sleep: async () => {},
     now: () => (time += 1000),
@@ -1527,6 +1532,61 @@ test("fix loop: entries from before the rounds are one round done", async (t) =>
   const over = setup(t, { path: old({ fixedAt: 2, rereviewAt: 3 }), pr: at("sha-2") });
   assert.equal(await over.reviews.fixed(done), null);
   assert.equal(over.accepted.length, 0);
+});
+
+// Deckhand's policy/machines.rego, with the real opa, replaced by the operator's `operator`
+// (name → text).
+function machinePolicies(t, operator = new Map()) {
+  return createPolicies({
+    config: {},
+    github: async () => new Response("{}", { status: 404 }),
+    service: localService(
+      policyEngineOf(t, {
+        opa: opaBinary(),
+        readBuiltIn: () =>
+          new Map([...allowOnly(), ["machines.rego", builtInPolicies().get("machines.rego")]]),
+        readOperator: () => operator,
+      }),
+    ),
+  });
+}
+
+test(
+  "the real opa: machines.rego refuses to auto-merge a machine's pull request, unless the operator's file drops it",
+  { skip: !hasOpa() && "no opa on the PATH" },
+  async (t) => {
+    // Pushed from alice's machine (#598): every built-in gate passes, Deckhand's policy refuses.
+    const machine = setup(t, {
+      policies: machinePolicies(t),
+      externalOf: (repo, number) => (number === 5 ? "alice" : null),
+    });
+    assert.equal(await machine.settle(), null);
+    assert.equal(machine.merges().length, 0);
+    assert.match(
+      machine.replies[0].text,
+      /the policies refuse it \(`deny_merge`\): `its commits were pushed from alice's machine, not through Deckhand: a person merges it`/,
+    );
+    // A sandbox run's: merged.
+    const sandbox = setup(t, { policies: machinePolicies(t), externalOf: () => null });
+    assert.ok(await sandbox.settle());
+    assert.equal(sandbox.merges().length, 1);
+    // The operator's machines.rego with its package alone: merged as any of Deckhand's own.
+    const broad = setup(t, {
+      policies: machinePolicies(t, new Map([["machines.rego", "package deckhand\n"]])),
+      externalOf: () => "alice",
+    });
+    assert.ok(await broad.settle());
+    assert.equal(broad.merges().length, 1);
+  },
+);
+
+test("docs/repo-config.md's machines.rego rule is policy/machines.rego's", () => {
+  const docs = readFileSync(new URL("../docs/repo-config.md", import.meta.url), "utf8");
+  const from = docs.indexOf("#### machines.rego");
+  const [, excerpt] = /```rego\n([\s\S]*?)```/.exec(docs.slice(from));
+  const rule = excerpt.replace(/^# policy\/machines\.rego.*\n/, "");
+  assert.ok(rule.startsWith("deny_merge contains"));
+  assert.ok(builtInPolicies().get("machines.rego").includes(rule));
 });
 
 test("fix loop: deny_merge sees the fix runs counted", async (t) => {

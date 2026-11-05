@@ -60,6 +60,19 @@ test("a pull request Deckhand merged by itself says so on its row and in the det
   expect(screen.getAllByText("merged #128")).toHaveLength(1);
 });
 
+test("a machine's pull request says whose machine pushed it", () => {
+  render(<Dashboard state={withPr(state, { state: "ready", external: "alice" })} error={null} />);
+  const note = screen.getByText("From @alice's machine");
+  expect(note.closest("[title]")!.getAttribute("title")).toMatch(
+    /^The App opened it from the branch @alice's machine pushed/,
+  );
+});
+
+test("a sandbox run's pull request says nothing of machines", () => {
+  render(<Dashboard state={state} error={null} />);
+  expect(screen.queryByText(/'s machine$/)).toBeNull();
+});
+
 test("the Ready chip lists the pull requests waiting for a review", () => {
   render(<Dashboard state={state} error={null} />);
   fireEvent.click(screen.getByRole("button", { name: /^Ready/ }));

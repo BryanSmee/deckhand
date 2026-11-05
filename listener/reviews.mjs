@@ -1091,9 +1091,18 @@ const POLICY_AGAIN_MS = 10_000;
 // `busy(task)`: a run going or queued on the issue; `policies`: createPolicies(), none without;
 // `review`, `fixes`: the review deciding the merge and how many fix runs came before it, for
 // the policies' input; `gates`: what the caller checked before ([{ name, passed }]), kept with
-// the policies' decision before the gates passed here.
+// the policies' decision before the gates passed here. `externalOf(repo, number)`: the login whose
+// machine pushed it (pulls.mjs), for the input's `pr.external`.
 export async function mergeRefusal(
-  { github, config, busy = () => false, sleep, policies = null, now = Date.now },
+  {
+    github,
+    config,
+    busy = () => false,
+    sleep,
+    policies = null,
+    externalOf = () => null,
+    now = Date.now,
+  },
   { repo, number, sha, settings, grant, review = null, fixes = 0, gates = [] },
 ) {
   let pr = await getJson(github, repo, `/repos/${repo}/pulls/${number}`, [404]);
@@ -1195,6 +1204,7 @@ export async function mergeRefusal(
         info,
         pr,
         bot: config.bot,
+        external: externalOf(repo, number),
         files,
         issue: found ?? { number: issue },
         review,
@@ -1235,10 +1245,11 @@ export function mergeInput({
   fixes = 0,
   runs,
   bot = null,
+  external = null,
   now = Date.now,
 }) {
   return {
-    ...pullInput({ decision: "merge", info, pr, files, issue, review, bot, now }),
+    ...pullInput({ decision: "merge", info, pr, files, issue, review, bot, external, now }),
     ...fixInput(fixes),
     checks: checksOf(runs),
   };
@@ -1261,10 +1272,11 @@ export const fixInput = (fixes) => ({ fixed: fixes > 0, fixes });
 // read from GitHub now: only called when a policy applies (policies.mjs deny()), so a repo
 // without any pays no extra call. `issue`: the number of the issue the pull request closes,
 // or null; `extra`: the fix runs so far (fixInput()), and the fix's round and `reason`
-// (`review`, `ci`, `conflict`: conflicts.mjs); `bot`: the App's login.
+// (`review`, `ci`, `conflict`: conflicts.mjs); `bot`: the App's login; `external`: the login
+// whose machine pushed it (pulls.mjs externalOf()).
 export async function readPullInput(
   github,
-  { decision, repo, pr, issue, review = null, bot = null, now },
+  { decision, repo, pr, issue, review = null, bot = null, external = null, now },
   extra,
 ) {
   const info = await getJson(github, repo, `/repos/${repo}`);
@@ -1279,7 +1291,7 @@ export async function readPullInput(
       }
     : null;
   return {
-    ...pullInput({ decision, info, pr, files, issue: found, review, bot, now }),
+    ...pullInput({ decision, info, pr, files, issue: found, review, bot, external, now }),
     ...extra,
   };
 }
@@ -1892,6 +1904,9 @@ export function createReviews({
   // The run that opened a pull request, for `/mode policy`'s deny_request_review (reviewers.mjs
   // openerOf()): `runOf(taskKey, pr)`, or null.
   runOf = () => null,
+  // The login whose machine pushed a pull request (pulls.mjs externalOf(), #598), for the
+  // policies' `pr.external`: `externalOf(repo, number)`, or null.
+  externalOf = () => null,
   // The orchestrator's metrics (metrics.mjs): its fix rounds, counted.
   metrics = null,
   log = () => {},
@@ -2094,7 +2109,15 @@ export function createReviews({
       () =>
         readPullInput(
           github,
-          { decision: "review", repo, pr, issue, bot: config.bot, now },
+          {
+            decision: "review",
+            repo,
+            pr,
+            issue,
+            bot: config.bot,
+            external: externalOf(repo, pr.number),
+            now,
+          },
           fixInput(fixes),
         ),
       { gates },
@@ -2305,7 +2328,16 @@ export function createReviews({
         () =>
           readPullInput(
             github,
-            { decision: "fix", repo, pr, issue, review, bot: config.bot, now },
+            {
+              decision: "fix",
+              repo,
+              pr,
+              issue,
+              review,
+              bot: config.bot,
+              external: externalOf(repo, pr.number),
+              now,
+            },
             { ...fixInput(fixes), ci: false, reason: "review", round, rounds },
           ),
         { gates },
@@ -2625,7 +2657,15 @@ export function createReviews({
         passed("At the reviewed commit"),
       ];
       gate = await mergeRefusal(
-        { github, config, busy, sleep, policies: asking(waiting.pr ?? { number }), now },
+        {
+          github,
+          config,
+          busy,
+          sleep,
+          policies: asking(waiting.pr ?? { number }),
+          externalOf,
+          now,
+        },
         { repo, number, sha, settings, grant, review, fixes, gates },
       );
       if (gate.pending) {
@@ -3355,7 +3395,19 @@ export function createReviews({
         repo,
         base,
         () =>
-          readPullInput(github, { decision: "fix", repo, pr, issue, bot: config.bot, now }, extra),
+          readPullInput(
+            github,
+            {
+              decision: "fix",
+              repo,
+              pr,
+              issue,
+              bot: config.bot,
+              external: externalOf(repo, pr.number),
+              now,
+            },
+            extra,
+          ),
         { gates },
       );
       if (denied.length) return stop(policyWhy("deny_fix", denied));
@@ -3574,6 +3626,7 @@ export function createReviews({
       fixes,
       runs,
       bot: config.bot,
+      external: externalOf(repo, number),
       now,
     });
     const results = [];
@@ -3633,6 +3686,7 @@ export function createReviews({
           when: "ready",
           run: runFields(runOf(task, pr)),
           bot: config.bot,
+          external: externalOf(repo, number),
           now,
         });
         const said = await ask(decision, () => own);

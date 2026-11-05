@@ -106,6 +106,9 @@ export const detail = {
   "detail.waitingAnswersGithub": "En attente de réponses à ses questions ouvertes sur GitHub",
   "detail.waitingFirstRun": "En attente du lancement de la première exécution de {title}…",
   "detail.mergedByDeckhand": "Fusionnée par Deckhand",
+  "detail.machinePr": "Depuis la machine de @{owner}",
+  "detail.machinePrTitle":
+    "L’App l’a ouverte depuis la branche poussée par la machine de @{owner} : ses commits ne sont pas passés par la passerelle git de Deckhand. Deckhand la relit comme les siennes ; sa politique par défaut laisse la fusion à une personne.",
 
   // Outcome.tsx: how the run shown ended, and what to do next.
   "outcome.merged": "Fusionnée",

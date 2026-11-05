@@ -99,6 +99,9 @@ export const detail = {
   "detail.waitingAnswersGithub": "Waiting for answers to its open questions on GitHub",
   "detail.waitingFirstRun": "Waiting for the first run of {title} to start…",
   "detail.mergedByDeckhand": "Merged by Deckhand",
+  "detail.machinePr": "From @{owner}'s machine",
+  "detail.machinePrTitle":
+    "The App opened it from the branch @{owner}'s machine pushed: its commits didn't go through Deckhand's git gateway. Deckhand reviews it as its own; its default policy leaves the merge to a person.",
 
   // Outcome.tsx: how the run shown ended, and what to do next.
   "outcome.merged": "Merged",

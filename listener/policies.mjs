@@ -220,7 +220,8 @@ export const INPUT_VERSION = 1;
 // What every decision's input has about a pull request (docs/repo-config.md#the-merge-input),
 // reviews.mjs's and reviewers.mjs's: the repo (`info`, GET /repos/{repo}), the pull request
 // and its `files`, its linked `issue`, and the `review` when there is one. `bot`: the App's
-// login (config.bot), for `pr.deckhand`.
+// login (config.bot), for `pr.deckhand`; `external`: the login whose machine pushed it
+// (pulls.mjs externalOf(), #598), for `pr.external`.
 export function pullInput({
   decision,
   info,
@@ -229,6 +230,7 @@ export function pullInput({
   issue,
   review = null,
   bot = null,
+  external = null,
   now = Date.now,
 }) {
   const names = (labels) => (labels ?? []).map((l) => (typeof l === "string" ? l : l?.name));
@@ -247,6 +249,9 @@ export function pullInput({
       // requests, Deckhand's own (`deckhand`) excepted.
       author_type: pr.user?.type ?? null,
       deckhand: !!bot && pr.user?.login?.toLowerCase() === bot.toLowerCase(),
+      // Opened by the App from the branch a user's machine pushed (#598): its commits never went
+      // through the git gateway's checks. policy/machines.rego refuses to auto-merge it.
+      external: external ?? null,
       title: pr.title ?? "",
       labels: names(pr.labels),
       base: pr.base?.ref ?? null,
