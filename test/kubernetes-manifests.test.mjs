@@ -21,6 +21,7 @@ import { builderIsolationProblem } from "../listener/runner/kube-images.mjs";
 import { isolationProblem, selects } from "../listener/runner/kubernetes.mjs";
 import { DRAIN_MS as MODELS_DRAIN_MS } from "../models/server.mjs";
 import { DRAIN_MS as POLICY_DRAIN_MS } from "../policy-service/service.mjs";
+import { documents } from "./helpers.mjs";
 
 const root = join(import.meta.dirname, "..", "deploy", "kubernetes");
 const SERVICES_NS = "deckhand";
@@ -30,11 +31,7 @@ const MONITORING_NS = "monitoring";
 const METRICS_PORT = 9464;
 
 // Each file's documents, as lib/yaml.mjs reads them.
-const docs = (file) =>
-  readFileSync(join(root, file), "utf8")
-    .split(/^---$/m)
-    .map((text) => parseYaml(text))
-    .filter(Boolean);
+const docs = (file) => documents(readFileSync(join(root, file), "utf8"));
 const kustomization = (dir = "") => docs(join(dir, "kustomization.yaml"))[0];
 const resources = (dir = "") => kustomization(dir).resources.flatMap((f) => docs(join(dir, f)));
 
@@ -677,10 +674,7 @@ test("components/redis: each service's store under its own user and keys, its pa
 });
 
 test("secrets.mjs: the keys and the App's credentials, each in its own service's Secret", async () => {
-  const made = keys("deckhand")
-    .split(/^---$/m)
-    .map((text) => parseYaml(text))
-    .filter(Boolean);
+  const made = documents(keys("deckhand"));
   assert.deepEqual(
     made.map((r) => `${r.kind} ${r.metadata.name}`),
     ["Secret deckhand-broker-key", "ConfigMap deckhand-service-keys", "Secret deckhand-models-key"],
@@ -710,13 +704,9 @@ test("secrets.mjs: the keys and the App's credentials, each in its own service's
   };
   const fetch = async (url) => Response.json(github[new URL(url).pathname]);
   const credentials = await convertManifest({ code: "c0de", api: "https://api.test", fetch });
-  const app = appSecrets(credentials, {
-    publicUrl: "https://deckhand.example.com",
-    namespace: "deckhand",
-  })
-    .split(/^---$/m)
-    .map((text) => parseYaml(text))
-    .filter(Boolean);
+  const app = documents(
+    appSecrets(credentials, { publicUrl: "https://deckhand.example.com", namespace: "deckhand" }),
+  );
   const file64 = (secret, key) =>
     Buffer.from(app.find((r) => r.metadata.name === secret).data[key], "base64");
   const edge = JSON.parse(file64("deckhand-edge", "app.json"));
