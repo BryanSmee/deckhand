@@ -91,3 +91,13 @@ test("chats: the list, and one open; a repository of an organization named chats
   expect(parseRoute(formatRoute(open))).toEqual(open);
   expect(parseRoute("#/chats/app")).toEqual({ repo: "chats/app", ...none });
 });
+
+test("a repository's chats: the list, and one open", () => {
+  const list = { repo: "acme/app", ...none, page: "chats" as const };
+  expect(formatRoute(list)).toBe("#/acme/app/chats");
+  expect(parseRoute("#/acme/app/chats")).toEqual(list);
+  const open = { ...list, chat: "0123456789abcdef" };
+  expect(formatRoute(open)).toBe("#/acme/app/chats/0123456789abcdef");
+  expect(parseRoute(formatRoute(open))).toEqual(open);
+  expect(parseRoute("#/chats/app/chats")).toEqual({ ...list, repo: "chats/app" });
+});

@@ -44,8 +44,8 @@ const chatRun = (partial: Partial<Run> = {}): Run => ({
 // The page over a listener whose api/chats answers `list` (changed by the POSTs' handlers).
 function show(list: Chats, routes: Parameters<typeof mockApi>[0] = {}) {
   const api = mockApi({ "api/chats": () => list, ...routes });
-  render(<Dashboard state={state} error={null} />);
-  return api;
+  const { unmount } = render(<Dashboard state={state} error={null} />);
+  return Object.assign(api, { unmount });
 }
 
 test("the list: the chats with how many the user keeps, Chats among the views, a chat opened", async () => {
@@ -60,82 +60,172 @@ test("the list: the chats with how many the user keeps, Chats among the views, a
   const chat = await screen.findByRole("region", { name: "Try the build" });
   expect(within(chat).getByText("acme/app")).toBeTruthy();
   expect(within(chat).getByText("Stopped")).toBeTruthy();
+  // Opened from All's list, as a task from All's tasks: the header stays All's.
+  expect(screen.getByRole("heading", { name: "All repositories", level: 1 })).toBeTruthy();
 });
 
-test("the header: All's on the list, the open chat's repository with its GitHub link", async () => {
-  show(makeChats([makeChat()]));
+test("the header: All's on every repository's chats, no GitHub link", async () => {
+  show(makeChats([makeChat(), makeChat({ id: "fedcba9876543210", repo: "acme/api" })]));
   const views = await screen.findByRole("group", { name: "View" });
   await within(views).findByRole("link", { name: /Chats/ });
-  // The list's: All, with no GitHub link, and All's views (no repository came before it).
   expect(screen.getByRole("heading", { name: "All repositories", level: 1 })).toBeTruthy();
   expect(screen.queryByRole("link", { name: /on GitHub$/ })).toBeNull();
   expect(within(views).getByRole("link", { name: "Tasks" }).getAttribute("href")).toBe("#/tasks");
-  fireEvent.click(await screen.findByRole("link", { name: /What does run\(\) do\?/ }));
-  await waitFor(() =>
-    expect(screen.getByRole("heading", { name: "acme/app", level: 1 })).toBeTruthy(),
-  );
-  const github = screen.getByRole("link", { name: "acme/app on GitHub" });
-  expect(github.getAttribute("href")).toBe("https://github.example.com/acme/app");
-  // Chats still the page shown; Tasks and Board the chat's repository's.
-  const open = screen.getByRole("group", { name: "View" });
-  expect(within(open).getByRole("link", { name: /Chats/ }).getAttribute("aria-current")).toBe(
-    "page",
-  );
-  expect(within(open).getByRole("link", { name: "Tasks" }).getAttribute("href")).toBe("#/acme/app");
-  expect(within(open).getByRole("link", { name: "Board" }).getAttribute("href")).toBe(
-    "#/acme/app/board",
-  );
+  // Every repository's chats, each with its repository.
+  const list = screen.getByRole("complementary", { name: "Your chats" });
+  expect(within(list).getAllByRole("link")).toHaveLength(2);
+  expect(within(list).getByText(/^acme\/api · /)).toBeTruthy();
 });
 
-test("the list opened from a repository: its Tasks go back to that repository", async () => {
+test("a repository's chats: its name and GitHub link, its views, only its chats", async () => {
+  history.replaceState(null, "", "#/acme/app/chats");
+  show(
+    makeChats([
+      makeChat(),
+      makeChat({ id: "fedcba9876543210", repo: "acme/api", title: "Elsewhere" }),
+    ]),
+  );
+  const views = await screen.findByRole("group", { name: "View" });
+  const nav = await within(views).findByRole("link", { name: /Chats\s*2 of 4/ });
+  expect(nav.getAttribute("aria-current")).toBe("page");
+  expect(nav.getAttribute("href")).toBe("#/acme/app/chats");
+  expect(screen.getByRole("heading", { name: "acme/app", level: 1 })).toBeTruthy();
+  const github = screen.getByRole("link", { name: "acme/app on GitHub" });
+  expect(github.getAttribute("href")).toBe("https://github.example.com/acme/app");
+  expect(within(views).getByRole("link", { name: "Tasks" }).getAttribute("href")).toBe(
+    "#/acme/app",
+  );
+  expect(within(views).getByRole("link", { name: "Board" }).getAttribute("href")).toBe(
+    "#/acme/app/board",
+  );
+  // The sidebar marks the repository, its links staying on Chats.
+  const repos = screen.getByRole("navigation", { name: "Repositories" });
+  const app = within(repos).getByRole("link", { name: /acme\/app/ });
+  expect(app.getAttribute("aria-current")).toBe("page");
+  expect(
+    within(repos)
+      .getByRole("link", { name: /acme\/api/ })
+      .getAttribute("href"),
+  ).toBe("#/acme/api/chats");
+  expect(
+    within(repos)
+      .getByRole("link", { name: /All repositories/ })
+      .getAttribute("href"),
+  ).toBe("#/chats");
+  // Its chats alone, opened on its page.
+  const list = screen.getByRole("complementary", { name: "Your chats" });
+  expect(within(list).queryByRole("link", { name: /Elsewhere/ })).toBeNull();
+  fireEvent.click(within(list).getByRole("link", { name: /What does run\(\) do\?/ }));
+  await waitFor(() => expect(location.hash).toBe("#/acme/app/chats/0123456789abcdef"));
+  expect(await screen.findByRole("region", { name: "What does run() do?" })).toBeTruthy();
+  expect(screen.getByRole("heading", { name: "acme/app", level: 1 })).toBeTruthy();
+});
+
+test("Chats from a repository's tasks: that repository's; Tasks and g t go back to it", async () => {
   history.replaceState(null, "", "#/acme/api");
   show(makeChats([makeChat()]));
+  const press = (key: string) => fireEvent.keyDown(document.body, { key });
   const views = await screen.findByRole("group", { name: "View" });
   fireEvent.click(await within(views).findByRole("link", { name: /Chats/ }));
-  await waitFor(() => expect(location.hash).toBe("#/chats"));
-  await screen.findByRole("heading", { name: "All repositories", level: 1 });
+  await waitFor(() => expect(location.hash).toBe("#/acme/api/chats"));
+  await screen.findByRole("heading", { name: "acme/api", level: 1 });
+  expect(await screen.findByText("No chats on acme/api yet.")).toBeTruthy();
   const tasks = within(screen.getByRole("group", { name: "View" })).getByRole("link", {
     name: "Tasks",
   });
   expect(tasks.getAttribute("href")).toBe("#/acme/api");
-  fireEvent.click(tasks);
-  await waitFor(() => expect(location.hash).toMatch(/^#\/acme\/api/));
-});
-
-test("g t and g b: back to the repository the list came from, the open chat's repository", async () => {
-  history.replaceState(null, "", "#/acme/api");
-  show(makeChats([makeChat()]));
-  const press = (key: string) => fireEvent.keyDown(document.body, { key });
-  await screen.findByRole("heading", { name: "acme/api", level: 1 });
-  history.replaceState(null, "", "#/chats");
-  window.dispatchEvent(new HashChangeEvent("hashchange"));
-  await screen.findByRole("heading", { name: "All repositories", level: 1 });
   press("g");
   press("t");
   await waitFor(() => expect(location.hash).toMatch(/^#\/acme\/api(\?|$)/));
-  history.replaceState(null, "", "#/chats/0123456789abcdef");
-  window.dispatchEvent(new HashChangeEvent("hashchange"));
-  await screen.findByRole("heading", { name: "acme/app", level: 1 });
-  press("g");
-  press("t");
-  await waitFor(() => expect(location.hash).toMatch(/^#\/acme\/app(\?|$)/));
-  history.replaceState(null, "", "#/chats/0123456789abcdef");
-  window.dispatchEvent(new HashChangeEvent("hashchange"));
-  await screen.findByRole("heading", { name: "acme/app", level: 1 });
-  press("g");
-  press("b");
-  await waitFor(() => expect(location.hash).toBe("#/acme/app/board"));
 });
 
-test("a phone's top bar names the open chat's repository", async () => {
+test("New chat on a repository's page: that repository first; one on another opens on its page", async () => {
+  history.replaceState(null, "", "#/acme/app/chats");
+  const list = makeChats();
+  const made = makeChat({ id: "aaaaaaaaaaaaaaaa", repo: "acme/api", title: "Hi" });
+  show(list, {
+    "POST api/chats": () => {
+      list.chats = [made];
+      return { chat: made };
+    },
+  });
+  await newChat();
+  const dialog = screen.getByRole("dialog", { name: "New chat" });
+  const repo = within(dialog).getByRole("combobox", { name: "Repository" }) as HTMLSelectElement;
+  expect(repo.value).toBe("acme/app");
+  fireEvent.change(repo, { target: { value: "acme/api" } });
+  fireEvent.click(within(dialog).getByRole("button", { name: "Start the chat" }));
+  await waitFor(() => expect(location.hash).toBe("#/acme/api/chats/aaaaaaaaaaaaaaaa"));
+  expect(await screen.findByRole("heading", { name: "Hi", level: 2 })).toBeTruthy();
+  expect(screen.getByRole("heading", { name: "acme/api", level: 1 })).toBeTruthy();
+});
+
+test("another repository's chat under a repository's chats: opened on its own repository's", async () => {
+  history.replaceState(null, "", "#/acme/app/chats/fedcba9876543210");
+  show(makeChats([makeChat({ id: "fedcba9876543210", repo: "acme/api", title: "Elsewhere" })]));
+  await waitFor(() => expect(location.hash).toBe("#/acme/api/chats/fedcba9876543210"));
+  expect(await screen.findByRole("region", { name: "Elsewhere" })).toBeTruthy();
+  expect(screen.getByRole("heading", { name: "acme/api", level: 1 })).toBeTruthy();
+});
+
+test("the same, followed from Chats under a repository spelled otherwise: its own repository's all the same", async () => {
+  show(makeChats([makeChat({ id: "fedcba9876543210", repo: "acme/api", title: "Elsewhere" })]));
+  const list = await screen.findByRole("complementary", { name: "Your chats" });
+  await within(list).findByRole("link", { name: /Elsewhere/ });
+  // The sidebar spells it acme/app: its rewrite mustn't win over the chat's repository.
+  history.replaceState(null, "", "#/Acme/App/chats/fedcba9876543210");
+  window.dispatchEvent(new HashChangeEvent("hashchange"));
+  await waitFor(() => expect(location.hash).toBe("#/acme/api/chats/fedcba9876543210"));
+  expect(await screen.findByRole("region", { name: "Elsewhere" })).toBeTruthy();
+  expect(screen.queryByText(/^No such chat/)).toBeNull();
+});
+
+test("a chat that isn't there, under a repository's chats: no such chat on it", async () => {
+  history.replaceState(null, "", "#/acme/app/chats/fedcba9876543210");
+  show(makeChats([makeChat()]));
+  expect(
+    await screen.findByText("No such chat on acme/app: it was deleted, or it isn't yours."),
+  ).toBeTruthy();
+  expect(location.hash).toBe("#/acme/app/chats/fedcba9876543210");
+});
+
+test("the repository shown on Chats is the one the dashboard reopens on", async () => {
+  history.replaceState(null, "", "#/acme/app/chats");
+  const first = show(makeChats([makeChat()]));
+  await screen.findByRole("heading", { name: "acme/app", level: 1 });
+  expect(localStorage.getItem("deckhand.tab")).toBe("acme/app");
+  first.unmount();
+  // Open on: the last repository (Preferences' default), from an empty address.
+  history.replaceState(null, "", "#");
+  const again = show(makeChats([makeChat()]));
+  await waitFor(() => expect(location.hash).toMatch(/^#\/acme\/app(\?|$)/));
+  again.unmount();
+  // Every repository's chats: All, reopened on the Overview.
+  history.replaceState(null, "", "#/chats");
+  show(makeChats([makeChat()]));
+  await screen.findByRole("heading", { name: "All repositories", level: 1 });
+  expect(localStorage.getItem("deckhand.tab")).toBe("");
+});
+
+test("a phone: the top bar names the repository, its Chats tab stays on it; All's on All's tasks", async () => {
   vi.stubGlobal("matchMedia", () => ({
     matches: false,
     addEventListener() {},
     removeEventListener() {},
   }));
-  history.replaceState(null, "", "#/chats/0123456789abcdef");
+  history.replaceState(null, "", "#/acme/app/chats");
   show(makeChats([makeChat()]));
   expect(await screen.findByRole("button", { name: "acme/app: switch repository" })).toBeTruthy();
+  const tabs = within(screen.getByRole("navigation", { name: "Pages" }));
+  const chats = await tabs.findByRole("link", { name: "Chats" });
+  expect(chats.getAttribute("href")).toBe("#/acme/app/chats");
+  expect(chats.getAttribute("aria-current")).toBe("page");
+  // From All's tasks, as their Tasks tab: every repository's chats, not the last one's.
+  history.replaceState(null, "", "#/tasks");
+  window.dispatchEvent(new HashChangeEvent("hashchange"));
+  await waitFor(() =>
+    expect(tabs.getByRole("link", { name: "Chats" }).getAttribute("href")).toBe("#/chats"),
+  );
 });
 
 test("the limit: New chat disabled past it, with the reason", async () => {
