@@ -24,7 +24,7 @@ import { isApart, kindOf } from "./modes.mjs";
 import { onboardingTargets } from "./onboarding.mjs";
 import { LOOP_STEPS } from "./reviews.mjs";
 import { applyInput, inputEvent } from "./questions.mjs";
-import { refreshFor } from "./repos.mjs";
+import { forgottenFor, refreshFor } from "./repos.mjs";
 import { labelAdded } from "./auto-pickup.mjs";
 import { pickedTask } from "./tasks.mjs";
 import { staleFor } from "./work.mjs";
@@ -462,8 +462,11 @@ export function createHttp(ctx) {
         log(`Conflicts: ${error.stack ?? error}`);
       });
     }
-    // Only the repository list's: nothing runs on a push.
-    if (event === "push") return work;
+    // A repository out of the App's reach, deleted, transferred or made private: what the
+    // policies kept of it goes now rather than when it expires (repos.mjs forgottenFor()).
+    for (const repo of forgottenFor(event, payload)) ctx.policies?.forget(repo);
+    // Only the repository list's: nothing runs on a push, nor on a repository's own change.
+    if (event === "push" || event === "repository") return work;
     if (event === "installation" || event === "installation_repositories") {
       // Its permissions as they are now: accepting new ones sends `new_permissions_accepted`.
       app.rememberPermissions?.(payload.installation);
