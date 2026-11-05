@@ -352,15 +352,15 @@ don't take the label off, so the orchestrator does, once every question has an a
 starts until a trigger comment or the work area says so.
 
 Boxes ticked in a run's reply answer it the same way: an `issue_comment` `edited` delivery, by an
-allowed user, of the App's comment that starts with `<!-- needs-input -->`, that ticks an option
-of every question (`questions.mjs` `tickedReply()`, none free text) goes through the same
-`answer` (`work.mjs` `ticked()`), its comment saying "ticked in the run's questions". Only for
-the questions of the task's latest run still waiting (titles, texts and options alike): ticking
-an older reply, or the boxes again once the run went on, starts nothing. The boxes the run's
-reply came with are the agent's (the task's questions, parsed from the run's text, have them
-`checked`): each question needs a box ticked since, which is the answer sent, so agreeing with
-the agent's own tick takes the dashboard's form or a comment. The form picks ticks in advance
-only for an issue's questions.
+allowed user, of the App's comment that asks (`<!-- needs-input -->` first, or on a line of its own
+before its first numbered line, `asksInput()`), that ticks an option of every question
+(`questions.mjs` `tickedReply()`, none free text) goes through the same `answer` (`work.mjs`
+`ticked()`), its comment saying "ticked in the run's questions". Only for the questions of the
+task's latest run still waiting (titles, texts and options alike): ticking an older reply, or the
+boxes again once the run went on, starts nothing. The boxes the run's reply came with are the
+agent's (the task's questions, parsed from the run's text, have them `checked`): each question needs
+a box ticked since, which is the answer sent, so agreeing with the agent's own tick takes the
+dashboard's form or a comment. The form picks ticks in advance only for an issue's questions.
 
 On the graph, an issue waiting for answers moves like a waiting one, but its questions come
 first: dragging it (or its Start and "After…" buttons) opens them, and the start or queue goes
