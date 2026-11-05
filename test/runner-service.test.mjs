@@ -17,6 +17,7 @@ import { EPOCH_HEADER } from "../lib/service-client.mjs";
 import { networkCallers, signServiceToken } from "../lib/service-token.mjs";
 import { fileStore } from "../lib/store-file.mjs";
 import { keyId } from "../lib/tokens.mjs";
+import { markerName } from "../listener/runner/deployment.mjs";
 import { createDockerRunner } from "../listener/runner/docker.mjs";
 import { SANDBOX_USER } from "../listener/sandbox-spec.mjs";
 import { createRunnerClient } from "../runner/client.mjs";
@@ -133,6 +134,7 @@ async function copy(
     metrics,
     settings = config,
     grantedTo = granted,
+    claimAgainMs,
   } = {},
 ) {
   let service;
@@ -177,6 +179,7 @@ async function copy(
     ...(log && { log }),
     ...(refresh && { refresh }),
     ...(metrics && { metrics }),
+    ...(claimAgainMs !== undefined && { claimAgainMs }),
   });
   // Where a test may start it again (a runner away, then back).
   await listenToRestart(service.server);
@@ -247,6 +250,55 @@ test("GET /health: the log segments waiting for blob storage; the copy acting mo
   assert.equal(await store.blobSize("logs/dh-o-a-1-1/0"), null);
   assert.equal((await files.read("logs/dh-o-a-1-1/1")).toString(), "world");
   assert.equal((await logs.read("dh-o-a-1-1")).data.toString(), "hello");
+});
+
+// Two deployments of one prefix on one engine (#858): each store its own ID, the first to claim
+// the prefix keeps it, the other takes no call and watches no sandbox until its marker is removed.
+test("a prefix another deployment claimed: no call taken, no event watched, the clash logged once and in /health", async (t) => {
+  const backend = host();
+  const first = await copy(t, { store: fileStore(), backend });
+  assert.equal((await call(first.url, "GET", "/sandboxes", { sub: "orchestrator" })).status, 200);
+  // A sandbox of the first one's, running.
+  backend.containers.set("dh-o-a-1", { owner: "dh", run: "dh-o-a-1-1", running: true });
+  const logged = [];
+  const store = fileStore();
+  const second = await copy(t, { store, backend, log: (line) => logged.push(line) });
+  const refused = await call(second.url, "GET", "/sandboxes", { sub: "orchestrator" });
+  assert.equal(refused.status, 503);
+  assert.match((await refused.json()).message, /NAME_PREFIX dh is another deployment's/);
+  assert.equal((await call(second.url, "GET", "/sandboxes", { sub: "orchestrator" })).status, 503);
+  const warnings = async (url) => (await (await fetch(`${url}/health`)).json()).warnings;
+  assert.match((await warnings(second.url))[0], /docker volume rm dh-deployment/);
+  assert.equal(logged.filter((line) => /NAME_PREFIX/.test(line)).length, 1);
+  // Its watch (every 50 ms here) never saw the first one's sandbox, nor do its metrics.
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  assert.equal(await store.get("events/running"), null);
+  assert.equal(await second.service.sandboxes(), null);
+  // The first one goes on.
+  assert.equal((await call(first.url, "GET", "/sandboxes", { sub: "orchestrator" })).status, 200);
+  assert.equal(await warnings(first.url), undefined);
+  assert.deepEqual(await first.service.sandboxes(), [{ engine: "none" }]);
+  // Its marker removed (the operator's, when no other deployment uses the prefix): claimed again
+  // by its watch, without a restart, which then follows the sandboxes.
+  backend.volumes.delete(markerName("dh"));
+  await until(async () => (await store.get("events/running"))?.["dh-o-a-1-1"]);
+  assert.equal((await call(second.url, "GET", "/sandboxes", { sub: "orchestrator" })).status, 200);
+  assert.equal(await warnings(second.url), undefined);
+  assert.deepEqual(await second.service.sandboxes(), [{ engine: "none" }]);
+});
+
+// A marker removed while the runner runs (a `docker volume prune`): its watch claims the prefix
+// again, before another deployment can.
+test("the prefix claimed again while the runner acts: its marker put back", async (t) => {
+  const backend = host();
+  const store = fileStore();
+  await copy(t, { store, backend, claimAgainMs: 0 });
+  await until(() => backend.volumes.has(markerName("dh")));
+  const id = backend.volumes.get(markerName("dh"))["deckhand.deployment"];
+  assert.equal(id, await store.get("deployment"));
+  backend.volumes.delete(markerName("dh"));
+  await until(() => backend.volumes.has(markerName("dh")));
+  assert.equal(backend.volumes.get(markerName("dh"))["deckhand.deployment"], id);
 });
 
 // A probe's second: /health never waits on the store, Redis stalling or not.
@@ -1052,9 +1104,15 @@ test("a chat's session volumes: removed for a chat's key and sandbox only, once 
     `${name}-light-trusted-codex`,
     `${name}-light-workspace`,
   ]);
+  // The deployment's marker of its prefix stays too (#858).
   assert.deepEqual(
     [...backend.volumes.keys()].sort(),
-    [`${issue}-light-workspace`, `${issue}-workspace`, `${other}-light-workspace`].sort(),
+    [
+      `${issue}-light-workspace`,
+      `${issue}-workspace`,
+      `${other}-light-workspace`,
+      markerName(config.prefix),
+    ].sort(),
   );
   // Only the orchestrator asks it.
   const models = await call(url, "DELETE", `/sessions/${name}?task=${encodeURIComponent(key)}`, {
