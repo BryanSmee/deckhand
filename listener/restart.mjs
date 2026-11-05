@@ -11,6 +11,7 @@ import { renameSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { agentFor } from "./agents/index.mjs";
 import { parseKey, taskKey } from "./events.mjs";
+import { MAX_WARNINGS } from "./health.mjs";
 import { RESEARCH } from "./modes.mjs";
 import { addRun, isRunState, writeEvent } from "./runlog.mjs";
 import { runLogContext } from "./runs.mjs";
@@ -134,12 +135,21 @@ export function endWait(ctx, live, what) {
 }
 
 // The runs whose end waits for the store (endWait()), a line each, for the orchestrator's
-// warnings on the dashboard's status page (health.mjs).
-export function endsWaitingWarnings(ctx, now = Date.now()) {
-  return [...(ctx.endsWaiting?.values() ?? [])].map((e) => {
+// warnings on the dashboard's status page (health.mjs), by endWait()'s clock: `max` lines at
+// most, the last one counting those left out (/ready's `ending` counts them all).
+export function endsWaitingWarnings(
+  ctx,
+  { now = (ctx.now ?? Date.now)(), max = MAX_WARNINGS } = {},
+) {
+  const ends = [...(ctx.endsWaiting?.values() ?? [])];
+  const shown = ends.length > max ? ends.slice(0, max - 1) : ends;
+  const lines = shown.map((e) => {
     const minutes = Math.max(1, Math.round((now - e.since) / 60_000));
     return `${e.key}: its end waits for the store (${e.what}, ${minutes} min${e.error ? `: ${e.error}` : ""}), holding its task and a parallel slot`;
   });
+  const more = ends.length - shown.length;
+  if (more) lines.push(`and ${more} more run(s) whose end waits for the store`);
+  return lines;
 }
 
 // How long a start waits for the runner to say whether the restored runs' inboxes are open.
@@ -290,9 +300,11 @@ export function createRestart(ctx) {
   // leaves them to the next one. Whole each time, the latest state when the write begins: a
   // call while one waits to begin joins it, one while it is under way comes after it.
   // Resolves once its state is written, to whether it was: a failed write is logged, the next
-  // one tries again.
+  // one tries again. `queueError`: the last failed write's error, null once one lands (a run's
+  // end waiting for it says it, endWait()).
   let saving = Promise.resolve();
   let waiting = null;
+  let queueError = null;
   function saveQueue() {
     waiting ??= saving.then(() => {
       waiting = null;
@@ -301,6 +313,7 @@ export function createRestart(ctx) {
         value = storable(queueState(), ctx.storeSecrets?.() ?? []);
       } catch (error) {
         log(`Saving the queue: ${error.stack ?? error}`);
+        queueError = error;
         return false;
       }
       // Those this write's state makes useless, as it is now: one added meanwhile waits for
@@ -308,13 +321,18 @@ export function createRestart(ctx) {
       const removing = [...removeOnSave];
       return ctx.store.set(QUEUE_KEY, value).then(
         () => {
+          queueError = null;
           for (const path of removing) {
             rmSync(path, { force: true });
             removeOnSave.delete(path);
           }
           return true;
         },
-        (error) => (log(`Saving the queue: ${error.stack ?? error}`), false),
+        (error) => {
+          log(`Saving the queue: ${error.stack ?? error}`);
+          queueError = error;
+          return false;
+        },
       );
     });
     saving = waiting;
@@ -583,7 +601,7 @@ export function createRestart(ctx) {
         if (!said)
           log(`${live.key}: its state stays until the queue is saved with what it put back`);
         said = true;
-        wait.failed();
+        wait.failed(queueError);
         if (!(await again("saving the queue"))) return false;
       }
       wait.done();

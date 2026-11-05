@@ -108,6 +108,10 @@ test("the orchestrator's own warnings, as they are at each check: its runs whose
     now: () => clock.now,
   });
   assert.deepEqual((await health.check()).services[0].warnings, warnings);
+  // Cut short as a probed service's are.
+  warnings = ["x".repeat(WARNING_LENGTH + 50)];
+  clock.now += CACHE_MS;
+  assert.equal((await health.check()).services[0].warnings[0].length, WARNING_LENGTH);
   warnings = [];
   clock.now += CACHE_MS;
   assert.equal("warnings" in (await health.check()).services[0], false);

@@ -102,7 +102,9 @@ export function createHealth({
     const checkedAt = now();
     // Its own warnings, as they are now (runs whose end waits for the store, restart.mjs
     // endWait()).
-    const warnings = (self.warnings?.() ?? []).slice(0, MAX_WARNINGS);
+    const warnings = (self.warnings?.() ?? [])
+      .slice(0, MAX_WARNINGS)
+      .map((w) => w.slice(0, WARNING_LENGTH));
     found.set(self.name, {
       name: self.name,
       state: stateOf(self.startedAt, checkedAt),
