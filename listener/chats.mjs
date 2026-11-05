@@ -30,7 +30,7 @@ import { sandboxName } from "./repo-config.mjs";
 import { queueId } from "./restart.mjs";
 import { publicRun } from "./runlog.mjs";
 import { CHATS, newTask } from "./tasks.mjs";
-import { apiRoute, hidden, mustDo, undecided } from "./web.mjs";
+import { apiRoute, hidden, mustDo } from "./web.mjs";
 import { readJsonBody, Refused, refuse, send } from "../lib/http.mjs";
 
 // The store's key of the chats: all of them, as one value (the store lists no keys).
@@ -205,7 +205,7 @@ export function createChats(
       // (message()), rather than a hidden repo's 404.
       if (sees.error) {
         log(`Chats: ${repo}: ${accessRefusal(sees, user, null)}`);
-        refuse(503, undecided(START).error);
+        refuse(503, `Your access to ${repo} can't be decided now; try again later.`);
       }
       if (!sees.ok) refuse(404, hidden(repo).error);
       await mustDo(ctx.permissions, user, repo, START);
@@ -273,6 +273,14 @@ export function createChats(
     return chat;
   }
 
+  // Refuses a message to a chat being reset or deleted, gone, or reset since `resetAt` (when the
+  // message came: it was written to the conversation the reset dropped).
+  function open(chat, resetAt = chat.resetAt) {
+    if (busy.has(chat.id) || chats.get(chat.id) !== chat || chat.resetAt !== resetAt) {
+      refuse(409, "This chat is being reset or deleted: send it again in a moment.");
+    }
+  }
+
   // MAX_RUNNING_CHATS 0: no chat runs, so a message would wait for good.
   function runnable() {
     if (config.maxRunningChats === 0) refuse(409, "No chat runs here: MAX_RUNNING_CHATS is 0.");
@@ -292,7 +300,8 @@ export function createChats(
     const chat = mine(user, id);
     textOf(text);
     runnable();
-    if (busy.has(id)) refuse(409, "This chat is being reset: send it again in a moment.");
+    open(chat);
+    const { resetAt } = chat;
     let read;
     try {
       read = await checked(chat.repo, user);
@@ -302,6 +311,9 @@ export function createChats(
       }
       throw error;
     }
+    // Reset or deleted while its checks read: a deleted chat's message would start a sandbox
+    // nothing stops (its task out of `chats`).
+    open(chat, resetAt);
     await queue(chat, user, text, read.settings, read.base);
     return view(chat);
   }
@@ -309,13 +321,17 @@ export function createChats(
   // `text` queued as the chat's message, like a comment (tasks.mjs queue()): delivered to its
   // sandbox when it waits for one, else its next run's.
   async function queue(chat, user, text, settings, base) {
-    const task = ensureTask(chat);
-    task.settings = settings;
-    task.base = base;
+    const { resetAt } = chat;
     chat.base = base;
     chat.lastActiveAt = now();
     chat.title ??= titleOf(text);
     await save();
+    // Its task made once the save is done, and only if the chat wasn't reset or deleted
+    // meanwhile.
+    open(chat, resetAt);
+    const task = ensureTask(chat);
+    task.settings = settings;
+    task.base = base;
     task.pending.push({
       repo: chat.repo,
       id: task.id,

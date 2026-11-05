@@ -43,6 +43,8 @@ async function setup(
     users,
     store = openStore("memory:"),
     permissions = null,
+    // A promise GitHub's answers wait for, while set (`hold.until`).
+    hold = {},
   } = {},
 ) {
   const config = testConfig({
@@ -100,6 +102,7 @@ async function setup(
     permissions,
   };
   const github = async (_repo, _method, path) => {
+    await hold.until;
     if (path === "/repos/org/repo" && installed) {
       return Response.json({ full_name: "org/repo", default_branch: "trunk", private: true });
     }
@@ -248,7 +251,7 @@ test("the access decision: a hidden repo is a 404, no runs:start:chat a 403 that
   access.alice.null = "error";
   assert.deepEqual(await refusal(chats.message("alice", chat.id, "next")), {
     status: 503,
-    message: "Whether you may do this (`runs:start:chat`) can't be decided now; try again later.",
+    message: "Your access to org/repo can't be decided now; try again later.",
   });
   assert.equal((await refusal(chats.create("alice", { repo: "org/repo" }))).status, 503);
   assert.deepEqual(calls.cancelled, []);
@@ -518,6 +521,31 @@ test("an idle chat whose inbox isn't known open (a restart): rested all the same
   clock.advance(30 * 60_000);
   assert.deepEqual(calls.rested, [task.name]);
   assert.equal(clock.timers.size, 0);
+});
+
+test("a chat deleted, or reset, while a message's checks read GitHub: the message refused, nothing started", async (t) => {
+  const hold = {};
+  const { chats, ctx, calls } = await setup(t, { hold });
+  for (const [what, act] of [
+    ["deleted", (chat) => chats.remove("alice", chat.id)],
+    ["reset", (chat) => chats.reset("alice", chat.id)],
+  ]) {
+    const chat = await chats.create("alice", { repo: "org/repo" });
+    let release;
+    hold.until = new Promise((resolve) => (release = resolve));
+    const sent = refusal(chats.message("alice", chat.id, "hi"));
+    await act(chat);
+    release();
+    assert.deepEqual(
+      await sent,
+      { status: 409, message: "This chat is being reset or deleted: send it again in a moment." },
+      what,
+    );
+    assert.deepEqual(calls.started, [], what);
+    assert.equal(ctx.tasks.get(chatKey(chat))?.pending.length ?? 0, 0, what);
+    hold.until = null;
+    if (what === "reset") await chats.remove("alice", chat.id);
+  }
 });
 
 test("a restored chat that answered, its inbox not known open: a message rests it at once, and starts the next run", async (t) => {
