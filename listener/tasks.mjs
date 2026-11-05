@@ -19,7 +19,7 @@ import {
 import { getJson } from "./github.mjs";
 import { customMode, entryRun, isApart } from "./modes.mjs";
 import { liveMessage } from "./prompts.mjs";
-import { hasOpenQuestions, stillAsks } from "./questions.mjs";
+import { ANSWER, hasOpenQuestions, stillAsks } from "./questions.mjs";
 import {
   CONFIG_FILE,
   effectiveConfig,
@@ -198,10 +198,16 @@ export function createTasks(ctx) {
     }
     // Only the comment's own issue, as the delivery has it: a pull request's labels are its own.
     const issue = event === "issue_comment" && !payload.issue?.pull_request ? payload.issue : null;
-    if (!hasAnswer(item) && unanswered(item, issue)) {
-      // Its reply is for an author who may start what the comment asks for (permissions.mjs).
-      if (!(await may(item, startAction(item.modeLine ?? "work"), "held back, and "))) return;
-      return holdBack(item);
+    if (unanswered(item, issue)) {
+      // Its text answers them only from an author who may answer (`runs:manage`), as the
+      // dashboard's answers and questions.mjs applyInput() ask: else its run's start would take
+      // the label off (runs.mjs) for an answer that was refused. Held back as a trigger alone.
+      const said = hasAnswer(item);
+      if (!said || !(await may(item, ANSWER, "its answers refused, "))) {
+        // Its reply is for an author who may start what the comment asks for (permissions.mjs).
+        if (!(await may(item, startAction(item.modeLine ?? "work"), "held back, and "))) return;
+        return holdBack(item, said);
+      }
     }
     // A trigger or "/mode" comment replaces the issue's wait, once it runs: refused by the
     // policies, it changes nothing. The wait is held meanwhile (waits.mjs reserve()): a blocker
@@ -262,13 +268,17 @@ export function createTasks(ctx) {
   }
 
   // A trigger comment on an issue whose questions aren't answered: nothing starts, and the
-  // reply says how to answer. The label stays (questions.mjs applyInput()).
-  async function holdBack(item) {
+  // reply says how to answer. The label stays (questions.mjs applyInput()). `refused`: the
+  // comment had answers its author may not give, nor anywhere else: someone else must.
+  async function holdBack(item, refused = false) {
     const key = taskKey(item.repo, item.id);
     log(`${key}: not started, its open questions aren't answered`);
     const url = ctx.publicUrl?.();
     const form = url ? ` or [on the dashboard](${dashboardLink(url, item.repo, key)})` : "";
-    const text = `#${item.number} has open questions: nothing starts until they are answered. A trigger comment with the answers starts the run with them; answered in a comment${form}, a new trigger comment starts it. (\`wait_for_answers: false\` in \`${CONFIG_FILE}\` turns this off.)`;
+    const how = refused
+      ? `Your answers don't count: answering them needs the \`${ANSWER}\` action here, on GitHub as on the dashboard. Once someone who has it answers them in a comment${form}, a new trigger comment starts the run.`
+      : `A trigger comment with the answers starts the run with them; answered in a comment${form}, a new trigger comment starts it.`;
+    const text = `#${item.number} has open questions: nothing starts until they are answered. ${how} (\`wait_for_answers: false\` in \`${CONFIG_FILE}\` turns this off.)`;
     await ctx.reply(item.repo, item.replyTo, text).catch((error) => log(`${key}: ${error}`));
     await ctx.settle(item, "needs-input");
   }

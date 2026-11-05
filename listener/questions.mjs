@@ -518,7 +518,7 @@ const ISSUE_ACTIONS = {
 };
 
 // The action an answer to an issue's open questions needs, on GitHub as on the dashboard.
-const ANSWER = "runs:manage";
+export const ANSWER = "runs:manage";
 
 // Open questions in an issue, or an answer to them (inputEvent()): the needs-input label and
 // the dashboard's list of issues waiting for input (inputs.mjs). `ctx` (server.mjs): the
