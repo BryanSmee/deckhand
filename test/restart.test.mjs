@@ -899,6 +899,58 @@ test("a queued comment is in the store with its pause's deadline as soon as it w
   assert.equal(await after.tasks.get("org/repo#7").pending[0].eyes, 41);
 });
 
+test("a machine's claim and the comments held for its owner come back with the queue, the claim with a fresh lease (#596)", async (t) => {
+  const dir = tempDir(t);
+  const store = fileStore({ dir: join(dir, "store") });
+  const before = queueContext(t, dir, store);
+  const task = newTask({ repo: "org/repo", id: "7", kind: "issue", number: 7, base: "main" });
+  before.tasks.set("org/repo#7", task);
+  task.held.push(queued("7", { queueId: "q-held", author: "alice", text: "Also this." }));
+  task.claim = {
+    id: "run-1",
+    machine: "0123456789abcdef",
+    name: "Desk",
+    owner: "alice",
+    items: [queued("7", { queueId: "q-claimed" })],
+    claimedAt: 1,
+    leaseUntil: 2,
+    resume: false,
+  };
+  task.running = true;
+  await before.saveQueue();
+  const saved = (await fileStore({ dir: join(dir, "store") }).get(QUEUE_KEY))["org/repo#7"];
+  assert.deepEqual(saved.pending, []);
+  assert.deepEqual(
+    [saved.held[0].queueId, saved.claim.items[0].queueId, saved.claim.id],
+    ["q-held", "q-claimed", "run-1"],
+  );
+  // The next copy: running again, on that machine, its lease from now.
+  const after = queueContext(t, dir, fileStore({ dir: join(dir, "store") }));
+  const restored = [];
+  after.claims = {
+    restore: (task, claim) => {
+      restored.push([task.id, claim]);
+      Object.assign(task, { claim, running: true });
+    },
+  };
+  await after.loadQueue();
+  const back = after.tasks.get("org/repo#7");
+  assert.deepEqual(
+    back.held.map((i) => i.text),
+    ["Also this."],
+  );
+  assert.equal(restored[0][0], "7");
+  assert.equal(restored[0][1].items[0].queueId, "q-claimed");
+  assert.deepEqual(after.armed, []);
+  // Without machines (claims.mjs absent): its comments queued again.
+  const plain = queueContext(t, dir, fileStore({ dir: join(dir, "store") }));
+  await plain.loadQueue();
+  assert.deepEqual(
+    plain.tasks.get("org/repo#7").pending.map((i) => i.queueId),
+    ["q-claimed"],
+  );
+});
+
 test("a deadline that passed while no listener ran: re-armed for now", async (t) => {
   const dir = tempDir(t);
   const store = fileStore();

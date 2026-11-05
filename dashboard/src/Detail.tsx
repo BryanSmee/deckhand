@@ -39,6 +39,7 @@ import { type Handlers, useShortcuts, withKey } from "./keys";
 // `tr`: t() where the task is called `t`.
 import { and, locale, t as tr, tx } from "./i18n";
 import { Log } from "./Log";
+import { HeldComments, MachineFact } from "./MachineTask";
 import { copyText, downloadText } from "./logExport";
 import { logSections, plainText } from "./logModel";
 import { CiStatus } from "./CiStatus";
@@ -72,6 +73,8 @@ interface Props {
   touch?: boolean;
   // Reads api/state again (answers sent, a rerun queued, a run stopped).
   refresh?: () => Promise<void>;
+  // The signed-in login: a machine task's owner delivers its held comments.
+  user?: string;
 }
 
 // The states a run is going on in, which Stop ends.
@@ -94,6 +97,7 @@ export function Detail({
   showRepo,
   touch,
   refresh,
+  user,
 }: Props) {
   // What the listener said of the answers sent or the rerun asked last, on that task's page.
   const [sent, setSent] = useState<{ key: string; message: string; error?: boolean } | null>(null);
@@ -475,6 +479,7 @@ export function Detail({
             <StatusBadge state={t.state} {...taskStatus(t)} />
             {loopLine(t) && <span>{loopLine(t)}</span>}
             {held && <StatusBadge tone="input" label={tr("detail.held")} />}
+            <MachineFact task={t} />
             {r && (
               <span>
                 {tx("detail.started", {
@@ -541,6 +546,7 @@ export function Detail({
             )}
           </div>
           <ReviewRounds task={t} actions={reviewActions || undefined} />
+          <HeldComments task={t} user={user} now={now} refresh={refresh} />
           {reply && (thread || reply.id !== r?.id) && (
             <section class={styles.reply} aria-label={tr("detail.lastReply")}>
               <h3>{tr("detail.lastReply")}</h3>

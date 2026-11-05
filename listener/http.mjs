@@ -173,6 +173,8 @@ export function createHttp(ctx) {
       pr: (key) => ctx.pulls.get(key),
       decisions: (key) => ctx.decisions?.get(key) ?? [],
       reviewed: (repo, number) => ctx.reviews?.entry(repo, number) ?? null,
+      // Routed to a user's machines (claims.mjs): waiting for one, or claimed.
+      machines: mine(ctx.claims?.board() ?? []),
     }).slice(0, 200);
     return { shown, queued, waiting: waiting.length };
   }
@@ -254,6 +256,8 @@ export function createHttp(ctx) {
         ...(ctx.decisions?.get(t.key).length && { decisions: ctx.decisions.get(t.key) }),
         // Its last `/mode policy` dry run.
         ...(ctx.decisions?.dryRun(t.key) && { dryRun: ctx.decisions.dryRun(t.key) }),
+        // A machine task's comments by others, held for its owner (claims.mjs).
+        ...(ctx.claims?.heldOf(t.key).length && { held: ctx.claims.heldOf(t.key) }),
         // Closed: the orchestrator would refuse it.
         rerunnable: t.rerunnable && !ctx.titles.closed(t.key),
         // Off: Start and Queue don't open its open questions first (work.mjs act()).
@@ -366,9 +370,16 @@ export function createHttp(ctx) {
       // The user's own machines (machines.mjs): what they register, they alone reach.
       machines: {
         register: (user, input) => ctx.machines.register(user, input),
-        heartbeat: (user, id, version) => ctx.machines.heartbeat(user, id, version),
+        // Its claims' leases renewed with it (claims.mjs): `runs`, those its driver still has.
+        heartbeat: (user, id, version, runs = null) => ({
+          ...ctx.machines.heartbeat(user, id, version),
+          claims: ctx.claims?.renew(user, id, runs) ?? [],
+        }),
         remove: (user, id) => ctx.machines.remove(user, id),
         offers: (user, id) => ctx.machines.offers(user, id),
+        // The next task routed to it, and a claim given back (claims.mjs).
+        claim: (user, id) => ctx.claims.claim(user, id),
+        release: (user, id, run) => ctx.claims.release(user, id, run),
       },
     },
     log,
@@ -690,6 +701,27 @@ export function createHttp(ctx) {
     log,
   });
 
+  // A machine task's held comments (claims.mjs), delivered or dropped by its owner alone: the
+  // repo's own checks first (hidden, as the task, from who doesn't see it).
+  const heldApi = apiRoute({
+    name: "Held comments",
+    route: (pathname) => {
+      const m = /^\/api\/held\/([^/]+)\/([^/]+)\/(\d+)\/(deliver|drop)$/.exec(pathname);
+      return m ? { what: m[4], repo: `${m[1]}/${m[2]}`, number: Number(m[3]) } : null;
+    },
+    posts: {
+      deliver: (req, res, user, repo, { number }) =>
+        sendJson(res, { delivered: ctx.claims.deliverHeld(user, taskKey(repo, String(number))) }),
+      drop: (req, res, user, repo, { number }) =>
+        sendJson(res, { dropped: ctx.claims.dropHeld(user, taskKey(repo, String(number))) }),
+    },
+    allowed: (repo) => repoAllowed(config, repo),
+    permissions: ctx.permissions,
+    action: () => TASKS,
+    publicUrl: ctx.publicUrl,
+    log,
+  });
+
   // `promise`'s end, logged when it fails, waited for by an orchestrator that stops.
   function admittedAs(promise) {
     const done = Promise.resolve(promise).catch((error) => log(error.stack ?? error));
@@ -736,6 +768,9 @@ export function createHttp(ctx) {
     }
     if (req.url.startsWith("/api/machines") && ctx.machines) {
       if (machinesApi(req, res, user)) return;
+    }
+    if (req.url.startsWith("/api/held/") && ctx.claims) {
+      if (heldApi(req, res, user)) return;
     }
     if (req.url.startsWith("/api/repos")) {
       if (!ctx.app) return res.writeHead(503).end();

@@ -6,7 +6,8 @@
 //
 // An issue is picked only when nothing holds it: an open issue with nothing live on the
 // dashboard (board.mjs isLive(): running, queued, waiting, asking…), without the needs-input
-// label, with no open "blocked by" issue and no open pull request of Deckhand's for it. The run
+// label, with no open "blocked by" issue and no open pull request of Deckhand's for it, and no
+// `runs-on:<label>` label (a machine task's, claims.mjs: never in a reserved slot). The run
 // is the work of the person who last added the label (its `labeled` event), who must be in
 // the operator's and the repo's users: a label a bot or someone else added starts nothing. The
 // App's comment says so, then the label comes off right before the run is queued, so a failed
@@ -22,6 +23,7 @@
 // by the App is a run's write, which may come from anyone's comment: refused as a bot's.
 import { hasLabel, headInRepo, issueItem, linkedIssue, MARKER, taskKey } from "./events.mjs";
 import { graphql, paginate } from "./github.mjs";
+import { hasRunsOn } from "./machines.mjs";
 import { startAction } from "./permissions.mjs";
 import { CONFIG_FILE } from "./repo-config.mjs";
 import { newLogContext, newRequestId } from "../lib/log.mjs";
@@ -343,6 +345,8 @@ export function createAutoPickup({
     if (config.needsInputLabel && hasLabel(issue.labels, config.needsInputLabel)) {
       return `it has open questions (${config.needsInputLabel})`;
     }
+    // A machine task (claims.mjs): its owner's machines take it, never a reserved slot.
+    if (hasRunsOn(issue)) return "it has a runs-on label: its machines take it";
     if (isLive(key)) return "something is live on it";
     if (!pulls.has(repo)) {
       const open = await paginate((p) => github(repo, "GET", p), `/repos/${repo}/pulls?state=open`);

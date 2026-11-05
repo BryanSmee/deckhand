@@ -2313,7 +2313,7 @@ client, and no sandbox service, run token or git gateway is on the machine.
 - **Its owner's alone**: every call names the machine by its id, and one that isn't the
   login's is "not found" as one that doesn't exist; Settings › MCP clients lists the login's
   own machines, its **Remove** posted from the dashboard's origin. Removing one deletes its
-  entry; once machines claim tasks (#596), its claims will end with it.
+  entry and ends its claims, their tasks waiting again.
 - **Every call checks the login again**: a token's login out of `ALLOWED_USERS` is refused at
   edge and at the orchestrator, as their dashboard session is; their machines are listed to
   nobody and offered nothing until they are back.
@@ -2324,6 +2324,28 @@ client, and no sandbox service, run token or git gateway is on the machine.
   start work runs there (`runs:start:work`, the repository's `users` narrowing it): never more
   than they may do on the dashboard. A grant, config or access decision that can't be read
   offers nothing (fail closed).
+- **Who claims what** (`listener/claims.mjs`, #596): an issue runs on a machine only when its
+  repository has the `machines:` block and it is routed there, by a `runs-on:<label>` label or
+  a `/machine` comment. Its owner is who asked: the comment's author, who must be able to start
+  work runs there, or whoever last added the label, checked as auto-pickup's labeller (an
+  allowed user, not a bot, who may start work runs; anyone else's labelling runs nothing). A
+  `claim` gives a machine only the tasks of its own owner, whose route it fits (the machine the
+  task sticks to, or its name or label), in a repository offered to it now (above), within its
+  capacity. The claim holds a lease of 2 minutes that the machine's heartbeat renews; one that
+  runs out gives the task's comments back, for that machine. Another owner's `/machine` on the
+  task is refused while its owner is a user here; taking its `runs-on` label off (anyone who
+  may edit labels) ends a label route, as `/machine none` does: the task goes back to
+  sandboxes, Deckhand's default, and the comments held for its owner are queued.
+- **What reaches the machine**: the work a sandbox run would get (the repository, the issue, its
+  branch's name, the mode, the prompt and the comments' text), no token, no secret of the
+  operator's. Only the owner's comments reach its runs: another user's are held on the task,
+  shown on the dashboard to those who see the task, until the owner delivers or drops them
+  (`POST /api/held/<repo>/<n>/deliver|drop`, the owner's alone). Deckhand's own items (a review's
+  fix round, a CI fix, a rebase, and the review of the issue's own pull request, which is the
+  issue's task) are delivered: the whole loop runs on the machine. Every comment a claim takes
+  is checked again first, as a sandbox run's are: one whose author left `ALLOWED_USERS` or the
+  repository's `users`, or may no longer start its mode, is dropped. Pushes are the owner's own git's; the App writes
+  what it writes for any run (#597, #598).
 - **What Deckhand doesn't enforce**: anything on the machine. An agent runs there on its own,
   with the owner's files, credentials and network; Deckhand suggests settings for it and
   enforces none. `register_machine`'s answer and the dashboard's list of machines say so.

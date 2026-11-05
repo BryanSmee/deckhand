@@ -126,17 +126,19 @@ export function headInRepo(pr, repo) {
 // The command on the first line ("work" for the trigger, "stop" for "/stop", "cancel" for
 // "/cancel": stop the running run, tasks.mjs), the mode a
 // "/mode <name>" line asks for (lowercase, or null), what an "/after #12" line waits for
-// (parseAfter(), or null) and the rest of the comment; trigger null and the whole comment when
-// there is none. The trigger is the whole first line, so "Deckhand is down" starts nothing;
-// "/mode", "/after", "/model", "/effort", "/speed" and "/agent" may follow it there ("Deckhand
-// /mode brainstorm", "Deckhand /agent codex"): the last four stay in the text, for takeOptions().
+// (parseAfter(), or null), the machine a "/machine <name or label>" line routes the issue to
+// (parseMachine(), or null: claims.mjs) and the rest of the comment; trigger null and the whole
+// comment when there is none. The trigger is the whole first line, so "Deckhand is down" starts
+// nothing; "/mode", "/after", "/machine", "/model", "/effort", "/speed" and "/agent" may follow
+// it there ("Deckhand /mode brainstorm", "Deckhand /agent codex"): the last four stay in the
+// text, for takeOptions().
 export function splitTrigger(config, body) {
   const [first, ...rest] = body.split(/\r?\n/);
   if (first.trim().toLowerCase() === "/stop") return takeCommands(rest.join("\n"), "stop");
   if (first.trim().toLowerCase() === "/cancel") return takeCommands(rest.join("\n"), "cancel");
   // Each command its own line, as if written below; anything else on the line and it isn't
   // the trigger line ("Deckhand /mode brainstorm please", "Deckhand /effort huge").
-  const inline = trailingCommands(first, ["mode", "after", ...OPTIONS]);
+  const inline = trailingCommands(first, ["mode", "after", "machine", ...OPTIONS]);
   if (inline && normalize(inline.head) === config.trigger) {
     return takeCommands([...inline.commands, ...rest].join("\n"), "work");
   }
@@ -151,7 +153,8 @@ export function splitTrigger(config, body) {
 export function trailingCommands(line, names) {
   // Only from the start of a run of spaces: from inside one, the search would be quadratic.
   const start = new RegExp(`(?<!\\s)\\s+(?=\\/(?:${names.join("|")})\\s)`, "gi");
-  const known = (l) => /^\/mode\s+[\w-]+$/i.test(l) || /^\/after\s/i.test(l) || !takeOptions(l, {});
+  const known = (l) =>
+    /^\/mode\s+[\w-]+$/i.test(l) || /^\/(?:after|machine)\s/i.test(l) || !takeOptions(l, {});
   for (const match of line.matchAll(start)) {
     const commands = line.slice(match.index).trim().split(start);
     if (commands.every(known)) return { head: line.slice(0, match.index), commands };
@@ -159,19 +162,43 @@ export function trailingCommands(line, names) {
   return null;
 }
 
-// Removes the "/mode <name>" and "/after …" lines. Their own lines, like "/model": the space
-// keeps "/mode" and "/model" apart. The last of each wins.
+// Removes the "/mode <name>", "/after …" and "/machine …" lines. Their own lines, like
+// "/model": the space keeps "/mode" and "/model" apart. The last of each wins.
 function takeCommands(text, trigger) {
   let mode = null;
   let after = null;
+  let machine = null;
   const kept = text.split(/\r?\n/).filter((line) => {
     const match = /^\s*\/mode\s+([\w-]+)\s*$/i.exec(line);
     if (match) mode = match[1].toLowerCase();
     const wait = /^\s*\/after(?:\s+(.*?))?\s*$/i.exec(line);
     if (wait) after = parseAfter(wait[1] ?? "");
-    return !match && !wait;
+    const route = /^\s*\/machine(?:\s+(.*?))?\s*$/i.exec(line);
+    if (route) machine = parseMachine(route[1] ?? "");
+    return !match && !wait && !route;
   });
-  return { trigger, mode, after, text: kept.join("\n").trim() };
+  return { trigger, mode, after, machine, text: kept.join("\n").trim() };
+}
+
+// The longest machine name a "/machine" line takes (machines.mjs's own).
+const MACHINE_NAME = 64;
+
+// What follows "/machine": { want } (a name of one of its author's machines, or a label they
+// carry, as written), { none: true } (back to sandboxes) or { error } (what the reply says).
+export function parseMachine(text) {
+  const want = text.trim();
+  if (!want) {
+    return {
+      error: "`/machine` needs a machine: its name or a label (`/machine unreal`), or `none`.",
+    };
+  }
+  if (want.toLowerCase() === "none") return { none: true };
+  if (want.length > MACHINE_NAME || /\p{Cc}/u.test(want)) {
+    return {
+      error: `\`/machine\` takes a machine's name or a label, ${MACHINE_NAME} characters at most.`,
+    };
+  }
+  return { want };
 }
 
 // What follows "/after": { numbers } (issues or pull requests of the same repo), { none: true }
@@ -331,9 +358,9 @@ function issueCommentItem(config, event, p, skip) {
   if (p.action !== "created") return undefined;
   const repo = p.repository.full_name;
   const body = p.comment.body ?? "";
-  const { trigger, mode, after, text } = splitTrigger(config, body);
+  const { trigger, mode, after, machine, text } = splitTrigger(config, body);
   if (p.issue.pull_request) {
-    return prItem(config, skip, repo, p.issue, { trigger, mode, after }, text, p.comment);
+    return prItem(config, skip, repo, p.issue, { trigger, mode, after, machine }, text, p.comment);
   }
   // Every comment on an inbox issue is an entry: trigger lines don't apply there, but for
   // `/cancel`, which stops the entry's run.
@@ -344,7 +371,14 @@ function issueCommentItem(config, event, p, skip) {
       ["bug", config.inbox?.bugs],
     ].find(([, number]) => number === p.issue.number)?.[0];
   if (inbox) return inboxItem(repo, p.issue, inbox, p.comment, p.comment.user, body);
-  return issueItem(repo, p.issue, { comment: p.comment, trigger, modeLine: mode, after, text });
+  return issueItem(repo, p.issue, {
+    comment: p.comment,
+    trigger,
+    modeLine: mode,
+    after,
+    machine,
+    text,
+  });
 }
 
 // A comment on a line of a pull request's diff: Claude gets the line and its hunk.
@@ -645,7 +679,15 @@ export function pullSize(pr) {
 // payload without its head, is the pull request's own until its head is looked up
 // (`claims`, see linkTo()). Brainstorms, `/stop` and onboarding are refused there by Deckhand's
 // policy/run.rego (`allow_run`, run-policy.mjs), which an operator may replace.
-function prItem(config, skip, repo, pull, { trigger, mode, after = null }, text, comment) {
+function prItem(
+  config,
+  skip,
+  repo,
+  pull,
+  { trigger, mode, after = null, machine = null },
+  text,
+  comment,
+) {
   const { number: pr, title } = pull;
   const item = {
     repo,
@@ -656,6 +698,7 @@ function prItem(config, skip, repo, pull, { trigger, mode, after = null }, text,
     trigger,
     modeLine: mode,
     after,
+    machine,
     text,
     replyTo: pr,
     comment,

@@ -310,6 +310,27 @@ test("each skip reason passes the issue over for the next one", async () => {
   assert.equal(p.calls.filter((c) => c.includes("/issues/7/events")).length, 2);
 });
 
+test("an issue with a runs-on label is a machine task's: never picked, the next one is", async () => {
+  const { pickup, p } = setup({
+    repos: {
+      "org/a": {
+        issues: [
+          issue(1, 1, { labels: [{ name: "auto-pickup" }, { name: "runs-on:unreal" }] }),
+          issue(2, 2),
+        ],
+      },
+    },
+  });
+  assert.deepEqual(await pickup.sweep(), ["org/a#2"]);
+  assert.ok(
+    p.logs.includes("Auto-pickup: org/a#1: skipped, it has a runs-on label: its machines take it"),
+    p.logs.join("\n"),
+  );
+  // Not even its events read, nor its label taken off.
+  assert.ok(!p.calls.some((c) => c.includes("/issues/1/")));
+  assert.deepEqual(p.removed, ["org/a#2"]);
+});
+
 test("a label whose latest labelling isn't in the events yet: no earlier labeller's run, read again", async () => {
   const unlabelled = {
     event: "unlabeled",

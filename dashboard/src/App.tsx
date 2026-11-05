@@ -424,6 +424,7 @@ export function Dashboard({ state, error, repos, refresh, onOverview }: Props) {
                   showRepo={!route.repo}
                   touch={!wide}
                   refresh={refresh}
+                  user={state?.user}
                 />
               </main>
             </div>

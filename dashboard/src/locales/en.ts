@@ -39,6 +39,9 @@ export const en = {
   "state.working": "Working",
   "state.stopping": "Stopping",
   "state.queued": "Queued",
+  // A machine task's (listener/claims.mjs): queued for its machine, or claimed by it.
+  "state.waitingFor": "Waiting for {machine}",
+  "state.onMachine": "On {machine}",
   "state.inReview": "In review",
   "state.waiting": "Waiting",
   "state.brainstorm": "Brainstorm",
