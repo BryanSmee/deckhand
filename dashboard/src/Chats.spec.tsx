@@ -228,7 +228,7 @@ test("a phone: the top bar names the repository, its Chats tab stays on it; All'
   );
 });
 
-test("a phone's tab bar: none with a chat open, the repository last browsed on the list", async () => {
+test("a phone's tab bar: Tasks and Board the chats' repository, not the last one browsed; none with a chat open", async () => {
   vi.stubGlobal("matchMedia", () => ({
     matches: false,
     addEventListener() {},
@@ -237,17 +237,18 @@ test("a phone's tab bar: none with a chat open, the repository last browsed on t
   history.replaceState(null, "", "#/acme/api");
   show(makeChats([makeChat()]));
   await screen.findByRole("button", { name: "acme/api: switch repository" });
-  // An open chat (acme/app): no tab bar to send Tasks and Board elsewhere than its header.
-  history.replaceState(null, "", "#/chats/0123456789abcdef");
+  // acme/app's chats after acme/api's tasks (#871): Tasks and Board the top bar's repository.
+  history.replaceState(null, "", "#/acme/app/chats");
   window.dispatchEvent(new HashChangeEvent("hashchange"));
   await screen.findByRole("button", { name: "acme/app: switch repository" });
-  expect(screen.queryByRole("navigation", { name: "Pages" })).toBeNull();
-  // The list: the repository the user came from, as the header's Tasks.
-  history.replaceState(null, "", "#/chats");
+  const tabs = within(screen.getByRole("navigation", { name: "Pages" }));
+  expect(tabs.getByRole("link", { name: "Tasks" }).getAttribute("href")).toBe("#/acme/app");
+  expect(tabs.getByRole("link", { name: "Board" }).getAttribute("href")).toBe("#/acme/app/board");
+  // A chat open: no tab bar, the conversation takes the screen.
+  history.replaceState(null, "", "#/acme/app/chats/0123456789abcdef");
   window.dispatchEvent(new HashChangeEvent("hashchange"));
-  const tabs = within(await screen.findByRole("navigation", { name: "Pages" }));
-  expect(tabs.getByRole("link", { name: "Tasks" }).getAttribute("href")).toBe("#/acme/api");
-  expect(tabs.getByRole("link", { name: "Board" }).getAttribute("href")).toBe("#/acme/api/board");
+  await screen.findByRole("region", { name: "What does run() do?" });
+  expect(screen.queryByRole("navigation", { name: "Pages" })).toBeNull();
 });
 
 test("the limit: New chat disabled past it, with the reason", async () => {
