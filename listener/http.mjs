@@ -658,6 +658,8 @@ export function createHttp(ctx) {
         if (questions) settleQuestions([closed.key, closed.state === "done" && pr?.key], at);
         // An auto-picked issue's work is over: a reopen doesn't take its pick back (picks.mjs).
         endPicks(ctx.picks, ctx.runs, [closed.key, pr?.key].filter(Boolean));
+        // Its route to a machine, if it had one (claims.mjs forget()).
+        ctx.claims?.forget(closed.key);
       }
       admitted(ctx.waits.closed(closed.repo, closed.number, closed.state));
     }

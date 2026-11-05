@@ -241,7 +241,8 @@ who may start work runs, as auto-pickup checks its labeller), or after a `/machi
 label>` line (its author's; alone, it starts nothing). `/machine none` sends it back to
 sandboxes, until a `/machine <label>` routes it again (a label added later doesn't); only its owner moves it. A machine claims it within its own capacity, never a
 `MAX_PARALLEL` or auto-pickup slot (the sweep skips `runs-on` issues), and keeps it: the next
-runs go there, in the same session. Other users' comments wait on the task's page until its
+runs go there, in the same session. Closing the issue ends its route (a `runs-on` label still on
+routes it again). Other users' comments wait on the task's page until its
 owner delivers them; Deckhand's own (a review's fix round, a CI fix) don't. When the agent
 there asks for a permission, the App's comment says so, and the owner answers with `/allow`,
 `/allow run` or `/deny` (or on the task's page): anyone else's answer is ignored

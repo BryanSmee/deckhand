@@ -746,3 +746,65 @@ test("a claim asks the access decision again: a refused start drops its comment,
     }
   }
 });
+
+test("an issue closed drops its route once its task is idle: then, or at the sweep after its run", async () => {
+  const { t, ctx } = bench();
+  const desk = t.register("alice", "Desk");
+  await t.say("alice", "Deckhand\n/machine Desk");
+  t.ready();
+  await ctx.claims.claim("alice", desk);
+  // Closed while its machine holds it: kept, the claim's.
+  assert.equal(ctx.claims.forget(KEY), false);
+  assert.equal(ctx.claims.view(t.task()).machine, "Desk");
+  const closed = new Map([[KEY, "completed"]]);
+  ctx.titles = {
+    ...ctx.titles,
+    keys: () => [...closed.keys(), "org/repo#3"],
+    closed: (key) => closed.get(key) ?? null,
+  };
+  assert.deepEqual(ctx.claims.forgetClosed(), []);
+  // Its claim over: the next sweep drops it, the task shared again.
+  ctx.claims.cancel(t.task(), "alice");
+  assert.deepEqual(ctx.claims.forgetClosed(), [KEY]);
+  assert.equal(ctx.claims.view(t.task()), null);
+  assert.equal(poolOf(t.task()), "shared");
+  assert.match(t.logs.at(-1), /org\/repo#12: its route dropped, the issue closed/);
+  // Nothing left to drop.
+  assert.equal(ctx.claims.forget(KEY), false);
+  assert.deepEqual(ctx.claims.forgetClosed(), []);
+});
+
+test("a closed issue's `/machine none` goes too; a reopened one routes again from its runs-on label", async () => {
+  const labels = [{ name: "runs-on:unreal" }];
+  const { t, ctx } = bench({ labels, events: [labelledBy("alice")] });
+  await t.say("alice", "/machine none");
+  assert.equal(t.task(), undefined);
+  assert.equal(ctx.claims.forget(KEY), true);
+  const item = {
+    repo: "org/repo",
+    id: "12",
+    kind: "issue",
+    number: 12,
+    settings: (await ctx.repoSettings()).settings,
+  };
+  const route = await ctx.claims.routeFor(item, labels);
+  assert.equal(route.owner, "alice");
+  assert.equal(route.via, "label");
+});
+
+test("start() sweeps the closed issues' routes at once, then hourly; stop() ends both timers", async () => {
+  const timers = [];
+  const { t, ctx } = bench();
+  const routes = new Map();
+  ctx.claims = createClaims(ctx, {
+    routes,
+    every: (fn, ms) => (timers.push(ms), { unref: () => {} }),
+  });
+  routes.set(KEY, { none: true, by: "alice", at: 1 });
+  ctx.titles = { ...ctx.titles, keys: () => [KEY], closed: () => "not_planned" };
+  ctx.claims.start();
+  assert.equal(routes.size, 0);
+  assert.deepEqual(timers, [5000, 3_600_000]);
+  ctx.claims.stop();
+  assert.equal(t.started.length, 0);
+});

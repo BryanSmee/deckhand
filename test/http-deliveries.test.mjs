@@ -34,6 +34,7 @@ function setup() {
   const s = { issues: { 77: { state: "open" } }, asked: [], replies: [], resumed: [] };
   s.moved = [];
   s.soon = [];
+  s.forgotten = [];
   s.waits = createWaits({
     github: async (repo, method, path) => {
       s.asked.push(path);
@@ -54,6 +55,7 @@ function setup() {
     },
     conflicts: { soon: async (repo) => s.soon.push(repo) },
     waits: s.waits,
+    claims: { forget: (key) => s.forgotten.push(key) },
   });
   s.http = createHttp(ctx);
   return s;
@@ -105,6 +107,16 @@ test("/after: an issues delivery closing #77 as completed starts the comment; as
   );
   assert.match(s.replies.at(-1)[1], /^#77 is done: starting\./);
   assert.deepEqual(s.waits.list(), []);
+});
+
+test("an issue closed drops its route to a machine (claims.mjs forget()); one reopened keeps it", async () => {
+  const s = setup();
+  await s.http.deliver(closed("completed"));
+  assert.deepEqual(s.forgotten, ["org/repo#77"]);
+  const reopened = closed(null);
+  reopened.payload = { ...reopened.payload, action: "reopened" };
+  await s.http.deliver(reopened);
+  assert.deepEqual(s.forgotten, ["org/repo#77"]);
 });
 
 test("/after: a merged pull request that closes #77 asks GitHub about #77, with no issues delivery", async () => {
