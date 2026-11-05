@@ -327,6 +327,22 @@ test("cached: a page load doesn't read every config again; deliveries refresh it
   assert.equal(configReads(gh.calls), 5);
 });
 
+test("infoOf: what GitHub said of a repo when last listed, for the access filters (#783)", async () => {
+  const { list } = setup({
+    first: [info("org/app", { default_branch: "trunk", private: false }), info("org/lib")],
+  });
+  assert.equal(list.infoOf("org/app"), null);
+  await list.list();
+  assert.deepEqual(list.infoOf("Org/App"), {
+    full_name: "org/app",
+    private: false,
+    default_branch: "trunk",
+  });
+  assert.equal(list.infoOf("org/lib").private, true);
+  assert.equal(list.infoOf("org/other"), null);
+  assert.equal(list.infoOf(null), null);
+});
+
 test("which deliveries refresh the list", () => {
   const calls = [];
   const refresh = (repo) => calls.push(repo ?? "*");

@@ -119,6 +119,8 @@ export function createRepoList({
   let listedAt = 0;
   // The repos' names as last listed, for what can't wait for a listing (http.mjs state()).
   let listedNames = [];
+  // What GitHub said of each, by its name in lower case, for access() (infoOf()).
+  let listedInfos = new Map();
   // The installations as last listed, [{ account, url, missing }]: the Manage App links.
   let installed = [];
   // installation id → what it lacked when last warned about ("" for nothing).
@@ -159,6 +161,7 @@ export function createRepoList({
     }
     infos.sort((a, b) => a.full_name.localeCompare(b.full_name));
     listedNames = infos.map((r) => r.full_name);
+    listedInfos = new Map(infos.map((r) => [r.full_name.toLowerCase(), r]));
     return infos;
   }
 
@@ -324,6 +327,21 @@ export function createRepoList({
   // [] before the first listing.
   const listed = () => [...new Set([...listedNames, ...[...configs.values()].map((k) => k.repo)])];
 
+  // What GitHub said of `repo` when the installations were last listed (at most LIST_MS ago, or
+  // an installation's delivery since), as policies.mjs access() takes it: { full_name, private,
+  // default_branch }, or null when it wasn't listed (or GitHub gave no default branch). The
+  // dashboard's filters over every repo ask access() with it (permissions.mjs which(),
+  // dashboard()): with the name alone each would read the repo from GitHub (#783).
+  function infoOf(repo) {
+    const info = typeof repo === "string" ? listedInfos.get(repo.toLowerCase()) : null;
+    if (!info || typeof info.default_branch !== "string" || !info.default_branch) return null;
+    return {
+      full_name: info.full_name,
+      private: info.private,
+      default_branch: info.default_branch,
+    };
+  }
+
   return {
     list,
     get,
@@ -332,6 +350,7 @@ export function createRepoList({
     refreshAll,
     names,
     listed,
+    infoOf,
     usersOf,
     known,
     autoPickup,
