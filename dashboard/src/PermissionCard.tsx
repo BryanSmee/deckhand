@@ -5,18 +5,23 @@
 // chat (its permissions profile keeps it), Deny.
 import { useState } from "preact/hooks";
 import { answerRequest } from "./api";
-import { plural } from "./format";
+import { t, tx } from "./i18n";
+import type { Plain } from "./locales";
 import type { Chat, PermissionAnswer, PermissionKind, PermissionRequest } from "./types";
 import { Button } from "./ui/Button";
 import * as Icon from "./ui/icons";
 import styles from "./PermissionCard.module.css";
 
-const KINDS: Record<PermissionKind, string> = {
-  host: "a host",
-  github: "GitHub access",
-  engine: "a container engine",
-  mount: "a host mount",
+// What the agent asks for, by kind. Keys: written when shown.
+const ASKS: Record<PermissionKind, Plain> = {
+  host: "chats.asksHost",
+  github: "chats.asksGithub",
+  engine: "chats.asksEngine",
+  mount: "chats.asksMount",
 };
+
+// The engine's name as the listener writes it (in English): it says no more than its kind.
+const ENGINE = "a container engine";
 
 interface Props {
   chatId: string;
@@ -40,26 +45,24 @@ export function PermissionCard({ chatId, request, now, onChat }: Props) {
     onChat(said.chat);
   };
 
+  const asks = t(ASKS[request.kind]);
   return (
-    <section class={styles.card} aria-label={`The agent asks for ${KINDS[request.kind]}`}>
+    <section class={styles.card} aria-label={asks}>
       <p class={styles.title}>
         <Icon.Alert size={16} />
         <span>
-          The agent asks for {KINDS[request.kind]}
-          {/* The engine's name says no more than its kind. */}
-          {request.what !== KINDS[request.kind] && (
-            <>
-              : <span class={styles.what}>{request.what}</span>
-            </>
-          )}
+          {request.kind === "engine" && request.what === ENGINE
+            ? asks
+            : tx("chats.asksWhat", {
+                asks,
+                what: <span class={styles.what}>{request.what}</span>,
+              })}
         </span>
       </p>
       {request.reason && <p class={styles.reason}>{request.reason}</p>}
       <p class={styles.meta}>
-        {request.live
-          ? "Applies to its sandbox at once."
-          : "Applies when its sandbox starts again: Restart now, in the chat's permissions, once the agent has answered."}{" "}
-        Denied in {plural(minutes, "minute")} without an answer.
+        {t(request.live ? "chats.appliesNow" : "chats.appliesLater")}{" "}
+        {t("chats.deniedIn", { count: minutes })}
       </p>
       {error && (
         <p class={styles.failed} role="alert">
@@ -74,7 +77,7 @@ export function PermissionCard({ chatId, request, now, onChat }: Props) {
           disabled={!!busy && busy !== "once"}
           onClick={() => void answer("once")}
         >
-          Approve once
+          {t("chats.approveOnce")}
         </Button>
         <Button
           size="small"
@@ -82,7 +85,7 @@ export function PermissionCard({ chatId, request, now, onChat }: Props) {
           disabled={!!busy && busy !== "chat"}
           onClick={() => void answer("chat")}
         >
-          Approve for this chat
+          {t("chats.approveChat")}
         </Button>
         <Button
           size="small"
@@ -91,7 +94,7 @@ export function PermissionCard({ chatId, request, now, onChat }: Props) {
           disabled={!!busy && busy !== "deny"}
           onClick={() => void answer("deny")}
         >
-          Deny
+          {t("chats.deny")}
         </Button>
       </div>
     </section>

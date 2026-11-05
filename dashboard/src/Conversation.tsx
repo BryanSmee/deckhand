@@ -19,7 +19,9 @@ import {
   type Turn,
   waitingTurns,
 } from "./chatModel";
-import { dayTime, plural } from "./format";
+import { dayTime } from "./format";
+import { t } from "./i18n";
+import type { Plain } from "./locales";
 import { ItemView } from "./Log";
 import { PermissionCard } from "./PermissionCard";
 import { PHASE_TITLES, shortDuration } from "./logModel";
@@ -151,7 +153,7 @@ export function Conversation({ chat, now, touch, onChat }: Props) {
           setFollowing(el.scrollHeight - el.scrollTop - el.clientHeight < NEAR_END);
         }}
       >
-        <div class={styles.turns} role="log" aria-label="Conversation">
+        <div class={styles.turns} role="log" aria-label={t("chats.conversation")}>
           {earlier > 0 && (
             <Button
               variant="ghost"
@@ -159,14 +161,10 @@ export function Conversation({ chat, now, touch, onChat }: Props) {
               class={styles.earlier}
               onClick={() => setShownRuns((n) => n + RUNS_SHOWN)}
             >
-              Show earlier ({plural(earlier, "more sandbox run", "more sandbox runs")})
+              {t("chats.showEarlier", { count: earlier })}
             </Button>
           )}
-          {!all.length && (
-            <p class={styles.hint}>
-              Ask anything about {chat.repo}: your first message starts its sandbox.
-            </p>
-          )}
+          {!all.length && <p class={styles.hint}>{t("chats.empty", { repo: chat.repo })}</p>}
           {all.map((turn) => (
             <TurnView key={turn.id} turn={turn} isOpen={isOpen} toggle={toggle} />
           ))}
@@ -190,13 +188,11 @@ export function Conversation({ chat, now, touch, onChat }: Props) {
       >
         <p class={styles.state} role="status">
           <StatusDot tone={CHAT_STATES[state].tone} pulse={live} />
-          {chat.reachable
-            ? chatNote(chat, state)
-            : "You can no longer run the agent on this repository: you can only delete this chat."}
+          {chat.reachable ? chatNote(chat, state) : t("chats.unreachable")}
         </p>
         {error && (
           <p class={styles.failed} role="alert">
-            Not sent: {error}
+            {t("chats.notSent", { error })}
           </p>
         )}
         <div class={styles.row}>
@@ -204,8 +200,8 @@ export function Conversation({ chat, now, touch, onChat }: Props) {
             ref={box}
             class={styles.box}
             rows={1}
-            aria-label="Message"
-            placeholder={chat.reachable ? "Message the agent" : "This chat takes no messages"}
+            aria-label={t("chats.message")}
+            placeholder={t(chat.reachable ? "chats.messagePlaceholder" : "chats.noMessages")}
             disabled={!chat.reachable}
             value={text}
             onInput={(e) => setText(e.currentTarget.value)}
@@ -219,8 +215,8 @@ export function Conversation({ chat, now, touch, onChat }: Props) {
             type="submit"
             variant="primary"
             size={touch ? "touch" : "default"}
-            label="Send"
-            title="Send (Enter; Shift Enter adds a line)"
+            label={t("chats.send")}
+            title={t("chats.sendTitle")}
             icon={<Icon.Send size={touch ? 20 : 16} />}
             disabled={!chat.reachable || !text.trim()}
           />
@@ -236,7 +232,9 @@ function startTurn(run: Run, now: number): Turn {
   return {
     kind: "note",
     id: `${run.id}:start`,
-    text: `${resumed ? "Sandbox resumed" : "Sandbox started"} ${dayTime(run.startedAt, now)}`,
+    text: t(resumed ? "chats.sandboxResumed" : "chats.sandboxStarted", {
+      when: dayTime(run.startedAt, now),
+    }),
   };
 }
 
@@ -245,16 +243,16 @@ function resetTurn(at: number, now: number): Turn {
   return {
     kind: "note",
     id: `reset:${at}`,
-    text: `Chat reset ${dayTime(at, now)}: a fresh clone and session, the agent remembers nothing above`,
+    text: t("chats.chatReset", { when: dayTime(at, now) }),
   };
 }
 
 // What a message on its way says: sent from here, waiting in the listener's queue, or taken
-// by a run whose log hasn't shown it yet.
-const WAITING = {
-  sending: "Sending…",
-  queued: "Queued: the agent gets it once its sandbox is ready",
-  sent: "Sent",
+// by a run whose log hasn't shown it yet. Keys: written when shown.
+const WAITING: Record<"sending" | "queued" | "sent", Plain> = {
+  sending: "chats.sending",
+  queued: "chats.queued",
+  sent: "chats.sent",
 };
 
 function TurnView({
@@ -271,7 +269,7 @@ function TurnView({
       return (
         <div class={`${styles.turn} ${styles.you}`}>
           <p class={`${styles.bubble} ${turn.waiting ? styles.waiting : ""}`}>{turn.text}</p>
-          {turn.waiting && <span class={styles.meta}>{WAITING[turn.waiting]}</span>}
+          {turn.waiting && <span class={styles.meta}>{t(WAITING[turn.waiting])}</span>}
         </div>
       );
     case "agent":
@@ -294,7 +292,9 @@ function TurnView({
         (i) =>
           (i.kind === "tool" && i.outputs.some((o) => o.error)) || (i.kind === "output" && i.error),
       );
-      const title = tools ? plural(tools, "tool call") : plural(turn.items.length, "line");
+      const title = tools
+        ? t("chats.toolCalls", { count: tools })
+        : t("chats.lines", { count: turn.items.length });
       return (
         <Fold
           class={styles.fold}
@@ -316,7 +316,11 @@ function TurnView({
       return (
         <Fold
           class={styles.fold}
-          title={turn.current ? `${PHASE_TITLES[turn.phase]}…` : PHASE_TITLES[turn.phase]}
+          title={
+            turn.current
+              ? t("chats.phaseNow", { phase: PHASE_TITLES[turn.phase] })
+              : PHASE_TITLES[turn.phase]
+          }
           tone={turn.failed ? "err" : turn.current ? "run" : "done"}
           pulse={turn.current}
           meta={<span class={styles.mono}>{shortDuration(turn.seconds)}</span>}

@@ -22,6 +22,7 @@ import {
   when,
   whenTitle,
 } from "./format";
+import { t } from "./i18n";
 import { useShortcuts, useShortcutsOn, withKey } from "./keys";
 import { CiStatus } from "./CiStatus";
 import { ReviewMarks } from "./ReviewLoop";
@@ -104,10 +105,10 @@ export function TaskList({
         {(searching || !!query) && (
           <div ref={box}>
             <Field
-              label="Search tasks"
+              label={t("taskList.search")}
               hideLabel
               type="search"
-              placeholder="Search tasks"
+              placeholder={t("taskList.search")}
               lead={<Search size={15} />}
               hint={touch || query || !shortcuts ? undefined : "/"}
               size={touch ? "touch" : "default"}
@@ -117,11 +118,11 @@ export function TaskList({
             />
           </div>
         )}
-        <div class={styles.chips} role="group" aria-label="State">
+        <div class={styles.chips} role="group" aria-label={t("taskList.state")}>
           {CHIPS.map((c, i) => (
             <FilterChip
               key={c.id}
-              title={withKey(`Filter: ${c.name}`, "filter", i)}
+              title={withKey(t("taskList.filter", { name: c.name }), "filter", i)}
               class={styles.chip}
               pressed={c.id === chip}
               count={found.filter((t) => inChip(c.id, t)).length}
@@ -148,12 +149,12 @@ export function TaskList({
       ) : (
         <p class={styles.empty}>
           {loading
-            ? "Loading…"
+            ? t("taskList.loading")
             : !tasks.length
-              ? "No runs yet"
+              ? t("taskList.noRuns")
               : query.trim() && !found.length
-                ? `No task matches “${query.trim()}”`
-                : "Nothing in this state"}
+                ? t("taskList.noMatch", { query: query.trim() })
+                : t("taskList.noneInState")}
         </p>
       )}
     </div>

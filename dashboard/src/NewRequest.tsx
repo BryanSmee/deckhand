@@ -7,7 +7,9 @@ import { useId, useState } from "preact/hooks";
 import { type Can, useCan } from "./access";
 import { analysisRepos, AnalyzeForm } from "./Analyze";
 import { sameRepo, uniqueRepos } from "./format";
+import { t } from "./i18n";
 import { INBOX_DOCS, InboxForm, type InboxKind } from "./Inbox";
+import type { Plain } from "./locales";
 import type { Inboxes, Task } from "./types";
 import { Button } from "./ui/Button";
 import { type Segment, Segmented } from "./ui/Choice";
@@ -26,19 +28,38 @@ export interface Action {
   pending: boolean;
 }
 
-// Each inbox kind's key in .deckhand.yaml's `inboxes`, and its name in a sentence.
-const INBOX: Record<InboxKind, { key: keyof Inboxes; name: string }> = {
-  idea: { key: "ideas", name: "ideas" },
-  bug: { key: "bugs", name: "bug reports" },
-  discussion: { key: "discussions", name: "discussions" },
+// Each inbox kind's key in .deckhand.yaml's `inboxes`, and the sentences that name it: whole
+// sentences, so a language can write each kind's name as its sentence needs.
+const INBOX: Record<
+  InboxKind,
+  { key: keyof Inboxes; cantSend: Plain; noInbox: Plain; repoNoInbox: RepoNoInbox }
+> = {
+  idea: {
+    key: "ideas",
+    cantSend: "request.cantSendIdeas",
+    noInbox: "request.noIdeas",
+    repoNoInbox: "request.repoNoIdeas",
+  },
+  bug: {
+    key: "bugs",
+    cantSend: "request.cantSendBugs",
+    noInbox: "request.noBugs",
+    repoNoInbox: "request.repoNoBugs",
+  },
+  discussion: {
+    key: "discussions",
+    cantSend: "request.cantSendDiscussions",
+    noInbox: "request.noDiscussions",
+    repoNoInbox: "request.repoNoDiscussions",
+  },
 };
+type RepoNoInbox = "request.repoNoIdeas" | "request.repoNoBugs" | "request.repoNoDiscussions";
 
-const SUBS: Record<RequestKind, string> = {
-  idea: "Goes to its repository's inbox, for the inbox run to pick up.",
-  bug: "Goes to its repository's inbox, for the inbox run to pick up.",
-  discussion: "Starts a discussion in its repository: Deckhand answers there.",
-  analyze:
-    "A run reads a digest of the runs you pick and replies on a new issue with what would make them faster or more reliable. It changes no code.",
+const SUBS: Record<RequestKind, Plain> = {
+  idea: "request.subInbox",
+  bug: "request.subInbox",
+  discussion: "request.subDiscussion",
+  analyze: "request.subAnalyze",
 };
 
 // The kinds in the order the dialog offers them.
@@ -95,12 +116,18 @@ export function NewRequest({
   const anyDiscussions = inboxRepos(inboxes, "discussion").length > 0;
   const kinds: Segment<RequestKind>[] = (
     [
-      { value: "idea", label: "Idea", icon: <Icon.Idea size={14} /> },
-      { value: "bug", label: "Bug report", icon: <Icon.Bug size={14} /> },
+      { value: "idea", label: t("request.kindIdea"), icon: <Icon.Idea size={14} /> },
+      { value: "bug", label: t("request.kindBug"), icon: <Icon.Bug size={14} /> },
       ...(anyDiscussions || kind === "discussion"
-        ? [{ value: "discussion" as const, label: "Discussion", icon: <Icon.Talk size={14} /> }]
+        ? [
+            {
+              value: "discussion" as const,
+              label: t("request.kindDiscussion"),
+              icon: <Icon.Talk size={14} />,
+            },
+          ]
         : []),
-      { value: "analyze", label: "Analyze runs", icon: <Icon.Chart size={14} /> },
+      { value: "analyze", label: t("request.kindAnalyze"), icon: <Icon.Chart size={14} /> },
     ] as Segment<RequestKind>[]
   ).filter((k) => allowed.includes(k.value) || k.value === kind);
 
@@ -110,22 +137,20 @@ export function NewRequest({
   const note =
     offered.length > 0 && !repos.length ? (
       <p class={styles.note}>
-        {kind === "analyze"
-          ? "You can't start an analysis on any of these repositories."
-          : `You can't send ${INBOX[kind].name} to any of these repositories.`}
+        {kind === "analyze" ? t("request.cantAnalyze") : t(INBOX[kind].cantSend)}
       </p>
     ) : kind === "analyze" ? (
-      !repos.length && <p class={styles.note}>No repository has runs to analyze yet.</p>
+      !repos.length && <p class={styles.note}>{t("request.nothingToAnalyze")}</p>
     ) : without || !repos.length ? (
       <p class={styles.note}>
         {without
-          ? `${without} has no inbox for ${INBOX[kind].name}.`
+          ? t(INBOX[kind].repoNoInbox, { repo: without })
           : inboxes
-            ? `No repository has an inbox for ${INBOX[kind].name}.`
-            : "Loading…"}{" "}
+            ? t(INBOX[kind].noInbox)
+            : t("request.loading")}{" "}
         {inboxes && (
           <a href={INBOX_DOCS} target="_blank" rel="noreferrer">
-            Set one up
+            {t("request.setUp")}
           </a>
         )}
       </p>
@@ -138,14 +163,14 @@ export function NewRequest({
 
   return (
     <Dialog
-      title="New request"
-      sub={SUBS[kind]}
+      title={t("request.title")}
+      sub={t(SUBS[kind])}
       onClose={onClose}
       onSubmit={repo ? send : undefined}
       actions={
         <>
           <Button variant="ghost" onClick={onClose}>
-            Cancel
+            {t("request.cancel")}
           </Button>
           {repo && action && (
             <Button
@@ -163,7 +188,7 @@ export function NewRequest({
       }
     >
       <Segmented
-        label="Kind"
+        label={t("request.kind")}
         class={styles.kinds}
         options={kinds}
         value={kind}
@@ -176,7 +201,7 @@ export function NewRequest({
       {repo && (
         <Field
           as="select"
-          label="Repository"
+          label={t("request.repository")}
           value={repo}
           onChange={(e) => setPicked(e.currentTarget.value)}
         >

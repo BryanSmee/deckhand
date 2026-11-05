@@ -2,6 +2,7 @@
 // icon alone, named by its label (aria-label and tooltip), the count a dot on its corner: a
 // number there covers a short repository name. Without an href it is a button (Notify me).
 import type { ComponentChildren } from "preact";
+import { t } from "../i18n";
 import { Count } from "./Count";
 import styles from "./NavItem.module.css";
 
@@ -25,7 +26,7 @@ export function NavItem(props: Props) {
   const counted = count !== undefined && count > 0;
   const attrs = {
     class: `${styles.nav} ${rail ? styles.rail : ""}`,
-    "aria-label": rail ? (counted ? `${label} (${count})` : label) : undefined,
+    "aria-label": rail ? (counted ? t("ui.navCounted", { label, count }) : label) : undefined,
     title: rail ? label : title,
   };
   const content = (

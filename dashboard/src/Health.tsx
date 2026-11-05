@@ -3,13 +3,14 @@
 // phone gets a list instead. The outside parts and the sandboxes are grey: nothing checks them.
 // The state is api/health's (listener/health.mjs), which the orchestrator probes; the shell's
 // alert (HealthAlert) says when a service is down or starting.
-import { ago, plural, type Tone, uptime } from "./format";
+import { ago, type Tone, uptime } from "./format";
+import { and, locale, t } from "./i18n";
+import type { Plain } from "./locales";
 import { formatRoute } from "./route";
 import type { Health, ServiceHealth, ServiceName, ServiceState } from "./types";
 import { StatusDot, toneClass } from "./ui/Status";
 import { Card } from "./ui/Surface";
 import styles from "./Health.module.css";
-import { locale } from "./i18n";
 
 export const STATE_TONES: Record<ServiceState, Tone> = {
   up: "done",
@@ -17,31 +18,38 @@ export const STATE_TONES: Record<ServiceState, Tone> = {
   down: "err",
 };
 
-const STATE_LABELS: Record<ServiceState, string> = {
-  up: "Up",
-  starting: "Starting",
-  down: "Down",
+const STATE_LABELS: Record<ServiceState, Plain> = {
+  up: "health.up",
+  starting: "health.starting",
+  down: "health.down",
 };
 
-// Each service's name and what it does, as docs/services.md's diagram says them.
-const SERVICES: Record<ServiceName, { label: string; role: string }> = {
-  edge: { label: "edge", role: "webhooks, API, UI" },
-  orchestrator: { label: "orchestrator", role: "events, tasks, queue" },
-  runner: { label: "runner", role: "sandboxes, images, logs" },
-  broker: { label: "broker", role: "tokens, runs' endpoints" },
-  github: { label: "github", role: "GitHub's gateways" },
-  models: { label: "models", role: "agents' API relay" },
-  policy: { label: "policy", role: "opa, no network" },
-  proxy: { label: "proxy", role: "the runs' egress" },
+// Each service's name (not translated: the service's own) and what it does, as
+// docs/services.md's diagram says them.
+const SERVICES: Record<ServiceName, { label: string; role: Plain }> = {
+  edge: { label: "edge", role: "health.roleEdge" },
+  orchestrator: { label: "orchestrator", role: "health.roleOrchestrator" },
+  runner: { label: "runner", role: "health.roleRunner" },
+  broker: { label: "broker", role: "health.roleBroker" },
+  github: { label: "github", role: "health.roleGithub" },
+  models: { label: "models", role: "health.roleModels" },
+  policy: { label: "policy", role: "health.rolePolicy" },
+  proxy: { label: "proxy", role: "health.roleProxy" },
 };
 
 // "up 3 d 4 h", "started 2 min ago", "unreachable: timeout": by the orchestrator's clock.
 export function stateText(s: ServiceHealth): string {
-  if (s.state === "down") return `unreachable: ${s.reason ?? "no answer"}`;
-  if (s.startedAt === null) return s.state === "up" ? "up" : "starting";
-  if (s.state === "starting") return `started ${ago(s.startedAt, s.checkedAt)}`;
-  return `up ${uptime(s.startedAt, s.checkedAt)}`;
+  if (s.state === "down")
+    return t("health.unreachable", { reason: s.reason ?? t("health.noAnswer") });
+  if (s.startedAt === null) return t(s.state === "up" ? "health.isUp" : "health.isStarting");
+  if (s.state === "starting") return t("health.startedAgo", { ago: ago(s.startedAt, s.checkedAt) });
+  return t("health.upFor", { time: uptime(s.startedAt, s.checkedAt) });
 }
+
+const ALERTS = {
+  down: { few: "health.alertDown", many: "health.manyDown" },
+  starting: { few: "health.alertStarting", many: "health.manyStarting" },
+} as const;
 
 // What the shell's dot says: the services down (red), else those starting (blue), else nothing.
 export function healthAlert(health: Health | null): { tone: Tone; text: string } | null {
@@ -49,11 +57,11 @@ export function healthAlert(health: Health | null): { tone: Tone; text: string }
   for (const state of ["down", "starting"] as const) {
     const these = health.services.filter((s) => s.state === state).map((s) => s.name);
     if (!these.length) continue;
-    const who =
+    const text =
       these.length > 2
-        ? plural(these.length, "service")
-        : these.map((n) => SERVICES[n].label).join(" and ");
-    return { tone: STATE_TONES[state], text: `${who} ${state}` };
+        ? t(ALERTS[state].many, { count: these.length })
+        : t(ALERTS[state].few, { services: and(these.map((n) => SERVICES[n].label)) });
+    return { tone: STATE_TONES[state], text };
   }
   return null;
 }
@@ -69,7 +77,9 @@ export function HealthAlert({
 }) {
   const alert = healthAlert(health);
   if (!alert) return null;
-  const label = `${alert.text[0].toUpperCase()}${alert.text.slice(1)}: see the services' status`;
+  const label = t("health.alertLabel", {
+    alert: `${alert.text[0].toLocaleUpperCase(locale())}${alert.text.slice(1)}`,
+  });
   return (
     <a
       class={[styles.alert, className].filter(Boolean).join(" ")}
@@ -96,12 +106,13 @@ const HEIGHT = 460;
 const BOX = { w: 70, h: 28 };
 const PILL = { w: 66, h: 22 };
 
-const OUTSIDE: Record<Exclude<NodeId, ServiceName>, { label: string; role?: string }> = {
-  web: { label: "GitHub webhooks", role: "and browsers" },
+// GitHub is a name: not translated.
+const OUTSIDE: Record<Exclude<NodeId, ServiceName>, { label: Plain | "GitHub"; role?: Plain }> = {
+  web: { label: "health.outsideWeb", role: "health.outsideWebRole" },
   gh: { label: "GitHub" },
-  ai: { label: "agents' APIs" },
-  hosts: { label: "granted hosts" },
-  sandbox: { label: "sandboxes", role: "not checked" },
+  ai: { label: "health.outsideAi" },
+  hosts: { label: "health.outsideHosts" },
+  sandbox: { label: "health.outsideSandbox", role: "health.outsideSandboxRole" },
 };
 
 const PLACES: Record<NodeId, [number, number]> = {
@@ -126,36 +137,36 @@ interface Arrow {
   // Bent sideways by this many steps (45 px each), left of its way for a positive one.
   bend?: number;
   // A narrow call (docs/services.md's dotted arrows), and what it is for.
-  narrow?: string;
+  narrow?: Plain;
   // Both ways: the call back is drawn on the same line.
-  both?: string;
+  both?: Plain;
 }
 
 // docs/services.md's arrows.
 const ARROWS: Arrow[] = [
   { from: "web", to: "edge" },
-  { from: "edge", to: "orchestrator", both: "deliveries, App" },
+  { from: "edge", to: "orchestrator", both: "health.arrowDeliveries" },
   { from: "edge", to: "github" },
-  { from: "orchestrator", to: "runner", both: "a run's first tokens" },
+  { from: "orchestrator", to: "runner", both: "health.arrowFirstTokens" },
   { from: "orchestrator", to: "broker" },
   { from: "runner", to: "broker" },
-  { from: "runner", to: "github", narrow: "tarballs" },
+  { from: "runner", to: "github", narrow: "health.arrowTarballs" },
   { from: "orchestrator", to: "github" },
   { from: "orchestrator", to: "policy" },
   { from: "orchestrator", to: "models" },
-  { from: "runner", to: "sandbox", narrow: "starts" },
+  { from: "runner", to: "sandbox", narrow: "health.arrowStarts" },
   { from: "sandbox", to: "proxy" },
   { from: "proxy", to: "github" },
   { from: "proxy", to: "models" },
   { from: "proxy", to: "broker", bend: 2 },
-  { from: "proxy", to: "orchestrator", narrow: "egress policy" },
+  { from: "proxy", to: "orchestrator", narrow: "health.arrowEgress" },
   { from: "proxy", to: "hosts" },
   { from: "github", to: "policy", bend: 1 },
   { from: "broker", to: "policy" },
-  { from: "runner", to: "policy", bend: 1, narrow: "grants" },
+  { from: "runner", to: "policy", bend: 1, narrow: "health.arrowGrants" },
   { from: "github", to: "gh" },
   { from: "models", to: "ai" },
-  { from: "models", to: "runner", narrow: "refresh" },
+  { from: "models", to: "runner", narrow: "health.arrowRefresh" },
 ];
 
 type Point = [number, number];
@@ -202,10 +213,16 @@ function Node({ id, health }: { id: NodeId; health: Map<ServiceName, ServiceHeal
   const { w, h } = half(id);
   const tone: Tone = known ? STATE_TONES[known.state] : "idle";
   const outside = OUTSIDE[id as keyof typeof OUTSIDE];
-  const label = service?.label ?? outside.label;
+  const label = service?.label ?? (outside.label === "GitHub" ? outside.label : t(outside.label));
   // A service: its state in words (a dash before the first answer, or "not checked" without a
   // URL); an outside part: its second line, if any.
-  const second = service ? (known ? stateText(known) : health ? "not checked" : "…") : outside.role;
+  const second = service
+    ? known
+      ? stateText(known)
+      : health
+        ? t("health.nodeNotChecked")
+        : "…"
+    : outside.role && t(outside.role);
   return (
     <g
       class={`${styles.node} ${toneClass(tone)} ${service ? "" : styles.outside}`}
@@ -214,7 +231,13 @@ function Node({ id, health }: { id: NodeId; health: Map<ServiceName, ServiceHeal
     >
       <title>
         {service
-          ? `${label}: ${service.role}${known?.version ? ` · ${known.version}` : ""}`
+          ? known?.version
+            ? t("health.serviceTitleVersion", {
+                name: label,
+                role: t(service.role),
+                version: known.version,
+              })
+            : t("health.serviceTitle", { name: label, role: t(service.role) })
           : label}
       </title>
       <rect x={x - w} y={y - h} width={w * 2} height={h * 2} rx={service ? 8 : h} />
@@ -244,14 +267,16 @@ function Node({ id, health }: { id: NodeId; health: Map<ServiceName, ServiceHeal
 function Diagram({ health }: { health: Health | null }) {
   const byName = health ? new Map(health.services.map((s) => [s.name, s])) : null;
   const summary = health
-    ? health.services.map((s) => `${SERVICES[s.name].label} ${stateText(s)}`).join(", ")
-    : "Not checked yet";
+    ? health.services
+        .map((s) => t("health.serviceState", { name: SERVICES[s.name].label, state: stateText(s) }))
+        .join(t("list.comma"))
+    : t("health.notCheckedYet");
   return (
     <svg
       class={styles.diagram}
       viewBox={`0 0 ${WIDTH} ${HEIGHT}`}
       role="img"
-      aria-label={`The services: ${summary}`}
+      aria-label={t("health.diagram", { summary })}
     >
       <defs>
         <marker
@@ -275,7 +300,9 @@ function Diagram({ health }: { health: Health | null }) {
             marker-end="url(#health-arrow)"
             marker-start={a.both ? "url(#health-arrow)" : undefined}
           >
-            <title>{a.narrow ?? (a.both ? `and back: ${a.both}` : "")}</title>
+            <title>
+              {a.narrow ? t(a.narrow) : a.both ? t("health.andBack", { what: t(a.both) }) : ""}
+            </title>
           </path>
         ))}
         {(Object.keys(PLACES) as NodeId[]).map((id) => (
@@ -288,7 +315,7 @@ function Diagram({ health }: { health: Health | null }) {
 
 // A phone's: one row per service, in the same colours.
 function List({ health }: { health: Health | null }) {
-  if (!health) return <p class={styles.empty}>Not checked yet.</p>;
+  if (!health) return <p class={styles.empty}>{t("health.notCheckedYetList")}</p>;
   return (
     <ul class={styles.list}>
       {health.services.map((s) => (
@@ -296,7 +323,7 @@ function List({ health }: { health: Health | null }) {
           <StatusDot tone={STATE_TONES[s.state]} />
           <span class={styles.rowName}>
             {SERVICES[s.name].label}
-            <span class={styles.role}>{SERVICES[s.name].role}</span>
+            <span class={styles.role}>{t(SERVICES[s.name].role)}</span>
           </span>
           <span class={styles.rowState}>{stateText(s)}</span>
         </li>
@@ -313,7 +340,7 @@ function Warnings({ health }: { health: Health | null }) {
   );
   if (!said.length) return null;
   return (
-    <ul class={`${styles.warnings} ${toneClass("input")}`} aria-label="Warnings">
+    <ul class={`${styles.warnings} ${toneClass("input")}`} aria-label={t("health.warnings")}>
       {said.map(({ name, text }) => (
         <li key={`${name}-${text}`} data-service={name}>
           <StatusDot tone="input" />
@@ -328,16 +355,16 @@ function Warnings({ health }: { health: Health | null }) {
 
 function Legend() {
   return (
-    <ul class={styles.legend} aria-label="Legend">
+    <ul class={styles.legend} aria-label={t("health.legend")}>
       {(["up", "starting", "down"] as const).map((state) => (
         <li key={state}>
           <StatusDot tone={STATE_TONES[state]} />
-          {STATE_LABELS[state]}
+          {t(STATE_LABELS[state])}
         </li>
       ))}
       <li>
         <StatusDot tone="idle" />
-        Not checked
+        {t("health.notChecked")}
       </li>
     </ul>
   );
@@ -364,13 +391,13 @@ export function Services({ health, error = null, narrow = false }: Props) {
   return (
     <Card as="section" aria-labelledby="server-services">
       <div class={styles.head}>
-        <h2 id="server-services">Services</h2>
+        <h2 id="server-services">{t("health.services")}</h2>
         <span class={styles.aside} role="status">
           {error
-            ? `Couldn't check them (${error})`
+            ? t("health.checkFailed", { error })
             : checked
-              ? `Checked at ${checked} · every 15 s`
-              : "Checking…"}
+              ? t("health.checkedAt", { time: checked })
+              : t("health.checking")}
         </span>
       </div>
       <div class={styles.body}>

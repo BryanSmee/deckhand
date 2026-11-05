@@ -4,6 +4,8 @@
 // sheet, Settings › Server). Nothing without a reading.
 import type { PlanUsage, PlanWindow } from "../types";
 import { ago, dayTime } from "../format";
+import { t } from "../i18n";
+import type { Plain } from "../locales";
 import styles from "./PlanUsage.module.css";
 
 // From this much used, the warning tone.
@@ -16,15 +18,16 @@ const COMPACT_WINDOWS = 2;
 // repositories sheet has them all.
 const PHONE_PLANS = 2;
 
-const WINDOW_NAMES: Record<string, string> = {
-  "5h": "5h",
-  "7d": "week",
-  "7d_opus": "week (Opus)",
-  "7d_sonnet": "week (Sonnet)",
+// Keys, written at render: the language may change after import. "5h" is its own name.
+const WINDOW_NAMES: Record<string, Plain> = {
+  "7d": "ui.planWindowWeek",
+  "7d_opus": "ui.planWindowWeekOpus",
+  "7d_sonnet": "ui.planWindowWeekSonnet",
 };
 
 export function windowName(w: PlanWindow): string {
-  return w.label ?? WINDOW_NAMES[w.name] ?? w.name;
+  const key = WINDOW_NAMES[w.name];
+  return w.label ?? (key ? t(key) : w.name);
 }
 
 export type PlanTone = "ok" | "warn" | "danger" | "stale";
@@ -38,19 +41,31 @@ export function windowTone(plan: PlanUsage, w: PlanWindow, now: number): PlanTon
   return w.used >= WARN_AT ? "warn" : "ok";
 }
 
-const percent = (used: number) => `${Math.round(used * 100)} %`;
+const percent = (used: number) => t("ui.planPercent", { n: Math.round(used * 100) });
+
+// What a window's line says after its usage: when it resets (or that its reading is stale), and
+// when it was read once that is old.
+function windowNotes(plan: PlanUsage, w: PlanWindow, now: number): string {
+  const tone = windowTone(plan, w, now);
+  const notes: string[] = [];
+  if (tone === "stale") notes.push(t("ui.planStale"));
+  else if (plan.limited && plan.limitedUntil && (w.used >= 1 || tone === "danger"))
+    notes.push(t("ui.planLimitedUntil", { time: dayTime(plan.limitedUntil, now) }));
+  else if (w.resetsAt !== null) notes.push(t("ui.planResets", { time: dayTime(w.resetsAt, now) }));
+  if (w.at !== null && (tone === "stale" || now - w.at > OLD_MS))
+    notes.push(t("ui.planAsOf", { ago: ago(w.at, now) }));
+  return notes.join(t("list.comma"));
+}
 
 // "Claude 5h: 42 % used, resets today 13:10", with when it was read once that is old.
 export function windowText(plan: PlanUsage, w: PlanWindow, now: number): string {
-  const tone = windowTone(plan, w, now);
-  const parts = [`${plan.label} ${windowName(w)}: ${percent(w.used)} used`];
-  if (tone === "stale") parts.push("read before its last reset, so no longer current");
-  else if (plan.limited && plan.limitedUntil && (w.used >= 1 || tone === "danger"))
-    parts.push(`limit reached until ${dayTime(plan.limitedUntil, now)}`);
-  else if (w.resetsAt !== null) parts.push(`resets ${dayTime(w.resetsAt, now)}`);
-  if (w.at !== null && (tone === "stale" || now - w.at > OLD_MS))
-    parts.push(`as of ${ago(w.at, now)}`);
-  return parts.join(", ");
+  const used = t("ui.planUsed", {
+    plan: plan.label,
+    window: windowName(w),
+    percent: percent(w.used),
+  });
+  const notes = windowNotes(plan, w, now);
+  return notes ? t("ui.planLine", { used, notes }) : used;
 }
 
 function Bar({ plan, w, now }: { plan: PlanUsage; w: PlanWindow; now: number }) {
@@ -118,12 +133,12 @@ export function PlanBars({
   const cls = [styles.plans, styles[form], className].filter(Boolean).join(" ");
   if (form === "full")
     return (
-      <div class={cls} role="group" aria-label="Plan usage">
+      <div class={cls} role="group" aria-label={t("ui.planUsage")}>
         {shown.map(({ plan, windows }) => (
           <div key={plan.plan} class={styles.plan}>
             <span class={styles.planName}>
               {plan.label}
-              {plan.limited && <span class={styles.limited}>limit reached</span>}
+              {plan.limited && <span class={styles.limited}>{t("ui.planLimited")}</span>}
             </span>
             {windows.map((w) => (
               <div key={w.name} class={styles.row} role="img" aria-label={windowText(plan, w, now)}>
@@ -132,9 +147,7 @@ export function PlanBars({
                   <span class={styles.value}>{percent(w.used)}</span>
                 </span>
                 <Bar plan={plan} w={w} now={now} />
-                <span class={styles.note}>
-                  {windowText(plan, w, now).split(", ").slice(1).join(", ")}
-                </span>
+                <span class={styles.note}>{windowNotes(plan, w, now)}</span>
               </div>
             ))}
           </div>
@@ -142,7 +155,7 @@ export function PlanBars({
       </div>
     );
   return (
-    <div class={cls} role="group" aria-label="Plan usage">
+    <div class={cls} role="group" aria-label={t("ui.planUsage")}>
       {shown.map(({ plan, windows }) => (
         <span key={plan.plan} class={styles.plan}>
           {form === "compact" && <span class={styles.planName}>{plan.label}</span>}

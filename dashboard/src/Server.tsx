@@ -7,9 +7,11 @@
 import { Fragment } from "preact";
 import { useCan } from "./access";
 import { usePolled } from "./api";
-import { ago, AUTH_NAMES, dayTime, plural, reservedText, uptime, versionUrl } from "./format";
+import { ago, AUTH_NAMES, dayTime, reservedText, uptime, versionUrl } from "./format";
 import { Services } from "./Health";
-import { useSync, syncMessage } from "./Sync";
+import { t, tx } from "./i18n";
+import type { Plain } from "./locales";
+import { useSync } from "./Sync";
 import type { AppLinks, Auth, Health, ServerSetup, State, SyncResult } from "./types";
 import { Button, buttonClass } from "./ui/Button";
 import * as Icon from "./ui/icons";
@@ -70,6 +72,20 @@ function Status({ state, error }: { state: State | null; error: string | null })
   const server = state?.server;
   const url = server && versionUrl(server);
   const tone = down ? "s-err" : server ? "s-done" : "s-idle";
+  // What the line says of it, with or without the repository it was built from.
+  const facts = server &&
+    state && {
+      version: url ? (
+        <a class={styles.mono} href={url} target="_blank" rel="noreferrer">
+          {server.version}
+        </a>
+      ) : (
+        <span class={styles.mono}>{server.version}</span>
+      ),
+      uptime: uptime(server.startedAt, state.now),
+      since: dayTime(server.startedAt, state.now),
+      node: server.node.replace(/^v/, ""),
+    };
   return (
     <Card as="section" class={`${styles.status} ${tone}`} aria-labelledby="server-status">
       <span class={styles.statusIcon} aria-hidden="true">
@@ -77,57 +93,48 @@ function Status({ state, error }: { state: State | null; error: string | null })
       </span>
       <div class={styles.statusText}>
         <h2 id="server-status">
-          {down ? "Can't reach the listener" : server ? "The listener is up" : "Loading…"}
+          {t(down ? "server.unreachable" : server ? "server.up" : "server.loading")}
         </h2>
         {down && <span class={styles.meta}>{error}</span>}
-        {!down && server && state && (
+        {!down && server && facts && (
           <span class={styles.meta}>
-            Deckhand{" "}
-            {url ? (
-              <a class={styles.mono} href={url} target="_blank" rel="noreferrer">
-                {server.version}
-              </a>
-            ) : (
-              <span class={styles.mono}>{server.version}</span>
-            )}
-            {` · up ${uptime(server.startedAt, state.now)}, since ${dayTime(server.startedAt, state.now)}`}
-            {` · Node ${server.node.replace(/^v/, "")}`}
-            {server.source && (
-              <>
-                {" · built from "}
-                <a class={styles.mono} href={server.source} target="_blank" rel="noreferrer">
-                  {repoName(server.source)}
-                </a>
-              </>
-            )}
+            {server.source
+              ? tx("server.versionFrom", {
+                  ...facts,
+                  repo: (
+                    <a class={styles.mono} href={server.source} target="_blank" rel="noreferrer">
+                      {repoName(server.source)}
+                    </a>
+                  ),
+                })
+              : tx("server.version", facts)}
           </span>
         )}
       </div>
-      <span class={styles.note}>
-        Its operator changes these in the server's environment and grants folder.
-      </span>
+      <span class={styles.note}>{t("server.operatorNote")}</span>
     </Card>
   );
 }
 
-const ENGINES: Record<NonNullable<ServerSetup["engine"]>, string> = {
-  sysbox: "Sysbox",
-  podman: "Podman",
-  auto: "Sysbox, else Podman",
+// Keys, written when shown.
+const ENGINES: Record<NonNullable<ServerSetup["engine"]>, Plain> = {
+  sysbox: "server.engineSysbox",
+  podman: "server.enginePodman",
+  auto: "server.engineAuto",
 };
 
 // Which Claude credential runs use unless they name one, then those FALLBACKS names
 // (`claude@anthropic:key`), then the others set, which only `/agent` names: "Plan first, then
 // API key as fallback", "Plan · API key also set".
 function claudeText({ set, default: first, fallbacks = [] }: NonNullable<ServerSetup["claude"]>) {
-  if (!first) return "No credential set";
+  if (!first) return t("server.noCredential");
   const names = (auths: Auth[]) => auths.map((a) => AUTH_NAMES[a].label).join(", ");
   const after = fallbacks.filter((a) => a !== first);
   const others = set.filter((a) => a !== first && !after.includes(a));
   const label = AUTH_NAMES[first].label;
   return [
-    after.length ? `${label} first, then ${names(after)} as fallback` : label,
-    ...(others.length ? [`${names(others)} also set`] : []),
+    after.length ? t("server.credentialFallback", { label, fallbacks: names(after) }) : label,
+    ...(others.length ? [t("server.credentialsAlso", { names: names(others) })] : []),
   ].join(" · ");
 }
 
@@ -142,17 +149,17 @@ function Runs({
   error: string | null;
 }) {
   // Not read yet: a dash; its read failed: why.
-  const unread = error ? `Couldn't read (${error})` : "…";
+  const unread = error ? t("server.unread", { error }) : "…";
   const grants = setup?.grants;
   return (
     <Card as="section" aria-labelledby="server-runs">
       <div class={styles.head}>
-        <h2 id="server-runs">Runs</h2>
+        <h2 id="server-runs">{t("server.runs")}</h2>
         {state && <span class={styles.aside}>MAX_PARALLEL {state.maxParallel}</span>}
       </div>
       <div class={styles.facts}>
         <div class={styles.fact}>
-          <span class={styles.label}>Slots</span>
+          <span class={styles.label}>{t("server.slots")}</span>
           {state && (
             <Meter
               running={state.running}
@@ -164,7 +171,11 @@ function Runs({
           )}
           <span class={styles.value}>
             {state
-              ? [`${state.running} running`, `${state.queued} queued`, reservedText(state)]
+              ? [
+                  t("server.running", { count: state.running }),
+                  t("slots.queued", { count: state.queued }),
+                  reservedText(state),
+                ]
                   .filter(Boolean)
                   .join(" · ")
               : "…"}
@@ -172,14 +183,14 @@ function Runs({
         </div>
         {state?.plans?.some((p) => p.windows.length) && (
           <div class={styles.fact}>
-            <span class={styles.label}>Plans</span>
+            <span class={styles.label}>{t("server.plans")}</span>
             <PlanBars plans={state.plans} now={state.now} class={styles.plans} />
           </div>
         )}
         <div class={styles.fact}>
-          <span class={styles.label}>Container engine</span>
+          <span class={styles.label}>{t("server.engine")}</span>
           <span class={styles.value}>
-            {setup ? (setup.engine ? ENGINES[setup.engine] : "None") : unread}
+            {setup ? t(setup.engine ? ENGINES[setup.engine] : "server.engineNone") : unread}
           </span>
         </div>
         {(!setup || setup.claude) && (
@@ -194,33 +205,31 @@ function Runs({
           </div>
         )}
         <div class={styles.fact}>
-          <span class={styles.label}>Egress proxy</span>
+          <span class={styles.label}>{t("server.proxy")}</span>
           <span class={styles.value}>
             {setup
               ? [
-                  setup.proxy.on ? "On" : "Off",
+                  t(setup.proxy.on ? "server.proxyOn" : "server.proxyOff"),
                   setup.proxy.hosts === null
-                    ? "hosts not counted"
-                    : `${plural(setup.proxy.hosts, "host")} granted`,
+                    ? t("server.hostsUncounted")
+                    : t("server.hosts", { count: setup.proxy.hosts }),
                 ].join(" · ")
               : unread}
           </span>
         </div>
         <div class={styles.fact}>
-          <span class={styles.label}>Grants folder</span>
+          <span class={styles.label}>{t("server.grants")}</span>
           {grants ? (
             grants.ok ? (
-              <span class={`${styles.value} ${styles.ok}`}>Read, no errors</span>
+              <span class={`${styles.value} ${styles.ok}`}>{t("server.grantsOk")}</span>
             ) : (
               <>
                 <span class={`${styles.value} ${styles.bad}`}>
-                  {grants.file ? (
-                    <>
-                      Errors in <span class={styles.mono}>{grants.file}</span>
-                    </>
-                  ) : (
-                    "Errors"
-                  )}
+                  {grants.file
+                    ? tx("server.grantsErrorsIn", {
+                        file: <span class={styles.mono}>{grants.file}</span>,
+                      })
+                    : t("server.grantsErrors")}
                 </span>
                 {grants.message && <span class={styles.small}>{grants.message}</span>}
               </>
@@ -235,12 +244,20 @@ function Runs({
 }
 
 // "Last sync 12 min ago: 2 missed deliveries asked again, 1 pull request updated."
+// What it did as Sync.tsx's syncMessage() says it, its counts in its keys, but as a clause of
+// this sentence rather than one of its own.
 export function lastSyncLine(last: SyncResult | null, now: number): string {
-  if (!last) return "No sync yet.";
-  const when = `Last sync ${ago(last.at, now)}`;
-  if (last.error) return `${when} failed: ${last.error}`;
-  const said = syncMessage(last).replace(/^Synced: /, "");
-  return `${when}: ${said.charAt(0).toLowerCase()}${said.slice(1)}.`;
+  if (!last) return t("server.noSync");
+  const when = ago(last.at, now);
+  if (last.error) return t("server.syncFailed", { when, error: last.error });
+  const { redelivered, pulls, conflicts } = last;
+  if (!redelivered && !pulls && !conflicts) return t("server.syncUpToDate", { when });
+  const done = [
+    redelivered && t("sync.redelivered", { count: redelivered }),
+    pulls && t("sync.pulls", { count: pulls }),
+    conflicts && t("sync.conflicts", { count: conflicts }),
+  ].filter(Boolean);
+  return t("server.synced", { when, done: done.join(t("list.comma")) });
 }
 
 // The App, where it is installed, the webhook deliveries and who and what it lets in.
@@ -264,15 +281,15 @@ function App({
   return (
     <Card as="section" aria-labelledby="server-app">
       <div class={styles.head}>
-        <h2 id="server-app">GitHub App</h2>
+        <h2 id="server-app">{t("server.app")}</h2>
         {app && (
           <span class={styles.links}>
             <a class={link} href={app.settingsUrl} target="_blank" rel="noreferrer">
-              App settings
+              {t("server.appSettings")}
               <External />
             </a>
             <a class={link} href={app.installUrl} target="_blank" rel="noreferrer">
-              Install on another account
+              {t("server.install")}
               <External />
             </a>
           </span>
@@ -280,25 +297,27 @@ function App({
       </div>
       <dl class={styles.kv}>
         <div>
-          <dt>Name</dt>
+          <dt>{t("server.name")}</dt>
           <dd class={styles.mono}>{app?.name ?? "…"}</dd>
         </div>
         <div>
-          <dt>Installed on</dt>
+          <dt>{t("server.installedOn")}</dt>
           <dd class={styles.wrap}>
-            {app && !app.installations.length && "No account yet"}
+            {app && !app.installations.length && t("server.noAccount")}
             {app?.installations.map((i) => (
               <span key={i.url}>
-                <span class={styles.mono}>{i.account ?? "An account"}</span>
+                <span class={styles.mono}>{i.account ?? t("server.anAccount")}</span>
                 {" · "}
                 {i.missing.length > 0 && (
                   <>
-                    <span class={styles.bad}>lacks {i.missing.join(", ")}</span>
+                    <span class={styles.bad}>
+                      {t("server.lacks", { missing: i.missing.join(", ") })}
+                    </span>
                     {" · "}
                   </>
                 )}
                 <a href={i.url} target="_blank" rel="noreferrer">
-                  {i.missing.length > 0 ? "accept new permissions ↗" : "configure ↗"}
+                  {t(i.missing.length > 0 ? "server.acceptPermissions" : "server.configure")}
                 </a>
               </span>
             ))}
@@ -306,35 +325,40 @@ function App({
         </div>
         {app && (app.missingPermissions.length > 0 || app.missingEvents.length > 0) && (
           <div>
-            <dt>Missing in its settings</dt>
+            <dt>{t("server.missing")}</dt>
             <dd class={styles.wrap}>
               {app.missingPermissions.length > 0 && (
                 <span>
                   <span class={styles.bad}>
-                    {plural(app.missingPermissions.length, "permission")}:{" "}
-                    {app.missingPermissions.join(", ")}
+                    {t("server.missingPermissions", {
+                      count: app.missingPermissions.length,
+                      names: app.missingPermissions.join(", "),
+                    })}
                   </span>
-                  {app.missingPermissions.length > 1
-                    ? " · add them under Permissions, then accept them on each installation"
-                    : " · add it under Permissions, then accept it on each installation"}
+                  {" · "}
+                  {t("server.addPermissions", { count: app.missingPermissions.length })}
                 </span>
               )}
               {app.missingEvents.length > 0 && (
                 <span>
                   <span class={styles.bad}>
-                    {plural(app.missingEvents.length, "event")}: {app.missingEvents.join(", ")}
+                    {t("server.missingEvents", {
+                      count: app.missingEvents.length,
+                      names: app.missingEvents.join(", "),
+                    })}
                   </span>
-                  {` · turn ${app.missingEvents.length > 1 ? "them" : "it"} on under Subscribe to events`}
+                  {" · "}
+                  {t("server.addEvents", { count: app.missingEvents.length })}
                 </span>
               )}
               <a href={app.settingsUrl} target="_blank" rel="noreferrer">
-                App settings ↗
+                {t("server.appSettingsLink")}
               </a>
             </dd>
           </div>
         )}
         <div>
-          <dt>Webhook deliveries</dt>
+          <dt>{t("server.deliveries")}</dt>
           <dd class={styles.wrap}>
             <span>{lastSyncLine(lastSync, now)}</span>
             {syncs && (
@@ -342,11 +366,11 @@ function App({
                 size="small"
                 icon={<Icon.Sync size={14} />}
                 pending={syncing}
-                pendingLabel="Syncing…"
+                pendingLabel={t("server.syncing")}
                 onClick={() => void sync()}
-                title="Ask GitHub again for the webhook deliveries it couldn't hand over, for the open pull requests' states, and whether they still merge"
+                title={t("server.syncHelp")}
               >
-                Sync now
+                {t("server.sync")}
               </Button>
             )}
             {/* A recorded sync's failure is on the line already: only a refusal is said. */}
@@ -358,14 +382,14 @@ function App({
           </dd>
         </div>
         <div>
-          <dt>Who can sign in</dt>
+          <dt>{t("server.users")}</dt>
           <dd>
             {setup ? setup.allowedUsers.join(", ") : "…"}
             <span class={styles.env}> · ALLOWED_USERS</span>
           </dd>
         </div>
         <div>
-          <dt>Allowed repositories</dt>
+          <dt>{t("server.repos")}</dt>
           <dd>
             {!setup
               ? "…"
@@ -376,7 +400,7 @@ function App({
                       <span class={styles.mono}>{r}</span>
                     </Fragment>
                   ))
-                : "Every repository the App is installed on"}
+                : t("server.everyRepo")}
             <span class={styles.env}> · ALLOWED_REPOS</span>
           </dd>
         </div>

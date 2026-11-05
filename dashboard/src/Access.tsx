@@ -5,7 +5,8 @@
 // Changed in the grants folder's policy/access.rego, never here.
 import { useState } from "preact/hooks";
 import { usePolled } from "./api";
-import { plural } from "./format";
+import { t, tx } from "./i18n";
+import type { Plain } from "./locales";
 import type { AccessDecision, AccessReport, UserAccess } from "./types";
 import { Field } from "./ui/Field";
 import { Alert, Search } from "./ui/icons";
@@ -14,28 +15,45 @@ import styles from "./Access.module.css";
 
 const DOCS = "https://github.com/BryanSmee/deckhand/blob/main/docs/repo-config.md#access";
 
-// What each action lets the user do, for the chips' titles.
-const ACTIONS: Record<string, string> = {
-  "*": "every action",
-  "tasks:read": "sees its tasks and runs",
-  "logs:read": "reads its runs' logs",
-  "runs:manage": "stops, reruns, answers, dismisses, orders and names lanes",
-  "runs:start:*": "starts runs in every mode",
-  "repo:config:read": "reads its config and onboards it",
-  "server:read": "reads Settings › Server and Access, the health and the plans",
-  "server:sync": "syncs with GitHub",
-  "server:*": "every server-wide action",
+// What each action lets the user do, for the chips' titles: keys, written when shown.
+const ACTIONS: Record<string, Plain> = {
+  "*": "config.actionAll",
+  "tasks:read": "config.actionTasksRead",
+  "logs:read": "config.actionLogsRead",
+  "runs:manage": "config.actionRunsManage",
+  "runs:start:*": "config.actionStartAll",
+  "repo:config:read": "config.actionConfigRead",
+  "server:read": "config.actionServerRead",
+  "server:sync": "config.actionServerSync",
+  "server:*": "config.actionServerAll",
 };
 
-const meaning = (action: string) =>
-  ACTIONS[action] ??
-  (action.startsWith("runs:start:")
-    ? `starts runs in ${action.endsWith("*") ? "the modes starting with " : ""}${action.slice(11).replace(/\*$/, "")}`
-    : action);
+function meaning(action: string) {
+  if (ACTIONS[action]) return t(ACTIONS[action]);
+  if (!action.startsWith("runs:start:")) return action;
+  const mode = action.slice(11);
+  return mode.endsWith("*")
+    ? t("config.actionStartPrefix", { prefix: mode.slice(0, -1) })
+    : t("config.actionStart", { mode });
+}
 
 // "access.rego", "repo: audit.rego", or the layer's rule without a file.
-const denyFile = ({ file, layer }: AccessDecision["denied"][number]) =>
-  `${layer === "repo" ? "repo: " : ""}${file ?? `a rule of the ${layer === "repo" ? "repo's" : "operator's"}`}`;
+const denyFile = ({ file, layer }: AccessDecision["denied"][number]) => {
+  const name = file ?? t(layer === "repo" ? "config.ruleOfRepo" : "config.ruleOfOperator");
+  return layer === "repo" ? t("config.repoFile", { file: name }) : name;
+};
+
+// The row's note: the files that allowed its actions, those that denied some and why.
+function noteOf(allowed: string, denied: string, reasons: string) {
+  if (!denied) return t("config.accessAllowedBy", { files: allowed });
+  if (!allowed)
+    return reasons
+      ? t("config.accessDeniedByWhy", { files: denied, reasons })
+      : t("config.accessDeniedBy", { files: denied });
+  return reasons
+    ? t("config.accessBothWhy", { allowed, denied, reasons })
+    : t("config.accessBoth", { allowed, denied });
+}
 
 // Whether a decision gives or takes anything, or says why it can't.
 const said = (d: AccessDecision) => d.actions.length > 0 || d.denied.length > 0 || !!d.error;
@@ -56,15 +74,19 @@ export function Access() {
   return (
     <div class={styles.page}>
       <p class={styles.model}>
-        Who may do what is the operator's policies' to say: a login has an action where an{" "}
-        <b>allow</b> rule of theirs gives it (<code>allow_access</code>, a role's{" "}
-        <code>bindings</code>) and no <b>deny</b> rule takes it away (<code>deny_access</code>, the
-        operator's or the repository's <code>.deckhand/policy/</code>), within{" "}
-        <code>ALLOWED_USERS</code> and the repository's <code>users</code>. A repository with no
-        action is hidden from that login. Read only: the grants folder's{" "}
-        <code>policy/access.rego</code> changes it.{" "}
+        {tx("config.accessModel", {
+          allow: <b>{t("config.allowRule")}</b>,
+          deny: <b>{t("config.denyRule")}</b>,
+          allowAccess: <code>allow_access</code>,
+          bindings: <code>bindings</code>,
+          denyAccess: <code>deny_access</code>,
+          repoPolicy: <code>.deckhand/policy/</code>,
+          allowedUsers: <code>ALLOWED_USERS</code>,
+          users: <code>users</code>,
+          accessRego: <code>policy/access.rego</code>,
+        })}{" "}
         <a href={DOCS} target="_blank" rel="noreferrer">
-          How access works
+          {t("config.accessDocs")}
         </a>
       </p>
       {(report.error || data?.error) && (
@@ -72,26 +94,26 @@ export function Access() {
           <Alert size={18} />
           <span>
             {report.error
-              ? `Can't read who has what (${report.error}).`
-              : `Only the server-wide actions: ${data!.error}.`}
+              ? t("config.accessUnreadable", { error: report.error })
+              : t("config.accessServerOnly", { error: data!.error ?? "" })}
           </span>
         </section>
       )}
       {data && (
         <Field
           class={styles.filter}
-          label="Filter by login or repository"
+          label={t("config.accessFilter")}
           hideLabel
           size="small"
           lead={<Search size={14} />}
-          placeholder="Filter by login or repository"
+          placeholder={t("config.accessFilter")}
           value={filter}
           onInput={(e) => setFilter(e.currentTarget.value)}
         />
       )}
-      {!data && !report.error && <p class={styles.empty}>Loading…</p>}
+      {!data && !report.error && <p class={styles.empty}>{t("config.accessLoading")}</p>}
       {data && !shown.length && (
-        <p class={styles.empty}>{words ? "No login or repository matches." : "No login."}</p>
+        <p class={styles.empty}>{t(words ? "config.accessNoMatch" : "config.accessNoLogin")}</p>
       )}
       {shown.map((u) => (
         <User key={u.login} user={u} />
@@ -113,11 +135,11 @@ function User({ user: u }: { user: UserAccess }) {
       <div class={styles.head}>
         <h2 id={id}>@{u.login}</h2>
         <span class={styles.note}>
-          {seen ? `${plural(seen, "repository", "repositories")} with access` : "No repository"}
+          {seen ? t("config.accessRepos", { count: seen }) : t("config.accessNoRepo")}
         </span>
       </div>
-      <ul class={styles.rows} aria-label={`@${u.login}'s actions`}>
-        <Row name="Server-wide" decision={u.server} />
+      <ul class={styles.rows} aria-label={t("config.accessActions", { login: u.login })}>
+        <Row name={t("config.accessServerWide")} decision={u.server} />
         {rows.map((r) => (
           <Row key={r.repo} name={r.repo} decision={r} mono />
         ))}
@@ -126,12 +148,17 @@ function User({ user: u }: { user: UserAccess }) {
         <div class={styles.foot}>
           {none.length > 0 && (
             <span>
-              No action on <span class={styles.mono}>{none.join(", ")}</span>
+              {tx("config.accessNoActionOn", {
+                repos: <span class={styles.mono}>{none.join(", ")}</span>,
+              })}
             </span>
           )}
           {outside.length > 0 && (
             <span>
-              Not in the <code>users</code> of <span class={styles.mono}>{outside.join(", ")}</span>
+              {tx("config.accessOutside", {
+                users: <code>users</code>,
+                repos: <span class={styles.mono}>{outside.join(", ")}</span>,
+              })}
             </span>
           )}
         </div>
@@ -157,16 +184,25 @@ function Row({
       <span class={`${styles.name} ${mono ? styles.mono : ""}`}>{name}</span>
       <span class={styles.what}>
         {d.error ? (
-          <span class={styles.bad}>Can't be decided: nothing given ({d.error})</span>
+          <span class={styles.bad}>{t("config.accessUndecided", { error: d.error })}</span>
         ) : (
           <>
             <span class={styles.chips}>
-              {d.actions.length === 0 && <span class={styles.note}>No action</span>}
+              {d.actions.length === 0 && (
+                <span class={styles.note}>{t("config.accessNoAction")}</span>
+              )}
               {d.actions.map((a) => (
                 <span
                   key={a.action}
                   class={styles.chip}
-                  title={`${meaning(a.action)}${a.files.length ? ` · allowed by ${a.files.join(", ")}` : ""}`}
+                  title={
+                    a.files.length
+                      ? t("config.accessChipAllowed", {
+                          meaning: meaning(a.action),
+                          files: a.files.join(", "),
+                        })
+                      : meaning(a.action)
+                  }
                 >
                   {a.action}
                 </span>
@@ -175,7 +211,11 @@ function Row({
                 <span
                   key={`${x.action} ${x.file}`}
                   class={`${styles.chip} ${styles.denied}`}
-                  title={`Denied by ${denyFile(x)}${x.reason ? `: ${x.reason}` : ""}`}
+                  title={
+                    x.reason
+                      ? t("config.accessChipDeniedWhy", { file: denyFile(x), reason: x.reason })
+                      : t("config.accessChipDenied", { file: denyFile(x) })
+                  }
                 >
                   {x.action}
                 </span>
@@ -183,10 +223,11 @@ function Row({
             </span>
             {(files.length > 0 || d.denied.length > 0) && (
               <span class={styles.note}>
-                {files.length > 0 && `Allowed by ${files.join(", ")}`}
-                {files.length > 0 && d.denied.length > 0 && " · "}
-                {d.denied.length > 0 &&
-                  `denied by ${[...new Set(d.denied.map(denyFile))].join(", ")}${d.denied.some((x) => x.reason) ? `: ${[...new Set(d.denied.map((x) => x.reason).filter(Boolean))].join("; ")}` : ""}`}
+                {noteOf(
+                  files.join(", "),
+                  [...new Set(d.denied.map(denyFile))].join(", "),
+                  [...new Set(d.denied.map((x) => x.reason).filter(Boolean))].join("; "),
+                )}
               </span>
             )}
           </>

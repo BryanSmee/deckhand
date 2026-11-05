@@ -7,6 +7,7 @@
 // waiting or failed when it loaded is old news.
 import { useEffect, useRef, useState } from "preact/hooks";
 import { findingsLeft, isReady, notClean, STATE_NAMES, titleOf, toneOf } from "./format";
+import { t as text } from "./i18n";
 import { getPref } from "./prefs";
 import { formatRoute } from "./route";
 import type { State, Task } from "./types";
@@ -53,7 +54,7 @@ export function useNotifications(state: State | null) {
 
   const ready = state?.tasks.filter(isReady).length ?? 0;
   useEffect(() => {
-    document.title = ready ? `(${ready}) Deckhand` : "Deckhand";
+    document.title = ready ? text("app.tabTitleReady", { count: ready }) : "Deckhand";
   }, [ready]);
 
   useEffect(() => {
@@ -78,8 +79,13 @@ export function useNotifications(state: State | null) {
         const left = findingsLeft(t) ?? notClean(t);
         if (once(id) && getPref("notifyReady"))
           show(
-            `Ready for review: ${titleOf(t)}`,
-            { body: `${t.repo} · pull request #${pr.number}${left ? ` · ${left}` : ""}`, tag: id },
+            text("app.notifyReady", { title: titleOf(t) }),
+            {
+              body: left
+                ? text("app.notifyReadyBodyLeft", { repo: t.repo, number: pr.number, left })
+                : text("app.notifyReadyBody", { repo: t.repo, number: pr.number }),
+              tag: id,
+            },
             openTask(t),
           );
       }
@@ -90,17 +96,23 @@ export function useNotifications(state: State | null) {
       if (!once(id)) continue;
       if (event === "input" && getPref("notifyInput"))
         show(
-          `Needs your answers: ${titleOf(t)}`,
+          text("app.notifyInput", { title: titleOf(t) }),
           {
-            body: `${t.repo} · ${t.state === "brainstorm" ? "a brainstorm waits for your turn" : "open questions"}`,
+            body: text(
+              t.state === "brainstorm" ? "app.notifyInputBrainstorm" : "app.notifyInputQuestions",
+              { repo: t.repo },
+            ),
             tag: id,
           },
           openTask(t),
         );
       if (event === "failed" && getPref("notifyFailed"))
         show(
-          `Run failed: ${titleOf(t)}`,
-          { body: `${t.repo} · ${STATE_NAMES[t.state]}`, tag: id },
+          text("app.notifyFailed", { title: titleOf(t) }),
+          {
+            body: text("app.notifyFailedBody", { repo: t.repo, state: STATE_NAMES[t.state] }),
+            tag: id,
+          },
           openTask(t),
         );
     }
@@ -114,7 +126,7 @@ export function useNotifications(state: State | null) {
   // Preferences' Send a test: what one looks like, here.
   const test = () =>
     show("Deckhand", {
-      body: "Notifications work in this browser.",
+      body: text("app.notifyTest"),
       tag: "deckhand-test",
     });
   return { ready, permission, ask, test };

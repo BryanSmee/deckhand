@@ -6,16 +6,20 @@
 import { useState } from "preact/hooks";
 import { postJson, usePolled } from "./api";
 import { ago } from "./format";
+import { t, tx } from "./i18n";
+import type { Plain } from "./locales";
 import type { McpClients } from "./types";
 import { Machines } from "./Machines";
 import { Button } from "./ui/Button";
 import styles from "./Clients.module.css";
 
-const SCOPE_NAMES: Record<string, string> = {
-  "deckhand:read": "Read",
-  "deckhand:work": "Work",
-  "deckhand:machine": "Machine",
+// Keys, written when shown: in the language chosen now.
+const SCOPE_NAMES: Record<string, Plain> = {
+  "deckhand:read": "config.scopeRead",
+  "deckhand:work": "config.scopeWork",
+  "deckhand:machine": "config.scopeMachine",
 };
+const scopeName = (s: string) => (SCOPE_NAMES[s] ? t(SCOPE_NAMES[s]) : s);
 
 export function Clients({ now = Date.now }: { now?: () => number }) {
   const list = usePolled<McpClients>("api/mcp/clients", null);
@@ -38,31 +42,36 @@ export function Clients({ now = Date.now }: { now?: () => number }) {
   return (
     <div class={styles.page}>
       <p class={styles.note}>
-        An MCP client connects to{" "}
-        {url ? <code class={styles.url}>{url}</code> : "this Deckhand's /mcp"}, signs you in with
-        GitHub and asks you to allow it. It acts as you, with your rights on this dashboard. Signing
-        out ends every one of them too.
+        {tx("config.clientsNote", {
+          url: url ? <code class={styles.url}>{url}</code> : t("config.clientsThisMcp"),
+        })}
       </p>
       <section class={styles.group} aria-labelledby="mcp-clients">
-        <h2 id="mcp-clients">Signed in as you</h2>
+        <h2 id="mcp-clients">{t("config.clientsTitle")}</h2>
         {(error || (list.error && !clients)) && (
           <p class={styles.error} role="alert">
-            {error ?? `Can't read the clients: ${list.error}`}
+            {error ?? t("config.clientsUnreadable", { error: list.error ?? "" })}
           </p>
         )}
-        {clients?.length === 0 && <p class={styles.empty}>No MCP client is signed in as you.</p>}
-        {!clients && !list.error && <p class={styles.empty}>Reading…</p>}
+        {clients?.length === 0 && <p class={styles.empty}>{t("config.clientsNone")}</p>}
+        {!clients && !list.error && <p class={styles.empty}>{t("config.clientsReading")}</p>}
         {clients?.map((c) => (
           <div key={c.id} class={styles.client}>
             <span class={styles.text}>
               <b>{c.name}</b>
               <span>
-                Connected {ago(c.created, now())}
-                {c.used !== null && ` · last used ${ago(c.used, now())}`}
-                {" · "}
-                {c.scopes.map((s) => SCOPE_NAMES[s] ?? s).join(", ")}
+                {c.used !== null
+                  ? t("config.clientUsed", {
+                      connected: ago(c.created, now()),
+                      used: ago(c.used, now()),
+                      scopes: c.scopes.map(scopeName).join(t("list.comma")),
+                    })
+                  : t("config.clientConnected", {
+                      connected: ago(c.created, now()),
+                      scopes: c.scopes.map(scopeName).join(t("list.comma")),
+                    })}
               </span>
-              <span class={styles.redirect} title="Where it was sent back after you allowed it">
+              <span class={styles.redirect} title={t("config.clientRedirect")}>
                 {c.redirect}
               </span>
             </span>
@@ -71,9 +80,9 @@ export function Clients({ now = Date.now }: { now?: () => number }) {
               pending={revoking === c.id}
               disabled={revoking !== null}
               onClick={() => void revoke(c.id)}
-              aria-label={`Revoke ${c.name}`}
+              aria-label={t("config.revokeClient", { name: c.name })}
             >
-              Revoke
+              {t("config.revoke")}
             </Button>
           </div>
         ))}

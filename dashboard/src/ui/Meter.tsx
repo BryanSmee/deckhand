@@ -3,7 +3,7 @@
 // auto-pickup's: dashed while free, filled from the far end in the auto-pickup tone by the
 // auto-picked runs, and in the standard one, still dashed, by the standard runs borrowing them.
 import styles from "./Meter.module.css";
-import { plural } from "../format";
+import { t } from "../i18n";
 
 // More slots than this read as a bar.
 const MAX_SEGMENTS = 12;
@@ -40,9 +40,10 @@ export function Meter({
   class?: string;
 }) {
   const zones = meterZones(running, max, auto);
-  const label =
-    `${running} of ${max} run slots in use` +
-    (auto ? `, ${zones.auto} of ${plural(zones.reserved, "auto-pickup slot")} in use` : "");
+  const slots = t("ui.meter", { running, count: max });
+  const label = auto
+    ? t("ui.meterAuto", { slots, auto: zones.auto, count: zones.reserved })
+    : slots;
   const cls = [styles.meter, rail && styles.rail, large && styles.large, className]
     .filter(Boolean)
     .join(" ");
