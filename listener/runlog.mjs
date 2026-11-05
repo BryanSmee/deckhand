@@ -66,7 +66,7 @@ export function writeEvent(file, event, fields = {}, options = undefined) {
 export const timed = (e) => e.type === "tool" || e.type === "toolOutput";
 
 // An `at` line of the listener's (writeEvent()): when the next line came, or null.
-function stampOf(line) {
+export function stampOf(line) {
   if (!line.includes('"event":"at"')) return null;
   const e = parse(line);
   return e?.type === "listener" && e.event === "at" && Number.isFinite(e.at) ? e.at : null;
@@ -506,14 +506,21 @@ function buildEntries(line, steps, at = null) {
 // image build step as it starts.
 const STAMPED = new Set(["tool", "output", "step"]);
 
+// The phases of a run's preparation, the only ones whose lines reader() reads apart.
+const PREPARING = new Set(["setup", "image"]);
+
 // format() for a stream of a log's lines, in order: it follows the phase they are in, the
 // image build's lines come as its steps (buildEntries()), and a line after an `at` one gets
-// its time (`at`, ms). Logs from before `at` lines have none.
+// its time (`at`, ms). Logs from before `at` lines have none. Its `settled()`: whether the
+// run's preparation is over (a phase after it, or an agent's line in a log from before phases),
+// after which the lines read so far change how no later one reads but through an `at` line:
+// where a page read from the middle of a log (mcp.mjs) stops reading what comes before it.
 export function reader(agent = agentFor()) {
   const seen = {};
   let phase = null;
   let steps = new Map();
   let at = null;
+  let settled = false;
   const read = (line) => {
     const entries = format(line, agent, seen);
     for (const e of entries) {
@@ -524,7 +531,7 @@ export function reader(agent = agentFor()) {
     if (phase !== "image" || entries.length !== 1 || entries[0].kind !== "raw") return entries;
     return buildEntries(line, steps, at) ?? entries;
   };
-  return (line) => {
+  const reading = (line) => {
     const stamp = stampOf(line);
     if (stamp !== null) {
       at = stamp;
@@ -532,11 +539,15 @@ export function reader(agent = agentFor()) {
     }
     if (!line.trim()) return [];
     const entries = read(line);
+    if (!settled)
+      settled = phase === null ? parse(line)?.type !== "listener" : !PREPARING.has(phase);
     if (at !== null)
       for (const e of entries) if (STAMPED.has(e.kind) && e.at === undefined) e.at = at;
     at = null;
     return entries;
   };
+  reading.settled = () => settled;
+  return reading;
 }
 
 // An image build's output (images.mjs), written to a run's log (`file`: openLog()'s) by whole
