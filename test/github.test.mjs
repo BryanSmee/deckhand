@@ -9,6 +9,7 @@ import {
   graphqlData,
   listLabelled,
   paginate,
+  rateLimited,
 } from "../listener/github.mjs";
 
 // A fake `github(repo, method, path, body, expected)`: `answers` path → Response, the calls kept.
@@ -142,4 +143,17 @@ test("listLabelled: every page of open issues with the label, which must be a li
   );
   const other = fake({ [path(1)]: Response.json({}) });
   await assert.rejects(listLabelled(other.github, "o/r", "needs input"), /no list/);
+});
+
+test("rateLimited: a 429, or a 403 saying so by its headers or its body, which stays readable", async () => {
+  const answer = (status, headers = {}, body = "{}") => new Response(body, { status, headers });
+  assert.equal(await rateLimited(answer(429)), true);
+  assert.equal(await rateLimited(answer(403, { "x-ratelimit-remaining": "0" })), true);
+  assert.equal(await rateLimited(answer(403, { "retry-after": "30" })), true);
+  const secondary = answer(403, {}, '{"message":"You have exceeded a secondary rate limit."}');
+  assert.equal(await rateLimited(secondary), true);
+  assert.match((await secondary.json()).message, /secondary/);
+  assert.equal(await rateLimited(answer(403, { "x-ratelimit-remaining": "12" })), false);
+  assert.equal(await rateLimited(answer(403, {}, '{"message":"Resource not accessible"}')), false);
+  for (const status of [404, 500, 200]) assert.equal(await rateLimited(answer(status)), false);
 });

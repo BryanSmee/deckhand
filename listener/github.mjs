@@ -21,6 +21,18 @@ export function createGitHub(app) {
   return { github, graphql: query };
 }
 
+// Whether GitHub's answer `res` is a rate limit: a 429, or a 403 with no requests left, a
+// `retry-after`, or a body that says so (a secondary rate limit may send neither header). Read
+// on a clone: `res`'s body is left for its caller.
+export async function rateLimited(res) {
+  if (res.status === 429) return true;
+  if (res.status !== 403) return false;
+  if (res.headers?.get?.("x-ratelimit-remaining") === "0") return true;
+  if (res.headers?.get?.("retry-after")) return true;
+  const text = await (res.clone?.() ?? res).text().catch(() => "");
+  return /rate limit/i.test(text);
+}
+
 // GET `path` as JSON, or null when GitHub answers a status in `expected` (404, 410: not
 // there). Any other failure throws.
 export async function getJson(github, repo, path, expected = []) {

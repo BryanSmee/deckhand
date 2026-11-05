@@ -44,6 +44,24 @@ async function fakeGitHub(t, answer = () => null) {
     req.on("end", async () => {
       const body = Buffer.concat(chunks).toString("utf8");
       calls.push({ method: req.method, url: req.url, auth: req.headers.authorization, body });
+      // org/gone: out of the App's reach; org/down: GitHub failing on its installation.
+      if (req.url.endsWith("/repos/org/gone/installation")) {
+        res.writeHead(404, { "content-type": "application/json" });
+        return res.end(JSON.stringify({ message: "Not Found" }));
+      }
+      // org/limited: a secondary rate limit, which sends no header; org/blocked: a plain 403.
+      if (req.url.endsWith("/repos/org/limited/installation")) {
+        res.writeHead(403, { "content-type": "application/json" });
+        return res.end(JSON.stringify({ message: "You have exceeded a secondary rate limit." }));
+      }
+      if (req.url.endsWith("/repos/org/blocked/installation")) {
+        res.writeHead(403, { "content-type": "application/json" });
+        return res.end(JSON.stringify({ message: "Repository access blocked" }));
+      }
+      if (req.url.endsWith("/repos/org/down/installation")) {
+        res.writeHead(502, { "content-type": "application/json" });
+        return res.end("{}");
+      }
       if (req.url.endsWith("/installation")) return res.end(JSON.stringify({ id: 7 }));
       if (req.url.endsWith("/access_tokens")) {
         const expires_at = new Date(Date.now() + 3600_000).toISOString();
@@ -459,6 +477,33 @@ test("the listener's client: GitHub's answers as fetch() gives them, the service
   await assert.rejects(
     stale.app({}).request("org/repo", "POST", "/repos/org/repo/issues/1/labels", {}),
     (error) => error.status === 409,
+  );
+  // A repository out of the App's reach: GitHub's 404 on its installation, as the service's
+  // refusal; GitHub failing on it stays the service failing (policies.mjs transient(), #785).
+  for (const path of ["/repos/org/gone", "/graphql"]) {
+    await assert.rejects(
+      app.request(
+        "org/gone",
+        path === "/graphql" ? "POST" : "GET",
+        path,
+        path === "/graphql" ? { query: "{ viewer { login } }" } : undefined,
+      ),
+      (error) => error.status === 404,
+      path,
+    );
+  }
+  // A 403 that is a rate limit stays a failure; any other, the refusal it is.
+  await assert.rejects(
+    app.request("org/limited", "GET", "/repos/org/limited"),
+    (error) => error.status === 500,
+  );
+  await assert.rejects(
+    app.request("org/blocked", "GET", "/repos/org/blocked"),
+    (error) => error.status === 403,
+  );
+  await assert.rejects(
+    app.request("org/down", "GET", "/repos/org/down"),
+    (error) => error.status === 500,
   );
   // The App's public parts, never its key.
   const info = await client.setup.info();
