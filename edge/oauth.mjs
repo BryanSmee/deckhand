@@ -13,7 +13,9 @@
 //                            (an hour) and a new refresh token (30 days, rotating: one used twice
 //                            ends its whole family)
 //   POST /oauth/revoke       RFC 7009: the client's own sign-out
-//   *    /mcp                401 with WWW-Authenticate without a valid token; the tools: #482
+//   *    /mcp                403 from another Origin, 401 with WWW-Authenticate without a valid
+//                            token; else passed on to the orchestrator's tools (#482,
+//                            ../listener/mcp.mjs) with the token's login and scopes
 //   GET  /api/mcp/clients               Settings: the signed-in login's connected clients
 //   POST /api/mcp/clients/<id>/revoke   Settings' Revoke
 //
@@ -117,7 +119,7 @@ export function registeredRedirect(registered, asked) {
 
 // `auth`: ../listener/auth.mjs's (the signed-in login, its session epoch); `publicUrl()`:
 // Deckhand's public URL, the issuer; `serve(req, res, who)`: /mcp itself once its token is
-// checked (#482). `random(bytes)`: base64url, the tests' to choose.
+// checked (#482: http.mjs mcp(), which passes it on). `random(bytes)`: base64url, the tests' to choose.
 export function createOAuth({
   config,
   auth,
@@ -619,8 +621,25 @@ on this Deckhand, with your rights on its dashboard:</p>
     return { login: family.login, scopes: access.scopes ?? family.scopes, client: family.client };
   }
 
+  // A request a browser sent from a page: only from Deckhand's own origin. Another's (DNS
+  // rebinding, a page that guessed a token) never reaches the tools, as the MCP spec advises.
+  // Native clients send none.
+  function foreign(req) {
+    const origin = req.headers.origin;
+    if (origin === undefined) return false;
+    try {
+      return new URL(origin).origin !== new URL(base()).origin;
+    } catch {
+      return true;
+    }
+  }
+
   async function mcp(req, res) {
     if (req.method === "OPTIONS") return res.writeHead(204, CORS).end();
+    if (foreign(req)) {
+      log(`MCP: refused a request from Origin ${JSON.stringify(req.headers.origin)}`);
+      return json(res, 403, { error: "Not from this Deckhand's origin." });
+    }
     const who = await authorize(req);
     if (!who) {
       const given = /^Bearer /i.test(String(req.headers.authorization ?? ""));

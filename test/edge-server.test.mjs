@@ -2,7 +2,7 @@
 // (its service tokens, the screenshots), a fake github service and a fake orchestrator. The deliveries' way to a
 // run and back to a reply goes through the orchestrator too: orchestrator-server.test.mjs.
 import assert from "node:assert/strict";
-import { createHmac } from "node:crypto";
+import { createHash, createHmac } from "node:crypto";
 import { writeFileSync } from "node:fs";
 import { request } from "node:http";
 import { join } from "node:path";
@@ -73,6 +73,8 @@ async function startEdge(t) {
       user: req.headers["x-deckhand-user"] ?? null,
       local: req.headers["x-deckhand-local"] === "1",
       service: !!req.headers.authorization,
+      scopes: req.headers["x-deckhand-scopes"] ?? null,
+      version: req.headers["mcp-protocol-version"] ?? null,
     });
     res.writeHead(200, { "content-type": "application/json" }).end('{"answered":true}');
   });
@@ -383,4 +385,115 @@ test("edge: MCP clients' sign-in, its metadata at the public URL, /mcp's 401, Se
     clients: [],
   });
   assert.equal(edge.asked.length, 0);
+});
+
+test("edge: /mcp with a token goes on to the orchestrator as its login and scopes; another Origin doesn't", async (t) => {
+  const edge = await startEdge(t);
+  const base = `http://127.0.0.1:${edge.port}`;
+  const redirect = "http://localhost:9/cb";
+  const verifier = "v".repeat(50);
+  const { client_id } = await (
+    await fetch(`${base}/oauth/register`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ client_name: "Claude Code", redirect_uris: [redirect] }),
+    })
+  ).json();
+  const query = new URLSearchParams({
+    response_type: "code",
+    client_id,
+    redirect_uri: redirect,
+    code_challenge: createHash("sha256").update(verifier).digest("base64url"),
+    code_challenge_method: "S256",
+  });
+  const cookie = session("alice");
+  const page = await (
+    await fetch(`${base}/oauth/authorize?${query}`, { headers: { cookie } })
+  ).text();
+  const allowed = await fetch(`${base}/oauth/authorize`, {
+    method: "POST",
+    redirect: "manual",
+    headers: {
+      cookie,
+      origin: "https://hooks.example.com",
+      "content-type": "application/x-www-form-urlencoded",
+    },
+    body: new URLSearchParams({
+      request: /name="request" value="([^"]+)"/.exec(page)[1],
+      decision: "allow",
+    }).toString(),
+  });
+  const code = new URL(allowed.headers.get("location")).searchParams.get("code");
+  const tokens = await (
+    await fetch(`${base}/oauth/token`, {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        grant_type: "authorization_code",
+        code,
+        client_id,
+        redirect_uri: redirect,
+        code_verifier: verifier,
+      }).toString(),
+    })
+  ).json();
+  const mcp = (headers = {}) =>
+    fetch(`${base}/mcp`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${tokens.access_token}`,
+        "content-type": "application/json",
+        "mcp-protocol-version": "2025-06-18",
+        // Never passed on as the client sent it: edge says which scopes.
+        "x-deckhand-scopes": "deckhand:everything",
+        ...headers,
+      },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }),
+    });
+  const answer = await mcp();
+  assert.equal(answer.status, 200);
+  assert.deepEqual(await answer.json(), { answered: true });
+  assert.deepEqual(edge.asked, [
+    {
+      method: "POST",
+      url: "/edge/mcp",
+      user: "alice",
+      local: false,
+      service: true,
+      scopes: "deckhand:read deckhand:work",
+      version: "2025-06-18",
+    },
+  ]);
+  // A browser's page elsewhere (DNS rebinding): refused at edge, the token never tried.
+  assert.equal((await mcp({ origin: "https://evil.example" })).status, 403);
+  assert.equal((await mcp({ origin: "null" })).status, 403);
+  // Deckhand's own origin is fine.
+  assert.equal((await mcp({ origin: "https://hooks.example.com" })).status, 200);
+  assert.equal(edge.asked.length, 2);
+  // Too large a call: refused before it is read.
+  const large = await fetch(`${base}/mcp`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${tokens.access_token}` },
+    body: "x".repeat(70 * 1024),
+  });
+  assert.equal(large.status, 413);
+  // Chunked, with no length to refuse it by: a 413 the client reads, never a 500 nor a reset.
+  const chunked = await new Promise((resolve, reject) => {
+    const req = request(
+      {
+        host,
+        port: edge.port,
+        method: "POST",
+        path: "/mcp",
+        headers: { authorization: `Bearer ${tokens.access_token}`, "transfer-encoding": "chunked" },
+      },
+      (res) => resolve(res.statusCode),
+    );
+    req.on("error", reject);
+    for (let i = 0; i < 70; i++) req.write("x".repeat(1024));
+    req.end();
+  });
+  assert.equal(chunked, 413);
+  assert.doesNotMatch(edge.output(), /MCP sign-in: POST \/mcp/);
+  assert.equal(edge.asked.length, 2);
 });

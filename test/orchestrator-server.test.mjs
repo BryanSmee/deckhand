@@ -4177,6 +4177,93 @@ allow_capabilities contains "read:pulls"
     assert.equal((await get("/api/runs/org-repo-pr-3-1000/stream", session)).status, 404);
   });
 
+  test("MCP (#482): a client signed in through edge lists the tasks and reads a run's log", async (t) => {
+    const { port } = await listen(t, {}, (dir, github) => {
+      const meta = { type: "listener", key: "org/repo#pr-3", repo: "org/repo", startedAt: 1000 };
+      const result = { type: "result", result: "## Fixed\n\nThe typo.", duration_ms: 6000 };
+      pastRun(dir, "org-repo-pr-3-1000", [meta, result]);
+      return { GITHUB_URL: github.url };
+    });
+    const base = `http://127.0.0.1:${port}`;
+    const get = (path, cookie) =>
+      fetch(base + path, { redirect: "manual", headers: cookie ? { cookie } : {} });
+    const post = (path, body, headers = {}) =>
+      fetch(base + path, { method: "POST", redirect: "manual", headers, body });
+    const form = { "content-type": "application/x-www-form-urlencoded" };
+    // Without a token: where to sign in.
+    const none = await post("/mcp", "{}");
+    assert.equal(none.status, 401);
+    assert.match(none.headers.get("www-authenticate"), /resource_metadata=/);
+    // alice signs in with GitHub, and allows a client, as `claude mcp add` gets her to.
+    const login = await get("/auth/login");
+    const to = new URL(login.headers.get("location"));
+    const state = login.headers.getSetCookie()[0].split(";")[0];
+    const back = await get(`/auth/callback?code=c&state=${to.searchParams.get("state")}`, state);
+    const session = back.headers
+      .getSetCookie()
+      .find((c) => c.startsWith("deckhand_session="))
+      .split(";")[0];
+    const redirect = "http://127.0.0.1:9/cb";
+    const verifier = "v".repeat(50);
+    const registered = await post(
+      "/oauth/register",
+      JSON.stringify({ client_name: "Claude Code", redirect_uris: [redirect] }),
+      { "content-type": "application/json" },
+    );
+    const { client_id } = await registered.json();
+    const query = new URLSearchParams({
+      response_type: "code",
+      client_id,
+      redirect_uri: redirect,
+      code_challenge: createHash("sha256").update(verifier).digest("base64url"),
+      code_challenge_method: "S256",
+    });
+    const page = await (await get(`/oauth/authorize?${query}`, session)).text();
+    const request = /name="request" value="([^"]+)"/.exec(page)[1];
+    const allowed = await post(
+      "/oauth/authorize",
+      new URLSearchParams({ request, decision: "allow" }).toString(),
+      { ...form, cookie: session, origin: "https://hooks.example.com" },
+    );
+    const code = new URL(allowed.headers.get("location")).searchParams.get("code");
+    const exchange = new URLSearchParams({
+      grant_type: "authorization_code",
+      code,
+      client_id,
+      redirect_uri: redirect,
+      code_verifier: verifier,
+    });
+    const { access_token } = await (await post("/oauth/token", exchange.toString(), form)).json();
+    let id = 0;
+    const rpc = async (method, params) => {
+      const res = await post("/mcp", JSON.stringify({ jsonrpc: "2.0", id: ++id, method, params }), {
+        authorization: `Bearer ${access_token}`,
+        "content-type": "application/json",
+        accept: "application/json, text/event-stream",
+      });
+      assert.equal(res.status, 200);
+      return (await res.json()).result;
+    };
+    const init = await rpc("initialize", { protocolVersion: "2025-06-18", capabilities: {} });
+    assert.equal(init.serverInfo.name, "deckhand");
+    const { tools } = await rpc("tools/list", {});
+    assert.equal(tools.length, 5);
+    const call = (name, args) => rpc("tools/call", { name, arguments: args });
+    const tasks = await call("list_tasks", {});
+    assert.deepEqual(
+      tasks.structuredContent.tasks.map((task) => [task.key, task.state]),
+      [["org/repo#pr-3", "done"]],
+    );
+    const runs = await call("list_runs", { task: "org/repo#pr-3" });
+    assert.deepEqual(
+      runs.structuredContent.runs.map((r) => r.id),
+      ["org-repo-pr-3-1000"],
+    );
+    // The log, read at the runner through the orchestrator.
+    const log = await call("get_run_log", { runId: "org-repo-pr-3-1000" });
+    assert.match(log.content[0].text, /= result \(ok, 0\.1 min\):\n## Fixed/);
+  });
+
   test("access (#731): a login with no action sees nothing, starts nothing, its routes 404 and 403", async (t) => {
     // The operator's access.rego replaces Deckhand's: decided by the policy service, whose opa
     // gives bob everything and alice nothing (not even server-wide).

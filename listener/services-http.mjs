@@ -7,7 +7,9 @@
 //                                       (`pendingTokens`), with the claims the orchestrator
 //                                       decided, never the runner's
 //   * /edge/*                           edge's: the dashboard's API and /status, as edge
-//                                       passes them on with the user it signed in (../edge/forward.mjs), answered by http.mjs
+//                                       passes them on with the user it signed in
+//                                       (../edge/forward.mjs), and /mcp with an MCP client's
+//                                       login and scopes, answered by http.mjs
 //
 // The repos' tarballs and blobs are the github service's (../github/service.mjs, #502).
 //
@@ -31,6 +33,8 @@ const USER_HEADER = "x-deckhand-user";
 const LOCAL_HEADER = "x-deckhand-local";
 const HOST_HEADER = "x-deckhand-host";
 const ORIGIN_HEADER = "x-deckhand-origin";
+// An MCP client's token's scopes, space-separated: only /mcp is passed on with them.
+const SCOPES_HEADER = "x-deckhand-scopes";
 // A GitHub login.
 const LOGIN = /^[a-z\d](?:[a-z\d-]{0,38})$/i;
 
@@ -91,7 +95,9 @@ export function createServicesHttp({
     }
     req.url = req.url.slice("/edge".length) || "/";
     const login = LOGIN.test(user) ? user.toLowerCase() : null;
-    return handle(req, res, { user: login && allowed(login) ? login : null, local });
+    const said = req.headers[SCOPES_HEADER];
+    const scopes = typeof said === "string" ? said.split(" ").filter(Boolean) : null;
+    return handle(req, res, { user: login && allowed(login) ? login : null, local, scopes });
   }
 
   async function handle(req, res) {

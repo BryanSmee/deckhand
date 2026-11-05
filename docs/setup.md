@@ -461,6 +461,38 @@ capability and what stops it), and the raw file. Anyone signed in with `repo:con
 that repository sees it, grants included. Its **Refresh** reads it again (at most every 5 seconds); changing it is a commit on
 the default branch.
 
+### MCP clients
+
+Deckhand is an MCP server too, at `<PUBLIC_URL>/mcp`: an MCP client (Claude Code, Codex,
+Cursor…) reads what the dashboard shows you, as you. In Claude Code:
+
+```sh
+claude mcp add --transport http deckhand https://deckhand.example.com/mcp
+```
+
+then `/mcp` in Claude Code, **Authenticate**: your browser opens Deckhand's sign-in (GitHub, as
+for the dashboard, skipped when you are signed in already) and a page naming the client and
+what it asks for; **Allow** sends you back to it. Other clients take the same URL, as a
+"Streamable HTTP" server with OAuth. Settings › MCP clients lists the clients you connected,
+with **Revoke**; signing out of the dashboard signs them out too. Behind a reverse proxy, the
+public URL (`PUBLIC_URL`) must be the address clients connect to: the sign-in's metadata names
+it, and a browser page from another origin is refused.
+
+Its tools only read (they need the `deckhand:read` scope, which a client gets by default):
+
+| Tool           | What it gives                                                                                                                              |
+| -------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| `list_repos`   | The repositories you see, whether each is set up, and its backlog's size                                                                   |
+| `list_tasks`   | The board's tasks (`repo`, `state` to narrow them): each issue or pull request, its state, its runs and how the last one ended             |
+| `list_runs`    | A task's runs (`task`: `owner/repo#12`, `owner/repo#pr-12`), the newest first: id, mode, agent and model, start, duration, outcome         |
+| `get_run_log`  | A run's log as text, a page at a time (64 KB of the log by default, `limit` up to 1 MB; `from` for another page): the newest page first    |
+| `get_schedule` | The runs going, the queue in its run order, what waits for which issues, the lanes, and the backlog (`repo`: its open issues; else counts) |
+
+Each shows what your access shows you on the dashboard, nothing of the repositories you don't
+see. A run's log can hold what its agent read (issues, command output, web pages): your
+client's model reads it as data, which the tool's description tells it, but treat a log as you
+would any text from the repository.
+
 ## The server folder
 
 Everything you configure but the secrets is in one folder, which `compose.yaml` mounts

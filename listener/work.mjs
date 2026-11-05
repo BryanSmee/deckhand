@@ -313,8 +313,9 @@ export function createWorkApi({
 
   // The last read straight away, refreshed in the background once it is older than ISSUES_MS
   // or stale(): only a repo without one waits for GitHub. `refreshing`: a newer read is on its
-  // way, which the dashboard asks for again soon.
-  async function backlog(res, repo, user) {
+  // way, which the dashboard asks for again soon. Throws Refused for a user the repo's `users`
+  // leave out. Its caller checked the rest (apiRoute(), or the MCP tools: http.mjs).
+  async function backlogOf(repo, user) {
     const name = repo.toLowerCase();
     const known = entry(repo);
     const live = ending(known, name);
@@ -327,13 +328,13 @@ export function createWorkApi({
     if (!last) await known.read;
     const { modes, errors, users, at } = known.last;
     if (!sees(users, user)) refuse(404, `${user} is not among ${repo}'s users.`);
-    send(res, 200, {
+    return {
       issues: shown(known, name, live),
       modes,
       errors,
       readAt: at,
       refreshing: known.read !== null,
-    });
+    };
   }
 
   // The repo's entry in `backlogs`, created without a read.
@@ -1323,7 +1324,7 @@ export function createWorkApi({
       analyze,
     },
     gets: {
-      issues: (req, res, user, repo) => backlog(res, repo, user),
+      issues: async (req, res, user, repo) => send(res, 200, await backlogOf(repo, user)),
       analyze: previewAnalysis,
     },
     allowed: (repo) => repoAllowed(config, repo),
@@ -1344,7 +1345,7 @@ export function createWorkApi({
     if (known.last || known.read) readAgain(known);
   }
 
-  return { handle, stale, counts, ticked };
+  return { handle, stale, counts, ticked, backlog: backlogOf };
 }
 
 // Which deliveries make a repo's backlog stale: an issue opened, closed, edited, moved or
