@@ -1059,6 +1059,18 @@ async function actionsRuns(github, repo, sha) {
   return { ok: true, status: res.status, runs: (await res.json()).workflow_runs ?? [] };
 }
 
+// How many commits branch `base` has that commit `sha` doesn't, or null when GitHub can't
+// compare them (a branch gone, a commit unknown).
+async function behindBy(github, repo, base, sha) {
+  const found = await getJson(
+    github,
+    repo,
+    `/repos/${repo}/compare/${encodeURIComponent(base)}...${encodeURIComponent(sha)}?per_page=1`,
+    [404, 422],
+  );
+  return Number.isInteger(found?.behind_by) ? found.behind_by : null;
+}
+
 // The `mergeable_state`s that checks still going can explain: `unstable` (a check or status
 // pending or failing), `blocked` (branch protection waiting for required checks), `unknown`
 // (still computed after MERGEABLE_TRIES). Any other one but `clean` refuses at once.
@@ -1165,6 +1177,17 @@ export async function mergeRefusal(
   };
   // A conflict or a branch behind its base: no check finishing changes that.
   if (!AWAITABLE.has(state)) return notClean;
+  // Behind its base: its checks ran without the base's latest commits, which may break it once
+  // merged (#714, #778). GitHub says `behind` only when branch protection requires branches up to
+  // date, and private repositories on the Free plan have none: asked of the base's branch now.
+  const base = pr.base?.ref || info.default_branch;
+  const behind = await behindBy(github, repo, base, sha);
+  if (behind == null) return { why: `it can't be compared with \`${base}\`` };
+  if (behind > 0) {
+    return {
+      why: `its branch is ${behind} commit${behind > 1 ? "s" : ""} behind \`${base}\`, which its checks didn't run with: update the branch`,
+    };
+  }
   const read = await actionsRuns(github, repo, sha);
   if (!read.ok) return { why: `its GitHub Actions runs can't be read (${read.status})` };
   const { runs } = read;
@@ -1215,6 +1238,7 @@ export async function mergeRefusal(
       passed(`Merge method ${method} allowed`),
       passed("No trusted file changed"),
       passed("Cleanly mergeable"),
+      passed(`Up to date with ${base}`),
       passed("Checks green"),
     ];
     const ref = info.default_branch || "main";

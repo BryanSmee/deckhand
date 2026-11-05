@@ -876,7 +876,10 @@ With `review.merge` and the operator's `auto_merge` grant (`grants.mjs`
 re-reads the repo's settings and grant, records `mergeAt` (one decision per pull request),
 checks `mergeBlockers()` and the gates (`mergeRefusal()`: the pull request, its labels, its
 head, the repository's visibility and merge methods, its changed files against
-`trustedFile()`, `mergeable_state`, its Actions runs, last the policies' `deny_merge`), then merges as the App at
+`trustedFile()`, `mergeable_state`, its head compared with its base's branch now (`GET /compare`, #778:
+GitHub's `behind` needs branch protection, which the Free plan's private repositories lack; behind
+refuses at once, and Deckhand doesn't update the branch, whose new head would need a review of
+its own), its Actions runs, last the policies' `deny_merge`), then merges as the App at
 the reviewed head (`PUT /pulls/{n}/merge` with `sha`) or comments why not. When only Actions
 runs still going stand in the way (`mergeRefusal()`'s `pending`), `decide()` clears `mergeAt`
 and keeps `waiting` ({ sha, since, review, … }) in the store's `reviews` instead: `checksDone()`, on a
