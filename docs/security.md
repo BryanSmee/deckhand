@@ -2924,9 +2924,11 @@ namespace of its own:
   (reviews, fix runs) aren't asked. With Deckhand's files alone and no repository file, the
   orchestrator decides as `run.rego` would, from the comment alone: no `opa`, no read of its issue.
   It only lists the repository's policy folder, as every decision does, and when GitHub can't
-  list it, it keeps the last listing up to an hour old (a push forgets it, and the log says when
-  it is used): an orchestrator that hasn't listed it in that hour, since its start or since a push,
-  refuses then, as every other decision does at once. For `merge`, the pull request then waits for
+  list it (no answer, a 5xx, a rate limit), it keeps the last listing up to an hour old (a push
+  forgets it, and the log says when it is used). Any other failure, such as a plain 403 or the
+  github service's own refusal, refuses at once and forgets the last listing. An orchestrator
+  that hasn't listed it in that hour, since its start or since a push, refuses then, as every
+  other decision does at once. For `merge`, the pull request then waits for
   a human, as with any refusal; for `review`, the review is skipped (the log says why); for
   `fix`, no fix run starts and a comment says why; for `link_branch`, no branch is linked (the
   sandbox creates it, unlinked); for `request_review`, nobody is asked to review (the log says

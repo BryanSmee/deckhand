@@ -693,6 +693,72 @@ test("Deckhand's defaults alone: GitHub failing to list the repo's policies agai
   assert.match(replies[0], /policy error: the policies can't be read .*Post the comment again/);
 });
 
+test("Deckhand's defaults alone: only a hiccup listing the repo's policies keeps its last listing (#856)", async (t) => {
+  let clock = 0;
+  // What GitHub answers the listing with: a Response, or a throw.
+  let answer = () => new Response("{}", { status: 404 });
+  const logs = [];
+  const policies = createPolicies({
+    config: {},
+    github: async () => answer(),
+    service: localService(
+      policyEngineOf(t, {
+        opa: { run: async () => assert.fail("no opa"), serve: async () => assert.fail("no opa") },
+        readBuiltIn: () => builtInPolicies(),
+      }),
+    ),
+    log: (line) => logs.push(line),
+    now: () => clock,
+  });
+  const allowed = createRunPolicy({ policies, log: () => {}, answer: async () => {} });
+  const work = () => itemOf({ trigger: "work" });
+  const answering =
+    (status, headers = {}, body = "{}") =>
+    () =>
+      new Response(body, { status, headers });
+  // The github service's own answer (../github/client.mjs): thrown, with its status.
+  const service = (status) => () => {
+    throw Object.assign(new Error(`the github service: ${status}`), { status });
+  };
+  // Hiccups: the last listing holds.
+  for (const hiccup of [
+    () => {
+      throw new Error("socket hang up");
+    },
+    answering(502),
+    answering(429),
+    answering(403, { "x-ratelimit-remaining": "0" }),
+    answering(403, {}, JSON.stringify({ message: "You have exceeded a secondary rate limit." })),
+    service(503),
+  ]) {
+    answer = answering(404);
+    clock += 11 * 60_000;
+    assert.equal(await allowed(work(), "work", "Org/Repo#12"), true);
+    clock += 11 * 60_000;
+    answer = hiccup;
+    assert.equal(await allowed(work(), "work", "Org/Repo#12"), true);
+  }
+  assert.ok(logs.some((l) => /Org\/Repo: listing its policies: .*last listing kept/.test(l)));
+  // Anything else says something: refused at once, and the last listing goes with it, so that a
+  // hiccup next can't bring it back.
+  for (const refusal of [
+    answering(403),
+    answering(403, {}, JSON.stringify({ message: "Resource not accessible by integration" })),
+    answering(401),
+    service(412),
+    service(404),
+  ]) {
+    answer = answering(404);
+    clock += 11 * 60_000;
+    assert.equal(await allowed(work(), "work", "Org/Repo#12"), true);
+    clock += 11 * 60_000;
+    answer = refusal;
+    assert.equal(await allowed(work(), "work", "Org/Repo#12"), false);
+    answer = answering(502);
+    assert.equal(await allowed(work(), "work", "Org/Repo#12"), false);
+  }
+});
+
 test("Deckhand's defaults alone, with permissions: GitHub failing on the repository keeps what it last said (#785)", async (t) => {
   let clock = 0;
   // null, or what GitHub answers every path with: a status (and its headers), or a throw.
