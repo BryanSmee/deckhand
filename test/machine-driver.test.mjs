@@ -151,6 +151,11 @@ test("suggested settings, POSIX: the run's folder writable, extra paths, credent
     assert.ok(deny.includes(rule), rule);
   }
   assert.ok(!deny.includes("Edit(//var/cache/ddc/**)"));
+  // Its clone's git folder: hooks and config there run as the owner, outside the sandbox.
+  assert.ok(deny.includes("Edit(~/deckhand/org/game/issue-12/.git/**)"));
+  // A grant of any host: no list of domains, Claude Code's own default.
+  const open = settingsFor({ run: "r1", dir, hosts: ["*", "github.com"], home, platform: "linux" });
+  assert.equal(open.sandbox.network, undefined);
   // macOS: its keychains and browser profiles.
   const mac = credentialPaths(home, "darwin").map((c) => c.path);
   assert.ok(mac.includes(join(home, "Library", "Keychains")));
@@ -552,6 +557,33 @@ test("the driver's loop: claim, run, stream, push, finish; its lease kept throug
   await until(() => mcp.seen.finished.r4, { ms: 20_000, what: "r4's finish" });
   assert.equal(mcp.seen.finished.r4.outcome, "error");
   assert.match(mcp.seen.finished.r4.reply, /Claude Code exited with 3 on Desk:[^]*asked to fail/);
+
+  // The clone went another way than GitHub's copy (a commit here, another pushed there): back
+  // on GitHub's, its own commit kept on a branch. Then the agent rewrites the branch's history,
+  // as a rebase does: pushed over GitHub's copy, which it fetched, with a lease.
+  const dir12 = join(root, "work", "org", "game", "issue-12");
+  const git = (cwd, ...args) => execFileSync("git", args, { cwd, env, encoding: "utf8" }).trim();
+  writeFileSync(join(dir12, "local.txt"), "here\n");
+  git(dir12, "add", ".");
+  git(dir12, "commit", "--quiet", "-m", "Local only");
+  const other = join(root, "other");
+  git(root, "clone", "--quiet", "--branch", "issue-12-build-the-level", repo, other);
+  writeFileSync(join(other, "theirs.txt"), "there\n");
+  git(other, "add", ".");
+  git(other, "commit", "--quiet", "-m", "Theirs");
+  git(other, "push", "--quiet", "origin", "issue-12-build-the-level");
+  const r5 = work("r5", { resume: true, message: "Rebase it. AMEND" });
+  mcp.seen.works.r5 = r5;
+  works.push(r5);
+  await until(() => mcp.seen.finished.r5, { ms: 20_000, what: "r5's finish" });
+  assert.equal(mcp.seen.finished.r5.outcome, "ok");
+  const rewritten = git(root, "--git-dir", repo, "log", "--format=%s", "issue-12-build-the-level");
+  // GitHub's last commit ("Theirs", which the clone fetched), rewritten and pushed over.
+  assert.deepEqual(rewritten.split("\n").slice(0, 2), ["Rewritten", "Turn 1"]);
+  assert.equal(
+    git(dir12, "log", "-1", "--format=%s", "issue-12-build-the-level-before-r5"),
+    "Local only",
+  );
 
   await driver.stop();
   await running;

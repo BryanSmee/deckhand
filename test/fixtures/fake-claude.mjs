@@ -3,7 +3,7 @@
 // FAKE_CLAUDE_LOG (a JSON line), and it answers each stream-json message on its input as
 // `claude -p --input-format stream-json --output-format stream-json` does: an assistant line and
 // a result. A message's words steer it: `COMMIT` commits a file in its folder, `SLEEP <ms>`
-// waits first, `FAIL` exits 3 at once, with a line on stderr, `ASK` asks its permission prompt
+// waits first, `AMEND` rewrites its branch's last commit (a rebase's history), `FAIL` exits 3 at once, with a line on stderr, `ASK` asks its permission prompt
 // tool (--mcp-config's server, --permission-prompt-tool's tool) about a Bash call and says the
 // answer. It ends when its input does.
 import { execFileSync, spawn } from "node:child_process";
@@ -45,6 +45,9 @@ for await (const line of lines) {
   if (text.includes("ASK")) {
     const answer = await askPermission({ command: "rm -rf build" });
     say({ type: "assistant", message: { content: [{ type: "text", text: `Asked: ${answer}` }] } });
+  }
+  if (text.includes("AMEND")) {
+    execFileSync("git", ["commit", "--quiet", "--amend", "-m", "Rewritten"]);
   }
   if (text.includes("COMMIT")) {
     writeFileSync(`turn-${turns}.txt`, `${text}\n`);

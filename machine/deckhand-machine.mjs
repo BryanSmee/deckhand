@@ -425,6 +425,8 @@ export function settingsFor({
           ]),
         ),
         ...readOnly.map((x) => `Edit(${rule(x.path)})`),
+        // Its clone's git folder: hooks and config there would run as the owner, outside it.
+        `Edit(${rule(pathsOf(platform).join(dir, ".git"))})`,
       ],
     },
     sandbox: on
@@ -437,7 +439,10 @@ export function settingsFor({
             allowWrite: [dir, ...paths.filter((x) => x.write).map((x) => x.path)],
             denyRead: denied.map((d) => d.path),
           },
-          network: { allowedDomains: [...new Set(hosts.map((h) => String(h).toLowerCase()))] },
+          // A grant of "*" (any host): no list, Claude Code's own default and the owner's settings.
+          ...(!hosts.includes("*") && {
+            network: { allowedDomains: [...new Set(hosts.map((h) => String(h).toLowerCase()))] },
+          }),
         }
       : { enabled: false },
   };
@@ -808,9 +813,9 @@ export function createDriver({
       persist("finish", { ...ids, outcome, ...(reply && { reply }) }).catch((e) =>
         log(`${work.key}: finish: ${e.message}`),
       );
-    let base;
+    let ready;
     try {
-      base = await checkout(work, dir);
+      ready = await checkout(work, dir);
     } catch (error) {
       if (run.cancelled) return;
       return end(
@@ -962,7 +967,7 @@ export function createDriver({
     const ok = exit.code === 0 && last && !last.is_error;
     let pushed = null;
     try {
-      pushed = await push(work, dir, base);
+      pushed = await push(work, dir, ready);
     } catch (error) {
       const said = last?.result ?? "";
       return end(
@@ -981,7 +986,10 @@ export function createDriver({
   }
 
   // The issue's clone, kept between runs, on its branch: fetched, then the branch as it is on
-  // GitHub (or here, ahead of it), else a new one from the base. → the base's ref.
+  // GitHub, or as it is here when it is ahead of it (a push that failed), else a new one from
+  // the base. One that went another way than GitHub's copy is put back on it, the machine's
+  // commits kept on a branch of their own: GitHub's copy is the task's. → { base, lease }: the
+  // base's ref, and GitHub's copy's commit as fetched ("" without one), which push() may replace.
   async function checkout(work, dir) {
     const url = config.gitUrl ? config.gitUrl.replaceAll("{repo}", work.repository) : work.cloneUrl;
     if (!existsSync(pathsOf(platform).join(dir, ".git"))) {
@@ -991,62 +999,69 @@ export function createDriver({
       await git(dir, ["fetch", "--quiet", "--prune", "origin"]);
     }
     const base = work.base ? `origin/${work.base}` : "origin/HEAD";
-    const remote = await git(dir, [
-      "rev-parse",
-      "--verify",
-      "--quiet",
-      `origin/${work.branch}`,
-    ]).then(
-      () => true,
-      () => false,
-    );
-    const local = await git(dir, [
-      "rev-parse",
-      "--verify",
-      "--quiet",
-      `refs/heads/${work.branch}`,
-    ]).then(
-      () => true,
-      () => false,
-    );
-    if (local) {
-      await git(dir, ["checkout", "--quiet", work.branch]);
-      if (remote)
-        await git(dir, ["merge", "--quiet", "--ff-only", `origin/${work.branch}`]).catch(() => {});
-    } else {
-      await git(dir, [
-        "checkout",
-        "--quiet",
-        "-b",
-        work.branch,
-        remote ? `origin/${work.branch}` : base,
-      ]);
+    const shaOf = (ref) =>
+      git(dir, ["rev-parse", "--verify", "--quiet", ref]).then(
+        (out) => out.trim(),
+        () => "",
+      );
+    const lease = await shaOf(`refs/remotes/origin/${work.branch}`);
+    const local = await shaOf(`refs/heads/${work.branch}`);
+    if (!local) {
+      await git(dir, ["checkout", "--quiet", "-b", work.branch, lease || base]);
+      return { base, lease };
     }
-    return base;
+    await git(dir, ["checkout", "--quiet", work.branch]);
+    if (!lease) return { base, lease };
+    const behind = await git(dir, ["merge-base", "--is-ancestor", local, lease]).then(
+      () => true,
+      () => false,
+    );
+    const ahead = await git(dir, ["merge-base", "--is-ancestor", lease, local]).then(
+      () => true,
+      () => false,
+    );
+    if (behind) await git(dir, ["merge", "--quiet", "--ff-only", lease]);
+    else if (!ahead) {
+      const kept = `${work.branch}-before-${work.run}`.replace(/[^\w./-]+/g, "-");
+      await git(dir, ["branch", "--quiet", "--force", kept, local]);
+      await git(dir, ["reset", "--quiet", "--hard", lease]);
+      log(
+        `${work.key}: ${work.branch} went another way than GitHub's: back on it, kept as ${kept}`,
+      );
+    }
+    return { base, lease };
   }
 
-  // The branch pushed when it has commits past its base and GitHub's copy of it. → whether it was.
-  async function push(work, dir, base) {
-    const ahead = async (ref) =>
-      Number((await git(dir, ["rev-list", "--count", `${ref}..HEAD`]).catch(() => "1")).trim());
-    if (!(await ahead(base))) return false;
-    const remote = await git(dir, [
-      "rev-parse",
-      "--verify",
-      "--quiet",
-      `origin/${work.branch}`,
-    ]).then(
-      () => true,
-      () => false,
+  // The branch pushed when it has commits past its base and isn't GitHub's copy: with a lease on
+  // the copy fetched, so that a rebase (history rewritten, on the task's own branch) goes, but
+  // never over a push made meanwhile. → whether it was.
+  async function push(work, dir, { base, lease }) {
+    const ahead = Number(
+      (await git(dir, ["rev-list", "--count", `${base}..HEAD`]).catch(() => "1")).trim(),
     );
-    if (remote && !(await ahead(`origin/${work.branch}`))) return false;
-    await git(dir, ["push", "--quiet", "origin", `HEAD:refs/heads/${work.branch}`]);
+    if (!ahead) return false;
+    const head = (await git(dir, ["rev-parse", "HEAD"])).trim();
+    if (head === lease) return false;
+    await git(dir, [
+      "push",
+      "--quiet",
+      `--force-with-lease=refs/heads/${work.branch}:${lease}`,
+      "origin",
+      `HEAD:refs/heads/${work.branch}`,
+    ]);
     return true;
   }
 
+  // An empty folder, the driver's git's hooks.
+  const noHooks = pathsOf(platform).join(driverHome, "no-hooks");
+  mkdirSync(noHooks, { recursive: true });
+
   function git(cwd, args) {
     return new Promise((resolve, reject) => {
-      const child = spawn("git", args, { cwd, env, windowsHide: true });
+      // Never the clone's own hooks nor fsmonitor: its agent could write them, and the driver's git
+      // runs outside any sandbox, with the owner's credentials.
+      const safe = ["-c", `core.hooksPath=${noHooks}`, "-c", "core.fsmonitor=false"];
+      const child = spawn("git", [...safe, ...args], { cwd, env, windowsHide: true });
       let out = "";
       let err = "";
       child.stdout.on("data", (c) => (out += c));
@@ -1374,9 +1389,15 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
       if (stopping) process.exit(130);
       stopping = true;
       console.log("Stopping: its runs given back…");
-      driver.stop().then(() => process.exit(0));
+      // Its claim in flight too (25 s at most), which claimLoop() gives back once it answers.
+      const cap = new Promise((resolve) => setTimeout(resolve, 30_000).unref());
+      driver
+        .stop()
+        .then(() => Promise.race([running, cap]))
+        .then(() => process.exit(0));
     });
-    await driver.start();
+    const running = driver.start();
+    await running;
     return;
   }
   if (command === "permissions") return permissionServer({ env });

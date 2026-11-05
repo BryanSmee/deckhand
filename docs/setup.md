@@ -614,23 +614,28 @@ Windows has none (WSL2 has).
    ([repo-config.md](repo-config.md#routing-an-issue-to-a-machine)).
 
 Each run fetches the repository into its clone, checks out the issue's branch (as it is on
-GitHub, or new from the base), and runs `claude -p` there, its output sent to Deckhand as the
+GitHub, ahead of it after a push that failed, or new from the base; one that went another way
+than GitHub's copy is put back on it, its own commits kept on a `<branch>-before-<run>` branch),
+and runs `claude -p` there, its output sent to Deckhand as the
 run's log and the comments that reach it written to its input; `--resume` goes on with the
 issue's session when the machine ran it before. Then the driver pushes the branch with your git
-and ends the run; Deckhand posts the reply and opens the pull request.
+(with a lease on GitHub's copy as it fetched it: a rebase goes, never over a push made meanwhile;
+the clone's own git hooks are never run) and ends the run; Deckhand posts the reply and opens the pull request.
 
 **The suggested settings.** For each run the driver writes Claude Code settings
 (`runs/<run>.settings.json` in its folder, which says the Claude Code version they were checked
 against), passed with `--settings`: above your user and the repository's settings, whose deny
 rules still add up. They:
 
-- let it write in the run's clone, and reach `paths` (read-only unless `write`);
+- let it write in the run's clone (not its `.git` folder with its file tools: hooks and config
+  there would run as you), and reach `paths` (read-only unless `write`);
 - deny reading the usual credential stores (`~/.ssh`, `~/.aws`, `~/.azure`, `~/.kube`,
   `~/.gnupg`, `~/.config/gh`, `~/.git-credentials`, `~/.netrc`, `~/.docker/config.json`,
   Claude Code's own credentials file…), your browsers' profiles and keychains, the driver's
   folder (its sign-in) and `deny`;
 - give its sandbox the hosts a sandbox run of the repository may reach as its only domains: the
-  agent's, GitHub's and the operator's grant;
+  agent's, GitHub's and the operator's grant (a grant of `*`, any host, gives no list: Claude
+  Code's own default and your settings decide);
 - turn its sandbox on where Claude Code has one, refusing to start without it
   (`failIfUnavailable`), and `bypassPermissions` off: what its permission mode would ask you
   goes to `approve_permission` (above), through the driver itself run as Claude Code's
