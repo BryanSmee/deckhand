@@ -121,6 +121,14 @@
   gap: 6px;
 }
 
+/* A machine's pull request (#598): the App opened it from its owner's push. */
+.machinePr {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--text-2);
+}
+
 /* The last reply, as a card. */
 .reply {
   display: flex;

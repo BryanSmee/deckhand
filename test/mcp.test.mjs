@@ -996,13 +996,23 @@ test("MCP: a claim's run tools (#597): its output, messages, question and end, u
       asked.push(["next", run, from]),
       { messages: ["New comment: the menu."], next: from + 1, closed: false }
     ),
-    ask: async (user, id, run, question) => (
-      asked.push(["ask", run, question]),
+    ask: async (user, id, run, question, pushed) => (
+      asked.push(["ask", run, question, pushed]),
       { key: "org/repo#12", status: "needs-input" }
     ),
     finish: async (user, id, run, end) => (
       asked.push(["finish", run, end]),
-      { key: "org/repo#12", status: end.outcome }
+      {
+        key: "org/repo#12",
+        status: end.outcome,
+        pull: end.pushed && {
+          number: 30,
+          url: "https://github.com/org/repo/pull/30",
+          state: end.pushed.ready ? "ready" : "draft",
+          opened: true,
+          moved: true,
+        },
+      }
     ),
   };
   const { tool, url } = await serveMcp(t, ctx);
@@ -1047,7 +1057,31 @@ test("MCP: a claim's run tools (#597): its output, messages, question and end, u
     { machine, run: "r1", outcome: "ok", reply: "Built." },
     MACHINE,
   );
-  assert.deepEqual(done.structuredContent, { key: "org/repo#12", status: "ok" });
+  assert.deepEqual(done.structuredContent, { key: "org/repo#12", status: "ok", pull: null });
+  // The branch it pushed (#598): with its head, `ready` only with them and outcome ok.
+  const sha = "a".repeat(40);
+  const branch = "issue-12-level";
+  for (const args of [
+    { outcome: "ok", branch },
+    { outcome: "ok", sha },
+    { outcome: "ok", ready: true },
+    { outcome: "error", branch, sha, ready: true },
+    { outcome: "ok", branch, sha, ready: "yes" },
+  ]) {
+    const refused = await tool("finish", { machine, run: "r1", ...args }, MACHINE);
+    assert.equal(refused.isError, true, JSON.stringify(args));
+  }
+  const opened = await tool(
+    "finish",
+    { machine, run: "r1", outcome: "ok", branch, sha, ready: true },
+    MACHINE,
+  );
+  assert.equal(opened.structuredContent.pull.number, 30);
+  assert.match(
+    opened.content[0].text,
+    /Pull request #30 opened \(ready\): https:\/\/github\.com\/org\/repo\/pull\/30/,
+  );
+  await tool("ask", { machine, run: "r1", question: "Which?", branch, sha }, MACHINE);
   // Not with another scope.
   const work = await tool(
     "finish",
@@ -1060,8 +1094,10 @@ test("MCP: a claim's run tools (#597): its output, messages, question and end, u
     ["post", "r1", 1, 0],
     ["post", "r1", 1, 9],
     ["next", "r1", 2],
-    ["ask", "r1", "1. **Menu**: which?"],
-    ["finish", "r1", { outcome: "ok", reply: "Built." }],
+    ["ask", "r1", "1. **Menu**: which?", null],
+    ["finish", "r1", { outcome: "ok", reply: "Built.", pushed: null }],
+    ["finish", "r1", { outcome: "ok", reply: null, pushed: { branch, sha, ready: true } }],
+    ["ask", "r1", "Which?", { branch, sha }],
   ]);
   // The same body without deckhand:machine is past what the other tools' calls take.
   const large = await fetch(`${url}/mcp`, {

@@ -387,7 +387,7 @@ export function createHttp(ctx) {
         // A claim's run (#597): its output, its messages and its end, its machine's alone.
         post: (user, id, run, lines, from) => ctx.claims.post(user, id, run, lines, from),
         nextMessage: (user, id, run, from) => ctx.claims.nextMessage(user, id, run, from),
-        ask: (user, id, run, question) => ctx.claims.ask(user, id, run, question),
+        ask: (user, id, run, question, pushed) => ctx.claims.ask(user, id, run, question, pushed),
         finish: (user, id, run, end) => ctx.claims.finish(user, id, run, end),
         // Its agent's tool calls, asked of its owner (#600, requests.mjs).
         approve: (user, id, run, ask) => ctx.claims.approve(user, id, run, ask),

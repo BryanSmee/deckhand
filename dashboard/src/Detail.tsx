@@ -502,6 +502,15 @@ export function Detail({
               <span class={styles.pr}>
                 <PrLink pr={t.pr} />
                 <CiStatus pr={t.pr} link />
+                {t.pr.external && (
+                  <span
+                    class={styles.machinePr}
+                    title={tr("detail.machinePrTitle", { owner: t.pr.external })}
+                  >
+                    <Icon.Machine size={14} />
+                    {tr("detail.machinePr", { owner: t.pr.external })}
+                  </span>
+                )}
               </span>
             )}
             {t.dismissed && t.runs[0] && (

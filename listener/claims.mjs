@@ -31,6 +31,8 @@
 // meanwhile, ask() or finish() its end, whose reply the App posts before what follows any run's
 // end (runs.mjs cleanUp()). A release, a lease that runs out or the machine removed ends it as
 // interrupted, the issue told. Only the machine holding the claim reaches its run (going()).
+// Its pushes are its owner's own git's: finish() names the issue's branch it pushed, and the App
+// opens its pull request (#598, machine-pulls.mjs).
 //
 // Its agent's permission requests (#600): approve() asks the run's owner whether its agent may
 // use a tool (requests.mjs askTool()), the call waiting for the answer, the claim's lease renewed
@@ -44,6 +46,7 @@ import { AGENTS } from "./agents/index.mjs";
 import { labeller, labellerRefusal } from "./auto-pickup.mjs";
 import { commentsText, taskKey } from "./events.mjs";
 import { getJson, paginate } from "./github.mjs";
+import { openPull } from "./machine-pulls.mjs";
 import { RUNS_ON, runsOn } from "./machines.mjs";
 import { customMode } from "./modes.mjs";
 import { startAction } from "./permissions.mjs";
@@ -574,12 +577,24 @@ export function createClaims(
 
   // The run is over, as its machine says: `outcome` "ok", "error" or "needs-input" (ask), its
   // `reply` posted as the App (its last result's text without one), then what follows a sandbox
-  // run's end (runs.mjs cleanUp()). → { key, status }.
-  async function finish(owner, id, run, { outcome = "ok", reply = null } = {}) {
-    const task = going(owner, id, run);
+  // run's end (runs.mjs cleanUp()). `pushed`: the issue's branch its machine pushed, { branch,
+  // sha, ready }, whose pull request the App opens first (machine-pulls.mjs, #598), ready for
+  // review with `ready`; refused, the run goes on. → { key, status, pull }.
+  async function finish(owner, id, run, { outcome = "ok", reply = null, pushed = null } = {}) {
+    let task = going(owner, id, run);
+    let pull = null;
+    if (pushed) {
+      const c = task.claim;
+      pull = await openPull(ctx, task, { ...pushed, owner: c.owner, machine: c.name });
+      // Its run ended meanwhile (a lease run out, a cancel): its pull request stays.
+      task = going(owner, id, run);
+      const { record } = task.live;
+      record.branch = pushed.branch;
+      if (pull.moved) record.lastPushAt = now();
+    }
     const { record } = task.live;
     await ctx.finishExternal(task, { outcome, reply });
-    return { key: keyOf(task), status: record.status };
+    return { key: keyOf(task), status: record.status, pull };
   }
 
   // Its agent asks to use a tool (approve_permission): `ask` { tool, input, toolUseId }, Claude
@@ -606,8 +621,13 @@ export function createClaims(
   }
 
   // The run stops to ask: `question` its reply, with the needs-input marker of a sandbox run's.
-  const ask = (owner, id, run, question) =>
-    finish(owner, id, run, { outcome: "needs-input", reply: question });
+  // `pushed`: as finish()'s, its pull request left a draft.
+  const ask = (owner, id, run, question, pushed = null) =>
+    finish(owner, id, run, {
+      outcome: "needs-input",
+      reply: question,
+      pushed: pushed && { ...pushed, ready: false },
+    });
 
   // The claims whose lease ran out: their runs interrupted, as a sandbox that died, their
   // comments waiting again for that machine. → the keys.

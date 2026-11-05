@@ -1,12 +1,15 @@
 // Each task's pull request for the dashboard, by task key ("org/repo#12", "org/repo#pr-3"):
 // { number, url, state, readyAt, autoMerged?, additions?, deletions?, changedFiles?, commits?,
-// head?, ci?, conflict? }, its size and commit count as the last pull request object that had them said
+// head?, ci?, conflict?, external? }, its size and commit count as the last pull request object that had them said
 // (events.mjs pullSize()). `ci`: what CI says of its `head` commit, { sha, state, runs } (ci.mjs
 // ciSummary(), #436), kept up to date from CI's deliveries (ciChanged()) while it is open; a new
 // head resets it to `none` until something reports; the last one known stays once it is merged or
 // closed. `conflict`: whether its head conflicts with its base, as GitHub last computed it (absent
 // while unknown; a new head forgets it), read again from the dashboard's Sync and after the
 // repo's default branch moved (baseMoved()), which no delivery of the pull request says.
+// `external`: the login whose machine pushed its branch, for one the App opened from a machine's
+// push (machine-pulls.mjs, #598): kept for that pull request whatever later records say, for the
+// dashboard and the policies' input (`pr.external`).
 // `pull_request` webhooks keep it current (events.mjs pullRequest()), and the listener's own
 // record of the runs' changes (github-pulls.mjs); tasks older than that are looked up once per
 // listener start, from the repo's recent pull requests. Kept in the store (lib/store-map.mjs:
@@ -83,6 +86,8 @@ export function createPulls({
     // Merged by the listener (reviews.mjs autoMerge()): the `closed` delivery that follows
     // doesn't know it.
     const autoMerged = pr.autoMerged || before?.autoMerged;
+    // A machine's (#598): no delivery says it, the App's record does.
+    const external = pr.external ?? before?.external;
     // A pull request object without its size (the listener's own changes may have none): the
     // one known stays.
     const size = before ? knownSize(before) : {};
@@ -109,6 +114,7 @@ export function createPulls({
       readyAt,
       ...(conflict !== undefined && { conflict }),
       ...(autoMerged && { autoMerged: true }),
+      ...(external && { external }),
       ...(head && { head }),
       ...(updatedAt && { updatedAt }),
       ...(ci && { ci }),
@@ -457,9 +463,19 @@ export function createPulls({
     respellMap(pulls, spelled, undefined, mergePulls);
   }
 
+  // The login whose machine pushed pull request `number` of `repo` (record()'s `external`), or
+  // null: what the policies' input says of it (policies.mjs pullInput()).
+  function externalOf(repo, number) {
+    for (const [key, pr] of pulls) {
+      if (pr.number === number && sameRepo(parseKey(key)?.repo, repo)) return pr.external ?? null;
+    }
+    return null;
+  }
+
   return {
     get: (key) => pulls.get(key) ?? null,
     record,
+    externalOf,
     fill,
     resync,
     ciChanged,
@@ -480,10 +496,12 @@ export function createPulls({
 function mergePulls(kept, moved) {
   if (kept.number !== moved.number) return open(moved) && !open(kept) ? moved : kept;
   const autoMerged = kept.autoMerged || moved.autoMerged;
+  const external = kept.external ?? moved.external;
   return {
     ...kept,
     readyAt: kept.readyAt ?? moved.readyAt ?? null,
     ...(autoMerged && { autoMerged: true }),
+    ...(external && { external }),
   };
 }
 

@@ -2347,8 +2347,8 @@ client, and no sandbox service, run token or git gateway is on the machine.
   fix round, a CI fix, a rebase, and the review of the issue's own pull request, which is the
   issue's task) are delivered: the whole loop runs on the machine. Every comment a claim takes
   is checked again first, as a sandbox run's are: one whose author left `ALLOWED_USERS` or the
-  repository's `users`, or may no longer start its mode, is dropped. Pushes are the owner's own git's; the App writes
-  what it writes for any run (#597, #598).
+  repository's `users`, or may no longer start its mode, is dropped. Pushes are the owner's own
+  git's; the App writes what it writes for any run (#597), and opens its pull request (below).
 - **Its run** (#597, [External runs](architecture.md#external-runs)): only the machine holding
   the claim reports on it (`post_events`, `next_message`, `ask`, `finish`): each call names the
   machine, its owner's, and the claim's run; another login's machine, the owner's other one or
@@ -2376,6 +2376,25 @@ client, and no sandbox service, run token or git gateway is on the machine.
   ceiling but the machine's**: Deckhand relays and records the answers, and enforces nothing
   with them; what the machine allows or denies without asking (its own settings, a deny list
   in its driver's config) never reaches Deckhand.
+- **Its pull request** (#598, `listener/machine-pulls.mjs`): the machine pushes with its owner's
+  own git and credentials, never through the git gateway, then names the branch and its head in
+  `finish`. Before the App writes anything, the orchestrator checks the branch is the issue's
+  own (`issue-<n>-<slug>`, one segment of plain characters), reads its head from the repository
+  itself, never a fork, and compares it with the commit the machine named; a pull request open
+  from it that isn't the App's, or closes another issue, is refused too. Then the App opens the
+  draft (`Closes #<n>`), or finds the one it opened, and marks it ready when asked: the only
+  writes of the App's the machine causes beyond its run's reply and its permission requests'
+  comments. **A machine's pull request is
+  trusted as an allowed user's**: its commits are whatever the owner's machine pushed (its
+  refs, `allow_push`, the workflow files: none of the gateway's checks ran), so the review is
+  their check. It is recorded as the machine's (`pr.external`, the owner's login), shown so on
+  the dashboard, and in the policies' input of `deny_review`, `deny_fix`, `deny_merge` and
+  `deny_request_review`.
+- **Never merged by itself, by default**: on top of auto-merge's gates ([Auto-merge](#auto-merge):
+  the files Deckhand trusts, `.github/` included, still wait for a person), Deckhand's
+  `policy/machines.rego` refuses `deny_merge` for a pull request marked `external`. An operator
+  who wants `review.merge` to merge them replaces that file in the grants folder's `policy/`; a
+  repository can only add refusals.
 - **What Deckhand doesn't enforce**: anything on the machine. An agent runs there on its own,
   with the owner's files, credentials and network; Deckhand suggests settings for it and
   enforces none. `register_machine`'s answer and the dashboard's list of machines say so.
@@ -2915,6 +2934,9 @@ branch, the last check of everything above. With it on:
 - **No sandbox can merge**: their tokens only read code and pull requests ([Tokens](#tokens)),
   and the git gateway never pushes the default branch. Only the orchestrator merges, after its
   own checks.
+- **A machine's push isn't merged by itself**: its commits never went through the git gateway,
+  so Deckhand's `policy/machines.rego` refuses to auto-merge a pull request the App opened from
+  one ([Machines](#machines)), unless the operator's file of that name replaces it.
 - **Nothing that widens Deckhand is merged by itself**: a pull request that changes
   `.deckhand.yaml`, `.deckhand/`, `.github/` (in any case), a `CODEOWNERS` or a file the config
   names (the instructions, the Dockerfile) waits for a human, so a run can't grant itself more
@@ -2962,7 +2984,7 @@ namespace of its own:
   only), a `mode-<mode>.rego` per mode for what its runs get, write and push
   (`allow_capabilities`, `allow_github`, `allow_push`), a `gh-<feature>.rego` for a feature
   that isn't a mode's (`gh-checks.rego`, `gh-linked-branch.rego`, `gh-reviewers.rego`), and
-  `review.rego`), which hold without any setup. Yours are the `*.rego` files of `policy/` in the grants folder, which the policy service
+  `review.rego` and `machines.rego`), which hold without any setup. Yours are the `*.rego` files of `policy/` in the grants folder, which the policy service
   mounts read-only and reads again at each decision: one with the same name as Deckhand's
   replaces it, others add to them. **Their allow rules are the ceiling** of every repository: a
   caller sends a repository's files, never yours. The orchestrator reads your folder too and sends,

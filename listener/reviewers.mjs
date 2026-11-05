@@ -95,10 +95,11 @@ export function requestInput({
   when,
   run,
   bot = null,
+  external = null,
   now = Date.now,
 }) {
   return {
-    ...pullInput({ decision: "request_review", info, pr, files, issue, bot, now }),
+    ...pullInput({ decision: "request_review", info, pr, files, issue, bot, external, now }),
     reviewers,
     when,
     ...run,
@@ -116,6 +117,8 @@ export function createReviewers({
   repoSettings,
   github,
   runOf = () => null,
+  // The login whose machine pushed a pull request (pulls.mjs externalOf(), #598), or null.
+  externalOf = () => null,
   policies = null,
   decided = () => {},
   // Who may do what where (permissions.mjs): a reviewer needs `tasks:read` on the repo.
@@ -238,6 +241,7 @@ export function createReviewers({
         when,
         run,
         bot: config.bot,
+        external: externalOf(repo, pr.number),
         now,
       });
     };
