@@ -285,7 +285,15 @@ export function createConflicts({
       () =>
         readPullInput(
           github,
-          { decision: "fix", repo, pr, issue, bot: config.bot, now },
+          {
+            decision: "fix",
+            repo,
+            pr,
+            issue,
+            bot: config.bot,
+            external: pulls.externalOf?.(repo, pr.number) ?? null,
+            now,
+          },
           { ...extra, round: null, rounds: null },
         ),
       {

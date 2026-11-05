@@ -125,6 +125,8 @@ export const System = stroke(
     <path d="M8 20h8M12 16v4" />
   </>,
 );
+// A user's own machine (#594): System's monitor.
+export const Machine = System;
 export const Sun = stroke(
   1.8,
   <>

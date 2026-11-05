@@ -121,6 +121,17 @@ const PROTOCOL = {
   description: `The version of these tools' protocol the driver speaks: ${MACHINE_PROTOCOL} by default.`,
 };
 
+// The branch a machine pushed with its own git (finish, ask): the App opens its pull request
+// (#598, machine-pulls.mjs).
+const PUSHED = {
+  branch: {
+    type: "string",
+    description:
+      "The issue's branch you pushed, from claim's `branch` (`issue-<n>-<slug>`), in the repository itself, never a fork.",
+  },
+  sha: { type: "string", description: "Its head commit, as pushed: the full id." },
+};
+
 const REPO = {
   type: "string",
   description: 'A repository, "owner/repo", as list_repos names it.',
@@ -368,6 +379,7 @@ const TOOL_SPECS = [
           type: "string",
           description: "The questions, in Markdown, as the agent's final message has them.",
         },
+        ...PUSHED,
         protocol: PROTOCOL,
       },
       ["machine", "run", "question"],
@@ -378,13 +390,19 @@ const TOOL_SPECS = [
     title: "End the run",
     scope: MACHINE,
     description:
-      "Ends the claimed run: `reply` (the agent's final message; its last result line's without one) is posted on the issue as the App, then what follows any run's end (a review's fix loop, a CI fix, the queue). `outcome`: ok, error (the agent failed), or needs-input (as ask).",
+      "Ends the claimed run: `reply` (the agent's final message; its last result line's without one) is posted on the issue as the App, then what follows any run's end (a review's fix loop, a CI fix, the queue). `outcome`: ok, error (the agent failed), or needs-input (as ask). With `branch` and `sha`, the issue's branch you pushed (`issue-<n>-<slug>`, in the repository itself) and its head: the App opens its draft pull request first (`Closes #<n>`), or finds the one it opened, and marks it ready for review with `ready`. A branch that isn't the issue's, isn't the repository's, or whose head isn't `sha` is refused, nothing opened, and the run goes on: push, then finish again.",
     inputSchema: object(
       {
         machine: { type: "string", description: "Its id, from register_machine." },
         run: { type: "string", description: "The claim's run, from claim." },
         outcome: { type: "string", enum: ["ok", "error", "needs-input"] },
         reply: { type: "string", description: "The reply, in Markdown." },
+        ...PUSHED,
+        ready: {
+          type: "boolean",
+          description:
+            "With `branch`, outcome ok only: the pull request is ready for review (its review starts), else it stays a draft.",
+        },
         protocol: PROTOCOL,
       },
       ["machine", "run", "outcome"],
@@ -824,8 +842,9 @@ export function createMcp({ source, version = "dev", now = Date.now, log = () =>
     const run = requiredString(args, "run");
     protocolOf(args);
     const question = replyOf(args, "question", true);
+    const pushed = pushedOf(args);
     return machineAct(
-      () => source.machines.ask(user, id, run, question),
+      () => source.machines.ask(user, id, run, question, pushed),
       ({ key, status }) =>
         result({ key, status }, [`${key}: its questions are posted; it waits for input.`]),
     );
@@ -840,9 +859,24 @@ export function createMcp({ source, version = "dev", now = Date.now, log = () =>
       throw new BadArguments("`outcome` is ok, error or needs-input.");
     }
     const reply = replyOf(args, "reply", false);
+    const pushed = pushedOf(args);
+    const ready = args.ready ?? false;
+    if (typeof ready !== "boolean") throw new BadArguments("`ready` is true or false.");
+    if (ready && (!pushed || outcome !== "ok")) {
+      throw new BadArguments("`ready` goes with `branch` and `sha`, and outcome ok.");
+    }
     return machineAct(
-      () => source.machines.finish(user, id, run, { outcome, reply }),
-      ({ key, status }) => result({ key, status }, [`${key}: done (${status}).`]),
+      () =>
+        source.machines.finish(user, id, run, {
+          outcome,
+          reply,
+          pushed: pushed && { ...pushed, ready },
+        }),
+      ({ key, status, pull }) =>
+        result({ key, status, pull }, [
+          `${key}: done (${status}).`,
+          ...(pull ? [pullLine(pull)] : []),
+        ]),
     );
   }
 
@@ -1232,6 +1266,19 @@ function protocolOf(args) {
   }
   return value;
 }
+
+// The branch a machine pushed (finish, ask): { branch, sha }, both or neither, or null.
+function pushedOf(args) {
+  const branch = optionalString(args, "branch");
+  const sha = optionalString(args, "sha");
+  if (branch === null && sha === null) return null;
+  if (branch === null || sha === null) throw new BadArguments("`branch` goes with `sha`.");
+  return { branch, sha };
+}
+
+// "Pull request #34 opened (draft): <url>".
+const pullLine = (pull) =>
+  `Pull request #${pull.number} ${pull.opened ? "opened" : "found"} (${pull.state}): ${pull.url}`;
 
 // A reply's text (finish, ask), MAX_REPLY characters at most.
 function replyOf(args, name, required) {

@@ -9,7 +9,9 @@ import { test } from "node:test";
 import { Refused } from "../lib/http.mjs";
 import { openStore } from "../lib/store.mjs";
 import { createClaims, LEASE_MS, MACHINE_PROTOCOL } from "../listener/claims.mjs";
+import { machinePullBody } from "../listener/machine-pulls.mjs";
 import { createMachines } from "../listener/machines.mjs";
+import { createPulls } from "../listener/pulls.mjs";
 import { NEEDS_INPUT } from "../listener/questions.mjs";
 import { parseRepoConfig } from "../listener/repo-config.mjs";
 import { createRequests } from "../listener/requests.mjs";
@@ -267,7 +269,7 @@ test("a run claimed, logged, asking, answered and finished goes the steps of a s
 
   // It stops to ask: the reply as the App, with the marker, the label, needs-input.
   const asked = await ctx.claims.ask("alice", desk, work.run, "1. **Menu**: the main one?");
-  assert.deepEqual(asked, { key: KEY, status: "needs-input" });
+  assert.deepEqual(asked, { key: KEY, status: "needs-input", pull: null });
   assert.equal(said.answers.length, 1);
   assert.equal(said.answers[0].to, 12);
   assert.ok(said.answers[0].body.startsWith(`${NEEDS_INPUT}\n\n1. **Menu**: the main one?`));
@@ -301,7 +303,7 @@ test("a run claimed, logged, asking, answered and finished goes the steps of a s
   assert.equal(b.run(again.run).model, null);
   await ctx.claims.post("alice", desk, again.run, [result("Done: the main menu.")]);
   const finished = await ctx.claims.finish("alice", desk, again.run, { outcome: "ok" });
-  assert.deepEqual(finished, { key: KEY, status: "ok" });
+  assert.deepEqual(finished, { key: KEY, status: "ok", pull: null });
   assert.match(
     said.answers[1].body,
     /^Done: the main menu\.\n\n<sub>🤖 Claude · on Desk · 1\.5 min/,
@@ -359,6 +361,302 @@ test("a machine's fix run that ends starts what a sandbox's does: the review's n
   );
   assert.match(said.answers.at(-1).body, /^Claude stopped with an error\.\n\n> API down/);
   assert.deepEqual(said.runner, []);
+});
+
+// GitHub as a machine's pull request reads and writes it (machine-pulls.mjs): org/repo's branches
+// (`refs`: name → head) and pull requests, the App's writes recorded in `writes`.
+function fakeGithub(b, refs) {
+  const pulls = [];
+  const writes = [];
+  b.ctx.pulls = createPulls({ listPulls: async () => [] });
+  b.ctx.graphql = async (repo, query, variables) => {
+    writes.push(["graphql", /markPullRequestReadyForReview/.test(query), variables.id]);
+    const pr = pulls.find((p) => p.node_id === variables.id);
+    pr.draft = false;
+    return { markPullRequestReadyForReview: { pullRequest: { isDraft: false } } };
+  };
+  b.ctx.github = async (repo, method, path, body) => {
+    const ref = /^\/repos\/org\/repo\/git\/ref\/heads\/(.+)$/.exec(path);
+    if (method === "GET" && ref) {
+      const sha = refs[ref[1]];
+      return sha ? Response.json({ object: { sha } }) : new Response("{}", { status: 404 });
+    }
+    const listed = /^\/repos\/org\/repo\/pulls\?head=([^&]+)&state=open$/.exec(path);
+    if (method === "GET" && listed) {
+      const [, branch] = decodeURIComponent(listed[1]).split(":");
+      return Response.json(pulls.filter((p) => p.state === "open" && p.head.ref === branch));
+    }
+    if (method === "POST" && path === "/repos/org/repo/pulls") {
+      writes.push(["POST", body]);
+      const number = 30 + pulls.length;
+      const pr = {
+        number,
+        node_id: `PR_${number}`,
+        html_url: `https://github.com/org/repo/pull/${number}`,
+        state: "open",
+        draft: body.draft,
+        title: body.title,
+        body: body.body,
+        user: { login: "deckhand[bot]", type: "Bot" },
+        head: { ref: body.head, sha: refs[body.head], repo: { full_name: "org/repo" } },
+        base: { ref: body.base },
+      };
+      pulls.push(pr);
+      return Response.json(pr, { status: 201 });
+    }
+    return new Response("{}", { status: 404 });
+  };
+  return { pulls, writes };
+}
+
+test("finish with a pushed branch: the App opens its pull request, a machine's, after checking the branch is the issue's and at that head", async (t) => {
+  const b = bench(t);
+  const { ctx, said } = b;
+  const branch = "issue-12-build-the-level";
+  const sha = "a".repeat(40);
+  const refs = { [branch]: sha, "issue-13-other": "b".repeat(40) };
+  const gh = fakeGithub(b, refs);
+  const { desk, work } = await claimed(b);
+  assert.equal(work.branch, branch);
+  const finish = (pushed, outcome = "ok") =>
+    ctx.claims.finish("alice", desk, work.run, { outcome, reply: "Built.", pushed });
+  // Another issue's branch, one that isn't in the repository (a fork's), a head that isn't
+  // what it says, a sha that isn't one: refused, nothing opened, the run going on.
+  for (const [pushed, status] of [
+    [{ branch: "issue-13-other", sha: "b".repeat(40) }, 400],
+    [{ branch: "main", sha }, 400],
+    [{ branch: "issue-12-../main", sha }, 400],
+    [{ branch: "issue-12-on-a-fork", sha }, 409],
+    [{ branch, sha: "c".repeat(40) }, 409],
+    [{ branch, sha: "HEAD" }, 400],
+  ]) {
+    await assert.rejects(finish(pushed), (error) => {
+      assert.ok(error instanceof Refused, error.stack);
+      assert.equal(error.status, status, `${JSON.stringify(pushed)}: ${error.message}`);
+      return true;
+    });
+  }
+  assert.deepEqual(gh.writes, []);
+  assert.equal(b.run(work.run).status, "running");
+  assert.deepEqual(said.answers, []);
+
+  // Its own branch at its head: the App opens the draft, ready for review as asked, then the
+  // run's end as any.
+  const done = await finish({ branch, sha, ready: true });
+  assert.deepEqual(done.pull, {
+    number: 30,
+    url: "https://github.com/org/repo/pull/30",
+    state: "ready",
+    opened: true,
+    moved: true,
+  });
+  assert.deepEqual(gh.writes, [
+    [
+      "POST",
+      {
+        title: "Build the level",
+        head: branch,
+        base: "main",
+        body: machinePullBody(12, "alice", "Desk"),
+        draft: true,
+      },
+    ],
+    ["graphql", true, "PR_30"],
+  ]);
+  assert.match(gh.writes[0][1].body, /^Closes #12\n/);
+  // Recorded as a machine's, for the dashboard and the policies' `pr.external`.
+  assert.equal(ctx.pulls.get(KEY).external, "alice");
+  assert.equal(ctx.pulls.get(KEY).head, sha);
+  assert.equal(ctx.pulls.externalOf("org/repo", 30), "alice");
+  assert.equal(ctx.pulls.externalOf("org/repo", 31), null);
+  // A delivery about it later says nothing of machines: it stays one.
+  ctx.pulls.record(KEY, { number: 30, url: "u", state: "ready", readyAt: null, head: sha });
+  assert.equal(ctx.pulls.externalOf("org/repo", 30), "alice");
+  // Its record has the push, for what follows a run that pushed (its reviewers again).
+  const record = b.run(work.run);
+  assert.deepEqual([record.status, record.branch], ["ok", branch]);
+  assert.ok(record.lastPushAt);
+  assert.equal(said.answers.at(-1).to, 12);
+
+  // Its review requests changes: the fix round, Deckhand's own, sticks to Desk, which pushes
+  // to the same branch; the App finds its pull request, opens none.
+  await ctx.accept({
+    repo: "org/repo",
+    id: "12",
+    kind: "issue",
+    number: 12,
+    title: null,
+    trigger: "work",
+    modeLine: null,
+    text: "Fix what the review found.",
+    replyTo: 30,
+    comment: null,
+    base: "main",
+    settings: b.settings,
+    sender: null,
+    reason: "review-fix",
+  });
+  const laptop = b.register("alice", "Laptop");
+  b.ready();
+  assert.equal(await ctx.claims.claim("alice", laptop), null, "not another machine of hers");
+  const fix = await ctx.claims.claim("alice", desk);
+  assert.ok(fix, "Desk claims the fix round");
+  assert.equal(fix.resume, true);
+  const fixed = await ctx.claims.finish("alice", desk, fix.run, {
+    outcome: "ok",
+    reply: "Fixed.",
+    pushed: { branch, sha, ready: true },
+  });
+  // Nothing pushed since: not a push of this run's.
+  assert.deepEqual([fixed.pull.number, fixed.pull.opened, fixed.pull.moved], [30, false, false]);
+  assert.equal(b.run(fix.run).lastPushAt, null);
+  assert.equal(gh.writes.length, 2, "nothing written again");
+  assert.deepEqual(said.after.at(-1), ["fixed", 30, "ok"]);
+
+  // The next round pushes, and GitHub's `synchronize` delivery of it is recorded before its
+  // finish: still a push of this run's, by the head the pull request had at its claim.
+  await b.say("alice", "Once more.", { id: 104 });
+  b.ready();
+  const again = await ctx.claims.claim("alice", desk);
+  const pushed = "d".repeat(40);
+  refs[branch] = pushed;
+  gh.pulls[0].head.sha = pushed;
+  ctx.pulls.record(KEY, { number: 30, url: "u", state: "ready", readyAt: null, head: pushed });
+  const round = await ctx.claims.finish("alice", desk, again.run, {
+    outcome: "ok",
+    pushed: { branch, sha: pushed },
+  });
+  assert.equal(round.pull.moved, true);
+  assert.ok(b.run(again.run).lastPushAt);
+});
+
+test("finish with a pushed branch: the pull request is marked a machine's before marking it ready can fail", async (t) => {
+  const b = bench(t);
+  const { ctx } = b;
+  const branch = "issue-12-build-the-level";
+  const sha = "a".repeat(40);
+  const gh = fakeGithub(b, { [branch]: sha });
+  ctx.graphql = async () => {
+    throw new Error("GitHub GraphQL: 502");
+  };
+  const { desk, work } = await claimed(b);
+  await assert.rejects(
+    ctx.claims.finish("alice", desk, work.run, {
+      outcome: "ok",
+      pushed: { branch, sha, ready: true },
+    }),
+    /502/,
+  );
+  // Opened, and already the machine's: machines.rego holds whoever marks it ready.
+  assert.equal(gh.pulls.length, 1);
+  assert.equal(ctx.pulls.externalOf("org/repo", 30), "alice");
+  // Asked again: found, not opened twice.
+  ctx.graphql = async () => ({});
+  const done = await ctx.claims.finish("alice", desk, work.run, {
+    outcome: "ok",
+    pushed: { branch, sha, ready: true },
+  });
+  assert.deepEqual([done.pull.number, done.pull.opened, done.pull.state], [30, false, "ready"]);
+  assert.equal(gh.pulls.length, 1);
+});
+
+test("finish with a pushed branch: a branch with nothing beyond its base is said so", async (t) => {
+  const b = bench(t);
+  const { ctx } = b;
+  const branch = "issue-12-build-the-level";
+  const sha = "a".repeat(40);
+  fakeGithub(b, { [branch]: sha });
+  const github = ctx.github;
+  ctx.github = async (repo, method, path, body, expected) =>
+    method === "POST"
+      ? Response.json(
+          {
+            message: "Validation Failed",
+            errors: [{ message: "No commits between main and issue-12-build-the-level" }],
+          },
+          { status: 422 },
+        )
+      : github(repo, method, path, body, expected);
+  const { desk, work } = await claimed(b);
+  await assert.rejects(
+    ctx.claims.finish("alice", desk, work.run, { outcome: "ok", pushed: { branch, sha } }),
+    {
+      status: 409,
+      message: "issue-12-build-the-level has no commits beyond main: nothing to open.",
+    },
+  );
+  assert.equal(b.run(work.run).status, "running");
+});
+
+test("a pull request a machine's claim covers is the machine's, whether or not finish names its branch", async (t) => {
+  const b = bench(t);
+  const { ctx } = b;
+  fakeGithub(b, {});
+  // A sandbox run's pull request, open when the issue moves to Desk: marked at the claim.
+  const sandbox = { number: 30, url: "u", state: "ready", readyAt: null, head: "a".repeat(40) };
+  ctx.pulls.record(KEY, sandbox);
+  const { desk, work } = await claimed(b);
+  assert.equal(ctx.pulls.externalOf("org/repo", 30), "alice");
+  await ctx.claims.finish("alice", desk, work.run, { outcome: "ok", reply: "Fixed." });
+  assert.equal(ctx.pulls.externalOf("org/repo", 30), "alice");
+
+  // One the pulls store learns of during the run, the run finishing without `branch`: marked
+  // at its end.
+  const other = bench(t);
+  fakeGithub(other, {});
+  const second = await claimed(other);
+  other.ctx.pulls.record(KEY, { ...sandbox, number: 31 });
+  assert.equal(other.ctx.pulls.externalOf("org/repo", 31), null);
+  await other.ctx.claims.finish("alice", second.desk, second.work.run, { outcome: "ok" });
+  assert.equal(other.ctx.pulls.externalOf("org/repo", 31), "alice");
+
+  // Or given back (its lease run out): marked all the same.
+  const third = bench(t);
+  fakeGithub(third, {});
+  const given = await claimed(third);
+  third.ctx.pulls.record(KEY, { ...sandbox, number: 32 });
+  third.ctx.claims.release("alice", given.desk, given.work.run);
+  assert.equal(third.ctx.pulls.externalOf("org/repo", 32), "alice");
+  // A closed one isn't.
+  const fourth = bench(t);
+  fakeGithub(fourth, {});
+  fourth.ctx.pulls.record(KEY, { ...sandbox, number: 33, state: "merged" });
+  await claimed(fourth);
+  assert.equal(fourth.ctx.pulls.externalOf("org/repo", 33), null);
+});
+
+test("finish with a pushed branch: a pull request from it that isn't the App's, or closes another issue, is refused", async (t) => {
+  const b = bench(t);
+  const { ctx } = b;
+  const branch = "issue-12-build-the-level";
+  const sha = "a".repeat(40);
+  const gh = fakeGithub(b, { [branch]: sha });
+  const { desk, work } = await claimed(b);
+  const theirs = {
+    number: 7,
+    state: "open",
+    body: "Closes #12",
+    user: { login: "alice", type: "User" },
+    head: { ref: branch, sha, repo: { full_name: "org/repo" } },
+  };
+  gh.pulls.push(theirs);
+  const finish = () =>
+    ctx.claims.finish("alice", desk, work.run, { outcome: "ok", pushed: { branch, sha } });
+  await assert.rejects(finish(), {
+    status: 409,
+    message: /#7 is open from .*not opened by Deckhand/,
+  });
+  Object.assign(theirs, { user: { login: "deckhand[bot]", type: "Bot" }, body: "Closes #13" });
+  await assert.rejects(finish(), { status: 409, message: /doesn't close #12/ });
+  assert.deepEqual(gh.writes, []);
+  assert.equal(b.run(work.run).status, "running");
+  // Its own, a draft without `ready`: found, left a draft, the run over.
+  theirs.body = "Closes #12";
+  theirs.draft = true;
+  const done = await finish();
+  assert.deepEqual([done.pull.number, done.pull.state, done.pull.opened], [7, "draft", false]);
+  assert.deepEqual(gh.writes, []);
+  assert.equal(ctx.pulls.externalOf("org/repo", 7), "alice");
 });
 
 test("a lease that runs out, or a release, ends the run as interrupted, the issue told, its comments queued again for the machine", async (t) => {

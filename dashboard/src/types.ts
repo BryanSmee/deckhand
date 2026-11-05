@@ -112,6 +112,9 @@ export interface PullRequest {
   readyAt: number | null;
   // Merged by Deckhand itself, with no human review (`review.merge`, listener/reviews.mjs).
   autoMerged?: boolean;
+  // The login whose machine pushed its branch, the App opening it from there
+  // (listener/machine-pulls.mjs, #598); absent for a sandbox run's or a person's.
+  external?: string;
   // Its size and commit count, as GitHub last sent them with it; absent until it did (a
   // pull request found in a listing).
   additions?: number;
