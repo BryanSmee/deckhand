@@ -258,6 +258,10 @@ export function createHttp(ctx) {
         ...(ctx.decisions?.dryRun(t.key) && { dryRun: ctx.decisions.dryRun(t.key) }),
         // A machine task's comments by others, held for its owner (claims.mjs).
         ...(ctx.claims?.heldOf(t.key).length && { held: ctx.claims.heldOf(t.key) }),
+        // Its machine run's tool calls waiting for its owner's answer (requests.mjs, #600).
+        ...(ctx.requests?.toolRequests(t.key).length && {
+          permissions: ctx.requests.toolRequests(t.key),
+        }),
         // Closed: the orchestrator would refuse it.
         rerunnable: t.rerunnable && !ctx.titles.closed(t.key),
         // Off: Start and Queue don't open its open questions first (work.mjs act()).
@@ -385,6 +389,8 @@ export function createHttp(ctx) {
         nextMessage: (user, id, run, from) => ctx.claims.nextMessage(user, id, run, from),
         ask: (user, id, run, question) => ctx.claims.ask(user, id, run, question),
         finish: (user, id, run, end) => ctx.claims.finish(user, id, run, end),
+        // Its agent's tool calls, asked of its owner (#600, requests.mjs).
+        approve: (user, id, run, ask) => ctx.claims.approve(user, id, run, ask),
       },
     },
     log,
@@ -738,6 +744,32 @@ export function createHttp(ctx) {
     log,
   });
 
+  // A machine run's tool call (requests.mjs, #600), allowed or denied on the task's page by the
+  // run's owner alone: the repo's own checks first, as for the held comments.
+  const permissionsApi = apiRoute({
+    name: "Tool requests",
+    route: (pathname) => {
+      const m = /^\/api\/permissions\/([^/]+)\/([^/]+)\/(\d+)\/([0-9a-f]{16})\/([a-z]+)$/.exec(
+        pathname,
+      );
+      return m
+        ? { what: "answer", repo: `${m[1]}/${m[2]}`, number: Number(m[3]), id: m[4], choice: m[5] }
+        : null;
+    },
+    posts: {
+      answer: async (req, res, user, repo, { number, id, choice }) => {
+        const said = await ctx.requests.answerTool(user, taskKey(repo, String(number)), id, choice);
+        if (said.error) throw new Refused(said.error, said.message);
+        sendJson(res, said);
+      },
+    },
+    allowed: (repo) => repoAllowed(config, repo),
+    permissions: ctx.permissions,
+    action: () => TASKS,
+    publicUrl: ctx.publicUrl,
+    log,
+  });
+
   // `promise`'s end, logged when it fails, waited for by an orchestrator that stops.
   function admittedAs(promise) {
     const done = Promise.resolve(promise).catch((error) => log(error.stack ?? error));
@@ -787,6 +819,9 @@ export function createHttp(ctx) {
     }
     if (req.url.startsWith("/api/held/") && ctx.claims) {
       if (heldApi(req, res, user)) return;
+    }
+    if (req.url.startsWith("/api/permissions/") && ctx.requests) {
+      if (permissionsApi(req, res, user)) return;
     }
     if (req.url.startsWith("/api/repos")) {
       if (!ctx.app) return res.writeHead(503).end();

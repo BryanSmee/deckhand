@@ -64,3 +64,61 @@
   gap: 8px;
   margin-top: 4px;
 }
+
+/* Its run's tool requests waiting for the owner: a card each, in the warning tone of a chat's
+   permission request (PermissionCard), the tool's input quoted as plain text. */
+.tools {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.tool {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 14px;
+  border: 1px solid var(--warn);
+  border-left-width: 3px;
+  border-radius: var(--radius-card);
+  background: var(--warn-soft);
+}
+
+.tool p {
+  margin: 0;
+}
+
+.toolTitle {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 20px;
+}
+
+.toolTitle > svg {
+  flex: none;
+  margin-top: 2px;
+  color: var(--warn);
+}
+
+.mono {
+  font-family: var(--mono);
+  font-size: 13px;
+  font-weight: 500;
+  overflow-wrap: anywhere;
+}
+
+/* The agent's tool input: quoted, never markup. */
+.input {
+  padding-left: 10px;
+  border-left: 2px solid var(--border-strong);
+  color: var(--text-2);
+  font-family: var(--mono);
+  font-size: 12.5px;
+  line-height: 19px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}

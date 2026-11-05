@@ -39,7 +39,7 @@ import { type Handlers, useShortcuts, withKey } from "./keys";
 // `tr`: t() where the task is called `t`.
 import { and, locale, t as tr, tx } from "./i18n";
 import { Log } from "./Log";
-import { HeldComments, MachineFact } from "./MachineTask";
+import { HeldComments, MachineFact, ToolRequests } from "./MachineTask";
 import { copyText, downloadText } from "./logExport";
 import { logSections, plainText } from "./logModel";
 import { CiStatus } from "./CiStatus";
@@ -546,6 +546,7 @@ export function Detail({
             )}
           </div>
           <ReviewRounds task={t} actions={reviewActions || undefined} />
+          <ToolRequests task={t} user={user} now={now} refresh={refresh} />
           <HeldComments task={t} user={user} now={now} refresh={refresh} />
           {reply && (thread || reply.id !== r?.id) && (
             <section class={styles.reply} aria-label={tr("detail.lastReply")}>

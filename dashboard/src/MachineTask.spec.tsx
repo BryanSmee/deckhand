@@ -1,11 +1,12 @@
 // A machine task on its page (listener/claims.mjs): whose machines take it, its state in words,
-// and the comments held for its owner, whom alone Deliver and Drop are offered to.
+// the comments held for its owner, whom alone Deliver and Drop are offered to, and its run's tool
+// requests, which the owner alone answers.
 import { fireEvent, render, screen, waitFor } from "@testing-library/preact";
 import { expect, test } from "vitest";
 import { taskStatus } from "./format";
-import { HeldComments, MachineFact } from "./MachineTask";
+import { HeldComments, MachineFact, ToolRequests } from "./MachineTask";
 import { makeTask, mockApi } from "./testUtils";
-import type { TaskMachine } from "./types";
+import type { TaskMachine, ToolRequest } from "./types";
 
 const NOW = 1_700_000_000_000;
 const route = (over: Partial<TaskMachine> = {}): TaskMachine => ({
@@ -65,4 +66,45 @@ test("held comments: listed for everyone who sees the task, delivered or dropped
   await waitFor(() => expect(refreshed).toBe(1));
   expect(api.posted.map((p) => p.url)).toEqual(["api/held/acme/game/12/deliver"]);
   expect(screen.getByRole("button", { name: "Drop" })).toBeTruthy();
+});
+
+test("a machine run's tool request: its input as text, never markup; Allow and Deny for its owner alone", async () => {
+  const request: ToolRequest = {
+    id: "0123456789abcdef",
+    tool: "Bash",
+    input: "echo '<img src=x onerror=alert(1)> **bold**'",
+    machine: "Desk",
+    owner: "alice",
+    state: "pending",
+    message: null,
+    at: NOW - 60_000,
+    expiresAt: NOW + 9 * 60_000,
+  };
+  const task = makeTask({
+    repo: "acme/game",
+    number: 12,
+    machine: route({ machine: "Desk", claimed: true }),
+    permissions: [request],
+  });
+  const url = "api/permissions/acme/game/12/0123456789abcdef/run";
+  const api = mockApi({ [`POST ${url}`]: () => ({ request: { ...request, state: "granted" } }) });
+  const { container, unmount } = render(<ToolRequests task={task} user="bob" now={NOW} />);
+  expect(screen.getByText("Desk asks to use")).toBeTruthy();
+  expect(screen.getByText("Bash")).toBeTruthy();
+  expect(screen.getByText("echo '<img src=x onerror=alert(1)> **bold**'")).toBeTruthy();
+  expect(container.querySelector("img, strong")).toBeNull();
+  expect(
+    screen.getByText(/Only @alice answers.*Denied in 9 minutes without an answer\./),
+  ).toBeTruthy();
+  // Bob sees it, without the buttons.
+  expect(screen.queryByRole("button", { name: "Allow once" })).toBeNull();
+  unmount();
+  let refreshed = 0;
+  render(
+    <ToolRequests task={task} user="Alice" now={NOW} refresh={async () => void refreshed++} />,
+  );
+  expect(screen.getByRole("button", { name: "Deny" })).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "Allow for this run" }));
+  await waitFor(() => expect(refreshed).toBe(1));
+  expect(api.posted.map((p) => p.url)).toEqual([url]);
 });

@@ -32,6 +32,11 @@
 // end (runs.mjs cleanUp()). A release, a lease that runs out or the machine removed ends it as
 // interrupted, the issue told. Only the machine holding the claim reaches its run (going()).
 //
+// Its agent's permission requests (#600): approve() asks the run's owner whether its agent may
+// use a tool (requests.mjs askTool()), the call waiting for the answer, the claim's lease renewed
+// meanwhile. Deckhand only relays and records them: what the machine allows without asking is
+// the machine's.
+//
 // Only its owner reaches it: a comment by another allowed user on a routed task is held, shown on
 // the dashboard, until the owner delivers it (or drops it). Deckhand's own items (a review's fix
 // round, a CI fix, a rebase) are delivered as on any task.
@@ -577,6 +582,29 @@ export function createClaims(
     return { key: keyOf(task), status: record.status };
   }
 
+  // Its agent asks to use a tool (approve_permission): `ask` { tool, input, toolUseId }, Claude
+  // Code's `--permission-prompt-tool` call. Asked of its owner, or found again by `toolUseId` (the
+  // driver asking again while it waits), then waited for up to `wait` ms; the claim's lease
+  // renewed as the call comes and as it ends, so that a run waiting on its owner keeps it.
+  // → { request, state, message }: "pending" while it still waits (ask again), else "granted",
+  // "denied" or "refused".
+  async function approve(owner, id, run, ask, { wait = waitMs } = {}) {
+    const task = going(owner, id, run);
+    if (!ctx.requests || ctx.stopping) {
+      throw new Refused(503, "Deckhand is restarting: ask again.");
+    }
+    const keep = () => {
+      if (task.claim?.id === run) {
+        task.claim.leaseUntil = Math.max(task.claim.leaseUntil, now() + leaseMs);
+      }
+    };
+    keep();
+    const record = await ctx.requests.askTool(task, ask);
+    if (record.state === "pending") await ctx.requests.settled(record.id, wait);
+    keep();
+    return { request: record.id, state: record.state, message: record.message };
+  }
+
   // The run stops to ask: `question` its reply, with the needs-input marker of a sandbox run's.
   const ask = (owner, id, run, question) =>
     finish(owner, id, run, { outcome: "needs-input", reply: question });
@@ -732,6 +760,7 @@ export function createClaims(
     nextMessage,
     finish,
     ask,
+    approve,
     expire,
     cancel,
     machineGone,

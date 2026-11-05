@@ -12,6 +12,7 @@ import {
   linkTo,
   MARKER,
   parseAfter,
+  parseAnswer,
   parseKey,
   replayedIssue,
   prId,
@@ -442,6 +443,35 @@ test("discussions: only in the repo's category, only from allowed users", () => 
   assert.equal(workItem(repoConfig, "discussion", edited), null);
   // The operator's check, before the repo's config is read, lets it through.
   assert.equal(workItem(config, "discussion", other).kind, "discussion");
+});
+
+test("/allow and /deny: a machine run's owner answering its request, never a trigger (#600)", () => {
+  const answer = (body) => splitTrigger(config, body).permission;
+  assert.deepEqual(answer("/allow"), { choice: "once", id: null });
+  assert.deepEqual(answer(" /Allow RUN \nthanks"), { choice: "run", id: null });
+  assert.deepEqual(answer("/allow a1b2c3d4"), { choice: "once", id: "a1b2c3d4" });
+  assert.deepEqual(answer("/allow a1b2c3 run"), { choice: "run", id: "a1b2c3" });
+  assert.deepEqual(answer("/deny"), { choice: "deny", id: null });
+  assert.deepEqual(answer("/deny A1B2C3"), { choice: "deny", id: "a1b2c3" });
+  // What it can't read is said to the owner.
+  assert.match(answer("/deny run").error, /`\/deny` takes/);
+  assert.match(answer("/allow abc").error, /`\/allow` takes/);
+  assert.match(answer("/allow everything").error, /`\/allow` takes/);
+  const said = splitTrigger(config, "/allow\nGo on.");
+  assert.deepEqual([said.trigger, said.text], ["allow", "Go on."]);
+  // Only on the first line, alone.
+  assert.equal(answer("Please /allow"), undefined);
+  assert.equal(answer("/allowed"), undefined);
+  assert.deepEqual(parseAnswer("allow", ""), { choice: "once", id: null });
+  // On an issue or a pull request: the item carries it.
+  const item = workItem(config, "issue_comment", {
+    action: "created",
+    installation: { id: 1 },
+    repository: { full_name: "org/repo" },
+    issue: { number: 12, title: "T" },
+    comment: { id: 5, body: "/allow run", user: { login: "alice", type: "User" } },
+  });
+  assert.deepEqual(item.permission, { choice: "run", id: null });
 });
 
 test("trigger lines and options", () => {

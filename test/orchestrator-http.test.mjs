@@ -440,6 +440,7 @@ test("api/state: a task's pull request in its fix loop has its review from the s
     running: false,
     pending: [{ mode: "work", replyTo: 99, text: "Also the docs." }],
   });
+  ctx.config.repos = ["org/repo"];
   const url = await serveHttp(t, ctx);
   const state = await (await fetch(`${url}/api/state`, { headers: { "x-user": "alice" } })).json();
   const task = state.tasks.find((x) => x.key === "org/repo#12");
@@ -544,4 +545,55 @@ test("api/review (#625): the last review's findings for a repo the login sees, 4
   const state = await fetch(`${url}/api/state`, { headers: { "x-user": "alice" } });
   assert.equal(state.status, 200);
   assert.doesNotMatch(await state.text(), /a hole/);
+});
+
+test("a machine run's tool requests (#600): in api/state on its task, answered by POST from this dashboard", async (t) => {
+  const asked = [];
+  const waiting = [
+    {
+      id: "0123456789abcdef",
+      tool: "Bash",
+      input: "make level",
+      machine: "Desk",
+      owner: "alice",
+      state: "pending",
+      message: null,
+      at: 1000,
+      expiresAt: 601_000,
+    },
+  ];
+  const ctx = oneRun({
+    permissions: permissionsOf({ alice: { "org/repo": ["*"] }, bob: { "org/repo": ["*"] } }),
+    publicUrl: () => "https://hooks.example.com",
+    requests: {
+      toolRequests: (key) => (key === "org/repo#pr-3" ? waiting : []),
+      answerTool: async (user, key, id, choice) => {
+        asked.push([user, key, id, choice]);
+        return user === "alice"
+          ? { request: { ...waiting[0], state: "granted" } }
+          : { error: 403, message: "Only alice, whose machine runs it, answers it." };
+      },
+    },
+  });
+  ctx.config.repos = ["org/repo"];
+  const url = await serveHttp(t, ctx);
+  const state = await (await fetch(`${url}/api/state`, { headers: { "x-user": "alice" } })).json();
+  assert.deepEqual(state.tasks[0].permissions, waiting);
+  const answer = (user, choice, origin = "https://hooks.example.com") =>
+    fetch(`${url}/api/permissions/org/repo/3/0123456789abcdef/${choice}`, {
+      method: "POST",
+      headers: { "x-user": user, origin },
+    });
+  const allowed = await answer("alice", "run");
+  assert.equal(allowed.status, 200);
+  assert.equal((await allowed.json()).request.state, "granted");
+  const bobs = await answer("bob", "once");
+  assert.equal(bobs.status, 403);
+  assert.match((await bobs.json()).error, /Only alice/);
+  // Another site's POST: refused before anything is asked.
+  assert.equal((await answer("alice", "deny", "https://evil.example")).status, 403);
+  assert.deepEqual(asked, [
+    ["alice", "org/repo#3", "0123456789abcdef", "run"],
+    ["bob", "org/repo#3", "0123456789abcdef", "once"],
+  ]);
 });

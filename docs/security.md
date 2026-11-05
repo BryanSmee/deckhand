@@ -2357,6 +2357,25 @@ client, and no sandbox service, run token or git gateway is on the machine.
   posted by the App on the task's own issue or pull request alone, as a sandbox run's (no other
   write of the App's is the machine's to ask for). Its run gets no token: a call is its owner's
   MCP token's, which edge checks.
+- **Its agent's permission requests** (#600, `listener/requests.mjs`): a tool call its agent
+  has to ask for (Claude Code's `--permission-prompt-tool`, which the driver relays to
+  `approve_permission` with the claim's run) goes into the requests chats' agents use, owned by
+  the run's owner, kept in the orchestrator's store (`permission-requests`). It is shown on the
+  task's page to those who see the task, and in a comment of the App's on the issue that
+  mentions the owner: the tool and its input, one line, redacted of the operator's secrets and
+  cut to 200 characters as policy messages are; on the page as text, never HTML or markdown, in
+  the comment inside a fenced block longer than any run of backticks in it (no markup, no
+  mention). Only the owner answers it: **Allow once**, **Allow for this run** (that tool's later
+  calls in the run allowed without asking) or **Deny**, from the dashboard
+  (`POST /api/permissions/<repo>/<n>/<id>/once|run|deny`, from its origin, the owner's alone) or
+  with a `/allow`, `/allow run` or `/deny` comment on the issue or its pull request, which is
+  never queued nor sent to the agent; anyone else's comment is ignored, their dashboard answer
+  refused. No answer within `CHAT_PERMISSION_TIMEOUT` (10 minutes) denies it, and so does the run
+  ending. The call waits for the answer 25 s at a time, renewing the claim's lease each time, so
+  a run waiting on its owner keeps its claim. At most 3 wait per run; more are refused. **No
+  ceiling but the machine's**: Deckhand relays and records the answers, and enforces nothing
+  with them; what the machine allows or denies without asking (its own settings, a deny list
+  in its driver's config) never reaches Deckhand.
 - **What Deckhand doesn't enforce**: anything on the machine. An agent runs there on its own,
   with the owner's files, credentials and network; Deckhand suggests settings for it and
   enforces none. `register_machine`'s answer and the dashboard's list of machines say so.

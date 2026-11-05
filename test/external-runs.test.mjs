@@ -12,6 +12,7 @@ import { createClaims, LEASE_MS, MACHINE_PROTOCOL } from "../listener/claims.mjs
 import { createMachines } from "../listener/machines.mjs";
 import { NEEDS_INPUT } from "../listener/questions.mjs";
 import { parseRepoConfig } from "../listener/repo-config.mjs";
+import { createRequests } from "../listener/requests.mjs";
 import { createRestart } from "../listener/restart.mjs";
 import { openLog } from "../listener/runlog.mjs";
 import { createRuns } from "../listener/runs.mjs";
@@ -115,6 +116,17 @@ function copy(t, { store, dir, machines = new Map(), routes = new Map(), clock =
     removed: (m) => ctx.claims.machineGone(m),
     now,
   });
+  // Its agents' requests (#600), their timeouts on the test's clock (`advance()`).
+  clock.timers ??= new Set();
+  ctx.requests = createRequests(ctx, {
+    now,
+    setTimer: (fn, ms) => {
+      const timer = { fn, at: clock.at + ms };
+      clock.timers.add(timer);
+      return timer;
+    },
+    clearTimer: (timer) => clock.timers.delete(timer),
+  });
   let ids = 0;
   ctx.claims = createClaims(ctx, {
     routes,
@@ -164,9 +176,20 @@ function copy(t, { store, dir, machines = new Map(), routes = new Map(), clock =
     const restored = await other.ctx.restoreRuns({ waitMs: 0 });
     await other.ctx.loadQueue();
     await other.ctx.reattach(restored, { waitMs: 0 });
+    await other.ctx.requests.load();
+    other.ctx.requests.start();
     return other;
   };
-  return { ctx, said, clock, say, ready, task, run, next, settings };
+  // The clock moved on by `ms`, the timers due by then fired in their order.
+  const advance = (ms) => {
+    clock.at += ms;
+    for (const timer of [...clock.timers].sort((a, b) => a.at - b.at)) {
+      if (timer.at > clock.at || !clock.timers.has(timer)) continue;
+      clock.timers.delete(timer);
+      timer.fn();
+    }
+  };
+  return { ctx, said, clock, say, ready, task, run, next, settings, advance };
 }
 
 function bench(t) {
@@ -471,4 +494,183 @@ test("a claim saved without its run, or a run without its claim, is given back a
   assert.equal(third.task().live, null);
   assert.equal(third.task().claim, null);
   assert.equal(third.task().pending.length, 1);
+});
+
+// --- Its agent's permission requests (#600) --------------------------------------------------
+
+const BASH = { tool: "Bash", input: { command: "make level" }, toolUseId: "toolu_1" };
+
+test("a machine run's tool call waits for its owner: on the dashboard and the issue; the owner's /allow reaches it, another's is ignored", async (t) => {
+  const b = bench(t);
+  const { ctx, said } = b;
+  const { desk, work } = await claimed(b);
+  const replies = said.replies.length;
+  // An input that would be markup, a mention and a fence's end.
+  const input = {
+    command: "echo '**bold** <img src=x onerror=alert(1)> @bob ``` done' && cat ~/.ssh/id_rsa",
+  };
+  const call = ctx.claims.approve("alice", desk, work.run, { ...BASH, input }, { wait: 60_000 });
+  await until(() => said.replies.length > replies, { what: "the request's comment" });
+  const asking = said.replies.at(-1);
+  assert.match(
+    asking,
+    /^@alice, the agent on your machine Desk asks to use a tool \(request `[0-9a-f]{6}`\):/,
+  );
+  // The tool and its input in a fence longer than any run of backticks in it: shown as text.
+  assert.ok(
+    asking.includes(
+      "\n````text\nBash: echo '**bold** <img src=x onerror=alert(1)> @bob ``` done' && cat ~/.ssh/id_rsa\n````\n",
+    ),
+  );
+  assert.match(asking, /`\/allow` \(this call\), `\/allow run`.*`\/deny`/);
+  assert.match(asking, /within 10 min, it is denied\. Only @alice's answer counts\./);
+  // On the dashboard, the task's.
+  const [shown] = ctx.requests.toolRequests(KEY);
+  assert.deepEqual(
+    [shown.tool, shown.machine, shown.owner, shown.state],
+    ["Bash", "Desk", "alice", "pending"],
+  );
+  assert.equal(shown.expiresAt - shown.at, 10 * 60_000);
+  // In the run's log.
+  await until(() =>
+    readFileSync(join(ctx.logDir, `${work.run}.log`), "utf8").includes("Permission asked: Bash"),
+  );
+
+  // Bob's `/allow`: ignored, neither an answer nor a comment for the run.
+  await b.say("bob", "/allow", { id: 103 });
+  assert.equal(ctx.requests.toolRequests(KEY).length, 1);
+  assert.equal(said.replies.length, replies + 1);
+  // Bob on the dashboard: refused.
+  assert.equal((await ctx.requests.answerTool("bob", KEY, shown.id, "once")).error, 403);
+
+  // Alice's: the call has its answer, her comment a 👍; neither queued nor sent to the agent.
+  await b.say("alice", "/allow", { id: 104 });
+  assert.deepEqual(await call, {
+    request: shown.id,
+    state: "granted",
+    message: "Allowed by alice once.",
+  });
+  assert.deepEqual(said.settled.at(-1), [104, "acknowledged"]);
+  assert.deepEqual(b.task().pending, []);
+  assert.deepEqual(b.task().live.outbox, []);
+  assert.deepEqual(ctx.requests.toolRequests(KEY), []);
+  // Allowed once: the next call of the same tool asks again.
+  const again = ctx.claims.approve(
+    "alice",
+    desk,
+    work.run,
+    { ...BASH, toolUseId: "toolu_2" },
+    {
+      wait: 60_000,
+    },
+  );
+  await until(() => ctx.requests.toolRequests(KEY).length === 1);
+  await b.say("alice", "/deny", { id: 105 });
+  assert.equal((await again).state, "denied");
+  assert.equal(said.replies.length, replies + 2);
+});
+
+test("Allow for this run: that tool's later calls are allowed without asking; a call asked again finds its request", async (t) => {
+  const b = bench(t);
+  const { ctx, said } = b;
+  const { desk, work } = await claimed(b);
+  const first = await ctx.claims.approve("alice", desk, work.run, BASH, { wait: 0 });
+  assert.equal(first.state, "pending");
+  // Asked again (its driver waiting on): the same request, not a second one.
+  const polled = ctx.claims.approve("alice", desk, work.run, BASH, { wait: 60_000 });
+  assert.equal(ctx.requests.toolRequests(KEY).length, 1);
+  // Several waiting: `/allow` alone names none; with its id, it answers that one.
+  const other = ctx.claims.approve(
+    "alice",
+    desk,
+    work.run,
+    { tool: "Write", input: { file_path: "Level.umap" }, toolUseId: "toolu_w" },
+    { wait: 60_000 },
+  );
+  const asking = () => said.replies.filter((r) => r.includes("asks to use a tool")).length;
+  await until(() => asking() === 2, { what: "both requests' comments" });
+  const before = said.replies.length;
+  await b.say("alice", "/allow run", { id: 106 });
+  assert.match(
+    said.replies.at(-1),
+    /^Several requests wait: `[0-9a-f]{6}` \(Bash\), `[0-9a-f]{6}` \(Write\)\./,
+  );
+  assert.equal(said.replies.length, before + 1);
+  await b.say("alice", `/allow ${first.request.slice(0, 8)} run`, { id: 107 });
+  assert.deepEqual(await polled, {
+    request: first.request,
+    state: "granted",
+    message: "Allowed by alice for this run.",
+  });
+  // Bash from now on, without asking; Write still waits, and is denied from the dashboard.
+  const replies = said.replies.length;
+  const later = await ctx.claims.approve(
+    "alice",
+    desk,
+    work.run,
+    { tool: "Bash", input: { command: "make test" }, toolUseId: "toolu_3" },
+    { wait: 0 },
+  );
+  assert.equal(later.state, "granted");
+  assert.equal(later.message, "Allowed: alice allowed Bash for this run.");
+  assert.equal(said.replies.length, replies);
+  const [write] = ctx.requests.toolRequests(KEY);
+  assert.equal(write.tool, "Write");
+  assert.equal(write.input, "Level.umap");
+  assert.equal(
+    (await ctx.requests.answerTool("alice", KEY, write.id, "deny")).request.state,
+    "denied",
+  );
+  assert.equal((await other).state, "denied");
+});
+
+test("no answer within the timeout denies the call; the lease stays alive while it waits", async (t) => {
+  const b = bench(t);
+  const { ctx } = b;
+  const { desk, work } = await claimed(b);
+  let answer = null;
+  // The driver asks again each time its call answers "pending", 25 s apart: no heartbeat at all.
+  for (let waited = 0; waited <= 11 * 60_000 && !answer; waited += 25_000) {
+    const call = ctx.claims.approve("alice", desk, work.run, BASH, { wait: 25_000 });
+    // Its wait armed before the clock moves on.
+    const due = b.clock.at + 25_000;
+    await until(() => [...b.clock.timers].some((timer) => timer.at === due));
+    b.advance(25_000);
+    const said = await call;
+    if (said.state !== "pending") answer = said;
+    // Long past LEASE_MS: still claimed.
+    assert.deepEqual(ctx.claims.expire(), []);
+  }
+  assert.ok(answer, "the timeout answers");
+  assert.equal(answer.state, "denied");
+  assert.equal(answer.message, "Denied: alice didn't answer within 10 min.");
+  assert.equal(b.task().claim.id, work.run);
+  assert.ok(b.clock.at - b.task().claim.claimedAt >= 5 * LEASE_MS);
+  // Without the calls (nor a heartbeat), the lease runs out as before.
+  b.advance(LEASE_MS + 1);
+  assert.deepEqual(ctx.claims.expire(), [KEY]);
+});
+
+test("the run ending denies the calls waiting; the next copy has the requests", async (t) => {
+  const b = bench(t);
+  const { ctx } = b;
+  const { desk, work } = await claimed(b);
+  assert.equal(
+    (await ctx.claims.approve("alice", desk, work.run, BASH, { wait: 0 })).state,
+    "pending",
+  );
+  await until(async () => Object.keys((await b.store.get("permission-requests")) ?? {}).length);
+  // A handover: the next copy shows it, and its driver's call finds it there.
+  const other = await b.next();
+  const [kept] = other.ctx.requests.toolRequests(KEY);
+  assert.equal(kept.tool, "Bash");
+  const call = other.ctx.claims.approve("alice", desk, work.run, BASH, { wait: 60_000 });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(other.ctx.requests.toolRequests(KEY).length, 1);
+  await other.ctx.claims.finish("alice", desk, work.run, { outcome: "ok", reply: "Built." });
+  assert.deepEqual(await call, {
+    request: kept.id,
+    state: "denied",
+    message: "Denied: this run has ended.",
+  });
 });
