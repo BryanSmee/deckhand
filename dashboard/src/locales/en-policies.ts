@@ -281,4 +281,14 @@ export const policies = {
   "server.syncing": "Syncing…",
   "server.syncHelp":
     "Ask GitHub again for the webhook deliveries it couldn't hand over, for the open pull requests' states, and whether they still merge",
+
+  // A run's Claude credential (format.ts AUTH_NAMES)
+  "auth.plan": "Plan",
+  "auth.key": "API key",
+  "auth.gateway": "Gateway",
+
+  // How long a service has been up (format.ts uptime())
+  "time.upMinutes": "{min} min",
+  "time.upHours": "{h} h {min} min",
+  "time.upDays": "{d} d {h} h",
 } as const;

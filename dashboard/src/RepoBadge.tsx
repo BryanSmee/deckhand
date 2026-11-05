@@ -2,6 +2,7 @@
 // (ConfigPanel.tsx).
 import type { Tone } from "./format";
 import { REPO_LABELS } from "./format";
+import { t } from "./i18n";
 import type { RepoStatus } from "./types";
 import { StatusBadge } from "./ui/Status";
 
@@ -17,7 +18,7 @@ export function RepoBadge({ status, class: extra }: { status: RepoStatus; class?
   return (
     <StatusBadge
       tone={TONES[status]}
-      label={REPO_LABELS[status]}
+      label={t(REPO_LABELS[status])}
       pulse={status === "onboarding"}
       class={extra}
     />

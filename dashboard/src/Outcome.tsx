@@ -3,6 +3,7 @@
 // commits, the change's size (the latest run's only: the pull request is the task's), how long, on which model, and where it replies. A run going on
 // says so instead.
 import { AUTH_NAMES, duration, plural, PR_NAMES, readyStatus, type Tone } from "./format";
+import { t } from "./i18n";
 import type { Auth, PullRequest, Run, Task } from "./types";
 import { Button, buttonClass } from "./ui/Button";
 import * as Icon from "./ui/icons";
@@ -44,7 +45,7 @@ export function AuthTag({ auth, class: className }: { auth?: Auth | null; class?
   const { label, variable } = AUTH_NAMES[auth];
   return (
     <span class={className} title={`Ran on ${variable}`}>
-      {label}
+      {t(label)}
     </span>
   );
 }

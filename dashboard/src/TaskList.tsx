@@ -122,13 +122,13 @@ export function TaskList({
           {CHIPS.map((c, i) => (
             <FilterChip
               key={c.id}
-              title={withKey(t("taskList.filter", { name: c.name }), "filter", i)}
+              title={withKey(t("taskList.filter", { name: t(c.name) }), "filter", i)}
               class={styles.chip}
               pressed={c.id === chip}
               count={found.filter((t) => inChip(c.id, t)).length}
               onClick={() => onChip(c.id)}
             >
-              {c.name}
+              {t(c.name)}
             </FilterChip>
           ))}
         </div>

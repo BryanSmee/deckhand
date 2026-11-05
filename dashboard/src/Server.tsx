@@ -128,10 +128,10 @@ const ENGINES: Record<NonNullable<ServerSetup["engine"]>, Plain> = {
 // API key as fallback", "Plan · API key also set".
 function claudeText({ set, default: first, fallbacks = [] }: NonNullable<ServerSetup["claude"]>) {
   if (!first) return t("server.noCredential");
-  const names = (auths: Auth[]) => auths.map((a) => AUTH_NAMES[a].label).join(", ");
+  const names = (auths: Auth[]) => auths.map((a) => t(AUTH_NAMES[a].label)).join(", ");
   const after = fallbacks.filter((a) => a !== first);
   const others = set.filter((a) => a !== first && !after.includes(a));
-  const label = AUTH_NAMES[first].label;
+  const label = t(AUTH_NAMES[first].label);
   return [
     after.length ? t("server.credentialFallback", { label, fallbacks: names(after) }) : label,
     ...(others.length ? [t("server.credentialsAlso", { names: names(others) })] : []),

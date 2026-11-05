@@ -138,4 +138,11 @@ export const repos = {
   "health.checking": "Checking…",
   "health.warnings": "Warnings",
   "health.legend": "Legend",
+
+  // A repository's status, as its badge says it (RepoBadge.tsx)
+  "repoStatus.configured": "Configured",
+  "repoStatus.invalid": "Config has errors",
+  "repoStatus.onboarding": "Onboarding",
+  "repoStatus.notOnboarded": "Not onboarded",
+  "repoStatus.unknown": "Unknown",
 } as const;

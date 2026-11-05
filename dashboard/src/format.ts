@@ -1,5 +1,6 @@
 // Names, groups and times the views share.
 import { and, locale, t } from "./i18n";
+import type { Plain } from "./locales";
 import type {
   Auth,
   Kind,
@@ -34,10 +35,10 @@ export const STATE_NAMES: Record<TaskState, string> = {
 };
 
 // A run's Claude credential (Run.auth): its tag, and the variable it comes from.
-export const AUTH_NAMES: Record<Auth, { label: string; variable: string }> = {
-  plan: { label: "Plan", variable: "CLAUDE_CODE_OAUTH_TOKEN" },
-  key: { label: "API key", variable: "ANTHROPIC_API_KEY" },
-  gateway: { label: "Gateway", variable: "ANTHROPIC_AUTH_TOKEN" },
+export const AUTH_NAMES: Record<Auth, { label: Plain; variable: string }> = {
+  plan: { label: "auth.plan", variable: "CLAUDE_CODE_OAUTH_TOKEN" },
+  key: { label: "auth.key", variable: "ANTHROPIC_API_KEY" },
+  gateway: { label: "auth.gateway", variable: "ANTHROPIC_AUTH_TOKEN" },
 };
 
 export const RUN_NAMES: Record<RunStatus, string> = {
@@ -63,10 +64,10 @@ export const PR_NAMES: Record<PrState, string> = {
 // is over, not failed. A pull request in its review-and-fix loop is still on its way: ready once
 // the loop ends.
 export const CHIPS = [
-  { id: "all", name: "All", states: null },
+  { id: "all", name: "chips.all", states: null },
   {
     id: "running",
-    name: "Running",
+    name: "chips.running",
     states: [
       "scheduled",
       "building-image",
@@ -77,11 +78,11 @@ export const CHIPS = [
       "waiting",
     ],
   },
-  { id: "input", name: "Needs you", states: ["needs-input", "brainstorm", "idle-brainstorm"] },
-  { id: "review", name: "Ready", states: null },
-  { id: "done", name: "Done", states: ["done", "cancelled"] },
-  { id: "error", name: "Error", states: ["error", "interrupted"] },
-] as const satisfies readonly { id: string; name: string; states: readonly TaskState[] | null }[];
+  { id: "input", name: "chips.input", states: ["needs-input", "brainstorm", "idle-brainstorm"] },
+  { id: "review", name: "chips.review", states: null },
+  { id: "done", name: "chips.done", states: ["done", "cancelled"] },
+  { id: "error", name: "chips.error", states: ["error", "interrupted"] },
+] as const satisfies readonly { id: string; name: Plain; states: readonly TaskState[] | null }[];
 
 export type ChipId = (typeof CHIPS)[number]["id"];
 
@@ -477,10 +478,10 @@ export function dayTime(at: number, now: number, words = true): string {
 // "3 d 4 h", "4 h 12 min", "12 min": how long the listener has been up, by the server's clock.
 export function uptime(startedAt: number, now: number): string {
   const min = Math.max(0, Math.floor((now - startedAt) / 60000));
-  if (min < 60) return `${min} min`;
+  if (min < 60) return t("time.upMinutes", { min });
   const h = Math.floor(min / 60);
-  if (h < 24) return `${h} h ${min % 60} min`;
-  return `${Math.floor(h / 24)} d ${h % 24} h`;
+  if (h < 24) return t("time.upHours", { h, min: min % 60 });
+  return t("time.upDays", { d: Math.floor(h / 24), h: h % 24 });
 }
 
 // Where a version's code is: an edge build's commit, a release's page; null for "dev" or
@@ -529,8 +530,7 @@ function ownWhen(t: Task, now: number): string | null {
 
 // "#77", "#77 and #80", "#77, #80 and #81".
 export function issueList(numbers: number[]): string {
-  const refs = numbers.map((n) => `#${n}`);
-  return refs.length > 1 ? `${refs.slice(0, -1).join(", ")} and ${refs.at(-1)}` : (refs[0] ?? "");
+  return and(numbers.map((n) => `#${n}`));
 }
 
 // "Continue", "Wrap-up"…: what a run did, for its button in the run history.
@@ -605,12 +605,12 @@ export function repoCounts(
 }
 
 // A repository's status (api/repos), as its badge says it.
-export const REPO_LABELS: Record<RepoStatus, string> = {
-  configured: "Configured",
-  invalid: "Config has errors",
-  onboarding: "Onboarding",
-  "not-onboarded": "Not onboarded",
-  unknown: "Unknown",
+export const REPO_LABELS: Record<RepoStatus, Plain> = {
+  configured: "repoStatus.configured",
+  invalid: "repoStatus.invalid",
+  onboarding: "repoStatus.onboarding",
+  "not-onboarded": "repoStatus.notOnboarded",
+  unknown: "repoStatus.unknown",
 };
 
 // "#12 · Fix the queue" shortened to `max` characters, to fit a graph node.
