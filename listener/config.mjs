@@ -163,6 +163,12 @@ export const SETTINGS = {
   SANDBOX_FAST_MODE: { default: false, parse: fastModeSetting },
   BRAINSTORM_IDLE_MINUTES: { default: 10, parse: whole("a whole number of minutes") },
   MAX_PARALLEL: { default: 2, parse: whole("a whole number of sandboxes") },
+  // The dashboard's chats (chats.mjs): how many a user keeps across the repositories (a repo's
+  // `chats.per_user` within it), how long a chat's sandbox waits for the next message before it
+  // stops, and how many chats' sandboxes run at once, apart from MAX_PARALLEL.
+  CHATS_PER_USER: { default: 2, parse: whole("a whole number of chats (0: none)") },
+  CHAT_IDLE_MINUTES: { default: 30, parse: aboveZero("a whole number of minutes above 0") },
+  MAX_RUNNING_CHATS: { default: 2, parse: whole("a whole number of sandboxes (0: none)") },
   // Slots within MAX_PARALLEL kept for the open issues labelled AUTO_PICKUP_LABEL, which the
   // listener starts by itself, oldest first, in the repos whose `auto_pickup` opts in
   // (auto-pickup.mjs). 0: off.
@@ -516,6 +522,9 @@ export function loadConfig(env, file = NO_FILE, { service = "orchestrator" } = {
     debounceMs: s.DEBOUNCE_MS,
     brainstormDebounceMs: s.BRAINSTORM_DEBOUNCE_MS,
     brainstormIdleMs: s.BRAINSTORM_IDLE_MINUTES * 60000,
+    chatsPerUser: s.CHATS_PER_USER,
+    chatIdleMs: s.CHAT_IDLE_MINUTES * 60000,
+    maxRunningChats: s.MAX_RUNNING_CHATS,
     dataDir: env.DATA_DIR || "/data",
     publicUrl: s.PUBLIC_URL,
     model: s.SANDBOX_MODEL,

@@ -30,7 +30,7 @@ import {
 } from "./runlog.mjs";
 import { logSent } from "./restart.mjs";
 import { sandboxSpec, sessionName, sessionOf } from "./sandbox-spec.mjs";
-import { noLongerAllowed, pickedTask } from "./tasks.mjs";
+import { countRun, isChat, noLongerAllowed, pickedTask } from "./tasks.mjs";
 import { startAction } from "./permissions.mjs";
 import { startedBy } from "./run-policy.mjs";
 import { operatorSecrets, redact } from "./secrets.mjs";
@@ -86,12 +86,12 @@ export function createRuns(ctx) {
   async function runTask(task) {
     task.running = true;
     task.ready = false;
-    ctx.running++;
+    countRun(ctx, task, 1);
     // Still in the queue meanwhile: a listener that stops now saves them.
     await dropRefused(task);
     if (ctx.stopping || !task.pending.length) {
       task.running = false;
-      ctx.running--;
+      countRun(ctx, task, -1);
       if (!ctx.stopping) ctx.schedule();
       return;
     }
@@ -179,6 +179,8 @@ export function createRuns(ctx) {
         agent: brainstormDefaults(mode) ? config.brainstormAgent : config.agent,
       },
     );
+    // A chat's run (chats.mjs): its chat and its owner, the only one the dashboard shows it to.
+    if (isChat(task)) Object.assign(record, { chat: chatOf(task), owner: items[0].author });
     // The issues it creates and the comments it posts, as GitHub answers its calls
     // (github-writes.mjs), saved with it.
     const created = [];
@@ -250,7 +252,8 @@ export function createRuns(ctx) {
     // the repo's `wait_for_answers`, a light run only helps answer them: the label stays. A
     // review answers nothing, and often has no comment at all (reviews.mjs).
     const helps = task.live.mode === "review" || (task.live.light && task.settings?.waitForAnswers);
-    if (config.needsInputLabel && task.kind !== "discussion" && !helps) {
+    const issue = task.kind !== "discussion" && !isChat(task);
+    if (config.needsInputLabel && issue && !helps) {
       await ctx.label(task.repo, task.number, false);
     }
     const note = writeHeader(task, run);
@@ -263,9 +266,11 @@ export function createRuns(ctx) {
     // Its issue on the repo's projects, at `start` (projects.mjs), once every check let the run
     // start: a run refused (its config's errors, its grants, its agent) moves nothing. Never in
     // the run's way.
-    ctx.projects
-      ?.started(task, note, run.errors)
-      .catch((error) => log(`${task.live.key}: projects: ${error.stack ?? error}`));
+    if (!isChat(task)) {
+      ctx.projects
+        ?.started(task, note, run.errors)
+        .catch((error) => log(`${task.live.key}: projects: ${error.stack ?? error}`));
+    }
     await launch(task, items, run, parts, note);
     // Written before the agent starts (setup takes a while), a message waits in the inbox.
     task.live.open = true;
@@ -286,8 +291,8 @@ export function createRuns(ctx) {
       (r) => r !== record && r.key === key && !!r.light === light && r.status !== "running",
     );
     // "/model", "/effort", "/speed" and "/agent" sent during the previous run, unless these comments say
-    // otherwise.
-    const options = task.next;
+    // otherwise; a chat's agent, model and effort as it was created, under them (chats.mjs).
+    const options = isChat(task) ? { ...ctx.chats?.options(task), ...task.next } : task.next;
     task.next = {};
     // Used: a listener restarting mid-run doesn't give them to the next run too.
     ctx.saveQueue?.();
@@ -545,9 +550,12 @@ export function createRuns(ctx) {
     // One result per turn: a comment answered after the first adds a turn.
     live.result = { ...event, durationMs: (live.result?.durationMs ?? 0) + event.durationMs };
     live.unanswered = [];
-    // Comments still in their pause go now, rather than to a new container.
+    // A chat's idle time counts from its answer too (chats.mjs).
+    if (isChat(task)) ctx.chats?.answered(task);
+    // Comments still in their pause go now, rather than to a new container. A chat's inbox stays
+    // open for the user's next message, until it is idle (chats.mjs rest()).
     clearTimeout(task.timer);
-    if (!ctx.deliver(task)) close(task);
+    if (!ctx.deliver(task) && !isChat(task)) close(task);
     // Nothing more for it: it should exit now, with this as its answer.
     if (!live.open && !live.cancelled && !live.finishing) {
       live.answered = true;
@@ -625,6 +633,25 @@ export function createRuns(ctx) {
     await ctx.runner
       .kill(task.name)
       .catch((error) => log(`${live.key}: stopping its sandbox: ${error.message ?? error}`));
+  }
+
+  // A chat idle for CHAT_IDLE_MINUTES (chats.mjs): its inbox closes, so its agent exits once it
+  // has answered what it was sent, and one that answered already and stays silent is stopped
+  // after the usual grace. An inbox not known open (a restart whose question to the runner
+  // failed, restart.mjs restoreRuns()) is closed at the runner all the same: the agent may be
+  // waiting on it. False when it had no run going, or rested already.
+  function rest(task) {
+    const live = task.live;
+    if (!live || live.finishing || live.cancelled || live.answered) return false;
+    if (live.open) close(task);
+    else ctx.runner.close(live.id);
+    if (live.result && !live.unanswered.length) {
+      live.answered = true;
+      enterPhase(live, "wrap-up");
+      linger(task);
+    }
+    ctx.saveLive(task);
+    return true;
   }
 
   // No more comments for this run: the agent exits once it has answered.
@@ -800,6 +827,8 @@ export function createRuns(ctx) {
   // (comments.mjs): finish() then ends the run as failed, `live.replied` still false.
   function post(task, text) {
     const { live } = task;
+    // A chat's answers are in its log, which its owner reads: nothing goes to GitHub.
+    if (isChat(task)) return Promise.resolve();
     // Once per run (`live.replied`): asked again after a handover, it isn't posted twice.
     return ctx.answer(target(task, live.replyTo), hidden(live, text), {
       full: runLink(task),
@@ -844,8 +873,9 @@ export function createRuns(ctx) {
       const api = status === "error" && !live.replied ? await ctx.models.apiOf(live.id) : {};
       const { apiStatus, apiReset } = api;
       live.apiError = api.apiError ?? null;
+      // Not a chat's: its messages would all be sent again to the next entry.
       const fallback =
-        status === "error" && !live.replied
+        status === "error" && !live.replied && !isChat(task)
           ? nextFallback(config, record, live.result, apiStatus, { apiReset, now: Date.now() })
           : null;
       if (fallback) fallBack(task, fallback);
@@ -865,7 +895,13 @@ export function createRuns(ctx) {
         writeEvent(live.logFile, "note", { message: `${record.summary} (${error.message})` });
       } else log(`${key}: ${error.stack ?? error}`);
       if (error instanceof RunError && !live.replied) {
-        await ctx.answer(target(task, live.asked), error.message).catch((e) => log(`${key}: ${e}`));
+        // A chat's owner reads it in the conversation.
+        if (isChat(task)) writeEvent(live.logFile, "note", { message: error.message });
+        else {
+          await ctx
+            .answer(target(task, live.asked), error.message)
+            .catch((e) => log(`${key}: ${e}`));
+        }
       }
     } finally {
       // Its outcome as its `done (…)` line says, or "error" for a run that failed before it.
@@ -984,7 +1020,7 @@ export function createRuns(ctx) {
     await ctx.removeLive(task);
     task.live = null;
     task.running = false;
-    ctx.running--;
+    countRun(ctx, task, -1);
   }
 
   // The run is over (teardown()), its comments get their outcome's reaction, and the task's
@@ -1054,7 +1090,7 @@ export function createRuns(ctx) {
     }
     if (live.talk) ctx.brainstorms.replied(key);
     // Comments waiting for this task ask GitHub about it again: its run may have closed it.
-    if (task.kind !== "discussion") {
+    if (task.kind !== "discussion" && !isChat(task)) {
       ctx.waits
         ?.recheck(task.repo, task.number)
         .catch((error) => log(`${key}: what waits for it: ${error.message ?? error}`));
@@ -1084,8 +1120,11 @@ export function createRuns(ctx) {
     }
   }
 
-  return { run, follow, ending, dropRefused, cancel, queuedTask, unqueue, teardown };
+  return { run, follow, ending, dropRefused, cancel, queuedTask, unqueue, rest, teardown };
 }
+
+// A chat task's id ("chat-<id>") → the chat's.
+const chatOf = (task) => task.id.slice("chat-".length);
 
 // A run's record mode once its capabilities are decided (runs.mjs begin()'s reopen()): null when
 // the volume they give it has a session as its mode's had (`started`, `now`: whether each has

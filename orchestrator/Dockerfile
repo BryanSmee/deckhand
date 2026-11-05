@@ -17,7 +17,7 @@ COPY runner/client.mjs runner/
 COPY github/client.mjs github/
 COPY edge/client.mjs edge/
 COPY listener/agents/ listener/agents/
-COPY prompts/brainstorm.md prompts/idea.md prompts/bug.md prompts/discussion.md prompts/onboarding.md prompts/analyze.md prompts/research.md prompts/review.md prompts/
+COPY prompts/brainstorm.md prompts/idea.md prompts/bug.md prompts/discussion.md prompts/onboarding.md prompts/analyze.md prompts/research.md prompts/review.md prompts/chat.md prompts/
 # The onboarding prompt ends with the config's reference.
 COPY docs/repo-config.md docs/
 ENV NODE_ENV=production

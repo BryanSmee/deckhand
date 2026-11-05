@@ -47,6 +47,39 @@ test("/status says since when the listener runs, next to its version", () => {
   assert.deepEqual([status.version, status.startedAt, status.idle], ["1.2.3", 1000, true]);
 });
 
+test("/status: a signed-in user's lists no run or queued message with an owner (a chat's), the whole listener's counts them", () => {
+  const started = Date.UTC(2026, 10, 5);
+  const run = (key, owner = null) => ({
+    key,
+    kind: "work",
+    status: "running",
+    startedAt: started,
+    owner,
+  });
+  const task = (repo, pending, owner = null) => ({ repo, pending: Array(pending).fill({}), owner });
+  const ctx = {
+    server: serverInfo({ DECKHAND_VERSION: "1.2.3" }, () => 1000),
+    tasks: new Map([
+      ["org/repo#12", task("org/repo", 1)],
+      ["org/repo#chat-0123456789abcdef", task("org/repo", 2, "alice")],
+    ]),
+    runs: [run("org/repo#12"), run("org/repo#chat-0123456789abcdef", "alice")],
+    running: 2,
+    app: null,
+  };
+  const { status } = createStatus(ctx);
+  // Whoever it is, even the chat's owner: the dashboard lists their chats elsewhere.
+  const theirs = status((repo) => repo === "org/repo");
+  assert.deepEqual(theirs.reasons, [
+    `work run org/repo#12 since ${new Date(started).toISOString()}`,
+  ]);
+  assert.equal(theirs.queued, 1);
+  const all = status();
+  assert.equal(all.reasons.length, 2);
+  assert.equal(all.queued, 3);
+  assert.equal(all.idle, false);
+});
+
 test("serverSetup: the engine, the hosts granted in all, who may sign in on which repos", (t) => {
   const { setup } = setupWith(
     t,

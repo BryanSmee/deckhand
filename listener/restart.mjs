@@ -18,7 +18,7 @@ import { ambiguous, githubNames, respelled, spellings } from "./spelling.mjs";
 import { readJson } from "../lib/files.mjs";
 import { newLogContext } from "../lib/log.mjs";
 import { storable, values } from "../lib/store.mjs";
-import { newTask, noLongerAllowed } from "./tasks.mjs";
+import { countRun, newTask, noLongerAllowed } from "./tasks.mjs";
 
 // A result saved by a listener from before the agent seam is Claude Code's raw stream-json
 // `result` event: Deckhand's own from it, with the duration of all its turns.
@@ -87,8 +87,8 @@ export function revive(item) {
   return revived;
 }
 
-function pick({ repo, id, kind, number, name, base, discussionId, settings }) {
-  return { repo, id, kind, number, name, base, discussionId, settings };
+function pick({ repo, id, kind, number, name, base, discussionId, settings, owner, pool }) {
+  return { repo, id, kind, number, name, base, discussionId, settings, owner, pool };
 }
 
 // How often queueWritten() tries the queue's write again while the store is away, and a run's
@@ -655,7 +655,7 @@ export function createRestart(ctx) {
     };
     delete task.live.task;
     task.running = true;
-    ctx.running++;
+    countRun(ctx, task, 1);
     ctx.broker.register(task.repo, {
       // Fail closed: a run saved with its capabilities pushes only with `push` (its `light` says
       // only whether its mode has volumes of its own, #498); one saved before them, only when it

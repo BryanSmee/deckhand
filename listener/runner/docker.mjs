@@ -20,6 +20,7 @@
 //   remove(name, run)    the sandbox, its engine, its network and its inbox
 //   hasSession(name, agent)  whether its issue has a session of that agent already (a
 //                        previous run)
+//   removeSessions(volumes)  those of the session volumes that exist, removed (a chat's)
 //   relink()             joins the proxy to running sandboxes' networks
 //                        again, and removes the networks of runs that are gone
 //   proxyAddresses()     the egress proxy's addresses, on all of its networks
@@ -318,6 +319,18 @@ export function createDockerRunner({
     return volumeExists(docker, `${name}-${agent.session.volume}`);
   }
 
+  // A chat's session volumes, each that exists (the runner service checks they are a chat's,
+  // without a sandbox): → the names removed.
+  async function removeSessions(volumes) {
+    const removed = [];
+    for (const volume of volumes) {
+      if (!(await volumeExists(docker, volume))) continue;
+      checked(await docker(["volume", "rm", volume]), `docker volume rm ${volume}`);
+      removed.push(volume);
+    }
+    return removed;
+  }
+
   return {
     start,
     list,
@@ -334,6 +347,7 @@ export function createDockerRunner({
     hasSession,
     // The engine of a sandbox that runs, as start() answered it, or null (volumes.mjs).
     engine: (name, run, engine) => engines.engineOf(name, run, engine),
+    removeSessions,
     relink: createRelink({ config, docker, log, list, starting, networks, engines }),
     proxyAddresses: networks.proxyAddresses,
     locate: networks.locate,
