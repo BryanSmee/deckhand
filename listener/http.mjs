@@ -307,6 +307,14 @@ export function createHttp(ctx) {
       state,
       repos: async (user) =>
         ctx.repoApi?.listed ? ctx.repoApi.listed(user, true) : { repos: [], listedAt: null },
+      // All of them, not the board's newest per task (board.mjs RUNS_PER_TASK), with api/state's
+      // checks: `tasks:read` on the repo, never a chat's.
+      runs: async (user) => {
+        const runs = ctx.runs.filter((r) => !r.owner);
+        const repoOfRun = (r) => r.repo ?? repoOf(r.key);
+        const shows = await seeing(user, [...new Set(runs.map(repoOfRun))], TASKS, true);
+        return runs.filter((r) => shows(repoOfRun(r))).map(publicRun);
+      },
       run: async (user, id) => {
         const run = ctx.runsById?.get(id);
         return run && (await readsLog(user, run)) ? run : null;

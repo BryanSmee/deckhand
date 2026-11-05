@@ -315,6 +315,30 @@ test("MCP: each tool shows only the repos the login sees, as the dashboard does"
   );
 });
 
+test("MCP: list_runs lists every run of a task, past the board's 20 newest", async (t) => {
+  const runs = Array.from({ length: 25 }, (_, i) =>
+    runOf("org/repo#1", `org-repo-1-${i}`, { startedAt: 1000 + i, finishedAt: 2000 + i }),
+  );
+  // One that ended without its end time (a summary from an older release).
+  runs.push(
+    runOf("org/repo#1", "org-repo-1-old", {
+      startedAt: 10,
+      finishedAt: null,
+      status: "interrupted",
+    }),
+  );
+  const { ctx } = orchestrator({ runs });
+  const { tool } = await serveMcp(t, ctx);
+  const listed = (await tool("list_runs", { task: "org/repo#1" })).structuredContent.runs;
+  assert.equal(listed.length, 26);
+  assert.equal(listed[0].id, "org-repo-1-24");
+  assert.deepEqual(listed.at(-1), { ...listed.at(-1), id: "org-repo-1-old", durationMs: null });
+  const listedText = (await tool("list_runs", { task: "org/repo#1" })).content[0].text;
+  assert.doesNotMatch(listedText, /-\d+ s/);
+  const [task] = (await tool("list_tasks")).structuredContent.tasks;
+  assert.equal(task.runs, 26);
+});
+
 test("MCP: a chat's run is its owner's alone, as on the dashboard", async (t) => {
   const run = runOf("org/repo#chat-1", "chat-1-1000", { owner: "bob" });
   const { ctx } = orchestrator({ runs: [run], logs: { [run.id]: text("mine") } });
@@ -369,13 +393,52 @@ test("MCP: get_run_log pages through a long log, its newest page first, never re
   assert.equal(log[mid.from - 1], "\n");
   // An older page's cursor near the start covers what is left, however little.
   const second = (await tool("get_run_log", { runId: id, from: 0, limit: 300 })).structuredContent;
-  const after = (await tool("get_run_log", { runId: id, ...second.next })).structuredContent;
+  const after = (await tool("get_run_log", { runId: id, from: second.next.from }))
+    .structuredContent;
   assert.deepEqual(after.previous, { from: 0, limit: after.from });
   const first = (await tool("get_run_log", { runId: id, ...after.previous })).structuredContent;
   assert.equal(first.to, after.from);
   assert.equal((await tool("get_run_log", { runId: id, limit: MAX_PAGE_BYTES + 1 })).isError, true);
   assert.equal((await tool("get_run_log", { runId: id, from: -1 })).isError, true);
   assert.equal((await tool("get_run_log", { runId: id, page: 2 })).isError, true);
+});
+
+// Every page of a run's log, from its newest back to its start (`previous`), oldest first: each
+// strictly before the one after it, so none comes back.
+async function pagesBack(tool, runId, limit) {
+  const pages = [(await tool("get_run_log", { runId, limit })).structuredContent];
+  while (pages[0].previous) {
+    const page = (await tool("get_run_log", { runId, ...pages[0].previous })).structuredContent;
+    assert.ok(page.from < pages[0].from, `${page.from} before ${pages[0].from}`);
+    pages.unshift(page);
+  }
+  return pages;
+}
+
+test("MCP: get_run_log pages back over a line longer than a page, in the middle and last", async (t) => {
+  const long = "x".repeat(100_000);
+  const short = (n) => Array.from({ length: n }, (_, i) => text(`short ${i}`)).join("");
+  const logs = {
+    middle: line({ type: "listener", key: "org/repo#1" }) + short(50) + text(long) + short(3),
+    last: line({ type: "listener", key: "org/repo#1" }) + short(50) + text(long),
+  };
+  const runs = Object.keys(logs).map((id) => runOf("org/repo#1", id));
+  const { ctx } = orchestrator({ runs, logs });
+  const { tool } = await serveMcp(t, ctx);
+  const limit = 64 * 1024;
+  for (const id of Object.keys(logs)) {
+    const pages = await pagesBack(tool, id, limit);
+    assert.equal(pages[0].from, 0, id);
+    assert.equal(pages.at(-1).to, Buffer.byteLength(logs[id]), id);
+    // Each page ends where the next one starts: every line once, the long one whole.
+    for (let i = 1; i < pages.length; i++) assert.equal(pages[i].from, pages[i - 1].to, id);
+    const texts = pages.flatMap((p) => p.entries.filter((e) => e.kind === "text"));
+    assert.equal(texts.filter((e) => e.text === long).length, 1, id);
+    assert.equal(texts.length, id === "middle" ? 54 : 51, id);
+  }
+  // The newest page of the second: the long line itself, read whole.
+  const newest = (await tool("get_run_log", { runId: "last", limit })).structuredContent;
+  assert.deepEqual(newest.entries, [{ kind: "text", text: long }]);
 });
 
 test("MCP: a running run gives what it has written, its last line once it is whole", async (t) => {

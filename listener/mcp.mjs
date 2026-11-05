@@ -6,7 +6,7 @@
 // batch), answered with JSON, notifications with a 202. No session and no event stream: GET is
 // 405. Written by hand (no SDK: no runtime dependency, AGENTS.md).
 //
-// Each tool reads what the dashboard shows its user (`source`, http.mjs mcpSource()): the same
+// Each tool reads what the dashboard shows its user (`source`, built in http.mjs createHttp()): the same
 // filters, ALLOWED_REPOS, the access decision and each repo's `users`. A run's log may hold a
 // repository's secrets in tool output: its readers are the dashboard's, nobody else.
 import { readBody, send } from "../lib/http.mjs";
@@ -136,9 +136,10 @@ export const TOOLS = [
 // Each tool's scope: all of them read.
 const SCOPE = Object.fromEntries(TOOLS.map((t) => [t.name, READ]));
 
-// `source` (http.mjs mcpSource()), each for the signed-in `user`:
+// `source` (http.mjs createHttp()'s), each for the signed-in `user`:
 //   state(user)              api/state, as the dashboard gets it
 //   repos(user)              GET /api/repos?backlog=1's answer: { repos, listedAt }
+//   runs(user)               every run of the tasks `user` sees (api/state's), newest first
 //   run(user, id)            the run, when `user` may read its log; else null
 //   readLog(id, { offset, length })  its bytes: { size, data } (../runner/client.mjs readLog())
 //   backlog(user, repo)      the work area's backlog (work.mjs), null where `user` can't see it
@@ -184,10 +185,15 @@ export function createMcp({ source, version = "dev", now = Date.now, log = () =>
       throw new BadArguments(`\`state\` is one of ${STATES.join(", ")}.`);
     }
     const said = await source.state(user);
+    // How many runs each task had, all of them (list_runs's), not the board's newest.
+    const counts = new Map();
+    for (const r of await source.runs(user)) {
+      counts.set(taskId(r.key), (counts.get(taskId(r.key)) ?? 0) + 1);
+    }
     const tasks = said.tasks
       .filter((t) => repo === null || taskId(t.repo) === taskId(repo))
       .filter((t) => state === null || t.state === state)
-      .map((t) => taskView(t, said.githubUrl));
+      .map((t) => taskView(t, said.githubUrl, counts.get(taskId(t.key)) ?? t.runs.length));
     const lines = tasks.map((t) => {
       const last = t.lastRun ? `, last run ${t.lastRun.status}` : "";
       return (
@@ -197,12 +203,15 @@ export function createMcp({ source, version = "dev", now = Date.now, log = () =>
     return result({ tasks }, [count(tasks.length, "task"), ...lines]);
   }
 
+  // Every run of the task the orchestrator keeps, not only the board's newest (board.mjs
+  // RUNS_PER_TASK): an older one's log is still read by its id.
   async function listRuns(user, args) {
     const key = requiredString(args, "task");
-    const said = await source.state(user);
-    const task = said.tasks.find((t) => taskId(t.key) === taskId(key));
+    const all = (await source.runs(user)).filter((r) => taskId(r.key) === taskId(key));
+    const said = all.length ? null : await source.state(user);
+    const task = said ? said.tasks.find((t) => taskId(t.key) === taskId(key)) : all[0];
     if (!task) return failure(`No task ${key} among those you see.`);
-    const runs = task.runs.toSorted((a, b) => b.startedAt - a.startedAt).map(runView);
+    const runs = all.toSorted((a, b) => b.startedAt - a.startedAt).map(runView);
     const lines = runs.map(
       (r) =>
         `- ${r.id}: ${r.mode ?? "work"}, ${r.status}, ${r.agent ?? "?"}${r.model ? ` (${r.model})` : ""}, started ${iso(r.startedAt)}${r.durationMs !== null ? `, ${Math.round(r.durationMs / 1000)} s` : ""}${r.summary ? `: ${r.summary}` : ""}`,
@@ -415,36 +424,66 @@ export function createMcp({ source, version = "dev", now = Date.now, log = () =>
     }
   }
 
-  // Read from the log at the runner: its whole lines from `a` to `b` (bytes), a page at most,
-  // never the whole log; a line longer than the page is read on to its end (MAX_LINE_BYTES at
-  // most, then cut). `ended`: the run is over, so its last line counts without its new line.
-  // → { from, to, text }: `from` the first line's start at or after `a`, `to` the last's end.
+  // Read from the log at the runner: the lines that start between `a` and `b` (bytes), each
+  // whole, never the whole log. A page that starts inside a line starts at its next one; one
+  // where no line starts at all (a line longer than the page) is that line, its start found
+  // back from `a`. The last line is read on to its end. Either way MAX_LINE_BYTES at most: past
+  // that, a line is cut (the runner cuts them at 1 MB anyway, runner/lines.mjs). `ended`: the
+  // run is over, so its last line counts without its new line.
+  // → { from, to, text }: `from` its first line's start, `to` its last line's end. A page
+  // before this one is one ending at `from`: it gets every line before it, none twice.
   async function readPage(id, a, b, size, ended) {
+    if (a >= size) return { from: size, to: size, text: "" };
     // The byte before `a` says whether a line starts there.
     const at = Math.max(0, a - 1);
-    let data = await readRange(id, at, b);
+    const first = await readRange(id, at, b);
+    const nl = first.indexOf(10);
+    let from;
+    let data;
+    if (a === 0) [from, data] = [0, first];
+    else if (nl >= 0 && at + nl + 1 < b) [from, data] = [at + nl + 1, first.subarray(nl + 1)];
+    else {
+      from = await lineStart(id, a);
+      data = await readRange(id, from, b);
+    }
     for (;;) {
-      const end = at + data.length;
-      const nl = data.indexOf(10);
-      const from = a === 0 ? 0 : nl < 0 ? null : at + nl + 1;
-      const whole = end >= size && ended;
-      const to = whole ? end : at + data.lastIndexOf(10) + 1;
-      if (from !== null && (to > from || whole)) return slice(data, at, from, Math.max(from, to));
-      if (end >= size || end - a >= MAX_LINE_BYTES) {
-        // A running run's last line, not finished yet: nothing. A line too long: cut.
-        if (from === null || end >= size) return { from: from ?? end, to: from ?? end, text: "" };
-        return slice(data, at, from, end);
+      const end = from + data.length;
+      // The end of the last line starting before `b`.
+      const last = data.indexOf(10, Math.max(0, b - 1 - from));
+      if (last >= 0) return slice(data, from, from + last + 1);
+      if (end >= size) {
+        if (ended) return slice(data, from, end);
+        // A running run's last line, not written whole yet: left for the next page.
+        const whole = data.lastIndexOf(10);
+        return slice(data, from, whole < 0 ? from : from + whole + 1);
       }
-      const more = await readRange(id, end, Math.min(size, end + Math.max(b - a, PAGE_BYTES)));
-      if (!more.length) return { from: from ?? end, to: from ?? end, text: "" };
+      if (end - from >= MAX_LINE_BYTES) return slice(data, from, end);
+      const more = await readRange(id, end, Math.min(size, end + PAGE_BYTES));
+      if (!more.length) return slice(data, from, end);
       data = Buffer.concat([data, more]);
     }
   }
 
-  const slice = (data, at, from, to) => ({
+  // The start of the line holding byte `a - 1` (no new line), read back from it a page at a
+  // time: `a` itself (cut there) for a line longer than MAX_LINE_BYTES, which then never sends
+  // a page back to where it came from.
+  async function lineStart(id, a) {
+    let end = a - 1;
+    while (end > 0) {
+      const start = Math.max(0, end - PAGE_BYTES, a - MAX_LINE_BYTES);
+      if (start >= end) return a;
+      const chunk = await readRange(id, start, end);
+      const nl = chunk.lastIndexOf(10);
+      if (nl >= 0) return start + nl + 1;
+      end = start;
+    }
+    return 0;
+  }
+
+  const slice = (data, from, to) => ({
     from,
     to,
-    text: data.subarray(from - at, to - at).toString("utf8"),
+    text: data.subarray(0, to - from).toString("utf8"),
   });
 
   // Bytes `a` to `b` of the log: the runner gives one segment's at most per read.
@@ -461,7 +500,7 @@ export function createMcp({ source, version = "dev", now = Date.now, log = () =>
 
   // --- Views -----------------------------------------------------------------------------------
 
-  function taskView(t, githubUrl) {
+  function taskView(t, githubUrl, runs) {
     const parsed = parseKey(t.key);
     const last = t.runs[0];
     return {
@@ -480,7 +519,7 @@ export function createMcp({ source, version = "dev", now = Date.now, log = () =>
       ...(t.questions && {
         questions: { source: t.questions.source, items: t.questions.items ?? [] },
       }),
-      runs: t.runs.length,
+      runs,
       lastRun: last
         ? {
             id: last.id,
@@ -493,6 +532,12 @@ export function createMcp({ source, version = "dev", now = Date.now, log = () =>
       rerunnable: !!t.rerunnable,
       updatedAt: t.updatedAt ?? null,
     };
+  }
+
+  // From its start to its end, or to now while it runs; null without either.
+  function durationOf(r) {
+    const end = r.finishedAt ?? (r.status === "running" ? now() : null);
+    return Number.isFinite(r.startedAt) && Number.isFinite(end) ? end - r.startedAt : null;
   }
 
   function runView(r) {
@@ -510,9 +555,7 @@ export function createMcp({ source, version = "dev", now = Date.now, log = () =>
       effort: r.effort ?? null,
       startedAt: r.startedAt,
       finishedAt: r.finishedAt ?? null,
-      durationMs: r.startedAt
-        ? (r.finishedAt ?? (r.status === "running" ? now() : null)) - r.startedAt || null
-        : null,
+      durationMs: durationOf(r),
       status: r.status,
       ...(r.status === "running" && r.phase && { phase: r.phase }),
       summary: r.summary ?? null,

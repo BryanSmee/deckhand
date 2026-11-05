@@ -292,7 +292,15 @@ export function createEdgeHttp({
       res.writeHead(413, { connection: "close" });
       return res.end();
     }
-    const body = req.method === "POST" ? await readBody(req, MAX_MCP_BODY) : undefined;
+    let body;
+    try {
+      body = req.method === "POST" ? await readBody(req, MAX_MCP_BODY) : undefined;
+    } catch (error) {
+      // A chunked body that went over: dropped as it came (readBody()), told if still there.
+      if (!/^body over/.test(error.message)) throw error;
+      if (!res.headersSent) res.writeHead(413, { connection: "close" }).end();
+      return;
+    }
     return orchestrator.forward(req, res, { user: login, scopes, body });
   }
 
