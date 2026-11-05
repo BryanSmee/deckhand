@@ -1840,7 +1840,7 @@ redis-cli --user <admin> --askpass ACL SAVE   # only with an aclfile: it writes 
 
 `ACL SETUSER` alone is lost when Redis restarts on a `redis.conf` without it: change the file
 too. On Kubernetes, the `redis` component and the Helm chart write their users again each time
-Redis starts, the orchestrator's with `+scan`: nothing to do there.
+Redis starts, the orchestrator's and the runner's with `+scan`: nothing to do there.
 
 ### Upgrading: the orchestrator's state in its store (#615, #616)
 

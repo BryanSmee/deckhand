@@ -367,8 +367,9 @@ components:
 It runs Valkey (Redis's protocol, `deploy/kubernetes/components/redis/redis.yaml`), kept on disk
 (append-only, fsync every second) and never evicting, with one user per service, each allowed the
 store's commands on its own keys (`deckhand:<service>:`) alone, and moves every store there. The
-orchestrator's user can also list its keys (`SCAN`), which Redis doesn't hold to a user's keys:
-it sees the other services' key names, never their values. Make
+orchestrator's and the runner's users can also list their keys (`SCAN`: the orchestrator's state,
+the runner's log segments to move to blob storage), which Redis doesn't hold to a user's keys:
+they see the other services' key names, never their values. Make
 its Secret first, one password per service (letters and digits): each service's pods read their own
 key of it alone, and Redis reads them all, to make its users:
 
