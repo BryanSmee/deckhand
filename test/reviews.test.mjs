@@ -4224,12 +4224,47 @@ test("parseReview: the verdict block read first, the same review as its markdown
   );
   const low = { ...notes, findings: [{ severity: "low", text: "a typo." }] };
   assert.equal(parseReview(block(low)).verdict, "request-changes");
-  // The markdown's own request-changes stands beside a block's comment on a low finding.
-  const said = parseReview(`Verdict: request-changes\n\n${block({ ...low, verdict: "comment" })}`);
-  assert.equal(said.verdict, "request-changes");
-  // A reply wrapped whole in a fence, as the prompt's example is: its block still read.
-  const wrapped = parseReview(`\`\`\`\`markdown\n${stray}\n\`\`\`\`\n`);
-  assert.deepEqual([wrapped.comments, wrapped.verdict], [read.comments, read.verdict]);
+  // The markdown asking for changes the block doesn't: logged, and read from the markdown, its
+  // request-changes kept even on a block with no finding or tolerated ones only.
+  const asked = "- **high** `a.mjs:1`: bug.\n\nRating: 4/10\nVerdict: request-changes";
+  for (const [data, allowed] of [
+    [{ ...notes, rating: 9, verdict: "comment" }, "low"],
+    [{ ...medium, verdict: "comment" }, "medium"],
+    [{ ...low, verdict: "comment" }, "low"],
+  ]) {
+    const disagree = [];
+    const review = parseReview(`${asked}\n\n${block(data)}`, {
+      allowed,
+      log: (line) => disagree.push(line),
+    });
+    assert.deepEqual(
+      [review.verdict, review.rating, review.findings, reviewEvent(review)],
+      [
+        "request-changes",
+        4,
+        [{ severity: "high", path: "a.mjs", line: 1, text: "bug." }],
+        "REQUEST_CHANGES",
+      ],
+    );
+    assert.match(disagree[0], /its verdict is `comment`, the markdown's `request-changes`/);
+  }
+  // Without findings in the markdown either, the verdict stays: one of the two is wrong.
+  const bare = parseReview(
+    `Rating: 9/10\nVerdict: request-changes\n\n${block({ ...notes, verdict: "comment" })}`,
+  );
+  assert.equal(bare.verdict, "request-changes");
+  // Agreeing on request-changes: the block's review.
+  assert.deepEqual(parseReview(`${asked}\n\n${block(notes)}`).findings, []);
+  // A title's bold and a text's blank lines are dropped: the posted review reads them back.
+  const styled = {
+    ...notes,
+    followUps: [{ title: "Use the **x** helper", text: "first para.\n\nsecond para." }],
+  };
+  const read2 = parseReview(block(styled));
+  assert.deepEqual(read2.followUps, [
+    { title: "Use the x helper", path: null, line: null, text: "first para.\nsecond para." },
+  ]);
+  assert.deepEqual(parsePostedReview(reviewBody(read2, "", "f")).followUps, read2.followUps);
   // A follow-up saying there is none files nothing; the last block is the one read.
   const none = { ...notes, followUps: [{ title: "None.", text: "nothing to file." }] };
   const last = parseReview(`${block(SECTIONS_BLOCK)}\n\n${block(none)}`);

@@ -119,7 +119,8 @@ function lastAt(v) {
 // line, text }], rating, verdict, allowed }, or null when it lacks the rating or the verdict.
 // Read from its verdict block first (a fenced `json deckhand-review` block, readBlock(), #645):
 // its items are typed, so nothing is guessed. A block that doesn't validate is logged (`log`)
-// and the markdown read instead (readMarkdown()), the block's own `request-changes` kept; a reply
+// and the markdown read instead (readMarkdown()), the block's own `request-changes` kept, and so
+// is one whose markdown asks for changes the block doesn't; a reply
 // without one (a repo's own prompt, an older session) reads from its markdown as before it.
 // The rating is capped by the most severe finding (RATING_CAPS), and anything blocking makes
 // the verdict `request-changes`, whatever the message says. `allowed`: the most severe
@@ -134,13 +135,15 @@ export function parseReview(text, { allowed = "low", log = () => {} } = {}) {
   const { json, rest } = verdictBlock(text);
   const md = readMarkdown(rest);
   if (json !== null) {
-    const { block, error } = readBlock(json);
-    if (block) {
-      // The markdown's own `request-changes` stands too: the two disagreeing is no reason to let
-      // the pull request through.
-      const said = md.said === "request-changes" ? md.said : block.verdict;
-      return settle({ summary: md.summary, ...block }, { said, allowed, sure: true });
-    }
+    const read = readBlock(json);
+    // The markdown asking for changes the block doesn't: one of the two left something out (a
+    // finding, say), so the block is no surer than the markdown, read as when it doesn't validate.
+    const error =
+      read.error ??
+      (md.said === "request-changes" && read.block.verdict !== "request-changes"
+        ? `its verdict is \`${read.block.verdict}\`, the markdown's \`request-changes\``
+        : null);
+    if (!error) return settle({ summary: md.summary, ...read.block }, { allowed, sure: true });
     log(`the review's verdict block doesn't validate (${error}): read from its markdown`);
     // The model's `request-changes` stands, the block's or the markdown's: the block may be what
     // says changes are needed, and a reply that strayed from its format once may have again.
@@ -156,9 +159,12 @@ export function parseReview(text, { allowed = "low", log = () => {} } = {}) {
 }
 
 // The review from its items, its rating capped and its verdict decided (parseReview()): `said`,
-// the model's verdict, reads `comment` when it asked for changes on nothing blocking but
+// the model's verdict (a block's `verdict`, unless given), reads `comment` when it asked for changes on nothing blocking but
 // tolerated findings, or on no finding at all, and the items were all read for sure (`sure`).
-function settle({ summary, findings, followUps, comments, rating }, { said, allowed, sure }) {
+function settle(
+  { summary, findings, followUps, comments, rating, verdict },
+  { said = verdict, allowed, sure },
+) {
   // An `unclear` comment blocks when the model asked for changes (its kind unread, it may be
   // why); with the model's `comment`, it is shown, not blocking.
   const review = {
@@ -245,12 +251,13 @@ const filled = (value) => typeof value === "string" && value.trim() !== "";
 // Each list of the verdict block → its item's own fields, or null when they don't validate.
 const BLOCK_ITEMS = {
   findings: (f) => (SEVERITIES.includes(f.severity) ? { severity: f.severity } : null),
-  // "None" as a title files nothing (NOTHING), as in the markdown.
+  // "None" as a title files nothing (NOTHING), as in the markdown. No bold in it: the title is
+  // posted in bold, and read back to its first `**` (parsePostedReview()).
   followUps: (f) =>
     filled(f.title)
       ? NOTHING.test(titleOf(f.title))
         ? { skip: true }
-        : { title: titleOf(f.title) }
+        : { title: titleOf(f.title.replace(/\*\*|__/g, "")) }
       : null,
   comments: (c) => (typeof c.blocking === "boolean" ? { blocking: c.blocking } : null),
 };
@@ -264,7 +271,8 @@ function place(item) {
   if ((path === null) !== (line === null)) return null;
   if (path !== null && (typeof path !== "string" || !/^[^`\s]+$/.test(path))) return null;
   if (line !== null && !(Number.isInteger(line) && line > 0)) return null;
-  return { path, line, text: item.text.trim() };
+  // No blank line: a posted item ends at one (parsePostedReview()).
+  return { path, line, text: item.text.trim().replace(/\n\s*\n/g, "\n") };
 }
 
 // The verdict a block that doesn't validate still says, or null.

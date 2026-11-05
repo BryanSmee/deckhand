@@ -160,8 +160,9 @@ Verdict: request-changes
   lists always there (`[]` when empty). A finding has `severity` (`critical`, `high`,
   `medium` or `low`) and `text`, a follow-up `title` and `text`, a comment `blocking` (`true`
   or `false`) and `text`; each has `path` and `line` together when it has a place, or
-  neither. `rating` is a number and `verdict` one of the three below. A block the listener can't read is ignored, and your
-  markdown read in its place, less reliably.
+  neither. `rating` is a number and `verdict` one of the three below. A title has no markdown. The two must agree: when the
+  block can't be read, or the markdown requests changes and the block doesn't, the listener
+  reads the markdown instead, less reliably, and keeps `request-changes`.
 - `Rating`: how ready to merge it is, from 0 (unusable) to 10 (merge as it is), tied to the
   Must fix findings: at most 3 with a critical finding, 5 with a high one, 8 with a medium one
   or a blocking comment. A 10 means every criterion met, every claim true and no finding above
