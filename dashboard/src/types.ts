@@ -1029,7 +1029,8 @@ export interface McpClient {
 // than 5 minutes ago (a restart, an update); `down`: no answer, `reason` says why in a word
 // ("timeout", "refused", "HTTP 503"). Times in ms, by the orchestrator's clock; `startedAt` and
 // `version` null when down, or from a service that doesn't say. `warnings`: what a service said
-// of its setup at start (its blobs taking Redis's memory, lib/blobs.mjs), when it said any.
+// of its setup at start (its blobs taking Redis's memory, lib/blobs.mjs), when it said any; the
+// orchestrator's own, its runs whose end waits for the store (listener/restart.mjs endWait()).
 export type ServiceName =
   "edge" | "orchestrator" | "runner" | "broker" | "github" | "models" | "policy" | "proxy";
 

@@ -1503,7 +1503,13 @@ handover or a crash; those an older release kept in `logs/<run>.json` or `logs/<
 moved there first); a run still live is listed from its saved state. A summary the store doesn't
 take at the run's end is tried again every 5 s (`runs.mjs` `summarySaved()`, `QUEUE_RETRY_MS`)
 until it lands, the run keeping its sandbox, its state and its task meanwhile: kept nowhere else
-since #619. A copy that stops first leaves the run as it is, for the next copy to end again. A restored run takes comments once the runner says its inbox is still open,
+since #619. A copy that stops first leaves the run as it is, for the next copy to end again.
+Such a run holds its task and a parallel slot, as one whose queue write or state's removal waits
+(`removeLive()`), which a store refusing it for good (a summary file it can't write, a Redis ACL
+without `summaries/`) would make last: not given up, as an hour's outage looks the same and the
+summary is kept nowhere else, but said (#821, `restart.mjs` `endWait()`): the orchestrator's
+`/ready` counts them (`ending`), the dashboard's status page lists each among the orchestrator's
+warnings (what waits, since when, the store's error), and the log says it again every 10 min. A restored run takes comments once the runner says its inbox is still open,
 waited for 10 s at start, later if the runner is away. The list is held newest first with an index by id,
 and both lose the runs `history.mjs` removes, at start and daily: those older than
 `LOG_RETENTION_DAYS`, but for a running run and the latest run of a task still queued, in a

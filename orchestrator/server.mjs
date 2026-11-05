@@ -94,7 +94,7 @@ import { createRepoCheck } from "../listener/repo-check.mjs";
 import { readRepoFile } from "../listener/repo-config.mjs";
 import { createRepoSettings } from "../listener/repo-settings.mjs";
 import { createRepoApi, createRepoList } from "../listener/repos.mjs";
-import { createRestart } from "../listener/restart.mjs";
+import { createRestart, endsWaitingWarnings } from "../listener/restart.mjs";
 import { createReviewers, openerOf } from "../listener/reviewers.mjs";
 import { createReviews, stepsGoing } from "../listener/reviews.mjs";
 import { loadRuns, moveSummaries, saveSummary, SUMMARIES } from "../listener/runlog.mjs";
@@ -321,6 +321,9 @@ const server = serverInfo(env);
 // Its metrics (../lib/metrics.mjs), on their own port when METRICS_PORT is set: the waiting copy
 // answers too, its lease not held.
 startMetrics({ service: "orchestrator", port: config.metricsPort, log, registry });
+// Runs whose end waits for the store, by id (restart.mjs endWait()): /ready and the status
+// page say them. Before `ctx`, which /ready can't wait for.
+const endsWaiting = new Map();
 const services = createServicesHttp({
   health: server,
   // The broker service's keys.
@@ -333,6 +336,8 @@ const services = createServicesHttp({
   active: () => acting,
   // The maps' items not written to the store yet (lib/store-map.mjs), once they are loaded.
   waiting: () => maps?.waiting() ?? 0,
+  // The runs whose end waits for the store (restart.mjs endWait()).
+  ending: () => endsWaiting.size,
   allowed: (login) => config.users.includes(login),
   log,
 });
@@ -481,7 +486,12 @@ const ctx = {
       policy: config.policyServiceUrl,
       proxy: config.egressProxy,
     },
-    self: { name: "orchestrator", startedAt: server.startedAt, version: server.version },
+    self: {
+      name: "orchestrator",
+      startedAt: server.startedAt,
+      version: server.version,
+      warnings: () => endsWaitingWarnings(ctx),
+    },
   }),
   config,
   log,
@@ -497,6 +507,7 @@ const ctx = {
   // The dashboard's runs, newest first (runlog.mjs), and by id; pruned daily (history.mjs).
   runs: [],
   runsById: new Map(),
+  endsWaiting,
   // Runs with a sandbox, for the parallel cap.
   running: 0,
   // Set on SIGTERM: no run starts any more, what waits is left to the next listener (saved
