@@ -153,6 +153,18 @@ case "$1" in
         echo "}" ;;
     esac ;;
   volume)
+    # The runner's marker of its prefix (listener/runner/deployment.mjs): made once, with the
+    # labels it was made with, which inspect answers as volumeLabels() reads them (owner,
+    # engine, role, deployment).
+    if [ "$2" = create ]; then
+      case "$*" in *deckhand.role=deployment*)
+        marker="$dir/marker-${@: -1}"
+        label() { printf '%s\n' "$@" | sed -n "s/^deckhand\.$1=//p"; }
+        [ -e "$marker" ] || printf '%s||deployment|%s\n' "$(label owner "$@")" "$(label deployment "$@")" > "$marker"
+        exit ;;
+      esac
+    fi
+    if [ "$2" = inspect ] && [ -e "$dir/marker-${@: -1}" ]; then cat "$dir/marker-${@: -1}"; exit; fi
     # The volumes a test says exist (one name per line in $dir/volumes).
     if [ "$2" = inspect ]; then grep -qx -- "${@: -1}" "$dir/volumes" 2> /dev/null; exit; fi
     [ "$2" = ls ] && exit

@@ -29,6 +29,8 @@
 //                        (Kubernetes names none: the pod is the sandbox), or null: what the
 //                        run's tokens are bound to, once the egress policy knows that
 //                        container is the run's sandbox or engine (../egress-http.mjs taskWhere())
+//   claimPrefix(id)      the prefix claimed for this deployment's ID, or a PrefixClash when it
+//                        is another deployment's (deployment.mjs): before anything else
 //
 // This file composes its parts, which share `docker`: inbox.mjs (the messages' file and the
 // run's other files, which the sandbox fetches from the broker rather than mounts),
@@ -49,6 +51,7 @@ import {
   volumeExists,
   volumeLabels,
 } from "../docker.mjs";
+import { DEPLOYMENT, MARKER_ROLE, markerName, prefixClash } from "./deployment.mjs";
 import { engineEnv } from "./engine.mjs";
 import { createRelink } from "./gc.mjs";
 import { createInbox } from "./inbox.mjs";
@@ -358,6 +361,25 @@ export function createDockerRunner({
     return removed;
   }
 
+  // The prefix claimed for this deployment's `id` (deployment.mjs): its marker volume made
+  // with it, unless there is one already (`docker volume create` then keeps that one's labels),
+  // which must be this deployment's.
+  async function claimPrefix(id) {
+    const name = markerName(config.prefix);
+    const labels = { "deckhand.owner": config.prefix, [ROLE]: MARKER_ROLE, [DEPLOYMENT]: id };
+    checked(await docker(["volume", "create", ...labelArgs(labels), name]), `creating ${name}`);
+    const found = await volumeLabels(docker, name);
+    if (!found) throw new Error(`docker volume inspect ${name}: it can't be read`);
+    if (found.owner === config.prefix && found.role === MARKER_ROLE && found.deployment === id) {
+      return;
+    }
+    throw prefixClash(config.prefix, {
+      where: "this engine",
+      what: `its volume ${name}`,
+      remove: `remove it (\`docker volume rm ${name}\`)`,
+    });
+  }
+
   return {
     start,
     list,
@@ -378,5 +400,6 @@ export function createDockerRunner({
     relink: createRelink({ config, docker, log, list, starting, networks, engines }),
     proxyAddresses: networks.proxyAddresses,
     locate: networks.locate,
+    claimPrefix,
   };
 }

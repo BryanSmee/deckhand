@@ -42,6 +42,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { RunError } from "../access.mjs";
 import { agentFor } from "../agents/index.mjs";
 import { proxyEnv } from "../egress.mjs";
+import { DEPLOYMENT, MARKER_ROLE, markerName, prefixClash } from "./deployment.mjs";
 import { createInbox } from "./inbox.mjs";
 import { kubeName, labelValue, restrictedContainer } from "./kube-names.mjs";
 import {
@@ -1323,6 +1324,38 @@ export function createKubernetesRunner({
     }
   }
 
+  // The prefix claimed for this deployment's `id` (deployment.mjs): its marker Secret, in the
+  // sandboxes' namespace, made with it unless there is one already (another copy's, made
+  // meanwhile: a 409), whose ID must be this one. It holds nothing but its labels.
+  async function claimPrefix(id) {
+    const name = kubeName(markerName(config.prefix));
+    const labels = { ...owner, [ROLE]: MARKER_ROLE, [DEPLOYMENT]: labelValue(id) };
+    let found = await api.find(`secrets/${name}`);
+    if (!found) {
+      try {
+        await api.create("secrets", {
+          apiVersion: "v1",
+          kind: "Secret",
+          metadata: { name, labels },
+          type: "Opaque",
+        });
+        return;
+      } catch (error) {
+        if (error.status !== 409) throw error;
+        found = await api.find(`secrets/${name}`);
+      }
+    }
+    const has = found?.metadata?.labels ?? {};
+    if (ownedBy(found) && has[ROLE] === MARKER_ROLE && has[DEPLOYMENT] === labels[DEPLOYMENT]) {
+      return;
+    }
+    throw prefixClash(config.prefix, {
+      where: `the namespace ${api.namespace}`,
+      what: `its Secret ${name}`,
+      remove: `remove it (\`kubectl -n ${api.namespace} delete secret ${name}\`)`,
+    });
+  }
+
   return {
     start,
     list,
@@ -1342,6 +1375,7 @@ export function createKubernetesRunner({
     installing,
     relink,
     proxyAddresses,
+    claimPrefix,
     // The runner service took its lease: the network probe runs again (kube-probe.mjs).
     // The starts it timed are forgotten: another copy may have started those names' pods since.
     leased: () => {
