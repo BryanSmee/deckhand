@@ -12,6 +12,7 @@ import {
   knownAction,
   knownMode,
   MAX_ACCESS,
+  MAX_LATER,
   REPO_ACTIONS,
   SERVER_ACTIONS,
   STALE_LISTING_MS,
@@ -1327,6 +1328,75 @@ test("access: a read in flight when forget() runs isn't kept after it (#875)", a
   assert.equal(listings(), before + 2);
   await other.access("bob", listed);
   assert.equal(listings(), before + 2);
+});
+
+test("access: a renamed repository's first read isn't kept after forget() of its current name (#892)", async (t) => {
+  const repos = { "acme/old": { renamed: "acme/new", private: false } };
+  const { github, calls } = fakeGithub(repos);
+  const engine = policyEngineOf(t, { readOperator: () => new Map() });
+  const infos = () => calls.filter((p) => p === "/repos/acme/old").length;
+  const info = holding(github, /^\/repos\/acme\/old$/);
+  const policies = createPolicies({
+    config: {},
+    github: info.github,
+    service: localService(engine),
+  });
+  // GET /repos/acme/old sent before a privatization delivered under the current name, which
+  // nothing knew yet to be that repository's.
+  const pending = policies.access("bob", "acme/old");
+  await info.reached;
+  policies.forget("Acme/New");
+  repos["acme/old"].private = true;
+  info.release();
+  assert.equal((await pending).error, null);
+  await policies.access("bob", "acme/old");
+  assert.equal(infos(), 2);
+  // Not forgotten: kept as before, and forget() of the current name now clears it.
+  await policies.access("bob", "acme/old");
+  assert.equal(infos(), 2);
+  policies.forget("acme/new");
+  await policies.access("bob", "acme/old");
+  assert.equal(infos(), 3);
+});
+
+test("access: a read in flight is kept when forget() ran for another repository alone (#892)", async (t) => {
+  const repos = { "acme/old": { renamed: "acme/new" }, "acme/other": {} };
+  const { github, calls } = fakeGithub(repos);
+  const engine = policyEngineOf(t, { readOperator: () => new Map() });
+  const infos = () => calls.filter((p) => p === "/repos/acme/old").length;
+  const info = holding(github, /^\/repos\/acme\/old$/);
+  const policies = createPolicies({
+    config: {},
+    github: info.github,
+    service: localService(engine),
+  });
+  const pending = policies.access("bob", "acme/old");
+  await info.reached;
+  policies.forget("acme/other");
+  info.release();
+  await pending;
+  await policies.access("bob", "acme/old");
+  assert.equal(infos(), 1);
+});
+
+test("access: past MAX_LATER forget()s during a read, its answer isn't kept (#892)", async (t) => {
+  const repos = { "acme/old": { renamed: "acme/new" } };
+  const { github, calls } = fakeGithub(repos);
+  const engine = policyEngineOf(t, { readOperator: () => new Map() });
+  const infos = () => calls.filter((p) => p === "/repos/acme/old").length;
+  const info = holding(github, /^\/repos\/acme\/old$/);
+  const policies = createPolicies({
+    config: {},
+    github: info.github,
+    service: localService(engine),
+  });
+  const pending = policies.access("bob", "acme/old");
+  await info.reached;
+  for (let i = 0; i <= MAX_LATER; i++) policies.forget(`acme/other${i}`);
+  info.release();
+  assert.equal((await pending).error, null);
+  await policies.access("bob", "acme/old");
+  assert.equal(infos(), 2);
 });
 
 test("access: a GitHub hiccup on a read forget() ran during fails closed, not on what was kept (#875)", async (t) => {
