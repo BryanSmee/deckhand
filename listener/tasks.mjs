@@ -433,8 +433,13 @@ export function createTasks(ctx) {
       task = newTask({ ...item, name });
       tasks.set(key, task);
     }
-    // The latest settings decide the repo's parallel cap.
-    if (item.settings) task.settings = item.settings;
+    // The latest settings decide the repo's parallel cap; since when, for api/state's (http.mjs
+    // repoSlots()). Now, not the item's queuedAt: a comment that waited (resume()) brings
+    // settings read just now. (A restart's tasks keep theirs: restart.mjs loadQueue().)
+    if (item.settings) {
+      task.settings = item.settings;
+      task.settingsAt = Date.now();
+    }
     // Its pick's follow-up (the review loop, a comment): in the reserved slot too, and still
     // started by what started it for the policies (run-policy.mjs runTrigger()).
     if (!item.autoPickup && followsPick(task, key, item.repo)) {

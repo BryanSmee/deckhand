@@ -286,6 +286,7 @@ export function createRuns(ctx) {
     // Fresh from the default branch: a config merged since the comment applies.
     const { settings, errors, warnings } = await ctx.repoSettings(task.repo, task.base);
     task.settings = settings;
+    task.settingsAt = Date.now();
     const own = customMode(settings, mode);
     const previous = ctx.runs.find(
       (r) => r !== record && r.key === key && !!r.light === light && r.status !== "running",

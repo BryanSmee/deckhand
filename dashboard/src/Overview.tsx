@@ -35,6 +35,7 @@ import type { Plain } from "./locales";
 import { Questions } from "./Questions";
 import { ReviewMarks } from "./ReviewLoop";
 import { RepoBadge } from "./RepoBadge";
+import { RepoSlots } from "./RepoSlots";
 import { formatRoute } from "./route";
 import type { Repo, State, Task } from "./types";
 import { Button, buttonClass } from "./ui/Button";
@@ -517,6 +518,7 @@ function RepoCard({
         ))}
       </span>
       <span class={styles.summary}>{text}</span>
+      <RepoSlots state={state} repo={name} form="card" />
       {failed && <Notice tone="err">{failed}</Notice>}
       <div class={styles.cardFoot}>
         <span class={styles.meta}>{foot}</span>

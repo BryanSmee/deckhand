@@ -282,3 +282,20 @@ test("resume: a comment that waited, its issue's questions still open, waits for
   });
   assert.equal(await free.resume(waited()), true);
 });
+
+test("settingsAt (#639): a comment sets when its task's settings took over; one that waited, the time it resumes", async (t) => {
+  t.mock.timers.enable({ apis: ["Date"], now: 5000 });
+  const g = gate("max_parallel: 1\nwait_for_answers: false\n");
+  await g.say("Deckhand");
+  const task = g.ctx.tasks.get("org/repo#12");
+  assert.deepEqual([task.settings.maxParallel, task.settingsAt], [1, 5000]);
+  g.queued();
+  // A comment first queued long ago that waited for another issue: its settings were read as it
+  // resumed, so they date from now, not its queuedAt.
+  t.mock.timers.setTime(9000);
+  const item = { ...waited(), queuedAt: 1000 };
+  assert.equal(await g.resume(item), true);
+  assert.deepEqual([task.settings.maxParallel, task.settingsAt], [1, 9000]);
+  assert.equal(task.pending.at(-1).queuedAt, 1000);
+  g.queued();
+});
