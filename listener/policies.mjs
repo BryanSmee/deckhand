@@ -178,6 +178,13 @@ export const decisionOf = (rule) => rule.replace(/^(?:allow|deny)_/, "");
 // requests: replacing it without a word about them gets a warning (botsReviewed()).
 const BOT_REVIEWS = "review.rego";
 
+// Deckhand's default access, which gives every login every action: an operator's `bindings`
+// narrow nothing while it is in effect (bindingsCancelled()).
+const ACCESS = "access.rego";
+
+// A `bindings` defined at the start of a line, out of a comment (what access-roles.rego reads).
+const BINDINGS = /^bindings\b\s*(?::=|=|\[|contains\b|if\b|\{)/m;
+
 // What the input looks like (docs/repo-config.md#the-merge-input): a policy can check it.
 export const INPUT_VERSION = 1;
 
@@ -1353,6 +1360,23 @@ export function createPolicies({
     return `The grants folder's policy/${BOT_REVIEWS} replaces Deckhand's default without a rule on \`input.pr.author_type\`: other bots' ready pull requests (Dependabot's, GitHub Actions') are reviewed by themselves in every repository. To keep them skipped, copy the default's rule into it; to say they should be reviewed, name \`author_type\` in a comment there`;
   }
 
+  // The operator's files (`operator`, name → text) that define `bindings` while Deckhand's
+  // access.rego is still in effect, not replaced or replaced by a copy of it: its
+  // `allow_access contains "*"` is in the union, so every login keeps every action whatever the
+  // bindings say (#764). → the warning, or null.
+  function bindingsCancelled(operator) {
+    // Deckhand's as the service last gave them; unknown, describe() says why.
+    const own = knownOwn?.get(ACCESS);
+    if (!own) return null;
+    const replaced = operator.get(ACCESS);
+    if (replaced !== undefined && replaced !== own) return null;
+    const files = [...operator]
+      .filter(([, text]) => /^\s*package\s+deckhand\s*$/m.test(text) && BINDINGS.test(text))
+      .map(([name]) => `policy/${name}`);
+    if (!files.length) return null;
+    return `The grants folder's ${files.join(", ")} define${files.length === 1 ? "s" : ""} \`bindings\`, but Deckhand's ${ACCESS} still gives every action to every login (\`allow_access contains "*"\`): the bindings narrow nothing. Write them in the grants folder's policy/${ACCESS}, which replaces Deckhand's`;
+  }
+
   // A repo's files named as one of the operator's layer (`under`, name → text): it no longer
   // replaces it (issue #494), a repo's files only add rules. → the warnings.
   function shadowing(own, under) {
@@ -1373,11 +1397,14 @@ export function createPolicies({
       if (error) throw new Error(error);
       const files = new Map([...deckhand, ...operator]);
       const checked = await check(files);
-      const bots = botsReviewed(operator.get(BOT_REVIEWS));
+      const said = [botsReviewed(operator.get(BOT_REVIEWS)), bindingsCancelled(operator)];
       const actions = checked.errors.length
         ? []
         : await accessActionWarnings(async () => ({ operator: await defaults(), repo: new Map() }));
-      return { ...checked, warnings: [...checked.warnings, ...(bots ? [bots] : []), ...actions] };
+      return {
+        ...checked,
+        warnings: [...checked.warnings, ...said.filter(Boolean), ...actions],
+      };
     } catch (error) {
       return { errors: [error.message ?? String(error)], warnings: [] };
     }
@@ -1457,6 +1484,7 @@ export function createPolicies({
     ]);
     const review = operator.find((f) => f.name === BOT_REVIEWS);
     const bots = review && botsReviewed(review.text);
+    const bindings = bindingsCancelled(new Map(operator.map((f) => [f.name, f.text])));
     return {
       files: files.map(({ text, ...f }) => ({ ...f, rules: rulesOf(text), ...shown(text) })),
       errors: [...errors, ...up.errors, ...down.errors],
@@ -1465,6 +1493,7 @@ export function createPolicies({
         ...down.warnings,
         ...shadowing(policies.repo, policies.operator),
         ...(bots ? [bots] : []),
+        ...(bindings ? [bindings] : []),
       ],
       policies,
     };
