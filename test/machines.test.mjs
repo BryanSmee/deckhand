@@ -139,7 +139,7 @@ test("an owner's machines: online while heartbeats come, capped, each name once"
   assert.equal(machines.list("bob").length, 1);
   assert.throws(() => machines.heartbeat("bob", desk.id), /No machine/);
   assert.throws(() => machines.remove("bob", desk.id), /No machine/);
-  assert.throws(() => machines.heartbeat("alice", "../etc"), /No machine/);
+  assert.throws(() => machines.heartbeat("alice", "../etc"), /No such machine/);
   // Someone not in ALLOWED_USERS registers nothing.
   assert.throws(() => machines.register("carol", { name: "desk", repos: ["org/app"] }), /users/);
 });
@@ -172,4 +172,13 @@ test("offers: the repositories of the machine's that opt in, where its owner may
   const bobs = machines.register("bob", { name: "desk", repos: ["org/app", "org/game"] });
   // Bob's machine has no `unreal` label: org/game isn't offered to it.
   assert.deepEqual(await machines.offers("bob", bobs.id), [{ repo: "org/app", labels: [] }]);
+});
+
+test("a machine that isn't one: the answer doesn't repeat what was asked", () => {
+  const machines = createMachines({ config });
+  assert.throws(
+    () => machines.heartbeat("alice", "<script>x</script>"),
+    (error) => error.message === "No such machine of yours: register it again.",
+  );
+  assert.throws(() => machines.remove("alice", "0123456789abcdef"), /No machine 0123456789abcdef/);
 });

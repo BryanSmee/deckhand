@@ -2312,7 +2312,8 @@ client, and no sandbox service, run token or git gateway is on the machine.
   online while its last `heartbeat` is under 90 s old.
 - **Its owner's alone**: every call names the machine by its id, and one that isn't the
   login's is "not found" as one that doesn't exist; Settings › MCP clients lists the login's
-  own machines, its **Remove** posted from the dashboard's origin. Removing one ends its claims.
+  own machines, its **Remove** posted from the dashboard's origin. Removing one deletes its
+  entry; once machines claim tasks (#596), its claims will end with it.
 - **Every call checks the login again**: a token's login out of `ALLOWED_USERS` is refused at
   edge and at the orchestrator, as their dashboard session is; their machines are listed to
   nobody and offered nothing until they are back.

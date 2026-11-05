@@ -143,7 +143,9 @@ export function createMachines({
   function mine(owner, id) {
     const m = isMachineId(id) ? machines.get(id) : null;
     if (!m || m.owner !== owner || !allowed(owner)) {
-      throw new Refused(404, `No machine ${id} of yours: register it again.`);
+      // Only an id's own characters go back: never arbitrary text from a path or an argument.
+      const named = isMachineId(id) ? `machine ${id}` : "such machine";
+      throw new Refused(404, `No ${named} of yours: register it again.`);
     }
     return m;
   }
@@ -196,7 +198,8 @@ export function createMachines({
     return view(next);
   }
 
-  // Unregistered by its driver, or removed from the dashboard. Its claims end with it (#596).
+  // Unregistered by its driver, or removed from the dashboard: its entry deleted. Its claims will
+  // end with it, once machines claim tasks (#596).
   function remove(owner, id) {
     const m = mine(owner, id);
     machines.delete(id);
