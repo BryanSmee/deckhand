@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
-import { writeFileSync } from "node:fs";
+import { existsSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
+import { runPlaces } from "../listener/board.mjs";
+import { taskKey } from "../listener/events.mjs";
 import { createOrder, ranked } from "../listener/order.mjs";
 import { newTask, createTasks } from "../listener/tasks.mjs";
 import { mapStore, tempDir, testConfig } from "./helpers.mjs";
@@ -287,4 +289,41 @@ test("schedule: a task whose run() is still reading its settings keeps its place
   s.order.move("org/app#2", { first: true }, s.order.keys());
   s.schedule();
   assert.deepEqual(s.order.keys(), ["org/app#1"]);
+});
+
+test("at start, a key not queued goes; a task moved first is position 1, its rank first in the store", async (t) => {
+  const dir = tempDir(t);
+  const file = join(dir, "order.json");
+  // A key with no comment queued (dropped as the queue came back, say), from the release before.
+  writeFileSync(file, JSON.stringify({ "org/repo#99": { key: "org/repo#99" } }));
+  const maps = mapStore();
+  const order = createOrder({ order: await maps.map("order", { file, moved: ranked }) });
+  assert.equal(existsSync(file), false);
+  const s = scheduler({
+    order,
+    queued: [
+      { repo: "org/repo", id: 5, at: 1 },
+      { repo: "org/repo", id: 6, at: 2 },
+    ],
+  });
+  const keys = () => s.queueOrder().map((task) => taskKey(task.repo, task.id));
+  // As the orchestrator does once its queue is back.
+  order.keep(keys());
+  assert.deepEqual(order.keys(), []);
+  assert.deepEqual([...(await maps.again("order"))], []);
+  // The dashboard's positions (http.mjs, board.mjs runPlaces()).
+  assert.deepEqual(Object.fromEntries(runPlaces(s.queueOrder())), {
+    "org/repo#5": 1,
+    "org/repo#6": 2,
+  });
+  order.move("org/repo#6", { first: true }, keys());
+  assert.deepEqual(Object.fromEntries(runPlaces(s.queueOrder())), {
+    "org/repo#6": 1,
+    "org/repo#5": 2,
+  });
+  const kept = [...(await maps.again("order"))].sort(([, a], [, b]) => a.rank - b.rank);
+  assert.deepEqual(
+    kept.map(([id]) => id),
+    ["org/repo#6", "org/repo#5"],
+  );
 });

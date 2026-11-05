@@ -3,6 +3,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createHttp } from "../listener/http.mjs";
+import { createStatus } from "../listener/status.mjs";
 import { MEMBER, VIEWER, permissionsOf, serve } from "./helpers.mjs";
 
 test("an unexpected throw answers 500, and the orchestrator keeps serving", async (t) => {
@@ -236,4 +237,113 @@ test("access (#732): api/state's actions name the boards' repos; Settings › Ac
   assert.match(down.error, /GitHub is down/);
   assert.deepEqual(down.repos, []);
   assert.equal(down.users[0].server.actions.length, 1);
+});
+
+// An orchestrator's ctx with one finished run of org/repo#pr-3, for the access tests below:
+// `extra` adds to it (its permissions, usersOf, health, sync…).
+function oneRun(extra = {}) {
+  const run = {
+    id: "org-repo-pr-3-1000",
+    key: "org/repo#pr-3",
+    repo: "org/repo",
+    kind: "pr",
+    mode: "work",
+    startedAt: 1000,
+    status: "ok",
+  };
+  return {
+    config: { maxParallel: 3, users: ["alice", "bob", "dave"] },
+    log: () => {},
+    skip: () => {},
+    tasks: new Map(),
+    app: {},
+    runs: [run],
+    runsById: new Map([[run.id, run]]),
+    running: 0,
+    brainstorms: { list: () => [] },
+    waits: { list: () => [] },
+    inputs: { list: () => [] },
+    inboxes: () => [["org/repo", { ideas: 1 }]],
+    titles: { get: () => null, closed: () => null, fill: () => {} },
+    pulls: { get: () => null, fill: () => {} },
+    runLogs: { read: async () => ({ data: Buffer.alloc(0) }) },
+    ...extra,
+  };
+}
+
+// `ctx`'s HTTP as edge passes it on: the user in x-user, a local caller with x-local.
+async function serveHttp(t, ctx) {
+  const http = createHttp(ctx);
+  const { url } = await serve(t, (req, res) =>
+    http.handle(req, res, {
+      user: req.headers["x-user"] ?? null,
+      local: req.headers["x-local"] === "1",
+    }),
+  );
+  return url;
+}
+
+test("access: the repo's users, once read, leave a login out of api/state and the log streams", async (t) => {
+  // Not read yet: ALLOWED_USERS (and the decision) alone.
+  let users = null;
+  const ctx = oneRun({
+    permissions: permissionsOf({ alice: { "org/repo": ["*"] } }, { usersOf: () => users }),
+  });
+  const url = await serveHttp(t, ctx);
+  const get = (path) => fetch(url + path, { headers: { "x-user": "alice" } });
+  const keys = async () => (await (await get("/api/state")).json()).tasks.map((task) => task.key);
+  assert.deepEqual(await keys(), ["org/repo#pr-3"]);
+  const open = await get("/api/runs/org-repo-pr-3-1000/stream");
+  assert.equal(open.status, 200);
+  await open.text();
+  // The repo's config read: its users leave alice out, whatever the decision says.
+  users = ["bob"];
+  assert.deepEqual(await keys(), []);
+  assert.equal((await get("/api/runs/org-repo-pr-3-1000/stream")).status, 404);
+});
+
+test("access (#731): a login with no action: its totals only, 403 server-wide, no Sync, /status filtered", async (t) => {
+  const synced = [];
+  const checked = [];
+  const ctx = oneRun({
+    permissions: permissionsOf({ bob: { "org/repo": ["*"], "": ["*"] } }),
+    health: { check: async () => (checked.push(1), { services: [] }) },
+    sync: async (user) => (synced.push(user), { ok: true }),
+    publicUrl: () => "https://hooks.example.com",
+    server: { version: "dev", startedAt: 500 },
+  });
+  ctx.runs[0].status = "running";
+  ctx.running = 1;
+  ctx.status = createStatus(ctx).status;
+  const url = await serveHttp(t, ctx);
+  const get = (path, headers = {}, init = {}) => fetch(url + path, { ...init, headers });
+  const dave = { "x-user": "dave" };
+  const seen = await (await get("/api/state", dave)).json();
+  assert.deepEqual([seen.tasks, seen.inboxes], [[], {}]);
+  // Totals stay: numbers without names.
+  assert.deepEqual([seen.maxParallel, seen.running], [3, 1]);
+  assert.equal((await get("/api/runs/org-repo-pr-3-1000/stream", dave)).status, 404);
+  for (const path of ["/api/server", "/api/health"]) {
+    assert.equal((await get(path, dave)).status, 403, path);
+  }
+  assert.deepEqual(checked, []);
+  // Sync is server:sync, from this dashboard's page: refused, nothing asked of GitHub.
+  const origin = { origin: "https://hooks.example.com" };
+  const sync = await get("/api/sync", { ...dave, ...origin }, { method: "POST" });
+  assert.equal(sync.status, 403);
+  assert.match((await sync.json()).error, /`server:sync`/);
+  assert.deepEqual(synced, []);
+  const bobSync = await get("/api/sync", { "x-user": "bob", ...origin }, { method: "POST" });
+  assert.equal(bobSync.status, 200);
+  assert.deepEqual(synced, ["bob"]);
+  // /status: dave's lists none of org/repo, though the listener is busy; bob's and a local
+  // caller's list its run; nobody's, neither signed in nor local, is refused.
+  const status = async (headers) => (await get("/status", headers)).json();
+  const mine = await status(dave);
+  assert.deepEqual([mine.idle, mine.reasons, mine.queued], [false, [], 0]);
+  assert.match((await status({ "x-user": "bob" })).reasons.join("\n"), /run org\/repo#pr-3 since/);
+  const all = await status({ "x-local": "1" });
+  assert.match(all.reasons.join("\n"), /run org\/repo#pr-3 since/);
+  assert.equal(all.startedAt, 500);
+  assert.equal((await get("/status")).status, 401);
 });

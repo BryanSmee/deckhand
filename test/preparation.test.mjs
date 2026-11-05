@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { RunError } from "../listener/access.mjs";
 import { agentFor } from "../listener/agents/index.mjs";
+import { customMode } from "../listener/modes.mjs";
 import { createPreparation } from "../listener/preparation.mjs";
 import { parseRepoConfig } from "../listener/repo-config.mjs";
 import { sandboxEnv, sandboxSpec, sessionOf } from "../listener/sandbox-spec.mjs";
@@ -753,4 +754,76 @@ test("a run with the open internet gets no caches, which later runs trust, and s
   // Without it, the repo's caches.
   const plain = await workRun(t, "org/repo");
   assert.equal(plain.parts.prepared.caches.length, 1);
+});
+
+// A repo's own mode's instructions file (modeInstructions()): read from the default branch like
+// the config; missing, the run stops with a reply that names it.
+
+const YAML = "modes:\n  audit:\n    instructions: .deckhand/audit.md\n";
+
+// An audit run on org/repo#12, its base `trunk`; `repoFile` as server.mjs's (null: not there).
+// The repo's policies give the mode what a brainstorm gets.
+function audit(repoFile) {
+  const config = testConfig();
+  const asked = [];
+  const ctx = {
+    config,
+    log: () => {},
+    images: {
+      installAgent: async () => {},
+      imageFor: async () => config.image,
+      caches: async () => [],
+    },
+    egressCa: async () => "the CA",
+    policies: capabilityPolicies({ repo: () => ["pull", "image:repo", "read:issues"] }),
+    broker: { allow: () => {}, grant: () => {} },
+    github: async () => Response.json({ private: false }),
+    repoFile: async (repo, path, ref) => (asked.push([repo, path, ref]), repoFile(path)),
+  };
+  const task = {
+    repo: "org/repo",
+    base: "trunk",
+    kind: "issue",
+    number: 12,
+    name: "deckhand-org-repo-12",
+    live: {
+      id: "deckhand-org-repo-12-1",
+      key: "org/repo#12",
+      mode: "audit",
+      light: false,
+      record: { agent: "claude", model: "opus", effort: "high" },
+      logFile: { write: () => {} },
+    },
+  };
+  const { settings } = parseRepoConfig(YAML, config);
+  const own = customMode(settings, "audit");
+  const run = () =>
+    createPreparation(ctx).prepareRun(
+      task,
+      [{ replyTo: 12 }],
+      { settings, own, message: "hi" },
+      () => {},
+    );
+  return { run, asked };
+}
+
+test("a mode whose instructions file is missing: the run stops, its reply naming the file and branch", async () => {
+  const missing = audit(async () => null);
+  await assert.rejects(
+    missing.run(),
+    (e) =>
+      e instanceof RunError &&
+      /the `audit` mode's instructions, `\.deckhand\/audit\.md`, are not on `trunk`\.$/.test(
+        e.message,
+      ),
+  );
+  assert.deepEqual(missing.asked, [["org/repo", ".deckhand/audit.md", "trunk"]]);
+  // GitHub failing to give it: the same, with why.
+  const failing = audit(async () => {
+    throw new Error("GitHub said 502");
+  });
+  await assert.rejects(failing.run(), /are not on `trunk`\.\n\nGitHub said 502$/);
+  // There: the run gets its text.
+  const found = audit(async () => ({ text: "Read the diff and list the risks." }));
+  assert.equal((await found.run()).instructions, "Read the diff and list the risks.");
 });

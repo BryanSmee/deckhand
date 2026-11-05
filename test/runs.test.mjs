@@ -10,6 +10,7 @@ import { createComments } from "../listener/comments.mjs";
 import { RunError } from "../listener/access.mjs";
 import { createRuns, reopenedMode } from "../listener/runs.mjs";
 import { openLog } from "../listener/runlog.mjs";
+import { parseRepoConfig } from "../listener/repo-config.mjs";
 import { recordingFetch, tempDir, testConfig, until } from "./helpers.mjs";
 
 const result = (text) => JSON.stringify({ type: "result", result: text, duration_ms: 60000 });
@@ -823,4 +824,256 @@ test("a run's reply carries its idempotency key: asked again after a handover, i
   assert.equal(sent.length, 1);
   // The run's id, its key whoever asks.
   assert.equal(sent[0].key, "run:reply");
+});
+
+// A provider's error, as Claude Code's result says it (agents/: providerError()).
+const failed = (text) =>
+  JSON.stringify({ type: "result", is_error: true, result: text, duration_ms: 1000 });
+const OVERLOADED = "API Error: 529 overloaded_error: Overloaded";
+
+// The operator's Claude plan, an OpenRouter key and an OpenAI key, with FALLBACKS; a run that
+// fails with `line`, its comment handled, its sandbox gone after it.
+async function endFailing(t, line, { fallbacks = "claude@openrouter, codex", record = {} } = {}) {
+  const config = testConfig({
+    CLAUDE_CODE_OAUTH_TOKEN: "sk-ant-oat01-operator",
+    OPENROUTER_API_KEY: "sk-or-v1-operator",
+    OPENAI_API_KEY: "sk-proj-operator",
+    FALLBACKS: fallbacks,
+  });
+  const run = setup(t, { mode: "work", config });
+  const counted = [];
+  const later = [];
+  Object.assign(run.ctx, {
+    models: { apiOf: async () => ({}), prints: () => [] },
+    fallbacks: { inc: (labels) => counted.push(labels) },
+    startLater: (task) => later.push(task),
+  });
+  Object.assign(run.task.live.record, { provider: "anthropic", ...record });
+  const item = { comment: { id: 99 }, mode: "work" };
+  run.task.live.handled.push(item);
+  run.runner.out(line);
+  await run.following;
+  return { ...run, item, counted, later };
+}
+
+test("a provider error with a fallback: no reply, its comments queued again for the next entry, said and counted", async (t) => {
+  const { task, item, answers, logs, counted, later, settled, logPath } = await endFailing(
+    t,
+    failed(OVERLOADED),
+  );
+  // The next run's reply says what happened: none for this one.
+  assert.deepEqual(answers, []);
+  const summary =
+    "Claude (anthropic, plan)'s provider failed: overloaded (529). Falling back to Claude (openrouter)";
+  assert.ok(logs.includes(`org/repo#12: ${summary}`));
+  assert.ok(logs.includes("org/repo#12: done (error)"));
+  assert.match(readFileSync(logPath, "utf8"), /Falling back to Claude \(openrouter\)/);
+  // deckhand_model_fallbacks_total, from the credential it ran on.
+  assert.deepEqual(counted, [{ from: "claude@anthropic:plan", to: "claude@openrouter" }]);
+  // Back in the queue, marked for the next entry with what the agent left; its 👀 kept.
+  assert.deepEqual(task.pending, [item]);
+  assert.deepEqual(item.fallback, {
+    entry: "claude@openrouter",
+    from: "claude@anthropic:plan",
+    reason: "overloaded (529)",
+    tried: ["claude@anthropic:plan"],
+    result: OVERLOADED,
+  });
+  assert.deepEqual(settled, []);
+  assert.deepEqual(later, [task]);
+});
+
+test("a provider error to another agent: the marker names it, the next run takes over", async (t) => {
+  const { item, counted } = await endFailing(t, failed(OVERLOADED), { fallbacks: "codex@openai" });
+  assert.equal(item.fallback.entry, "codex@openai");
+  assert.deepEqual(counted, [{ from: "claude@anthropic:plan", to: "codex@openai" }]);
+});
+
+test("a run that fails for another reason: its error replied, no fallback", async (t) => {
+  const { task, answers, counted, settled } = await endFailing(t, failed("The tests still fail."));
+  assert.equal(answers.length, 1);
+  assert.match(answers[0], /^Claude stopped with an error\.\n\n> The tests still fail\./);
+  assert.deepEqual(counted, []);
+  assert.deepEqual(task.pending, []);
+  assert.deepEqual(settled, ["error"]);
+});
+
+test("a provider error with no fallback left, or on an /agent pick: its error replied", async (t) => {
+  // Every entry tried in this chain.
+  const left = await endFailing(t, failed(OVERLOADED), {
+    fallbacks: "claude@openrouter",
+    record: {
+      provider: "openrouter",
+      fallback: { from: "claude@anthropic:plan", reason: "x", tried: ["claude@anthropic:plan"] },
+    },
+  });
+  assert.equal(left.answers.length, 1);
+  assert.match(left.answers[0], /^Claude stopped with an error\.\n\n> API Error: 529/);
+  assert.deepEqual(left.counted, []);
+  assert.deepEqual(left.task.pending, []);
+  // Picked with /agent (and stuck to the issue since): never falls back.
+  const picked = await endFailing(t, failed(OVERLOADED), { record: { picked: { sticky: true } } });
+  assert.match(picked.answers[0], /^Claude stopped with an error\./);
+  assert.deepEqual(picked.counted, []);
+  assert.deepEqual(picked.task.pending, []);
+});
+
+test("a run's address is nobody's once its sandbox exits, before its reply is posted", async (t) => {
+  // Docker may give the address to another sandbox meanwhile (egress-http.mjs taskWhere()).
+  const seen = [];
+  const { runner, task, following } = setup(t, {
+    answer: async (target) => seen.push([target.live.hosts, target.live.trusted]),
+  });
+  Object.assign(task.live, { hosts: ["github.com"], trusted: [], cached: [], uncached: [] });
+  runner.out(result("Done."));
+  await following;
+  assert.deepEqual(seen, [[null, null]]);
+});
+
+// A run's start, up to the first line of its log (begin(), writeHeader()): `items` queued on
+// issue 12, the repo's settings parsed from `yaml`. Its errors, an /agent refused, or STOP's
+// mode (in no config) end it there (access.mjs validateRun()): none of these tests needs its
+// preparation.
+async function starting(t, { env = {}, items, yaml = "", previous = null }) {
+  const dir = tempDir(t);
+  const config = testConfig({ CLAUDE_CODE_OAUTH_TOKEN: "sk-ant-oat01-operator", ...env });
+  const logs = [];
+  const answers = [];
+  const provided = [];
+  const moved = [];
+  const ctx = {
+    config,
+    log: (line) => logs.push(line),
+    logDir: dir,
+    shotsDir: dir,
+    running: 0,
+    runs: previous ? [previous] : [],
+    runsById: new Map(),
+    tasks: new Map(),
+    store: openStore("memory:"),
+    titles: { get: () => null },
+    broker: {
+      register: () => {},
+      provide: (id, provider, note, credential) => provided.push([provider, credential]),
+      runOf: () => null,
+      secretsOf: () => [],
+      revoke: () => {},
+    },
+    runner: { state: async () => null, remove: async () => {}, hasSession: async () => true },
+    runLogs: { open: (id) => openLog(join(dir, `${id}.log`)) },
+    models: { apiOf: async () => ({}), prints: () => [] },
+    repoSettings: async () => parseRepoConfig(yaml, config),
+    projects: { started: async (...args) => moved.push(args) },
+    watchPushes: () => {},
+    label: async () => {},
+    saveLive: async () => {},
+    removeLive: async () => true,
+    answer: async (_, text) => answers.push(text),
+    schedule: () => {},
+    track: () => {},
+    settle: () => {},
+    startLater: () => {},
+    onboarded: { isIssue: () => false },
+    brainstorms: { replied: () => {} },
+  };
+  Object.assign(ctx, createRuns(ctx));
+  const task = {
+    repo: "org/repo",
+    id: "12",
+    kind: "issue",
+    number: 12,
+    base: "trunk",
+    name: "deckhand-org-repo-12",
+    pending: items.map((item) => ({
+      repo: "org/repo",
+      author: "alice",
+      mode: "work",
+      replyTo: { kind: "issue", number: 12 },
+      comment: { id: 99 },
+      ...item,
+    })),
+    next: {},
+    running: false,
+    settings: null,
+  };
+  ctx.tasks.set("org/repo#12", task);
+  const record = ctx.runs[0];
+  await ctx.run(task);
+  const header = logs.find((l) => l.includes(": running "));
+  return { logs, answers, provided, moved, header, record: ctx.runs.find((r) => r !== record) };
+}
+
+// A mode no config has: the run stops once its log has its first line.
+const STOP = { mode: "gone" };
+
+test("a run marked for a plan's fallback to its key: on the key, in its session, the broker told", async (t) => {
+  const fallback = {
+    entry: "claude@anthropic:key",
+    from: "claude@anthropic:plan",
+    reason: "overloaded (529)",
+    tried: ["claude@anthropic:plan"],
+    result: OVERLOADED,
+  };
+  const { provided, header, record } = await starting(t, {
+    env: { ANTHROPIC_API_KEY: "sk-ant-api03-operator", FALLBACKS: "claude@anthropic:key" },
+    items: [{ text: "Fix the login", fallback, ...STOP }],
+  });
+  // The models service gives its agent token the key, not the plan (models/runs.mjs).
+  assert.deepEqual(provided, [["anthropic", "key"]]);
+  assert.match(header, /running deckhand-org-repo-12 \(gone, continue, claude@anthropic:key /);
+  assert.equal(record.credential, "key");
+  assert.equal(record.auth, "key");
+  assert.equal(record.fallback.from, "claude@anthropic:plan");
+});
+
+test("/agent codex on an issue Claude worked on: Codex takes over afresh, on its best model", async (t) => {
+  const previous = {
+    id: "before",
+    key: "org/repo#12",
+    light: false,
+    status: "ok",
+    agent: "claude",
+    provider: "anthropic",
+    fallback: null,
+    picked: null,
+  };
+  const { provided, header, record } = await starting(t, {
+    env: { OPENAI_API_KEY: "sk-proj-operator" },
+    items: [{ text: "/agent codex\nNow the logout", ...STOP }],
+    previous,
+  });
+  assert.deepEqual(provided, [["openai", null]]);
+  // A new session (`start`), not Claude's (`continue`).
+  assert.match(header, /\(gone, start, codex@openai gpt-6-astra\/medium\)/);
+  assert.deepEqual(record.picked, {});
+  assert.equal(record.fallback, null);
+});
+
+test("a run refused as it starts (an /agent the operator hasn't configured, a config's errors) moves nothing", async (t) => {
+  // Only Claude configured.
+  const pick = await starting(t, { items: [{ text: "/agent codex\nGo." }] });
+  assert.equal(pick.answers.length, 1);
+  assert.match(
+    pick.answers[0],
+    /^Claude can't run here: `\/agent codex` isn't one the operator configured/,
+  );
+  // Not even its project asked for (projects.mjs).
+  assert.deepEqual(pick.moved, []);
+  const broken = await starting(t, { items: [{ text: "Go." }], yaml: "max_parallel: lots\n" });
+  assert.match(
+    broken.answers[0],
+    /^Claude can't run here: `\.deckhand\.yaml` on `trunk` has errors\.\n\n- max_parallel: expected a whole number/,
+  );
+  assert.deepEqual(broken.moved, []);
+});
+
+test("a run's end asks the waits about its own issue again: its run may have closed it", async (t) => {
+  const { ctx, runner, task, following } = setup(t, { mode: "work" });
+  const asked = [];
+  ctx.waits = { recheck: async (repo, number) => (asked.push(`${repo}#${number}`), null) };
+  task.live.light = false;
+  runner.out(result("Done."));
+  await runner.kill();
+  await following;
+  assert.deepEqual(asked, ["org/repo#12"]);
 });

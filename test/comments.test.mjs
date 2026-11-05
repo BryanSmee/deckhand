@@ -297,3 +297,48 @@ test("a run's reply carries its idempotency key, in an issue and in a discussion
     ["graphql", undefined],
   ]);
 });
+
+test("label: the needs-input label added (GitHub makes it) or taken off, a 404 then expected", async () => {
+  const calls = [];
+  const github = async (repo, method, path, body, expected) => {
+    calls.push({ method, path, body, expected });
+    return new Response(null, { status: 200 });
+  };
+  const config = { needsInputLabel: "needs input" };
+  const comments = createComments({ config, github, log: () => {} });
+  await comments.label("org/repo", 12, true);
+  await comments.label("org/repo", 12, false);
+  assert.deepEqual(calls, [
+    {
+      method: "POST",
+      path: "/repos/org/repo/issues/12/labels",
+      body: { labels: ["needs input"] },
+      expected: undefined,
+    },
+    {
+      method: "DELETE",
+      path: "/repos/org/repo/issues/12/labels/needs%20input",
+      body: null,
+      expected: [404],
+    },
+  ]);
+});
+
+test("settle: each outcome's reaction, 😕 for a comment held back for its open questions", async () => {
+  const posted = [];
+  const github = async (repo, method, path, body) => {
+    if (method === "POST") posted.push([path, body.content]);
+    return Response.json({ id: 1 }, { status: 201 });
+  };
+  const comments = createComments({ config: {}, github, log: () => {} });
+  const outcomes = ["needs-input", "ok", "error", "acknowledged", "stopped", "cancelled"];
+  for (const [i, status] of outcomes.entries()) {
+    await comments.settle({ repo: "org/repo", comment: { id: 90 + i } }, status);
+  }
+  assert.deepEqual(posted, [
+    ["/repos/org/repo/issues/comments/90/reactions", "confused"],
+    ["/repos/org/repo/issues/comments/91/reactions", "rocket"],
+    ["/repos/org/repo/issues/comments/92/reactions", "-1"],
+    ["/repos/org/repo/issues/comments/93/reactions", "+1"],
+  ]);
+});

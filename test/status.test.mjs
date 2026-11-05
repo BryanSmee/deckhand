@@ -174,3 +174,36 @@ test(
     assert.match(setup.grants.message, /^the grants folder has errors/);
   },
 );
+
+test("/status: sees() picks the runs and queued comments listed; idle is the whole listener's", () => {
+  const ctx = {
+    server: serverInfo({}, () => 1000),
+    tasks: new Map([
+      ["org/app#1", { repo: "org/app", pending: [{}, {}] }],
+      ["org/hidden#2", { repo: "org/hidden", pending: [{}] }],
+    ]),
+    runs: [
+      { key: "org/app#1", repo: "org/app", kind: "issue", status: "running", startedAt: 0 },
+      // A run without its repo: the key's.
+      { key: "org/hidden#2", kind: "issue", status: "running", startedAt: 0 },
+      { key: "org/app#3", repo: "org/app", kind: "issue", status: "ok", startedAt: 0 },
+    ],
+    running: 2,
+    app: {},
+  };
+  const { status } = createStatus(ctx);
+  const all = status();
+  assert.deepEqual(all.reasons, [
+    "issue run org/app#1 since 1970-01-01T00:00:00.000Z",
+    "issue run org/hidden#2 since 1970-01-01T00:00:00.000Z",
+  ]);
+  assert.equal(all.queued, 3);
+  // A user who sees org/app alone.
+  const mine = status((repo) => repo === "org/app");
+  assert.deepEqual(mine.reasons, ["issue run org/app#1 since 1970-01-01T00:00:00.000Z"]);
+  assert.equal(mine.queued, 2);
+  // One who sees none: nothing named, but busy all the same.
+  const none = status(() => false);
+  assert.deepEqual([none.idle, none.reasons, none.queued], [false, [], 0]);
+  assert.ok(none.startedAt <= none.now);
+});

@@ -266,6 +266,21 @@ test("sandboxEnv: the run's speed, as speedFor() decided it", () => {
   assert.equal(sandboxEnv(run, "p", "m", parts.settings, null).SANDBOX_SPEED, "fast");
 });
 
+test("sandboxEnv: another agent taking over after a fallback starts a new session; the model, instructions", () => {
+  const run = runOf();
+  run.task.live.handoff = true;
+  run.task.live.record.model = "sonnet";
+  const env = sandboxEnv(run, "p", "m", { setup: "npm ci", instructions: "docs/agents.md" }, null);
+  assert.equal(env.TASK_SESSION, "new");
+  assert.equal(env.SANDBOX_MODEL, "sonnet");
+  assert.equal(env.SANDBOX_EFFORT, "high");
+  assert.equal(env.SANDBOX_INSTRUCTIONS, "docs/agents.md");
+  // An inbox entry starts afresh, hand-off or not.
+  const inbox = runOf({ light: true, mode: "idea" });
+  inbox.task.live.handoff = true;
+  assert.equal(sandboxEnv(inbox, "p", "m", parts.settings, null).TASK_SESSION, "fresh");
+});
+
 test("sandboxArgs: caps, a read-only volume folder, a root user", () => {
   const args = sandboxArgs({
     user: { uid: 0 },

@@ -792,3 +792,24 @@ test("a redelivered issues delivery: its label or close action kept only while t
   const kept = replayedIssue(delivery("unlabeled"), now(labelled));
   assert.equal(kept.issue.updated_at, "2026-10-30T09:00:00Z");
 });
+
+// A delivery that is no comment starts nothing, whatever the repo's config (a `preview` left in
+// it is ignored: repo-config.test.mjs).
+
+test("a pull request's or CI's delivery is nothing to run, whoever sent it", () => {
+  const reasons = [];
+  const skip = (reason) => (reasons.push(reason), null);
+  const delivery = {
+    action: "opened",
+    installation: { id: 7 },
+    repository: { full_name: "org/repo", default_branch: "trunk" },
+    pull_request: { number: 13 },
+    sender: { login: "mallory" },
+  };
+  assert.equal(workItem(testConfig(), "pull_request", delivery, skip), null);
+  assert.equal(
+    workItem(testConfig(), "workflow_run", { ...delivery, action: "completed" }, skip),
+    null,
+  );
+  assert.deepEqual(reasons, ["pull_request: nothing to run", "workflow_run: nothing to run"]);
+});
