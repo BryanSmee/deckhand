@@ -25,7 +25,7 @@ import { needingYou } from "./Repos";
 import { SettingsTabs } from "./Settings";
 import { formatRoute, isOverview, type Route } from "./route";
 import type { Syncer } from "./Sync";
-import type { Health, State } from "./types";
+import type { Chats, Health, State } from "./types";
 import { Button, IconButton } from "./ui/Button";
 import { type Segment, Segmented } from "./ui/Choice";
 import * as Icon from "./ui/icons";
@@ -69,6 +69,8 @@ const repoHref = (route: Route, repo: string | null) => {
 interface Common {
   state: State | null;
   route: Route;
+  // api/chats (App.tsx): the Chats link, with how many the user keeps of the most they may.
+  chats?: Chats | null;
   // The services' health (api/health): a dot by Deckhand's name when one is down or starting.
   health?: Health | null;
 }
@@ -83,9 +85,15 @@ interface SidebarProps extends Common {
   syncer: Syncer;
 }
 
+// Chats: shown to a user who may start one somewhere (access.ts), or who keeps some.
+const chatsShown = (can: Can, chats: Chats | null | undefined) =>
+  !!chats && (can.anywhere("chat") || chats.chats.length > 0);
+const chatsHref = formatRoute({ repo: null, task: null, run: null, page: "chats" });
+
 export function Sidebar(props: SidebarProps) {
-  const { state, route, repos, rail, onRail, onRequest, notify, health = null } = props;
-  const requests = menuRequests(useCan());
+  const { state, route, repos, rail, onRail, onRequest, notify, health = null, chats } = props;
+  const can = useCan();
+  const requests = menuRequests(can);
   const counts = repoCounts(state?.tasks ?? [], route.repo);
   const waiting = needingYou(repos?.repos ?? null, state?.tasks ?? []);
   const toggle = (
@@ -119,6 +127,20 @@ export function Sidebar(props: SidebarProps) {
       {rail && <span class={styles.rule} />}
       <RepoLinks counts={counts} route={route} rail={rail} />
       <div class={styles.bottom}>
+        {chatsShown(can, chats) && (
+          <NavItem
+            href={chatsHref}
+            icon={<Icon.Talk size={rail ? 17 : 16} />}
+            label="Chats"
+            current={route.page === "chats"}
+            extra={
+              <span class={styles.kept} title="The chats you keep, of the most you may">
+                {chats!.chats.length} of {chats!.limit}
+              </span>
+            }
+            rail={rail}
+          />
+        )}
         {repos && (
           <NavItem
             href={formatRoute({ repo: null, task: null, run: null, page: "settings" })}
@@ -164,7 +186,7 @@ function RepoLinks({
   rail?: boolean;
   touch?: boolean;
 }) {
-  const shown = route.page !== "settings";
+  const shown = route.page !== "settings" && route.page !== "chats";
   const dot = (c: RepoCounts) => (
     <span class={styles.dot}>
       <StatusDot tone={c.live ? "run" : "idle"} pulse={c.moving} />
@@ -486,8 +508,10 @@ export function TopBar(props: TopBarProps) {
   const [sheet, setSheet] = useState(false);
   const counts = repoCounts(state?.tasks ?? [], route.repo);
   const settings = route.page === "settings";
-  const current = settings ? null : counts.repos.find((c) => sameRepo(c.repo, route.repo));
-  const label = settings ? "Settings" : (current?.repo ?? "All repositories");
+  const chatting = route.page === "chats";
+  const current =
+    settings || chatting ? null : counts.repos.find((c) => sameRepo(c.repo, route.repo));
+  const label = settings ? "Settings" : chatting ? "Chats" : (current?.repo ?? "All repositories");
   return (
     <>
       <header class={styles.topbar}>
@@ -536,7 +560,8 @@ export function TopBar(props: TopBarProps) {
 // The phone's tab bar. Tasks and Board are the repository shown, else the one last open
 // here. Else Tasks are All's (and stay All's on them), and Board the most recently active
 // repository's: the board is one repository's.
-export function TabBar({ state, route, lastRepo }: Common & { lastRepo: string | null }) {
+export function TabBar({ state, route, lastRepo, chats }: Common & { lastRepo: string | null }) {
+  const can = useCan();
   const counts = repoCounts(state?.tasks ?? [], route.repo);
   const onAllTasks = route.page === "tasks" && !route.repo;
   const tasksRepo = route.repo ?? (onAllTasks ? null : lastRepo);
@@ -561,6 +586,16 @@ export function TabBar({ state, route, lastRepo }: Common & { lastRepo: string |
       href: repo ? boardOf(repo) : tasksOf(null),
       current: route.page === "board",
     },
+    ...(chatsShown(can, chats)
+      ? [
+          {
+            label: "Chats",
+            icon: <Icon.Talk size={22} />,
+            href: chatsHref,
+            current: route.page === "chats",
+          },
+        ]
+      : []),
     {
       label: "Settings",
       icon: <Icon.Settings size={22} />,

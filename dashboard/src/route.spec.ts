@@ -81,3 +81,13 @@ test("anything else in the path is the Overview", () => {
   expect(parseRoute("#/not a repo")).toEqual({ repo: null, ...none });
   expect(parseRoute("#/org/app/elsewhere")).toEqual({ repo: null, ...none });
 });
+
+test("chats: the list, and one open; a repository of an organization named chats stays one", () => {
+  const list = { repo: null, ...none, page: "chats" as const };
+  expect(formatRoute(list)).toBe("#/chats");
+  expect(parseRoute("#/chats")).toEqual(list);
+  const open = { ...list, chat: "0123456789abcdef" };
+  expect(formatRoute(open)).toBe("#/chats/0123456789abcdef");
+  expect(parseRoute(formatRoute(open))).toEqual(open);
+  expect(parseRoute("#/chats/app")).toEqual({ repo: "chats/app", ...none });
+});

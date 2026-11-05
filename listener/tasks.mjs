@@ -496,7 +496,8 @@ export function createTasks(ctx) {
       return false;
     }
     ctx.runner.send(live.id, liveMessage(live.mode, text), agentFor(live.record.agent));
-    writeEvent(live.logFile, "delivered", { message: text });
+    // A chat's: its owner's message, which the conversation shows as theirs (runlog.mjs).
+    writeEvent(live.logFile, "delivered", { message: text, ...(isChat(task) && { chat: true }) });
     live.unanswered.push(...items);
     taken(task, items);
     return true;

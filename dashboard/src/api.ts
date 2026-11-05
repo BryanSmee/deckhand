@@ -15,6 +15,8 @@ import type {
   AppLinks,
   Backlog,
   CancelAction,
+  Chat,
+  Chats,
   DiscussionComment,
   DiscussionResult,
   DiscussionStart,
@@ -74,6 +76,15 @@ export async function postJson<T>(url: string, body?: unknown): Promise<Answer<T
             body: JSON.stringify(body),
           };
     return await answer<T>(await fetch(url, init));
+  } catch (e) {
+    return { error: message(e) } as Answer<T>;
+  }
+}
+
+// DELETE: what the listener says, or why it refused.
+export async function deleteJson<T>(url: string): Promise<Answer<T>> {
+  try {
+    return await answer<T>(await fetch(url, { method: "DELETE" }));
   } catch (e) {
     return { error: message(e) } as Answer<T>;
   }
@@ -146,7 +157,7 @@ export function usePolled<T>(
     if (ms === null) return;
     const timer = setInterval(reload, ms);
     return () => clearInterval(timer);
-  }, [url]);
+  }, [url, ms]);
   return { data: read.data, error: read.error, reload, show };
 }
 
@@ -206,6 +217,51 @@ export function useRunLog(runId: string | null): { entries: Entry[]; ended: bool
     return () => source.close();
   }, [runId]);
   return log.id === runId ? log : { entries: [], ended: false };
+}
+
+// Several runs' logs at once (a chat's runs, Chats.tsx), each as useRunLog() reads one: a log
+// streams from when its id is first given until it ends, or its id goes.
+export type RunLogs = Record<string, { entries: Entry[]; ended: boolean }>;
+
+export function useRunLogs(ids: string[]): RunLogs {
+  const [logs, setLogs] = useState<RunLogs>({});
+  const sources = useRef(new Map<string, EventSource>());
+  const key = ids.join(" ");
+  useEffect(() => {
+    const open = sources.current;
+    for (const [id, source] of open) {
+      if (ids.includes(id)) continue;
+      source.close();
+      open.delete(id);
+    }
+    setLogs((l) => Object.fromEntries(Object.entries(l).filter(([id]) => ids.includes(id))));
+    for (const id of ids) {
+      if (open.has(id)) continue;
+      const source = new EventSource(`api/runs/${encodeURIComponent(id)}/stream`);
+      open.set(id, source);
+      source.addEventListener("entries", (event) => {
+        if (open.get(id) !== source) return;
+        const more = JSON.parse((event as MessageEvent).data) as Entry[];
+        setLogs((l) => ({
+          ...l,
+          [id]: { entries: [...(l[id]?.entries ?? []), ...more], ended: false },
+        }));
+      });
+      source.addEventListener("end", () => {
+        source.close();
+        if (open.get(id) !== source) return;
+        setLogs((l) => ({ ...l, [id]: { entries: l[id]?.entries ?? [], ended: true } }));
+      });
+    }
+  }, [key]);
+  useEffect(
+    () => () => {
+      for (const source of sources.current.values()) source.close();
+      sources.current.clear();
+    },
+    [],
+  );
+  return logs;
 }
 
 // The listener caches the list for minutes: polling it now and then costs GitHub nothing.
@@ -515,3 +571,30 @@ export const saveChatPermissions = (id: string, profile: ChatProfile) =>
 // The chat's sandbox stopped once its agent has answered, its session kept: the next message
 // starts it with the profile saved.
 export const restartChat = (id: string) => postJson<{ message: string }>(`api/chats/${id}/restart`);
+
+// The user's chats (listener/chats.mjs): their status, their runs (whose logs stream on their
+// own) and their messages still on their way. Polled as api/state is on the Chats page
+// (`often`), else now and then for the sidebar's count; not at all when `allowed` is false (a
+// listener without chats, a user who may start none).
+export const CHATS_MS = 60_000;
+
+export function useChats(often: boolean, allowed = true): Polled<Chats> {
+  return usePolled<Chats>(allowed ? "api/chats" : null, often ? POLL_MS : CHATS_MS);
+}
+
+const chatUrl = (id: string, then = "") => `api/chats/${encodeURIComponent(id)}${then}`;
+
+export interface NewChat {
+  repo: string;
+  agent: string | null;
+  model: string | null;
+  effort: string | null;
+  message: string | null;
+}
+
+// Each answers the chat as it is now, or why the listener refused.
+export const createChat = (chat: NewChat) => postJson<{ chat: Chat }>("api/chats", chat);
+export const sendChatMessage = (id: string, text: string) =>
+  postJson<{ chat: Chat }>(chatUrl(id, "/messages"), { text });
+export const resetChat = (id: string) => postJson<{ chat: Chat }>(chatUrl(id, "/reset"));
+export const deleteChat = (id: string) => deleteJson<{ message: string }>(chatUrl(id));

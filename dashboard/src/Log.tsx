@@ -572,13 +572,14 @@ function Hl({ text, field }: { text: string; field: string }) {
   return <>{parts}</>;
 }
 
-interface ItemProps {
+export interface ItemProps {
   item: Item;
   isOpen: (id: string, fallback: boolean) => boolean;
   toggle: (id: string, fallback: boolean) => (open: boolean) => void;
 }
 
-function ItemView({ item, isOpen, toggle }: ItemProps) {
+// One item of a log: the chat's conversation (Conversation.tsx) shows them too.
+export function ItemView({ item, isOpen, toggle }: ItemProps) {
   const f = (i: number) => `${item.id}:${i}`;
   switch (item.kind) {
     case "say":
@@ -586,6 +587,15 @@ function ItemView({ item, isOpen, toggle }: ItemProps) {
         <p class={styles.say} data-item={item.id}>
           <Hl text={item.text} field={f(0)} />
         </p>
+      );
+    case "message":
+      return (
+        <div class={`${styles.line} ${styles.note}`} data-item={item.id}>
+          <span class={styles.tag}>you</span>
+          <span class={styles.text}>
+            <Hl text={item.text} field={f(0)} />
+          </span>
+        </div>
       );
     case "note":
       return (

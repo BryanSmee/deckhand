@@ -59,6 +59,8 @@ export interface Output {
 
 export type Item = { id: string } & (
   | { kind: "say"; text: string }
+  // A chat owner's message.
+  | { kind: "message"; text: string }
   | { kind: "note"; text: string }
   | { kind: "raw"; text: string }
   // `call`: the agent's id for it, which its outputs have too; `at`: when it came (ms).
@@ -122,7 +124,7 @@ export const fails = (phase: Phase, item: Item): boolean =>
   (failuresFail(phase) && isFailure(item)) || (item.kind === "result" && item.status === "error");
 
 export function shown(item: Item, filter: Filter): boolean {
-  if (filter === "messages") return item.kind === "say" || item.kind === "result";
+  if (filter === "messages") return ["say", "message", "result"].includes(item.kind);
   if (filter === "tools") return ["tool", "output", "step", "cached"].includes(item.kind);
   if (filter === "errors") return isError(item);
   return true;
@@ -193,6 +195,7 @@ function itemsOf(phase: Phase, entries: Entry[], calls: Calls): Item[] {
       calls.byEntry.set(e, item);
       out.push(item);
     } else if (e.kind === "text") out.push({ id: id(), kind: "say", text: e.text });
+    else if (e.kind === "message") out.push({ id: id(), kind: "message", text: e.text });
     else if (e.kind === "meta") out.push({ id: id(), kind: "note", text: e.text });
     else if (e.kind === "result") {
       for (const call of calls.byEntry.values()) if (!call.outputs.length) calls.ended.add(call);
@@ -398,6 +401,9 @@ export function plainText(list: LogSection[]): string {
           break;
         case "note":
           lines.push(`› ${item.text}`);
+          break;
+        case "message":
+          lines.push(`You: ${item.text}`);
           break;
         case "result":
           lines.push(`${resultTitle(item)}\n${item.text}`);
