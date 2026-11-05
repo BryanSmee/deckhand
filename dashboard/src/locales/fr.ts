@@ -72,6 +72,7 @@ export const fr = {
   "loop.checks": "Revue · en attente des checks",
   "loop.ci": "Revue · en attente de la CI",
   "loop.ciFix": "Revue · correction CI",
+  "loop.rebasing": "Revue · rebase",
   "loop.first": "Revue · première revue",
   "loop.roundOf": "Revue · tour {round} sur {rounds}",
   "loop.round": "Revue · tour {round}",

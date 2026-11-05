@@ -53,6 +53,7 @@ function setup({
   sleep,
   policies = null,
   fixes = 0,
+  looping = () => false,
   reply = null,
   metrics = null,
 } = {}) {
@@ -103,6 +104,7 @@ function setup({
     policies,
     decided: (key, entry) => decided.push({ key, ...entry }),
     fixes: (repo, number) => (repo === "org/repo" && number === 31 ? fixes : 0),
+    looping,
     reply: reply ?? (async (repo, number, text) => replies.push({ repo, number, text })),
     log: (line) => logged.push(line),
     now: () => time,
@@ -134,6 +136,7 @@ test("a dirty pull request starts one work run with the rebase message", async (
       settings: undefined,
       sender: null,
       reason: "conflict",
+      rebaseFrom: "head-1",
     },
   );
   assert.match(item.text, /rebase it on `origin\/main`.*--force-with-lease.*stop and ask/s);
@@ -141,6 +144,33 @@ test("a dirty pull request starts one work run with the rebase message", async (
   w.advance(10 * MIN);
   await w.conflicts.tick();
   assert.equal(w.accepted.length, 1);
+});
+
+test("no rebase run while the pull request's review loop decides a step or waits for CI (#896)", async () => {
+  let looping = true;
+  const asked = [];
+  const w = setup({
+    looping: (repo, number) => {
+      asked.push([repo, number]);
+      return looping;
+    },
+  });
+  assert.deepEqual(await w.conflicts.tick(), { started: 0, pending: 0, errors: [] });
+  assert.deepEqual([w.accepted, asked], [[], [["org/repo", 31]]]);
+  // Skipped before its attempt is kept: once the loop is done, the next check starts it.
+  w.advance(10 * MIN);
+  looping = false;
+  await w.conflicts.tick();
+  assert.equal(w.accepted.length, 1);
+  // The loop's next step begun during the watcher's own calls: checked again before it starts.
+  let calls = 0;
+  const late = setup({ looping: () => ++calls > 1 });
+  await late.conflicts.tick();
+  assert.deepEqual([late.accepted, calls], [[], 2]);
+  late.advance(10 * MIN);
+  calls = -10;
+  await late.conflicts.tick();
+  assert.equal(late.accepted.length, 1);
 });
 
 test("a pull request without an issue is its own task", async () => {

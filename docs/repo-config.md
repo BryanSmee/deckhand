@@ -697,6 +697,8 @@ review` gets the "unknown mode" reply. `review: true` (or a block without `on`, 
   - **something else takes over**: the issue has a run going or queued, or the needs-input
     label.
 
+  A [rebase run](#conflicts)'s push is reviewed too, using no round.
+
   **Bounded**: `n` fix runs and `n` reviews after them at most per pull request (`fix: true`
   without `merge`: one fix run, no review after it), each counted
   in the orchestrator's store (`reviews`) before it is queued, across restarts: the fix's push doesn't start a
@@ -1014,8 +1016,8 @@ It is off without the key, and each conflict found is a run, so a bill.
 - The run goes on in the task's session, as if a maintainer had asked: rebase on the base
   branch, resolve the conflicts, rerun the checks and push with `--force-with-lease`, or stop
   and ask. Its reply goes on the pull request; the dashboard names it "Conflict".
-- A task with a run going or comments waiting is skipped, and so is a pull request (or its
-  issue) labelled `NEEDS_INPUT_LABEL`.
+- Skipped: a task with a run going or comments waiting, a review loop deciding a step or
+  waiting for CI, a pull request (or its issue) labelled `NEEDS_INPUT_LABEL`.
 - Each pull request is tried once per pair of its head commit and its base branch's latest
   commit, across restarts: a rebase that failed or stopped to ask isn't tried again
   until someone pushes to the pull request or the base branch moves.

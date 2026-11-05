@@ -338,7 +338,8 @@ export interface Task {
 
 // Where a pull request's review-and-fix loop is: a review or fix run of it queued or running,
 // the auto-merge waiting for checks, the review waiting for CI (ci) or a CI fix run queued or
-// running (ci-fix), or how it ended (ci-failed: CI failed and no review ran, its CI fix run
+// running (ci-fix), a conflict run queued or running, whose end reviews the rebased head
+// (rebasing), or how it ended (ci-failed: CI failed and no review ran, its CI fix run
 // refused, failed or pushing nothing) (clean; rounds-out: the review after the
 // last fix run still blocks; fixed: by design nothing reviewed its one fix run, `review.fix:
 // true` without `merge`; stopped: it blocks, and no fix run follows).
@@ -348,6 +349,7 @@ export type LoopState =
   | "checks"
   | "ci"
   | "ci-fix"
+  | "rebasing"
   | "ci-failed"
   | "clean"
   | "rounds-out"

@@ -231,6 +231,7 @@ async function endRun(t, handled) {
     runEnded: (repo) => heard.push(["runEnded", repo]),
     fixed: async (run) => heard.push(["fixed", run]),
     ciFixed: async (run) => heard.push(["ciFixed", run]),
+    rebased: async (run) => heard.push(["rebased", run]),
   };
   task.base = "trunk";
   task.live.light = false;
@@ -247,6 +248,11 @@ test("a run's end: the CI step told of any run, a review's fix run's outcome to 
   // A review's fix run, replying on #13: its outcome, for the review of what it pushed.
   assert.deepEqual(await endRun(t, [{ reason: "review-fix", replyTo: 13 }]), [
     ["fixed", { repo: "org/repo", number: 13, base: "trunk", status: "ok" }],
+    ["runEnded", "org/repo"],
+  ]);
+  // A conflict run, rebasing #13 from head-1: the loop goes on from what it pushed (#896).
+  assert.deepEqual(await endRun(t, [{ reason: "conflict", replyTo: 13, rebaseFrom: "head-1" }]), [
+    ["rebased", { repo: "org/repo", number: 13, base: "trunk", status: "ok", from: "head-1" }],
     ["runEnded", "org/repo"],
   ]);
 });
