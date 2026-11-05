@@ -49,6 +49,8 @@ const BODY_MS = 10000;
 const MAX_API_BODY = 1024 * 1024;
 // An MCP client's call is smaller still: a tool's name and its arguments (../listener/mcp.mjs).
 const MAX_MCP_BODY = 64 * 1024;
+// What edge reads and drops of a larger one before it answers 413 (mcpBody()).
+const MAX_DRAINED = MAX_API_BODY;
 // The most deliveries the stream keeps unread (far more than a handover leaves); one the
 // orchestrator acknowledged goes from it at once (internal.mjs).
 const STREAM_MAX = 10_000;
@@ -288,20 +290,33 @@ export function createEdgeHttp({
   // token's login, with its scopes.
   async function mcp(req, res, { login, scopes }) {
     metrics?.seen(login);
-    if (Number(req.headers["content-length"]) > MAX_MCP_BODY) {
+    // Too large to read even to drop it: cut (its client may see a reset rather than the 413).
+    if (Number(req.headers["content-length"]) > MAX_DRAINED) {
       res.writeHead(413, { connection: "close" });
       return res.end();
     }
-    let body;
-    try {
-      body = req.method === "POST" ? await readBody(req, MAX_MCP_BODY) : undefined;
-    } catch (error) {
-      // A chunked body that went over: dropped as it came (readBody()), told if still there.
-      if (!/^body over/.test(error.message)) throw error;
-      if (!res.headersSent) res.writeHead(413, { connection: "close" }).end();
-      return;
-    }
+    const body = req.method === "POST" ? await mcpBody(req) : undefined;
+    // Over MAX_MCP_BODY: its client reads the 413, the rest of the body read and dropped.
+    if (body === null) return res.writeHead(413, { connection: "close" }).end();
     return orchestrator.forward(req, res, { user: login, scopes, body });
+  }
+
+  // /mcp's body, MAX_MCP_BODY at most, or null past it. Unlike readBody(), which cuts the
+  // connection at once, the rest is read and dropped (MAX_DRAINED at most, then cut), so that a
+  // client gets its 413: one whose request is cut while it sends sees a reset instead.
+  function mcpBody(req) {
+    return new Promise((resolve, reject) => {
+      const chunks = [];
+      let size = 0;
+      req.on("data", (chunk) => {
+        size += chunk.length;
+        if (size <= MAX_MCP_BODY) chunks.push(chunk);
+        else if (size > MAX_DRAINED) req.destroy();
+      });
+      req.on("end", () => resolve(size > MAX_MCP_BODY ? null : Buffer.concat(chunks)));
+      req.on("error", reject);
+      req.on("close", () => reject(new Error("the request was cut short")));
+    });
   }
 
   async function route(req, res) {

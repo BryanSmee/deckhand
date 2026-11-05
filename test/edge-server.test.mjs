@@ -477,7 +477,7 @@ test("edge: /mcp with a token goes on to the orchestrator as its login and scope
     body: "x".repeat(70 * 1024),
   });
   assert.equal(large.status, 413);
-  // Chunked, with no length to refuse it by: 413 once it goes over, never a 500.
+  // Chunked, with no length to refuse it by: a 413 the client reads, never a 500 nor a reset.
   const chunked = await new Promise((resolve, reject) => {
     const req = request(
       {
@@ -492,8 +492,8 @@ test("edge: /mcp with a token goes on to the orchestrator as its login and scope
     req.on("error", reject);
     for (let i = 0; i < 70; i++) req.write("x".repeat(1024));
     req.end();
-  }).catch((error) => error);
-  assert.ok(chunked === 413 || chunked instanceof Error, String(chunked));
+  });
+  assert.equal(chunked, 413);
   assert.doesNotMatch(edge.output(), /MCP sign-in: POST \/mcp/);
   assert.equal(edge.asked.length, 2);
 });
