@@ -110,6 +110,26 @@ test("egress: only the proxy may ask", async (t) => {
   assert.deepEqual(await ask("10.1.0.2", "github.com"), { allowed: false });
 });
 
+test("egress: a caller not among the proxy's last addresses, the runner away: a 503, not a refusal (#936)", async (t) => {
+  const { ctx } = twoRuns();
+  const logged = [];
+  // A proxy recreated while the runner hands over: its address isn't in the last list, and the
+  // fresh one can't be had.
+  ctx.runner.proxyAddresses = async ({ fresh } = {}) => {
+    if (fresh) throw new RunnerAway("the egress proxy's addresses: the runner service is away");
+    return ["10.0.0.9"];
+  };
+  const config = testConfig();
+  config.policyPort = 0;
+  const server = createEgressHttp({ ...ctx, config, log: (l) => logged.push(l) }).listen();
+  await once(server, "listening");
+  t.after(() => server.close());
+  const res = await fetch(`http://127.0.0.1:${config.policyPort}/egress?ip=10.1.0.2&host=models`);
+  assert.equal(res.status, 503);
+  assert.deepEqual(await res.json(), { allowed: false, reason: "runner_away" });
+  assert.ok(logged.includes("Egress: models for 10.1.0.2 waits for the runner"));
+});
+
 // --- Kubernetes: the builder, install pods and init containers ----------------------------------
 
 test("egress: the runner's builder and installs answered by the images, an installing sandbox its install's hosts only", async (t) => {

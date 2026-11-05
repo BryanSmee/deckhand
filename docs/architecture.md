@@ -1325,7 +1325,8 @@ proxy's next questions are refused and waited for rather than cut.
 The egress proxy waits for the next copy meanwhile (`proxy/wait.mjs`): a connection the
 orchestrator refused (a waiting copy refuses them all), or that failed before it was made (reset
 while connecting, its name unknown while its container is gone), never reached it, and a `503`
-(the policy can't tell yet who asks: the runner away, #936) decided nothing, so the proxy
+(the policy can't tell yet who asks: the runner away, #936) or the policy's answer not coming
+within 5 s decided nothing either, so the proxy
 tries again, with a growing delay (0.25 s doubling up to 5 s), for up to 5 minutes before it
 refuses the host. With one copy of each (compose), the next orchestrator only starts once the
 previous one has exited; with two, both are on the proxy's network under the name
@@ -1468,9 +1469,10 @@ of the runner's calls, which the orchestrator waits for (30 minutes for a run's,
 answer, for the egress policy's questions about a sandbox's address and the proxy's; once one
 found it away, the next ones go by the last answers for a second, so that one answer of the
 policy waits 3 s at most, under the proxy's 5 s for it). With no last
-answer (an orchestrator copy that took over while the runner was away), the egress policy
-answers `503` rather than "no run there", and the proxy asks again, as for an orchestrator
-restarting (#936).
+answer (an orchestrator copy that took over while the runner was away), or none that can say
+(a proxy recreated meanwhile, not among the last addresses), the egress policy answers `503`
+rather than "no run there" or "not the proxy", and the proxy asks again, as for an orchestrator
+restarting (#936). An answer of the runner's with an error status is its word: no place there.
 
 ### The github service
 

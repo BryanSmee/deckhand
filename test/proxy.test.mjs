@@ -339,6 +339,16 @@ test("the orchestrator's policy answering 503 (the runner away, #936): asked aga
     limitMs: 2000,
   })("10.0.0.5", "models", { forward: true });
   assert.deepEqual(gaveUp, { allowed: false, reason: "policy_error" });
+  // Its own timeout: asked again too, the question deciding nothing (a slow runner behind it).
+  let slow = 1;
+  const late = await serve(t, (req, res) => {
+    if (slow-- > 0) return setTimeout(() => res.end("{}"), 1000).unref();
+    res.end(JSON.stringify({ allowed: true }));
+  });
+  const timely = await egressPolicy(`${late.url}/egress`, 50, wait)("10.0.0.5", "models", {
+    forward: true,
+  });
+  assert.equal(timely.allowed, true);
   // The client gone: no use asking again.
   left = 5;
   const gone = await egressPolicy(`${url}/egress`, 5000, wait)("10.0.0.5", "models", {

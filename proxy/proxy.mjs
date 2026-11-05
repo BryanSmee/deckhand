@@ -96,8 +96,8 @@ export function target(authority) {
 // Asks the orchestrator: { allowed, private, cache, decrypt, relay, source, reason }. Fails
 // closed: no `decrypt`, a tunnel; no answer, refused (`reason` "policy_error"). An orchestrator
 // restarting is waited for (wait.mjs; `wait`: its clock, in the tests), and so is one that
-// answers 503 (it can't tell yet who asks: the runner away, #936), unless the client left
-// (`gone()`). `forward`: the host is a service's name, whose plain HTTP the proxy forwards
+// answers 503 (it can't tell yet who asks: the runner away, #936) or not within `timeoutMs`,
+// unless the client left (`gone()`). `forward`: the host is a service's name, whose plain HTTP the proxy forwards
 // (SANDBOX_URLS): the policy allows it for the runs' sandboxes and engines only. `engine`: it
 // came in on the engines' port (ENGINE_PROXY_PORT), so it is the engine's of the run at that
 // address.
@@ -112,7 +112,14 @@ export function egressPolicy(url, timeoutMs = 5000, wait = {}) {
       });
       const res = await untilReached(
         async () => {
-          const res = await fetch(`${url}?${query}`, { signal: AbortSignal.timeout(timeoutMs) });
+          // Its own timeout too: the question decides nothing, and a slow runner behind the
+          // policy is no refusal.
+          const res = await fetch(`${url}?${query}`, {
+            signal: AbortSignal.timeout(timeoutMs),
+          }).catch((error) => {
+            if (error?.name !== "TimeoutError") throw error;
+            throw new AskAgain("the egress policy didn't answer in time", { cause: error });
+          });
           if (res.status !== 503) return res;
           await res.body?.cancel();
           throw new AskAgain("the egress policy can't tell yet");

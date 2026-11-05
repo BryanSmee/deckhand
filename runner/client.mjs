@@ -37,6 +37,9 @@ const REFRESH_RETRY_MAX_MS = 5000;
 // there" (#936).
 export class RunnerAway extends Error {}
 
+// No answer from the runner (not there, a timeout, RunnerAway): an answer's status is its word.
+const isAway = (error) => error?.status == null;
+
 const path = (...parts) => parts.map((p) => encodeURIComponent(p)).join("/");
 
 async function failure(res, what) {
@@ -105,8 +108,7 @@ export function createRunnerClient({
       try {
         return await asPolicy.json(method, url, { signal: AbortSignal.timeout(policyWaitMs) });
       } catch (error) {
-        // No answer at all (an answer's status is the runner's word): away.
-        if (error.status == null) awayAt = now();
+        if (isAway(error)) awayAt = now();
         throw error;
       }
     },
@@ -232,12 +234,17 @@ export function createRunnerClient({
     } catch (error) {
       if (known.has(ip)) return known.get(ip);
       log(`Where ${ip} is: ${error.message}`);
+      // An answer with a status is the runner's word (a broken token, its backend failing): no
+      // place, as before; no answer at all, it can't tell.
+      if (!isAway(error)) return null;
       throw new RunnerAway(`where ${ip} is: ${error.message}`, { cause: error });
     }
   }
 
-  // Asked on each of the broker's calls: kept a second, as the runner keeps them longer. Never
-  // answered yet (a copy that just took over): RunnerAway, as for locate().
+  // Asked on each of the broker's calls: kept a second, as the runner keeps them longer. The
+  // runner away and never answered yet (a copy that just took over), or asked `fresh` (the
+  // caller isn't among the last ones, a proxy recreated): RunnerAway, as for locate(), never the
+  // last list that didn't have it.
   let proxyAt = -Infinity;
   async function proxyAddresses({ fresh = false } = {}) {
     if (!fresh && now() - proxyAt < 1000) return proxy;
@@ -249,7 +256,7 @@ export function createRunnerClient({
       proxyAt = now();
     } catch (error) {
       log(`The egress proxy's addresses: ${error.message}`);
-      if (proxyAt === -Infinity) {
+      if (isAway(error) && (fresh || proxyAt === -Infinity)) {
         throw new RunnerAway(`the egress proxy's addresses: ${error.message}`, { cause: error });
       }
     }
