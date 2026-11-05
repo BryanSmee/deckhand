@@ -195,6 +195,14 @@ test("permissions: the decision, narrowed by the repo's users; a failure gives n
     [...(await permissions.which("bob", ["org/app", "Org/App", "org/other", null]))],
     ["org/app"],
   );
+  // whoMay(): those who may, in lower case, each asked once; a decision that fails throws.
+  assert.deepEqual(
+    [...(await permissions.whoMay(["Bob", "bob", "alice", null, "dave"], "org/app", "tasks:read"))],
+    ["bob"],
+  );
+  await assert.rejects(permissions.whoMay(["bob", "carol"], "org/else", "tasks:read"), {
+    message: "who has tasks:read on org/else can't be decided (the policies can't be read)",
+  });
   // decide() tells the failure from a refusal, the action null asking for any action.
   assert.deepEqual(await permissions.decide("bob", "org/app", null), { ok: true, error: null });
   assert.deepEqual(await permissions.decide("bob", "org/other", null), { ok: false, error: null });

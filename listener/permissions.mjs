@@ -156,6 +156,17 @@ export function createPermissions({ policies = null, usersOf = () => null }) {
     return new Set(said.filter(Boolean));
   }
 
+  // Those of `logins` who may do `action` on `repo`, by their logins in lower case: one decision
+  // each, asked together. A decision that fails throws, for a caller that keeps what it decides
+  // (auto-pickup.mjs, reviewers.mjs) and must not keep a refusal it wasn't given.
+  async function whoMay(logins, repo, action) {
+    const names = [...new Set(logins.filter(Boolean).map((l) => l.toLowerCase()))];
+    const said = await Promise.all(names.map((login) => decide(login, repo, action)));
+    const failed = said.find((d) => d.error);
+    if (failed) throw new Error(`who has ${action} on ${repo} can't be decided (${failed.error})`);
+    return new Set(names.filter((_, i) => said[i].ok));
+  }
+
   // What the dashboard shows `login` (api/state's `access`, #732): their server-wide actions,
   // and on each of `repos` (names) they see, the repo's actions and starts (repoActions()), by
   // the repo's name in lower case. The repos they don't see aren't named.
@@ -191,5 +202,5 @@ export function createPermissions({ policies = null, usersOf = () => null }) {
     );
   }
 
-  return { answerOf, can, decide, visible, which, dashboard, report };
+  return { answerOf, can, decide, visible, which, whoMay, dashboard, report };
 }

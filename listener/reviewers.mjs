@@ -128,10 +128,8 @@ export function createReviewers({
   // run's end asks again.
   async function readers(repo, logins) {
     if (!permissions) return logins;
-    const said = await Promise.all(logins.map((l) => permissions.decide(l, repo, "tasks:read")));
-    const failed = said.find((d) => d.error);
-    if (failed) throw new Error(`who may see ${repo}'s tasks can't be decided (${failed.error})`);
-    const out = logins.filter((_, i) => said[i].ok);
+    const may = await permissions.whoMay(logins, repo, "tasks:read");
+    const out = logins.filter((l) => may.has(l.toLowerCase()));
     if (out.length < logins.length) {
       const left = logins.filter((l) => !out.includes(l));
       log(`${repo}: reviewers left out, without tasks:read: ${left.join(", ")}`);
