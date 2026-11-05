@@ -599,7 +599,13 @@ test("MCP: get_run_log reads a page from the middle as the whole log reads there
     listener({ event: "phase", phase: "setup", at: 3000 }) +
     listener({ event: "phase", phase: "work", at: 4000 });
   const tail = at(9000) + call + listener({ event: "delivered", at: 9500, message: "Hi" });
-  const log = prepared + work + tail + work;
+  // Plain lines after the preparation (a push's output, say), an `at` line each second: a page
+  // starting among them gives them the time the lines before it last said (#719).
+  const pushed = (second) =>
+    at(second * 1000) +
+    Array.from({ length: 200 }, (_, i) => `remote: line ${second}.${i}\n`).join("");
+  const wrapUp = listener({ event: "phase", phase: "wrap-up", at: 9100 }) + pushed(10) + pushed(11);
+  const log = prepared + work + tail + work + wrapUp;
   const { ctx, reads } = orchestrator({ runs: [runOf("org/repo#1", id)], logs: { [id]: log } });
   const { tool } = await serveMcp(t, ctx);
   const whole = log.split("\n").flatMap(reader(agentFor("claude")));
@@ -611,6 +617,14 @@ test("MCP: get_run_log reads a page from the middle as the whole log reads there
     pages.flatMap((p) => p.entries),
     JSON.parse(JSON.stringify(whole)),
   );
+  const plain = whole.filter((e) => e.kind === "raw" && e.text.startsWith("remote:"));
+  assert.equal(plain.length, 400);
+  assert.deepEqual(new Set(plain.map((e) => e.at)), new Set([10000, 11000]));
+  // A page from the middle of a second's lines: the `at` line well before it, read back for.
+  const from = Buffer.byteLength(log) - 3000;
+  const inPush = (await tool("get_run_log", { runId: id, from })).structuredContent;
+  assert.ok(inPush.entries.length > 50);
+  assert.ok(inPush.entries.every((e) => e.at === 11000));
 
   const page = async (from) => (await tool("get_run_log", { runId: id, from })).structuredContent;
   // In the build: its lines are its step's output, its end the step's, as started at 7000.

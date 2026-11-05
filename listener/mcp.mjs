@@ -22,7 +22,7 @@ import { parseKey } from "./events.mjs";
 import { AGENTS } from "./agents/index.mjs";
 import { CLAIM_WAIT_MS, LEASE_MS, MACHINE_PROTOCOL, MACHINE_PROTOCOLS } from "./claims.mjs";
 import { HEARTBEAT_MS, MAX_CAPACITY, ONLINE_MS, WARNING } from "./machines.mjs";
-import { reader, stampOf } from "./runlog.mjs";
+import { parse, reader, stampOf, timeOf } from "./runlog.mjs";
 import { taskId } from "./spelling.mjs";
 
 // The versions of the protocol this server speaks, the newest first: a client asking for
@@ -57,6 +57,19 @@ const LINE_STEP = 4 * 1024;
 const PRIMING_BYTES = 4 * 1024;
 // Enough for an `at` line (runlog.mjs writeEvent()), the one before a page's first line.
 const STAMP_BYTES = 128;
+// The most read back from a page for the last time its log said (lastTime()): a page.
+const TIME_BYTES = PAGE_BYTES;
+
+// Whether a page's text has plain lines (setup's output, a push's) before any that says a time
+// (runlog.mjs timeOf()): those take the time the log said before the page (readerAt()).
+function plainFirst(text, agent) {
+  for (const line of text.split("\n")) {
+    if (!line.trim()) continue;
+    if (timeOf(line, agent) !== null) return false;
+    if (parse(line) === null) return true;
+  }
+  return false;
+}
 
 export const READ = "deckhand:read";
 export const WORK = "deckhand:work";
@@ -581,7 +594,7 @@ export function createMcp({ source, version = "dev", now = Date.now, log = () =>
     // The newest page runs to the log's end, however far back it starts.
     const end = from === null ? size : Math.min(size, start + limit);
     const page = await readPage(run.id, start, end, size, !running);
-    const read = await readerAt(run, page.from);
+    const read = await readerAt(run, page.from, plainFirst(page.text, agentFor(run.agent)));
     const entries = page.text.split("\n").flatMap(read);
     const previous =
       page.from > 0
@@ -1055,7 +1068,7 @@ export function createMcp({ source, version = "dev", now = Date.now, log = () =>
   // just before gives the page's first line. Only the run's preparation sets them, so only it is
   // read, to the page at most (settled()): a page after it reads the log's first lines, not all
   // before it.
-  async function readerAt(run, from) {
+  async function readerAt(run, from, plain = false) {
     const read = reader(agentFor(run.agent));
     if (from === 0) return read;
     const decoder = new StringDecoder("utf8");
@@ -1074,8 +1087,9 @@ export function createMcp({ source, version = "dev", now = Date.now, log = () =>
         else read(line);
       }
     }
-    // Lines left unread: the last time setup's output took doesn't hold past them.
-    if (unread || offset < from) read.skipped();
+    // Lines left unread: the time setup's output takes is the last one they said, looked for
+    // back from the page when it starts with such lines (`plain`).
+    if (unread || offset < from) read.skipped(plain ? await lastTime(run, from) : null);
     // Read again when the priming got there: an `at` line only sets the time of the next one.
     const start = Math.max(0, from - STAMP_BYTES);
     const lines = (await readRange(run.id, start, from)).toString("utf8").split("\n");
@@ -1086,6 +1100,29 @@ export function createMcp({ source, version = "dev", now = Date.now, log = () =>
       read(before);
     }
     return read;
+  }
+
+  // The time the last whole line before byte `from` that says one says (runlog.mjs timeOf()),
+  // read back from it, TIME_BYTES at most; null when none is found there. Close: setup's output
+  // gets an `at` line each second (needsStamp()).
+  async function lastTime(run, from) {
+    const agent = agentFor(run.agent);
+    const least = Math.max(0, from - TIME_BYTES);
+    let data = Buffer.alloc(0);
+    for (let start = from, step = STAMP_BYTES; start > least; step *= 2) {
+      const end = start;
+      start = Math.max(least, end - step);
+      data = Buffer.concat([await readRange(run.id, start, end), data]);
+      const lines = data.toString("utf8").split("\n");
+      lines.pop();
+      // Whole, not the end of a longer line cut where the read starts.
+      if (start > 0) lines.shift();
+      for (let i = lines.length - 1; i >= 0; i--) {
+        const time = timeOf(lines[i], agent);
+        if (time !== null) return time;
+      }
+    }
+    return null;
   }
 
   // The start of the line holding byte `a - 1` (no new line), read back from it: `a` itself

@@ -21,6 +21,7 @@ import {
   summaryKey,
   stream,
   summaryOf,
+  timeOf,
   writeEvent,
 } from "../listener/runlog.mjs";
 import { agentFor } from "../listener/agents/index.mjs";
@@ -966,6 +967,28 @@ test("reader: messages are timed, setup's output keeps the last time said", () =
   );
   read.skipped();
   assert.deepEqual(read("later"), [{ kind: "raw", text: "later" }]);
+});
+
+// What a page read from the middle looks back for (mcp.mjs lastTime()): the time the reader
+// gives the plain lines after it. A listener's line at an earlier time (another clock) sets it
+// back: the last one said, as the reader keeps it.
+test("timeOf: an `at` line's time, or one of the listener's lines', the reader's alike", () => {
+  const note = line({ type: "listener", event: "note", at: 1500, message: "Image x" });
+  assert.equal(timeOf(line({ type: "listener", event: "at", at: 2000 })), 2000);
+  assert.equal(timeOf(note), 1500);
+  assert.equal(timeOf(phase("work", 3000)), 3000);
+  assert.equal(timeOf("npm ci"), null);
+  assert.equal(timeOf(line({ type: "result", result: "Done.", duration_ms: 1 })), null);
+  // One that shows nothing says no time.
+  assert.equal(timeOf(line({ type: "listener", event: "session", at: 4000 })), null);
+  const read = reader();
+  const at = line({ type: "listener", event: "at", at: 2000 });
+  assert.deepEqual(
+    [at, "a", note, "b"].flatMap(read).map((e) => e.at),
+    [2000, 1500, 1500],
+  );
+  read.skipped(7000);
+  assert.deepEqual(read("c"), [{ kind: "raw", text: "c", at: 7000 }]);
 });
 
 test("needsStamp: the agent's timed events always, setup's output once a second", () => {

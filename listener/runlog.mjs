@@ -526,11 +526,21 @@ const STAMPED = new Set(["tool", "output", "step", "text", "result"]);
 // The phases of a run's preparation, the only ones whose lines reader() reads apart.
 const PREPARING = new Set(["setup", "image"]);
 
+// The time a log line says for setup's output after it (reader()): an `at` line's, or one of
+// the listener's own lines' (a note, a phase…), null for any other. What a page read from the
+// middle of a log (mcp.mjs) looks back for.
+export function timeOf(line, agent = agentFor()) {
+  const stamp = stampOf(line);
+  if (stamp !== null) return stamp;
+  if (parse(line)?.type !== "listener") return null;
+  return format(line, agent).findLast((e) => e.at !== undefined)?.at ?? null;
+}
+
 // format() for a stream of a log's lines, in order: it follows the phase they are in, the
 // image build's lines come as its steps (buildEntries()), and a line after an `at` one gets
 // its time (`at`, ms), setup's output the last one said (STAMPED). Logs from before `at` lines
-// have none. Its `skipped()`: lines were left unread before the next one (mcp.mjs readerAt()),
-// so the last time said no longer holds for it. Its `settled()`: whether the
+// have none. Its `skipped(time)`: lines were left unread before the next one (mcp.mjs
+// readerAt()), the last of them that said a time (timeOf()) saying `time` (null: none known). Its `settled()`: whether the
 // run's preparation is over (a phase after it, or an agent's line in a log from before phases),
 // after which the lines read so far change how no later one reads but through an `at` line:
 // where a page read from the middle of a log (mcp.mjs) stops reading what comes before it.
@@ -563,17 +573,20 @@ export function reader(agent = agentFor()) {
       settled = phase === null ? parse(line)?.type !== "listener" : !PREPARING.has(phase);
     if (at !== null) last = at;
     for (const e of entries) {
-      // A build step's later status keeps when it started: the time only goes forward.
-      if (e.at !== undefined) last = Math.max(last ?? e.at, e.at);
-      else if (at !== null && STAMPED.has(e.kind)) e.at = at;
+      // A line's own time (the listener's lines: timeOf()), as it is, even before the last
+      // one (another clock's): a second at most. A build step's later status keeps when it
+      // started: not a time said now.
+      if (e.at !== undefined) {
+        if (e.kind !== "step") last = e.at;
+      } else if (at !== null && STAMPED.has(e.kind)) e.at = at;
       else if (last !== null && e.kind === "raw") e.at = last;
     }
     at = null;
     return entries;
   };
   reading.settled = () => settled;
-  reading.skipped = () => {
-    last = null;
+  reading.skipped = (time = null) => {
+    last = time;
   };
   return reading;
 }

@@ -323,9 +323,10 @@ pre.out {
   overflow-x: auto;
 }
 
-/* An output with no call before it: a box of its own. */
+/* An output with no call before it: a box of its own (each in its own cell with the times). */
 .line + pre.out,
-.say + pre.out {
+.say + pre.out,
+.stamped:has(> .line, > .say) + .stamped > pre.out {
   border: 1px solid var(--border);
   border-radius: 10px;
 }
