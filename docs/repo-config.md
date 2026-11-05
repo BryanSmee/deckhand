@@ -1679,6 +1679,12 @@ aren't checked so, as they may name another repository's modes. Only evaluating 
 what they name, so a rule that holds for none of those inputs (a binding of a repository not
 checked, a login outside `ALLOWED_USERS`) isn't said.
 
+A binding whose `role` is none of `access-roles.rego`'s (`viwer`) gives nothing but its own
+`actions`. The same checks of the operator's rules say it, whoever and wherever the binding is
+for: `access-roles.rego` answers their input of its own (`check: "roles"`, which no decision
+sends) with an action per such role, `deckhand:unknown-role:<role>`. A grants folder's
+`access-roles.rego` replaces that rule too: without it, nothing is said.
+
 **Roles and bindings**: Deckhand's `access-roles.rego` defines four roles as action sets, and
 gives each login the actions of the `bindings` that match it:
 
