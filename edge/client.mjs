@@ -97,7 +97,6 @@ export function createEdgeClient({
       return tags;
     },
     scan: async () => (await client.json("POST", "/redeliveries/scan", { waitMs: 30_000 })).count,
-    handOver: (body) => client.json("PUT", "/app", { body }),
     stop() {
       stopped = true;
       stopping.abort();

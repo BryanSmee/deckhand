@@ -737,9 +737,8 @@ on no caller's network.
 (`POST /app/manifest`, edge alone), which keeps the key and answers with the rest. GitHub
 converts a code once: the rest is kept beside the key for an hour (`setup.json`), so that an
 edge that didn't get the answer gets it by asking again with the same code (its /setup
-callback loaded again), and goes then. A refused handover (another App's key there) is said
-once in the orchestrator's log, and the key stays in its `app.json` until the operator removes one
-of the two.
+callback loaded again), and goes then. No other way in: the service takes no key from another
+service (#820).
 
 **The operator's credentials** (the agents' keys, the plans' logins) are no service's but the
 models service's (#504): the github service redacts them from the runs' writes without
