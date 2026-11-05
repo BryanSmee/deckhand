@@ -1370,8 +1370,9 @@ asks every 250 ms). On a crash, or a store that no longer answers it, the lease 
 (15 s) and the other copy takes over; the stopped one, by its own clock, no longer acts. Either
 copy finds the sandboxes again by their labels, and the logs and events in the store: the file
 store for one node, Redis for copies on several (`STORE_URL`, docs/setup.md, The store). The
-runs' inboxes are files of its `runs` volume, which it copies to the broker service as they change
-(the broker serves them): two copies on several nodes need that volume shared. With Docker Compose, one copy runs: an update is a wait
+runs' inboxes are files of its own volume (`runner-data`'s `runs/` folder), which it copies to the
+broker service as they change (the broker serves them): two copies on several nodes need that
+folder shared. With Docker Compose, one copy runs: an update is a wait
 of the runner's calls, which the orchestrator waits for (30 minutes for a run's, 10 s, then the last
 answer, for the egress policy's questions about a sandbox's address).
 
