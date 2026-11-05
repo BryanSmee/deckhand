@@ -1870,7 +1870,6 @@ operator's layer, under the operator's files:
   runs](#the-run-input).
 - **`review.rego`** for the reviews that start by themselves: it skips other bots' pull
   requests ([below](#reviewrego)), which no allowlist stops, as the allowlist lists people.
-- **`machines.rego`** refuses to auto-merge a machine's pull request ([below](#machinesrego)).
 - **`access.rego`** gives every login every action, and **`access-roles.rego`** the roles
   and the rule that turns the operator's `bindings` into actions ([access](#access)): the
   grants folder's `policy/access.rego` replaces the first, usually with bindings only.
@@ -1947,7 +1946,7 @@ reviewed, at the operator's cost. The config check warns of one that never names
 `author_type`, at the start and on every Policies tab: copy the rule above into it, or name
 `author_type` in a comment if bots' pull requests should be reviewed.
 
-<!-- onboarding: skip: `machines.rego` refuses to auto-merge a machine's pull request: docs/repo-config.md in Deckhand's source. -->
+<!-- onboarding: skip: `machines.rego` is in docs/repo-config.md in Deckhand's source. -->
 
 #### machines.rego
 
@@ -2248,9 +2247,8 @@ there asks for a permission, the App's comment says so, and the owner answers wi
 `/allow run` or `/deny` (or on the task's page): anyone else's answer is ignored
 ([setup.md](setup.md#mcp-clients)).
 
-The machine pushes the issue's branch with its owner's git; the App opens its pull request
-([setup.md](setup.md#mcp-clients)), reviewed and fixed as a sandbox run's, never auto-merged by
-Deckhand's default [`machines.rego`](#machinesrego).
+The App opens the pull request from the branch the machine pushed, which Deckhand's default
+`machines.rego` never auto-merges.
 
 ## Auto-pickup
 
