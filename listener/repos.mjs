@@ -722,5 +722,6 @@ export function createRepoApi({
     log,
   });
 
-  return { handle };
+  // `listed`: the list as GET /api/repos answers it (the MCP tools', mcp.mjs).
+  return { handle, listed };
 }

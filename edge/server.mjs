@@ -151,8 +151,16 @@ const auth = createAuth({
   log,
 });
 
-// MCP clients' sign-in (#481): GitHub's, through `auth`; their tokens hashed in the store.
-const oauth = createOAuth({ config, auth, store, publicUrl, log });
+// MCP clients' sign-in (#481): GitHub's, through `auth`; their tokens hashed in the store. Their
+// calls, once signed in, go on to the orchestrator's tools (#482).
+const oauth = createOAuth({
+  config,
+  auth,
+  store,
+  publicUrl,
+  serve: (req, res, who) => http.mcp(req, res, who),
+  log,
+});
 
 const redeliveries = createRedeliveries({
   store,

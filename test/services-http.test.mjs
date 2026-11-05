@@ -101,8 +101,15 @@ test("edge's requests: the dashboard's API with the user it signed in, from edge
       origin: "https://deck.example.com",
       user: "alice",
       local: false,
+      scopes: null,
     },
   ]);
+  // An MCP client's call (/mcp), with its token's scopes.
+  await ask(
+    { ...as("edge", "orchestrator"), "x-deckhand-scopes": "deckhand:read deckhand:work" },
+    "/edge/mcp",
+  );
+  assert.deepEqual(seen.pop().scopes, ["deckhand:read", "deckhand:work"]);
   // The runner's token, none, or another service's: the user header counts for nothing.
   assert.equal((await ask(as("runner", "orchestrator"))).status, 403);
   assert.equal((await ask({})).status, 401);

@@ -241,6 +241,31 @@ test("/mcp without a token: 401 naming the resource metadata", async (t) => {
   assert.match(bad.headers.get("www-authenticate"), /error="invalid_token"/);
 });
 
+test("/mcp from another Origin: 403, whatever the token; native clients send none", async (t) => {
+  const s = await serveOAuth(t);
+  const { tokens } = await s.connect();
+  const call = (origin) =>
+    s.call("/mcp", {
+      method: "POST",
+      headers: { authorization: `Bearer ${tokens.access_token}`, ...(origin && { origin }) },
+    });
+  for (const origin of ["https://evil.example", "http://deck.example.com", "null", "nonsense"]) {
+    const res = await call(origin);
+    assert.equal(res.status, 403, origin);
+  }
+  // Refused before the token is read: no token, still 403.
+  const bare = await s.call("/mcp", {
+    method: "POST",
+    headers: { origin: "https://evil.example" },
+  });
+  assert.equal(bare.status, 403);
+  for (const origin of [PUBLIC, null]) {
+    const res = await call(origin);
+    assert.equal(res.status, 200, String(origin));
+    assert.equal((await res.json()).login, "alice");
+  }
+});
+
 test("registration: public clients, loopback or https:// redirect URIs only", async (t) => {
   const s = await serveOAuth(t);
   const ok = await s.register([REDIRECT, "https://vscode.dev/redirect"], {
