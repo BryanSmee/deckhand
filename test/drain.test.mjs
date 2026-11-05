@@ -5,7 +5,7 @@ import { Agent, request } from "node:http";
 import { test } from "node:test";
 import { EventEmitter } from "node:events";
 import { drain, drainable, drainOnSigterm } from "../lib/drain.mjs";
-import { serve } from "./helpers.mjs";
+import { serve, until } from "./helpers.mjs";
 
 // A server whose /stream answers (an agent's) stay open in `streams`, for the test to write
 // and end; /quick answers at once.
@@ -137,7 +137,8 @@ test("on SIGTERM, every service: what it does first, its servers drain together,
   });
 
   signals.emit("SIGTERM");
-  await new Promise((resolve) => setTimeout(resolve, 20));
+  // Both closed once before() is done: a wait for that, not a fixed delay a slow runner outlasts.
+  await until(() => !server.listening && !other.server.listening, { what: "both servers closed" });
   await refused(port);
   await refused(other.port);
   streams[0].end("data: 2\n\n");
