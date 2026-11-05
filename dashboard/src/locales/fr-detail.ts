@@ -101,7 +101,7 @@ export const detail = {
   "reviewLoop.outdated": "Revue périmée",
   "reviewLoop.reviewing": "Revue en cours",
   "reviewLoop.fixing": "Correction en cours",
-  "reviewLoop.checks": "En attente des vérifications",
+  "reviewLoop.checks": "En attente des checks",
   "reviewLoop.ci": "En attente de la CI",
   "reviewLoop.ciFix": "Correction de la CI",
   "reviewLoop.ciFailed": "CI échouée, pas relue",

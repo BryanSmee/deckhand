@@ -49,7 +49,7 @@ export const request = {
   "request.outcomeInterrupted": "Interrompue",
   "request.outcomeCancelled": "Annulée",
   "request.warning":
-    "C’est une grosse exécution : elle utilise le budget Claude de l’opérateur, sur le modèle des exécutions légères.",
+    "C’est une grosse exécution : elle utilise le budget Claude de l’opérateur, avec le modèle des exécutions légères.",
 
   // Analyze runs: the footer's action
   "request.analyze": "Analyser",

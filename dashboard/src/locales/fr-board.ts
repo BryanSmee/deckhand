@@ -6,8 +6,8 @@ import type { board as en } from "./en-board";
 
 export const board = {
   // Board.tsx: its toolbar, options and notices.
-  "board.startIn": "Lancer en",
-  "board.startInBox": "Lancer en {select}",
+  "board.startIn": "Lancer en mode",
+  "board.startInBox": "Lancer en mode {select}",
   "board.showClosed": "Afficher les fermées",
   "board.showClosedHelp":
     "Issues fermées comme terminées ou non prévues, et pull requests fusionnées",
@@ -37,20 +37,20 @@ export const board = {
   "drag.startWork": "Lancer le travail sur {ref}",
   "drag.layOut": "Disposer {ref} et ses sous-issues",
   "drag.start": "Lancer {ref}",
-  "drag.startIn": "Lancer {ref} en {mode}",
+  "drag.startIn": "Lancer {ref} en mode {mode}",
   // The same, its open questions answered first.
   "drag.answerQueueAfter": "Répondre à {ref}, puis mettre en file après {node}",
   "drag.answerLayOutAfter": "Répondre à {ref}, puis disposer après {node}",
   "drag.answerStartWork": "Répondre à {ref}, puis lancer le travail",
   "drag.answerLayOut": "Répondre à {ref}, puis la disposer avec ses sous-issues",
   "drag.answerStart": "Répondre à {ref}, puis lancer",
-  "drag.answerStartIn": "Répondre à {ref}, puis lancer en {mode}",
+  "drag.answerStartIn": "Répondre à {ref}, puis lancer en mode {mode}",
 
   // graphModel.ts: the legend's tones, and what each means.
   "graph.lookRunning": "En cours",
   "graph.lookRunningMeans": "en cours de traitement",
-  "graph.lookInput": "Pour vous",
-  "graph.lookInputMeans": "des questions à répondre, ou le tour d’un brainstorm",
+  "graph.lookInput": "Vous attend",
+  "graph.lookInputMeans": "des questions auxquelles répondre, ou votre tour dans un brainstorm",
   "graph.lookReady": "Prête pour la revue",
   "graph.lookReadyMeans": "CI réussie, aucun conflit, boucle de revue propre",
   "graph.lookError": "Erreur",

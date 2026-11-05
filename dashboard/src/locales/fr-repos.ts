@@ -6,7 +6,7 @@ export const repos = {
   // Settings › Repositories: a config that isn't the user's to read
   "repos.configLabel": "Configuration de {repo}",
   "repos.configDenied":
-    "La config de {repo} ne vous est pas lisible : vous n’y avez pas {permission}.",
+    "La config de {repo} ne vous est pas accessible : vous n’y avez pas {permission}.",
   "repos.back": "Retour aux dépôts",
 
   // The onboarding card
@@ -98,7 +98,7 @@ export const repos = {
   "health.roleEdge": "webhooks, API, interface",
   "health.roleOrchestrator": "événements, tâches, file d’attente",
   "health.roleRunner": "sandboxes, images, journaux",
-  "health.roleBroker": "jetons, endpoints des exécutions",
+  "health.roleBroker": "jetons, points d’accès des exécutions",
   "health.roleGithub": "passerelles GitHub",
   "health.roleModels": "relais de l’API des agents",
   "health.rolePolicy": "opa, sans réseau",

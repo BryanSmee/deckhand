@@ -10,7 +10,7 @@ export const overview = {
   "overview.ofSlots": { one: "sur {count} emplacement", other: "sur {count} emplacements" },
   "overview.autoPicked": "{count} en prise auto",
   "overview.queued": "{count} en file",
-  "overview.needsYou": "Pour vous",
+  "overview.needsYou": "Vous attend",
   "overview.questions": { one: "{count} question", other: "{count} questions" },
   "overview.brainstormTurns": {
     one: "{count} tour de brainstorm",
@@ -30,7 +30,10 @@ export const overview = {
   "overview.failed": "Échouées",
   "overview.nothingFailed": "aucun échec",
   "overview.canBeRerun": "relance possible",
-  "overview.someCanBeRerun": "relance possible pour {count}",
+  "overview.someCanBeRerun": {
+    one: "{count} peut être relancée",
+    other: "{count} peuvent être relancées",
+  },
 
   // Waiting on you: its rows' badges and actions.
   "overview.waitingOnYou": "En attente de vous",

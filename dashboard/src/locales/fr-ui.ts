@@ -32,7 +32,7 @@ export const ui = {
   "ui.planUsed": "{plan} {window} : {percent} utilisés",
   // The usage, then its notes (the ones below, joined as a list).
   "ui.planStale": "relevé avant sa dernière réinitialisation, donc plus à jour",
-  "ui.planLimitedUntil": "limite atteinte jusqu’à {time}",
+  "ui.planLimitedUntil": "limite atteinte, levée {time}",
   "ui.planResets": "réinitialisation {time}",
   "ui.planAsOf": "relevé {ago}",
 } satisfies Section<typeof en>;

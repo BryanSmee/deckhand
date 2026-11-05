@@ -148,7 +148,8 @@ deploy/       kubernetes/: the manifests for a cluster (#396), a kustomize base 
               grafana/deckhand.json: the Grafana dashboard, alerts/: the alert rules and their
               promtool tests (#661; docs/setup.md, Metrics), the chart carrying copies of both in
               helm/deckhand/files/, held the same by test/metrics-deploy.test.mjs
-docs/         setup, per-repo config reference, security model, architecture
+docs/         setup, per-repo config reference, security model, architecture, the dashboard's
+              languages (dashboard-languages.md)
 ```
 
 ## Conventions

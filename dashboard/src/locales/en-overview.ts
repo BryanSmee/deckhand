@@ -20,7 +20,7 @@ export const overview = {
   "overview.failed": "Failed",
   "overview.nothingFailed": "nothing failed",
   "overview.canBeRerun": "can be rerun",
-  "overview.someCanBeRerun": "{count} can be rerun",
+  "overview.someCanBeRerun": { one: "{count} can be rerun", other: "{count} can be rerun" },
 
   // Waiting on you: its rows' badges and actions.
   "overview.waitingOnYou": "Waiting on you",

@@ -37,23 +37,23 @@ export const queue = {
 
   // A tab's hint: what its cards' drags do.
   "queue.hintBacklog":
-    "Glissez sur le tableau pour lancer · sur une carte pour passer après elle · sur l’onglet Brainstorm pour un brainstorm.",
+    "Glissez sur le tableau pour lancer · sur une carte pour passer après elle · sur l’onglet Brainstorm pour en faire un brainstorm.",
   "queue.hintBrainstorm":
     "Glissez sur le tableau pour lancer le travail · sur une carte pour passer après elle · sur l’onglet Backlog pour arrêter.",
   "queue.hintWaiting":
-    "Sur le tableau, écartez une carte en attente pour mettre fin à son attente, ou déposez-la sur une autre carte pour qu’elle attende celle-ci.",
+    "Sur le tableau, déplacez une carte en attente ailleurs pour mettre fin à son attente, ou sur une autre carte pour qu’elle attende celle-ci.",
   "queue.hintAnswers":
     "Glissez sur le tableau pour répondre et lancer · sur une carte pour répondre et passer après elle.",
   "queue.hintQueued":
-    "L’ordre de lancement quand un emplacement se libère · glissez au-dessus ou en dessous d’une autre carte pour déplacer · sur une carte du tableau pour passer après elle · sur l’onglet Backlog pour la retirer. Les brainstorms démarrent en premier.",
+    "L’ordre de lancement quand un emplacement se libère · glissez au-dessus ou en dessous d’une autre carte pour la déplacer · sur une carte du tableau pour passer après elle · sur l’onglet Backlog pour la retirer. Les brainstorms démarrent en premier.",
 
   // A card: its name without a title, the line under it, its status while dragged.
   "queue.untitled": "Issue #{number}",
   "queue.inLine": "{position} dans l’ordre",
   "queue.startsFirst": "démarre en premier",
   "queue.subIssues": {
-    one: "{count} sous-issue · lancer la dispose",
-    other: "{count} sous-issues · lancer les dispose",
+    one: "{count} sous-issue · le lancement la dispose",
+    other: "{count} sous-issues · le lancement les dispose",
   },
   "queue.openQuestions": { one: "{count} question ouverte", other: "{count} questions ouvertes" },
   "queue.openQuestionsUncounted": "Questions ouvertes",

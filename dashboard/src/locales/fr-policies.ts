@@ -40,9 +40,9 @@ export const policies = {
 
   // A task's Policies tab: a merge a policy kept for a human
   "policies.held": "Une politique a réservé cette pull request à un humain",
-  "policies.heldGates": "Les contrôles de Deckhand sont passés {at}, puis {then}",
+  "policies.heldGates": "Contrôles de Deckhand franchis {at}, puis {then}",
   "policies.heldAt": "{at} : {then}",
-  "policies.heldFailed": "{rule} a échoué, donc refusée : toute erreur de politique vaut refus.",
+  "policies.heldFailed": "{rule} a échoué, d’où un refus : toute erreur de politique vaut refus.",
   "policies.heldReturned": {
     one: "{rule} a renvoyé {count} raison.",
     other: "{rule} a renvoyé {count} raisons.",
@@ -124,9 +124,9 @@ export const policies = {
   "policyConfig.refusedMerge": "Toute fusion auto est refusée {until}.",
   "policyConfig.decisionReview": "Revue automatique",
   "policyConfig.deniesReview":
-    "Un refus saute la revue automatique ; /mode review s’exécute quand même.",
+    "Un refus annule la revue automatique ; /mode review s’exécute quand même.",
   "policyConfig.refusedReview":
-    "Les revues automatiques sont sautées {until} ; /mode review s’exécute quand même.",
+    "Les revues automatiques n’ont pas lieu {until} ; /mode review s’exécute quand même.",
   "policyConfig.decisionFix": "Exécution de correction",
   "policyConfig.deniesFix":
     "Un refus ne lance aucune exécution de correction (celle d’une revue, une correction CI ou le rebase d’un conflit) ; un commentaire sur la pull request explique pourquoi.",
@@ -289,7 +289,7 @@ export const policies = {
   // Settings › Server: the webhook deliveries and the last sync
   "server.deliveries": "Livraisons de webhooks",
   "server.noSync": "Aucune synchro pour l’instant.",
-  "server.syncFailed": "Dernière synchro {when} échouée : {error}",
+  "server.syncFailed": "Échec de la dernière synchro {when} : {error}",
   "server.syncUpToDate": "Dernière synchro {when} : à jour avec GitHub.",
   "server.synced": "Dernière synchro {when} : {done}.",
   "server.sync": "Synchroniser",

@@ -9,9 +9,9 @@ export const chats = {
   "chats.keptTitle": "Les conversations que vous gardez, sur le maximum autorisé",
   "chats.newChat": "Nouvelle conversation",
   "chats.loading": "Chargement…",
-  "chats.noneAllowed": "Pas de conversations ici : CHATS_PER_USER vaut 0.",
+  "chats.noneAllowed": "Aucune conversation ici : CHATS_PER_USER vaut 0.",
   "chats.atLimit":
-    "Vous gardez {kept} conversations sur {limit}, le maximum : supprimez-en une pour en commencer une autre.",
+    "Vous gardez {kept} conversations sur {limit}, le maximum autorisé : supprimez-en une pour en commencer une autre.",
   "chats.noRepository": "Aucun dépôt ne vous permet de commencer une conversation.",
   "chats.cantRead": "Impossible de lire vos conversations ({error})",
   "chats.noneOn": "Pas encore de conversation sur {repo}.",
@@ -21,7 +21,7 @@ export const chats = {
   "chats.noSuchChat": "Conversation introuvable : elle a été supprimée, ou elle n’est pas à vous.",
   "chats.pick": "Choisissez une conversation, ou commencez-en une.",
   "chats.intro":
-    "Commencez une conversation pour interroger l’agent sur un dépôt, ou pour essayer des choses dans une sandbox à elle. Il peut lire les issues et les pull requests du dépôt, mais n’écrit rien sur GitHub.",
+    "Commencez une conversation pour interroger l’agent sur un dépôt, ou pour essayer des choses dans sa propre sandbox. Il peut lire les issues et les pull requests du dépôt, mais n’écrit rien sur GitHub.",
 
   // The open chat's header and menu
   "chats.back": "Retour à vos conversations",
@@ -47,7 +47,7 @@ export const chats = {
 
   // New chat
   "chats.newSub":
-    "Une sandbox à elle sur le dépôt, en lecture seule sur GitHub. Elle s’arrête après un moment sans message, et redémarre au suivant.",
+    "Une sandbox dédiée sur le dépôt, en lecture seule sur GitHub. Elle s’arrête après un moment sans message, et redémarre au suivant.",
   "chats.starting": "Démarrage…",
   "chats.start": "Commencer",
   "chats.repository": "Dépôt",
@@ -85,8 +85,8 @@ export const chats = {
   // The conversation
   "chats.conversation": "Conversation",
   "chats.showEarlier": {
-    one: "Afficher plus tôt ({count} autre exécution de sandbox)",
-    other: "Afficher plus tôt ({count} autres exécutions de sandbox)",
+    one: "Voir les précédents ({count} autre exécution de sandbox)",
+    other: "Voir les précédents ({count} autres exécutions de sandbox)",
   },
   "chats.empty":
     "Posez n’importe quelle question sur {repo} : votre premier message démarre sa sandbox.",
@@ -95,7 +95,7 @@ export const chats = {
   "chats.notSent": "Non envoyé : {error}",
   "chats.message": "Message",
   "chats.messagePlaceholder": "Écrire à l’agent",
-  "chats.noMessages": "Cette conversation ne prend pas de messages",
+  "chats.noMessages": "Cette conversation n’accepte pas de message",
   "chats.send": "Envoyer",
   "chats.sendTitle": "Envoyer (Enter ; Shift Enter ajoute une ligne)",
   "chats.sandboxStarted": "Sandbox démarrée {when}",
@@ -117,10 +117,10 @@ export const chats = {
   "chats.asksWhat": "{asks} : {what}",
   "chats.appliesNow": "S’applique tout de suite à sa sandbox.",
   "chats.appliesLater":
-    "S’applique au redémarrage de sa sandbox : Redémarrer maintenant, dans les permissions de la conversation, une fois que l’agent a répondu.",
+    "S’applique au redémarrage de sa sandbox : « Redémarrer maintenant », dans les permissions de la conversation, une fois que l’agent a répondu.",
   "chats.deniedIn": {
-    one: "Refusé dans {count} minute sans réponse.",
-    other: "Refusé dans {count} minutes sans réponse.",
+    one: "Refusée dans {count} minute faute de réponse.",
+    other: "Refusée dans {count} minutes faute de réponse.",
   },
   "chats.approveOnce": "Approuver une fois",
   "chats.approveChat": "Approuver pour la conversation",
@@ -131,7 +131,7 @@ export const chats = {
   "chats.permissionsLoading": "Chargement des permissions…",
   "chats.permissionsNote":
     "Ce que la sandbox de cette conversation peut faire, dans la limite de ce que les autorisations de l’opérateur et les politiques du dépôt accordent à une conversation. Appliqué dans la sandbox ; les changements prennent effet à son prochain démarrage.",
-  "chats.permissionsDocs": "Comment les conversations sont encadrées",
+  "chats.permissionsDocs": "Comment les conversations sont confinées",
   "chats.wouldntStart":
     "La prochaine exécution de cette conversation ne démarrerait pas, quelles que soient ses permissions :",
   "chats.github": "GitHub",
@@ -152,7 +152,7 @@ export const chats = {
   "chats.network": "Réseau",
   "chats.noHosts":
     "L’opérateur n’accorde à ce dépôt aucun hôte au-delà de ceux dont toute exécution a besoin.",
-  "chats.internetOn": "Avec internet ouvert, la sandbox atteint n’importe quel hôte public.",
+  "chats.internetOn": "Avec Internet ouvert activé, la sandbox atteint n’importe quel hôte public.",
   "chats.hostsNeeded":
     "Les hôtes dont toute exécution a besoin (l’API de l’agent, GitHub) restent joignables. Un hôte absent des autorisations ne peut pas être ajouté ici.",
   "chats.mounts": "Montages",

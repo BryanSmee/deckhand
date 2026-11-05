@@ -17,7 +17,7 @@ export const app = {
   "app.shortcutSettings": "Paramètres",
   "app.shortcutSidebar": "Replier la barre latérale",
   "app.shortcutTheme": "Thème : système, clair, sombre",
-  "app.shortcutBack": "Fermer, ou revenir",
+  "app.shortcutBack": "Fermer ou revenir",
   "app.shortcutSearch": "Rechercher des tâches",
   "app.shortcutNextTask": "Tâche suivante / précédente",
   "app.shortcutFilter": "Filtre : Toutes … Erreur",
@@ -56,7 +56,7 @@ export const app = {
   "app.shortcutsTitle": "Raccourcis clavier",
   "app.shortcutsSub": "Appuyez sur {key} n’importe où pour les afficher",
   "app.shortcutsHint":
-    "Les raccourcis ne se déclenchent jamais pendant la saisie dans un champ. Sur Mac, Ctrl se lit ⌘. {link}",
+    "Les raccourcis ne se déclenchent jamais pendant la saisie dans un champ. Sur Mac, Ctrl correspond à ⌘. {link}",
   "app.shortcutsOff": "Les désactiver dans les Préférences",
 
   // Ctrl K (Palette.tsx)
@@ -111,7 +111,7 @@ export const app = {
 
   // Settings (Settings.tsx)
   "app.settingsRefused":
-    "Cette page ne vous est pas ouverte : il faut {permission}, que donnent les politiques de l’opérateur.",
+    "Cette page ne vous est pas accessible : elle demande {permission}, que donnent les politiques de l’opérateur.",
 
   // The dashboard's own errors (api.ts)
   "app.noRepository": "Aucun dépôt.",

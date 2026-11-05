@@ -34,7 +34,7 @@ export const config = {
   // What stops its runs
   "config.problemsTitle": "Aucune exécution ne démarre tant que ceci n’est pas corrigé",
   "config.ungranted":
-    "Seul l’opérateur l’accorde, avec une règle {allowGrant} dans le {policy} de son dossier d’autorisations ; d’ici là, retirez-le de {file}.",
+    "Seul l’opérateur l’accorde, avec une règle {allowGrant} dans le sous-dossier {policy} de son dossier d’autorisations ; d’ici là, retirez-le de {file}.",
   "config.grantsFileErrorAny":
     "{file} dans le dossier d’autorisations de l’opérateur contient des erreurs, donc aucune exécution ne démarre, dans aucun dépôt : {error}",
   "config.grantsFileErrorThis":
@@ -58,7 +58,7 @@ export const config = {
   "config.fineText":
     "Aucune erreur, aucun avertissement, rien de refusé par les autorisations de l’opérateur.",
   "config.glance": "En bref",
-  "config.glanceModel": "Exécute avec",
+  "config.glanceModel": "S’exécute avec",
   "config.glanceEffort": "effort {effort}",
   "config.glanceParallel": "En parallèle",
   "config.glanceUsers": "Qui peut déclencher",
@@ -109,7 +109,7 @@ export const config = {
   "config.tocHosts": "Hôtes",
   "config.changing": "La modifier",
   "config.changingHelp":
-    "Un commit sur {file} dans {base}. Deckhand la relit au push, ou avec Relire.",
+    "Un commit modifiant {file} sur {base}. Deckhand la relit au push, ou avec « Relire ».",
 
   // Auto-merge's warning
   "config.autoMergeTitle": "Fusion automatique : aucune revue humaine",
@@ -143,7 +143,7 @@ export const config = {
   "config.capabilitiesUndecided":
     "Les politiques ne peuvent pas décider ce que reçoivent les exécutions : aucune ne démarre",
   "config.capabilitiesModel":
-    "À son démarrage, une exécution reçoit chaque capacité qu’une règle {allow} des politiques lui donne ({allowCapabilities}) et qu’aucune règle {deny} ne refuse ({denyCapabilities}), si {file} la demande quand une clé le fait, et si l’autorisation de l’opérateur la donne quand elle en dépend. En dehors de celles-ci, toute exécution a sa sandbox, l’API de l’agent et son prompt, rien du dépôt. Affiché pour une exécution lancée par un commentaire sur une issue, pas celle d’un fork : une politique peut décider autrement pour une pull request, celle d’un fork ou une exécution de correction.",
+    "À son démarrage, une exécution reçoit chaque capacité qu’une règle {allow} des politiques lui donne ({allowCapabilities}) et qu’aucune règle {deny} ne refuse ({denyCapabilities}), à condition que {file} la demande si une clé la contrôle, et que l’autorisation de l’opérateur la donne si elle en dépend. En dehors de celles-ci, toute exécution a sa sandbox, l’API de l’agent et son prompt, rien du dépôt. Affiché pour une exécution lancée par un commentaire sur une issue, hors fork : une politique peut décider autrement pour une pull request, celle d’un fork ou une exécution de correction.",
   "config.capabilitiesDocs": "Fonctionnement des capacités",
   "config.capabilitiesModes": "Ce que reçoivent les exécutions de chaque mode",
   "config.capabilitiesModesNote": {
@@ -161,7 +161,7 @@ export const config = {
   "config.modeEvery": "Toutes les capacités",
   "config.catalogueTitle": "Les capacités",
   "config.catalogueNote":
-    "Une exécution dont les capacités n’ont pas toutes celles dont elles ont besoin ne démarre pas ; ni une avec {pull} d’un dépôt privé et {internet}, sauf si les politiques de l’opérateur donnent {both}.",
+    "Une exécution dont une capacité n’a pas celles dont elle dépend ne démarre pas ; ni une exécution avec {pull} d’un dépôt privé et {internet}, sauf si les politiques de l’opérateur donnent {both}.",
   "config.catalogueCapability": "Capacité",
   "config.catalogueGives": "Donne",
   "config.catalogueNeeds": "Nécessite",
@@ -195,7 +195,7 @@ export const config = {
   "config.actionLogsRead": "lit les journaux de ses exécutions",
   "config.actionRunsManage": "arrête, relance, répond, écarte, ordonne et nomme les colonnes",
   "config.actionStartAll": "lance des exécutions dans tous les modes",
-  "config.actionStart": "lance des exécutions en {mode}",
+  "config.actionStart": "lance des exécutions en mode {mode}",
   "config.actionStartPrefix": "lance des exécutions dans les modes commençant par {prefix}",
   "config.actionConfigRead": "lit sa config et fait son onboarding",
   "config.actionServerRead": "lit Paramètres › Serveur et Accès, la santé et les forfaits",
@@ -245,7 +245,7 @@ export const config = {
     one: "{count} exécution à la fois",
     other: "{count} exécutions à la fois",
   },
-  "machines.seen": "vu {ago}",
+  "machines.seen": "vue {ago}",
   "machines.driver": "pilote {version}",
   "machines.repos": "Les dépôts qu’elle prend",
   "machines.remove": "Retirer",
