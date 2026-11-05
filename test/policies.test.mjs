@@ -859,6 +859,39 @@ test("check: a review.rego that replaces Deckhand's without a word on bots is wa
   assert.deepEqual((await repo.policies.describe("org/repo", "main")).warnings, [onboarding]);
 });
 
+test("check: an operator's bindings that Deckhand's access.rego cancels out are warned of", async (t) => {
+  const own = builtInPolicies().get("access.rego");
+  const bindings =
+    'package deckhand\n\nbindings := [{"users": ["alice"], "repos": ["*/*"], "role": "viewer"}]\n';
+  const warned = async (operator) => {
+    const { policies } = setup(t, { builtIn: { "access.rego": own }, operator });
+    const start = (await policies.checkOperator()).warnings;
+    const described = (await policies.describe("org/repo", "main")).warnings;
+    assert.deepEqual(described, start);
+    return start;
+  };
+  // Deckhand's alone, or bindings that replace it: nothing to say.
+  assert.deepEqual(await warned({}), []);
+  assert.deepEqual(await warned({ "access.rego": bindings }), []);
+  // A comment naming them, or another package: nothing defined for access-roles.rego.
+  assert.deepEqual(await warned({ "a.rego": "package deckhand\n# bindings := []\n" }), []);
+  assert.deepEqual(await warned({ "a.rego": bindings.replace("deckhand", "other") }), []);
+  // Beside Deckhand's, or beside a copy of it: every login keeps every action.
+  for (const operator of [
+    { "bindings.rego": bindings },
+    { "bindings.rego": bindings, "access.rego": own },
+  ]) {
+    const [warning, ...rest] = await warned(operator);
+    assert.deepEqual(rest, []);
+    assert.match(
+      warning,
+      /^The grants folder's policy\/bindings\.rego defines `bindings`, but Deckhand's access\.rego still gives every action to every login .*: the bindings narrow nothing\./,
+    );
+  }
+  const [both] = await warned({ "a.rego": bindings, "b.rego": bindings });
+  assert.match(both, /^The grants folder's policy\/a\.rego, policy\/b\.rego define `bindings`/);
+});
+
 test("check: an operator's allow_github or allow_push whatever the input is warned of", async (t) => {
   const { policies } = setup(t);
   const files = new Map([
