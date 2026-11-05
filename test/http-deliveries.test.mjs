@@ -133,6 +133,25 @@ test("conflicts: a merge into the default branch checks its pull requests soon, 
   assert.deepEqual([s.soon, s.moved], [["org/repo"], ["org/repo"]]);
 });
 
+test("conflicts: another branch made the default in the settings checks its pull requests soon (#876)", async () => {
+  const s = setup();
+  const edited = (changes) => ({
+    event: "repository",
+    payload: {
+      action: "edited",
+      changes,
+      installation: { id: 7 },
+      repository,
+      sender: { login: "bob" },
+    },
+  });
+  await s.http.deliver(edited({ default_branch: { from: "master" } }));
+  assert.deepEqual([s.soon, s.moved], [["org/repo"], ["org/repo"]]);
+  // Its description edited: no branch moved.
+  await s.http.deliver(edited({ description: { from: "" } }));
+  assert.deepEqual([s.soon, s.moved], [["org/repo"], ["org/repo"]]);
+});
+
 // The orchestrator's deliveries, with fake reviews and reviewers recording their calls.
 function deliveries() {
   const calls = [];

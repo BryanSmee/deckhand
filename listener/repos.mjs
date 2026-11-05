@@ -377,8 +377,11 @@ export function createRepoList({
 
 // Which deliveries make the list stale: refresh(repo) for a repo whose default branch moved,
 // refresh() for the installations' repos and a repository's own change (deleted, renamed,
-// transferred, made private: the list's names and `private`). Returns false for the others, a
-// repository's change included: forgottenFor() covers what it changes for the policies.
+// transferred, made private: the list's names and `private`). Returns true when the default
+// branch moved, a push or a merge into it, or another branch made the default in the
+// repository's settings (`edited` with `changes.default_branch`, #876): its open pull requests
+// are checked again. False for the others, a repository's other changes included:
+// forgottenFor() covers what they change for the policies.
 export function refreshFor(event, p, refresh) {
   if (event === "installation" || event === "installation_repositories") {
     refresh();
@@ -386,7 +389,7 @@ export function refreshFor(event, p, refresh) {
   }
   if (event === "repository") {
     refresh();
-    return false;
+    return p.action === "edited" && !!p.changes?.default_branch && !!p.repository?.full_name;
   }
   const repo = p.repository?.full_name;
   const base = p.repository?.default_branch;
