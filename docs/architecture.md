@@ -197,7 +197,8 @@ are, with `runs:start:chat`) and the agents it offers (`agents`: what `/agent` m
 chat lists its messages not delivered yet (`pending`). Its conversation is its runs' logs, read
 as any run's (`/api/runs/<id>/stream`): a chat run's first line and its delivered messages are
 `message` entries (`runlog.mjs`), the owner's turns, rather than notes. It reads nothing of the
-chat's sandbox, so a chat whose agent runs elsewhere (#601) shows the same way.
+chat's sandbox, so a chat whose agent runs elsewhere (#601) shows the same way. Who reaches a
+chat, what it may do and where its data lives: [security.md](security.md#chats).
 
 ### Modes
 
