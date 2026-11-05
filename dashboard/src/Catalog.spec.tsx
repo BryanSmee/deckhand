@@ -45,7 +45,7 @@ beforeAll(async () => {
 // writes of a date in a language it has no data for (English), and a commit's short sha.
 const NAMES = [
   ...["Ctrl", "Shift", "Esc", "Space"],
-  ...["Deckhand", "GitHub", "Claude", "English"],
+  ...["Deckhand", "GitHub", "Claude", "English", "Français"],
   ...["edge", "github", "policy", "orchestrator", "models", "broker", "runner", "proxy", "Runner"],
   ...["AM", "PM", "Oct"],
   "abcdef1",

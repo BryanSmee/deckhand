@@ -20,7 +20,7 @@ export const overview = {
   "overview.failed": "Failed",
   "overview.nothingFailed": "nothing failed",
   "overview.canBeRerun": "can be rerun",
-  "overview.someCanBeRerun": "{count} can be rerun",
+  "overview.someCanBeRerun": { one: "{count} can be rerun", other: "{count} can be rerun" },
 
   // Waiting on you: its rows' badges and actions.
   "overview.waitingOnYou": "Waiting on you",
@@ -75,8 +75,8 @@ export const overview = {
   "overview.partFailed": "{count} failed",
   "overview.partQueued": "{count} queued",
   "overview.partIdle": "{count} idle",
-  "overview.partEnded": "{count} done this week",
-  "overview.partMerged": "{count} merged this week",
+  "overview.partEnded": { one: "{count} done this week", other: "{count} done this week" },
+  "overview.partMerged": { one: "{count} merged this week", other: "{count} merged this week" },
   "overview.backlog": "Backlog {count}",
   // More than the count read: "Backlog 100+".
   "overview.backlogMore": "Backlog {count}+",

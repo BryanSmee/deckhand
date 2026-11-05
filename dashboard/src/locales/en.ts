@@ -128,9 +128,9 @@ export const en = {
     one: "{count} auto-pickup slot ({use})",
     other: "{count} auto-pickup slots ({use})",
   },
-  "slots.inUse": "{count} in use",
+  "slots.inUse": { one: "{count} in use", other: "{count} in use" },
   "slots.free": "free",
-  "slots.held": "{count} held between runs",
+  "slots.held": { one: "{count} held between runs", other: "{count} held between runs" },
   "slots.queued": "{count} queued",
   "slots.shared": {
     one: "{running} running · of {count} shared slot",
