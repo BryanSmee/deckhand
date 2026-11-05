@@ -239,6 +239,26 @@ test("a run the policies refuse: no mode, nothing changed on the issue, a reply 
   ]);
 });
 
+test("deny_run refuses: its input read from the issue the comment is on, and kept with the decision", async () => {
+  const reads = [];
+  const refusing = async (rule, repo, ref, input) => ({
+    applied: true,
+    messages: ["not today"],
+    input: await input(),
+  });
+  const refused = await asked({ trigger: "work" }, refusing, { reads });
+  assert.deepEqual(refused.replies, [[12, "No `work` run: the policies refuse it: `not today`."]]);
+  assert.deepEqual(reads, ["/repos/Org/Repo/issues/12"]);
+  const [[key, kept]] = refused.kept;
+  assert.equal(key, "Org/Repo#12");
+  assert.deepEqual(
+    [kept.decision, kept.rule, kept.denied, kept.messages, kept.input.mode, kept.input.sender],
+    ["run", "deny_run", true, ["not today"], "work", "alice"],
+  );
+  // The dashboard's answer says it too (work.mjs).
+  assert.equal(refused.item.refused, "No `work` run: the policies refuse it: `not today`.");
+});
+
 test("a run the policies allow: its mode, nothing kept; the listener's own runs aren't asked", async () => {
   let calls = 0;
   const allowing = async (rule, repo, ref, input) => {

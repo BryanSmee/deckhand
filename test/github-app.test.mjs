@@ -287,6 +287,19 @@ test("checkAppSettings: the permissions the App lacks, at a lower level or not a
   );
 });
 
+test("checkAppSettings: one permission the App lacks, said in the singular, every event subscribed", async () => {
+  const logs = [];
+  const asApp = appAnswers({ permissions: { ...APP_PERMISSIONS, discussions: undefined } });
+  const checked = await checkAppSettings(asApp, (l) => logs.push(l), {
+    githubUrl: "https://github.com",
+  });
+  assert.deepEqual(checked.missing, []);
+  assert.deepEqual(checked.permissions, ["discussions: write"]);
+  assert.deepEqual(logs, [
+    "The GitHub App lacks the permission discussions: write: add it under Permissions in its settings (https://github.com/organizations/acme/settings/apps/acme-deckhand), then accept it on each installation (docs/setup.md)",
+  ]);
+});
+
 // An installation without one of the sandbox's required permissions (contents).
 const { contents: _, ...withoutContents } = READS;
 

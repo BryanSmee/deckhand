@@ -81,7 +81,16 @@ test("repoStatus: configured (or invalid) wins, then onboarding, then unknown, e
   assert.deepEqual(repoStatus(repo, null, null), { ...row, status: "unknown", readAt: null });
 });
 
-function fakeGitHub({ first = [], second = [], configured = [], files = {} } = {}) {
+// `lacking`: the permissions the first installation hasn't accepted (`actions` by default).
+function fakeGitHub({
+  first = [],
+  second = [],
+  configured = [],
+  files = {},
+  lacking = ["actions"],
+} = {}) {
+  const accepted = { ...APP_PERMISSIONS };
+  for (const name of lacking) delete accepted[name];
   const github = recordingFetch(({ path, auth }) => {
     const { pathname, searchParams } = new URL(path, "https://api.github.com");
     const page = Number(searchParams.get("page") ?? 1);
@@ -93,8 +102,8 @@ function fakeGitHub({ first = [], second = [], configured = [], files = {} } = {
           id: 1,
           account: { login: "org" },
           html_url: "https://github.com/organizations/org/settings/installations/1",
-          // All but `actions`, which it hasn't accepted yet.
-          permissions: { ...APP_PERMISSIONS, actions: undefined },
+          // All but `lacking`, which it hasn't accepted yet.
+          permissions: accepted,
         },
         {
           id: 2,
@@ -198,6 +207,45 @@ test("each listing reads the App's settings again, and warns about an installati
     account: "org",
     url: "https://github.com/organizations/org/settings/installations/1",
   });
+});
+
+test("what the App lacks too is left out of its installation's warning and links, the rest said", async () => {
+  const { app, config, store } = setup({
+    first: [info("org/app")],
+    lacking: ["actions", "discussions"],
+  });
+  const logs = [];
+  const list = createRepoList({
+    app: { ...app, settings: async () => ["discussions: write"] },
+    config,
+    store,
+    grants: grantsOf({}, config),
+    log: (line) => logs.push(line),
+  });
+  // Listed twice: the warning isn't new the second time.
+  await list.list();
+  list.refresh();
+  await list.list();
+  assert.deepEqual(logs, [
+    "The GitHub App's installation on org lacks actions: write: an owner of the account accepts the new permissions on https://github.com/organizations/org/settings/installations/1 (docs/setup.md)",
+  ]);
+  const stored = { slug: "my-app", owner: "org", ownerType: "Organization" };
+  const links = appLinks(
+    "https://github.com",
+    { ...stored, missingEvents: [], missingPermissions: ["discussions: write"] },
+    list.installations(),
+  );
+  assert.deepEqual(links.missingEvents, []);
+  assert.deepEqual(links.missingPermissions, ["discussions: write"]);
+  // `other`'s permissions unknown: nothing said missing.
+  assert.deepEqual(links.installations, [
+    {
+      account: "org",
+      url: "https://github.com/organizations/org/settings/installations/1",
+      missing: ["actions: write"],
+    },
+    { account: "other", url: "https://github.com/settings/installations/2", missing: [] },
+  ]);
 });
 
 test("every repo of every installation, paginated, with its status", async () => {

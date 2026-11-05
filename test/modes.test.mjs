@@ -7,6 +7,7 @@ import {
   BUILT_IN,
   customMode,
   entryRun,
+  isApart,
   MODES,
   RESEARCH,
 } from "../listener/modes.mjs";
@@ -38,6 +39,10 @@ test("modes apart from work have volumes of their own, research's apart again", 
   assert.equal(sessionName("deckhand-org-repo-12", "audit"), "deckhand-org-repo-12");
   assert.deepEqual([...RESEARCH], ["research"]);
   assert.ok(!APART.has("work") && !APART.has("policy") && APART.has("research"));
+  // A brainstorm, its wrap-up and onboarding are light runs (runs.mjs newLive()); work and the
+  // repo's own modes aren't.
+  for (const mode of ["brainstorm", "stop", "onboarding"]) assert.equal(isApart(mode), true, mode);
+  for (const mode of ["work", "audit"]) assert.equal(isApart(mode), false, mode);
 });
 
 test("a mode's defaults: the light runs' agent, model and effort, or work's", () => {

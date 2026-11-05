@@ -3,6 +3,8 @@ import assert from "node:assert/strict";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
+import { createBrainstorms, createIssueModes } from "../listener/brainstorms.mjs";
+import { createOnboardingStore } from "../listener/onboarding.mjs";
 import { parseRepoConfig } from "../listener/repo-config.mjs";
 import { createTaskModes } from "../listener/task-modes.mjs";
 import { grantedOf, tempDir, testConfig } from "./helpers.mjs";
@@ -13,6 +15,7 @@ const config = testConfig();
 // `issueModes`: the issues' current modes, kept across calls. `sessions`: the volumes that hold an
 // agent session (the runner's hasSession()). `grants`: what the operator's policies grant the repo
 // (grants.mjs GRANTS), with policies that are Deckhand's alone otherwise; none: no policies.
+// `brainstorms`, `onboarded`: brainstorms.mjs's and onboarding.mjs's, when a test follows them.
 async function modeOf(
   fields,
   yaml = "",
@@ -24,6 +27,8 @@ async function modeOf(
     posted,
     sessions = new Set(),
     grants = null,
+    brainstorms = { get: () => null, end: () => {} },
+    onboarded = null,
   } = {},
 ) {
   const replies = [];
@@ -33,7 +38,8 @@ async function modeOf(
     skip: () => null,
     tasks: new Map(),
     issueModes,
-    brainstorms: { get: () => null, end: () => {} },
+    brainstorms,
+    onboarded,
     // `posted`: GitHub's response to a reply, when a test reads it.
     reply: async (repo, number, text) => {
       replies.push([repo, number, text]);
@@ -227,4 +233,56 @@ test("a comment without a trigger line goes on with a session in any volume a wo
     const sessions = new Set([`deckhand-org-repo-12-${volume}`]);
     assert.equal((await modeOf({}, "", { sessions })).mode, null, volume);
   }
+});
+
+// The issue's brainstorm as brainstorms.mjs keeps it, its idle timer under the test's clock.
+function brainstormsOf(t) {
+  t.mock.timers.enable({ apis: ["setTimeout", "Date"] });
+  return createBrainstorms({ idleMs: 60000, busy: () => false, log: () => {}, now: Date.now });
+}
+
+test("/mode brainstorm discusses; a comment goes on in it; /stop wraps it up; the trigger then works", async (t) => {
+  const brainstorms = brainstormsOf(t);
+  const issueModes = createIssueModes();
+  const opts = { brainstorms, issueModes };
+  const key = "org/repo#12";
+  // "@Deckhand /mode Brainstorm" (events.mjs splitTrigger()).
+  const first = await modeOf({ trigger: "work", modeLine: "brainstorm" }, "", opts);
+  assert.deepEqual([first.mode, first.replies], ["brainstorm", []]);
+  assert.equal(brainstorms.get(key).status, "active");
+  assert.equal(issueModes.has(key), false);
+  // A comment without the trigger goes on in the brainstorm.
+  assert.equal((await modeOf({}, "", opts)).mode, "brainstorm");
+  // "/stop": its wrap-up, a brainstorm's run still.
+  assert.equal((await modeOf({ trigger: "stop" }, "", opts)).mode, "stop");
+  assert.equal(brainstorms.get(key).status, "stopped");
+  // Stopped: a comment without a trigger line reaches nothing.
+  assert.equal((await modeOf({}, "", opts)).mode, null);
+  // The trigger alone implements: work, the brainstorm over.
+  assert.equal((await modeOf({ trigger: "work" }, "", opts)).mode, "work");
+  assert.equal(brainstorms.get(key), undefined);
+});
+
+test("/mode work alone moves a brainstorm to work; without one or a session, nothing", async (t) => {
+  const brainstorms = brainstormsOf(t);
+  const opts = { brainstorms, issueModes: createIssueModes() };
+  assert.equal(
+    (await modeOf({ trigger: "work", modeLine: "brainstorm" }, "", opts)).mode,
+    "brainstorm",
+  );
+  assert.equal((await modeOf({ modeLine: "work" }, "", opts)).mode, "work");
+  assert.equal(brainstorms.get("org/repo#12"), undefined);
+  // Nothing to switch from now: no brainstorm, no mode, no session.
+  assert.equal((await modeOf({ modeLine: "work" }, "", opts)).mode, null);
+});
+
+test("/mode onboarding alone on an issue: its conversation, the issue recorded as the repo's onboarding", async () => {
+  const issueModes = createIssueModes();
+  const onboarded = createOnboardingStore();
+  const { mode, replies } = await modeOf({ modeLine: "onboarding" }, "", { issueModes, onboarded });
+  assert.deepEqual([mode, replies], ["onboarding", []]);
+  assert.equal(issueModes.get("org/repo#12"), "onboarding");
+  assert.equal(onboarded.get("org/repo").issue, 12);
+  // A comment without a trigger line goes on in it.
+  assert.equal((await modeOf({}, "", { issueModes, onboarded })).mode, "onboarding");
 });

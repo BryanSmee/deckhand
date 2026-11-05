@@ -57,6 +57,7 @@ async function edgeCopy(
     config = testConfig({ PORT: "0" }),
     stopping,
     waiting,
+    auth = { handle: () => false, user: async () => null },
   } = {},
 ) {
   writeFileSync(join(dir, "app.json"), JSON.stringify(CREDENTIALS));
@@ -65,7 +66,7 @@ async function edgeCopy(
   const http = createEdgeHttp({
     config,
     app,
-    auth: { handle: () => false, user: async () => null },
+    auth,
     setup: { handle: () => false },
     store,
     orchestrator: orchestrator ?? { forward: async (req, res) => res.writeHead(599).end() },
@@ -497,6 +498,30 @@ test("the dashboard's API, passed on with the signed-in user; an orchestrator aw
   const away = createForwarder({ urls: "http://127.0.0.1:9", token, waitMs: 200, log: () => {} });
   const down = await edgeCopy(t, { store, orchestrator: away });
   assert.equal((await fetch(`${down.url}/api/state`)).status, 503);
+});
+
+test("/status: local from loopback without a forwarding header; forwarded, the session decides", async (t) => {
+  const asked = [];
+  const orchestrator = {
+    forward: async (req, res, { user, local }) => (asked.push([user, local]), res.end("{}")),
+  };
+  const auth = {
+    handle: () => false,
+    user: async (req) => (req.headers.cookie === "alice" ? "alice" : null),
+  };
+  const { url } = await edgeCopy(t, { store: openStore("memory:"), orchestrator, auth });
+  assert.equal((await fetch(`${url}/status`)).status, 200);
+  // A reverse proxy on the host's network calls from loopback too, for anyone: not trusted.
+  for (const header of ["x-forwarded-for", "forwarded", "x-forwarded-host", "x-real-ip"]) {
+    const proxied = await fetch(`${url}/status`, { headers: { [header]: "203.0.113.9" } });
+    assert.equal(proxied.status, 401, header);
+  }
+  const signedIn = { "x-forwarded-for": "203.0.113.9", cookie: "alice" };
+  assert.equal((await fetch(`${url}/status`, { headers: signedIn })).status, 200);
+  assert.deepEqual(asked, [
+    [null, true],
+    ["alice", false],
+  ]);
 });
 
 test("a live log passed on ends once its user signs out", async (t) => {

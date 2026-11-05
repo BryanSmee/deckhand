@@ -702,3 +702,61 @@ test("a review queued while the work run that marked the pull request ready stil
   );
   assert.deepEqual([of("acme/api#2").state, of("acme/api#2").review.loop], ["queued", "reviewing"]);
 });
+
+// A task's pull request in its fix loop, from reviews.mjs's entry: field by field.
+
+// #12's fix run is over; the auto-merge of its pull request #13 waits for checks.
+const fixRun = {
+  id: "org-repo-12-1000",
+  key: "org/repo#12",
+  repo: "org/repo",
+  kind: "issue",
+  replyTo: 12,
+  mode: "start",
+  taskMode: "work",
+  reason: "review-fix",
+  startedAt: 1000,
+  status: "ok",
+};
+const counts = { critical: 0, high: 1, medium: 0, low: 0 };
+const round = (n, blocking) => ({ round: n, at: 2000, head: `sha-${n}`, counts, blocking });
+// reviews.json's entry for the pull request: a fix reviewed, of 3 rounds, waiting for checks.
+const entry = {
+  head: "sha-1",
+  at: 2000,
+  fixes: 1,
+  reviewedFixes: 1,
+  fixRounds: 3,
+  rounds: [round(0, 1), round(1, 0)],
+  waiting: { sha: "sha-1", since: 2000 },
+};
+
+const tasks = (queued = []) =>
+  board({
+    runs: [fixRun],
+    queued,
+    brainstorms: [],
+    pr: (key) => (key === "org/repo#12" ? { number: 13, state: "ready", readyAt: 1 } : null),
+    reviewed: (repo, number) => (repo === "org/repo" && number === 13 ? entry : null),
+  }).find((t) => t.key === "org/repo#12");
+
+test("in review between runs: waiting for checks, its last review's round of the repo's, every round", () => {
+  const waiting = tasks();
+  assert.equal(waiting.state, "in-review");
+  assert.deepEqual(
+    [waiting.review.loop, waiting.review.round, waiting.review.rounds],
+    ["checks", 1, 3],
+  );
+  assert.deepEqual(
+    waiting.review.history.map((r) => r.blocking),
+    [1, 0],
+  );
+});
+
+test("in review: a maintainer's comment queued meanwhile makes it queued, the loop still on it", () => {
+  const comment = { reason: undefined, replyTo: 12 };
+  const queued = tasks([
+    { key: "org/repo#12", kind: "issue", repo: "org/repo", ...loopStep([comment]), position: 1 },
+  ]);
+  assert.deepEqual([queued.state, queued.review.loop, queued.position], ["queued", "checks", 1]);
+});
