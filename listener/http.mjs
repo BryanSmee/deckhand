@@ -178,7 +178,7 @@ export function createHttp(ctx) {
   }
 
   // Each repo `shows` with tasks in the shared pool (#639): its runs going and its tasks
-  // waiting, counted as the totals are, and the cap schedule() holds them to (repo-config.mjs
+  // waiting (queued as the totals count it), and the cap schedule() holds them to (repo-config.mjs
   // startable()): its max_parallel when below MAX_PARALLEL (`own`), else MAX_PARALLEL, which the
   // other repos share. Its settings are the ones read last, by any of its tasks (`settingsAt`:
   // with a comment, tasks.mjs accept(), or as a run began, runs.mjs begin()), queued, running

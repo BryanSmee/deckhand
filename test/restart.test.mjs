@@ -517,14 +517,17 @@ test("queued comments keep when they were queued through a restart: the run orde
   ]) {
     const task = newTask({ repo: "org/repo", id, kind: "issue", number: Number(id), base: "main" });
     task.pending.push({ repo: "org/repo", id, mode: "work", author: "alice", queuedAt });
+    // And when its settings took over (#639, http.mjs repoSlots()).
+    Object.assign(task, { settings: { maxParallel: 2 }, settingsAt: queuedAt + 5 });
     before.tasks.set(`org/repo#${id}`, task);
   }
   await before.saveQueue();
   const after = context();
   await after.loadQueue();
+  const seven = after.tasks.get("org/repo#7");
   assert.deepEqual(
-    after.tasks.get("org/repo#7").pending.map((i) => i.queuedAt),
-    [300],
+    [seven.pending.map((i) => i.queuedAt), seven.settings, seven.settingsAt],
+    [[300], { maxParallel: 2 }, 305],
   );
   assert.deepEqual(
     after.queueOrder().map((task) => task.id),
