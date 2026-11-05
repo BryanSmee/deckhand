@@ -402,7 +402,9 @@ in a restart can run again too. `POST /api/repos/<owner>/<repo>/rerun { runId }`
 `rerun`) checks what the work area does, refuses a run that isn't the task's latest or didn't
 fail, posts an App comment ("Rerun from the dashboard by @user") where the run replied, and
 queues those comments again in the run's mode, with that comment for the reactions. The
-issue's session volume carries what the run had done.
+issue's session volume carries what the run had done. An MCP client's `rerun` and `schedule`
+(`mcp.mjs`) post the same comments, "from an MCP client" where these say "from the dashboard"
+(#907), so the issue's readers tell one from the other.
 
 A pull request whose review-and-fix loop is over (`review.loop` in `api/state`) shows **Review**
 and, ready for review with blocking findings left and `review.fix` on, **Fix** in its page's
