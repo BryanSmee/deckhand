@@ -311,6 +311,7 @@ const services = createServicesHttp({
   health: server,
   // The broker service's keys.
   keys: { get: (kid) => brokerService.serviceKeys().get(kid) },
+  keysRead: () => brokerService.serviceKeys().size > 0,
   // none on Kubernetes: the callers' service tokens, and NetworkPolicies (deploy/kubernetes/).
   bound: config.serviceNetworks === "none" ? null : networkCallers(config.serviceNetworks),
   pendingTokens,

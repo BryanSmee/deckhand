@@ -35,7 +35,9 @@ const LOGIN = /^[a-z\d](?:[a-z\d-]{0,38})$/i;
 
 const MAX_BODY = 64 * 1024;
 
-// `keys`: the broker service's public keys ({ get(kid) }, broker-service.mjs serviceKeys());
+// `keys`: the broker service's public keys ({ get(kid) }, broker-service.mjs serviceKeys()), and
+// `keysRead()`, whether they were read: until then every call is 503, tried again, not a 401
+// its caller would take as final (a copy that just took the lease still reads them);
 // `bound`: lib/service-token.mjs networkCallers()'s; `pendingTokens`: run → tokens(sandbox)
 // (../runner/client.mjs start()); `edge()`: http.mjs handle(), or null while the orchestrator
 // isn't ready to answer it; `active()`: whether this copy holds the lease. A waiting copy
@@ -45,6 +47,7 @@ const MAX_BODY = 64 * 1024;
 // the copy acting still answers (no other could do better), and what it changes lands later.
 export function createServicesHttp({
   keys,
+  keysRead = () => true,
   bound,
   pendingTokens,
   edge = () => null,
@@ -95,6 +98,7 @@ export function createServicesHttp({
       return sendJson(res, { ok: active(), waiting: waiting() }, active() ? 200 : 503);
     }
     if (!active()) throw new Refused(503, "this copy waits for the orchestrator's lease");
+    if (!keysRead()) throw new Refused(503, "the broker service's keys aren't read yet");
     if (url.pathname.startsWith("/edge/")) {
       guard(req);
       return fromEdge(req, res);

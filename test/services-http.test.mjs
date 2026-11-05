@@ -159,6 +159,28 @@ test("a copy waiting for the lease answers its probes, and 503 to every call", a
   assert.equal((await tokens()).status, 200);
 });
 
+test("a copy that took the lease, the broker's keys not read yet: 503, tried again, never 401", async (t) => {
+  // Its keys come after the lease (broker-service.mjs start()): a 401 then would be edge's
+  // answer to the dashboard, where a 503 is tried again (lib/service-client.mjs).
+  let read = false;
+  const server = createServicesHttp({
+    keys: new Map(),
+    keysRead: () => read,
+    bound: networkCallers("edge=127.0.0.0/8"),
+    pendingTokens: new Map(),
+    edge: () => (req, res) => res.end("ok"),
+  });
+  const url = `http://127.0.0.1:${await listening(server)}`;
+  server.unref();
+  t.after(() => server.close());
+  const call = () => fetch(`${url}/edge/status`, { headers: as("edge", "orchestrator") });
+  assert.equal((await call()).status, 503);
+  assert.equal((await fetch(`${url}/ready`)).status, 200);
+  read = true;
+  // Read, a token signed with a key they don't have is refused as before.
+  assert.equal((await call()).status, 401);
+});
+
 test("/ready says how many items of the orchestrator's state wait for the store", async (t) => {
   let waiting = 0;
   const server = createServicesHttp({
