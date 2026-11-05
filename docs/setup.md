@@ -2079,9 +2079,12 @@ The dashboard's run history came from the runs' summaries in the orchestrator's 
 a copy taking over on another node finds them there. Nothing to do: at its first start, the
 orchestrator writes those left in `logs/` to its store, then removes them (`Run summaries: <n>
 moved from /data/logs to the store` in its log), before the dashboard lists the runs: about a
-second for 4,500 with the file store or Redis. A file that isn't a summary is logged (`Listing
-the run of <file>: not a run's summary`) and left in `logs/`, out of the history, as it was
-before; one the store didn't take stays for the next start, and so did a summary the store
+second for 4,500 with the file store or Redis. A file that isn't a summary (unreadable, or
+another run's) is left out of the history and set aside as `logs/<file>.bad`, logged once
+(`Listing the run of <file>: not a run's summary, set aside as <file>.bad`), then named at each
+start among what the volume holds that nothing reads any more, until it is removed (one already
+there is kept: the next is `.bad.2`, and so on). A file that can't be renamed stays where it is,
+logged at each start. Look at it, then remove it. One the store didn't take stays for the next start, and so did a summary the store
 refused at a run's end (`logs/<run>.summary.json`, moved at the next start): since #619, the
 run's end tries the store again instead. The run logs left there from before the runner service
 were moved as before, until #619.

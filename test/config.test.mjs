@@ -1067,8 +1067,10 @@ test("leftInData: what nothing reads any more, never the store's nor what is sti
       "b-2.summary.json",
       "c-3.live.json",
       "d.queued.json",
-      // A run's state that wasn't one, set aside (restart.mjs moveLive()).
+      // A run's state and a summary that weren't one, set aside (restart.mjs moveLive(),
+      // runlog.mjs moveSummaries()).
       "e-4.live.json.bad",
+      "f-5.json.bad",
     ],
   };
   const list = (path) => entries[path] ?? [];
@@ -1077,6 +1079,7 @@ test("leftInData: what nothing reads any more, never the store's nor what is sti
     "queue.json",
     "logs/a-1.log",
     "logs/e-4.live.json.bad",
+    "logs/f-5.json.bad",
   ]);
   assert.deepEqual(leftInData(dir, null, moving, { list }), [
     "store",
@@ -1084,6 +1087,7 @@ test("leftInData: what nothing reads any more, never the store's nor what is sti
     "queue.json",
     "logs/a-1.log",
     "logs/e-4.live.json.bad",
+    "logs/f-5.json.bad",
   ]);
   // The store at the volume's root: its own files, never named.
   assert.deepEqual(leftInData(dir, "", moving, { list: () => ["state.json", "keys"] }), []);

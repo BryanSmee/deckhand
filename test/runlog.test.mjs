@@ -442,6 +442,54 @@ test("moveSummaries: one the store refuses stays in logs/, for the next start", 
   );
 });
 
+test("moveSummaries: a file that isn't a run's summary is set aside, logged once rather than at every start (#853)", async (t) => {
+  const dir = tempDir(t);
+  const store = openStore("memory:");
+  // Another run's id, not JSON at all, and a kept one (.summary.json) without its id.
+  writeFileSync(join(dir, "a-1.json"), JSON.stringify({ id: "another" }));
+  writeFileSync(join(dir, "b-2.json"), "{not json");
+  writeFileSync(join(dir, "c-3.summary.json"), JSON.stringify({ key: "org/repo#3" }));
+  // One the operator hasn't removed yet: kept, the new one beside it.
+  writeFileSync(join(dir, "a-1.json.bad"), "older");
+  const logs = [];
+  assert.equal(await moveSummaries(dir, store, { log: (l) => logs.push(l) }), 0);
+  assert.deepEqual(readdirSync(dir).sort(), [
+    "a-1.json.bad",
+    "a-1.json.bad.2",
+    "b-2.json.bad",
+    "c-3.summary.json.bad",
+  ]);
+  assert.equal(readFileSync(join(dir, "a-1.json.bad"), "utf8"), "older");
+  assert.deepEqual(logs.sort(), [
+    "Listing the run of a-1.json: not a run's summary, set aside as a-1.json.bad.2",
+    "Listing the run of b-2.json: not a run's summary, set aside as b-2.json.bad",
+    "Listing the run of c-3.summary.json: not a run's summary, set aside as c-3.summary.json.bad",
+  ]);
+  assert.deepEqual(await loadRuns(store), []);
+  // The next start reads none of them, and says nothing.
+  logs.length = 0;
+  assert.equal(await moveSummaries(dir, store, { log: (l) => logs.push(l) }), 0);
+  assert.deepEqual(logs, []);
+});
+
+test("moveSummaries: a file that can't be set aside stays there, logged, the next start trying again (#853)", async (t) => {
+  const dir = tempDir(t);
+  // A name NAME_MAX allows (255) whose .bad it doesn't: the rename fails, as root too.
+  const file = `${"a".repeat(255 - ".json".length)}.json`;
+  writeFileSync(join(dir, file), "{}");
+  for (let start = 0; start < 2; start++) {
+    const logs = [];
+    assert.equal(await moveSummaries(dir, openStore("memory:"), { log: (l) => logs.push(l) }), 0);
+    assert.deepEqual(readdirSync(dir), [file]);
+    assert.ok(
+      logs.some((l) =>
+        l.startsWith(`Listing the run of ${file}: not a run's summary, left in ${dir}: `),
+      ),
+      logs.join("\n"),
+    );
+  }
+});
+
 test("saveSummary: one the store doesn't take is logged, false; one a release before kept in logs/ goes over the store's", async (t) => {
   const dir = tempDir(t);
   const store = openStore("memory:");
