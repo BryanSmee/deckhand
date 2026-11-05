@@ -112,12 +112,14 @@ export function serviceCallMetrics(registry, { now = () => performance.now() } =
 
 // The deliveries of a state the orchestrator follows rather than a comment: issues and pull
 // requests (titles, waits, questions, reviews), CI's runs, pushes (the default branches), the
-// App's installations (onboarding). A comment is taken only as a work item.
+// repositories' own changes (policies) and the App's installations (onboarding). A comment is
+// taken only as a work item.
 const FOLLOWED = new Set([
   "issues",
   "pull_request",
   "workflow_run",
   "push",
+  "repository",
   "installation",
   "installation_repositories",
 ]);

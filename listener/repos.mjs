@@ -376,11 +376,17 @@ export function createRepoList({
 }
 
 // Which deliveries make the list stale: refresh(repo) for a repo whose default branch moved,
-// refresh() for the installations' repos. Returns false for the others.
+// refresh() for the installations' repos and a repository's own change (deleted, renamed,
+// transferred, made private: the list's names and `private`). Returns false for the others, a
+// repository's change included: forgottenFor() covers what it changes for the policies.
 export function refreshFor(event, p, refresh) {
   if (event === "installation" || event === "installation_repositories") {
     refresh();
     return true;
+  }
+  if (event === "repository") {
+    refresh();
+    return false;
   }
   const repo = p.repository?.full_name;
   const base = p.repository?.default_branch;
@@ -393,6 +399,33 @@ export function refreshFor(event, p, refresh) {
       p.pull_request.base?.ref === base);
   if (moved) refresh(repo);
   return !!moved;
+}
+
+// The repositories whose policies' state (policies.mjs forget()) a delivery makes stale, beyond
+// a default branch that moved (refreshFor()): those removed from an installation or out of a
+// deleted or suspended one, and the repository a `repository` delivery is about (deleted,
+// transferred, renamed, made private, archived…), under its old name too. Forgotten rather than
+// left to expire: a repository made private would keep its `private: false` up to ACCESS_MS, or
+// up to STALE_LISTING_MS during a GitHub error, and one out of the App's reach its last listing.
+export function forgottenFor(event, p) {
+  const names = (repos) => (Array.isArray(repos) ? repos.map((r) => r?.full_name) : []);
+  let repos = [];
+  if (event === "installation_repositories" && p.action === "removed") {
+    repos = names(p.repositories_removed);
+  } else if (event === "installation" && ["deleted", "suspend"].includes(p.action)) {
+    repos = names(p.repositories);
+  } else if (event === "repository") {
+    const current = p.repository?.full_name;
+    const [owner, name] = typeof current === "string" ? current.split("/") : [];
+    const from = p.changes ?? {};
+    const oldOwner = from.owner?.from?.user?.login ?? from.owner?.from?.organization?.login;
+    repos = [
+      current,
+      from.repository?.name?.from && owner && `${owner}/${from.repository.name.from}`,
+      oldOwner && name && `${oldOwner}/${name}`,
+    ];
+  }
+  return [...new Set(repos.filter((r) => typeof r === "string" && r.includes("/")))];
 }
 
 // A grants error as the config panel shows it: { file, message, everyRepo }, the file to edit

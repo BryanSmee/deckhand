@@ -2153,7 +2153,10 @@ once, since its listing would read as no policy and drop its deny rules: a 404 (
 deleted, or out of the App's reach, which the github service passes on as GitHub said it, its
 installation included), any other 403, or the github service's own refusal (no App yet). Such an
 answer also forgets what GitHub said before and the last listing, so a hiccup right after it gives
-no action either. A push forgets both, and an orchestrator that hasn't read them in that hour, since
+no action either. A push forgets both, and so does a repository removed from the installation
+(or out of an installation deleted or suspended), deleted, transferred, renamed or made private
+(their `installation_repositories`, `installation` and `repository` deliveries), rather than
+waiting for them to expire. An orchestrator that hasn't read them in that hour, since
 its start or since a push, gives no action.
 
 **When a change holds.** An edit of your policy files holds at the next decision (the answers

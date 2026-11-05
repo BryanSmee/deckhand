@@ -40,6 +40,9 @@ export const APP_EVENTS = [
   "pull_request_review_comment",
   "workflow_run",
   "push",
+  // A repository deleted, transferred, renamed or made private: the policies forget what they
+  // kept of it (repos.mjs forgottenFor()).
+  "repository",
   // CI beyond GitHub Actions (check suites of other Apps, commit statuses): the dashboard's CI
   // status of a task's pull request (pulls.mjs, #436), see QUIET_EVENTS.
   "check_suite",

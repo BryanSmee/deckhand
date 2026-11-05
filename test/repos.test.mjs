@@ -14,6 +14,7 @@ import {
   appLinks,
   createRepoApi,
   createRepoList,
+  forgottenFor,
   refreshFor,
   repoStatus,
 } from "../listener/repos.mjs";
@@ -390,6 +391,45 @@ test("which deliveries refresh the list", () => {
   );
   refreshFor("issue_comment", { action: "created", repository }, refresh);
   assert.deepEqual(calls, ["*", "org/app", "org/app"]);
+  // A repository's own change: the whole list (its name may be another), no default branch moved.
+  assert.equal(refreshFor("repository", { action: "privatized", repository }, refresh), false);
+  assert.deepEqual(calls, ["*", "org/app", "org/app", "*"]);
+});
+
+test("which deliveries forget a repository's policies' state (#855)", () => {
+  const repository = { full_name: "org/app", name: "app", default_branch: "main" };
+  const repos = (...names) => names.map((full_name) => ({ full_name }));
+  const removed = { action: "removed", repositories_removed: repos("org/app", "org/lib") };
+  assert.deepEqual(forgottenFor("installation_repositories", removed), ["org/app", "org/lib"]);
+  const added = { action: "added", repositories_added: repos("org/new") };
+  assert.deepEqual(forgottenFor("installation_repositories", added), []);
+  for (const action of ["deleted", "suspend"]) {
+    const p = { action, repositories: repos("org/app") };
+    assert.deepEqual(forgottenFor("installation", p), ["org/app"], action);
+  }
+  assert.deepEqual(
+    forgottenFor("installation", { action: "created", repositories: repos("org/app") }),
+    [],
+  );
+  for (const action of ["deleted", "privatized", "publicized", "archived", "edited"]) {
+    assert.deepEqual(forgottenFor("repository", { action, repository }), ["org/app"], action);
+  }
+  // Renamed or transferred: the new name, and the old one it may be kept under.
+  const renamed = {
+    action: "renamed",
+    repository,
+    changes: { repository: { name: { from: "old" } } },
+  };
+  assert.deepEqual(forgottenFor("repository", renamed), ["org/app", "org/old"]);
+  for (const from of [{ user: { login: "alice" } }, { organization: { login: "acme" } }]) {
+    const transferred = { action: "transferred", repository, changes: { owner: { from } } };
+    const owner = from.user?.login ?? from.organization.login;
+    assert.deepEqual(forgottenFor("repository", transferred), ["org/app", `${owner}/app`]);
+  }
+  // Nothing else, nor a payload without names.
+  assert.deepEqual(forgottenFor("push", { ref: "refs/heads/main", repository }), []);
+  assert.deepEqual(forgottenFor("repository", { action: "deleted" }), []);
+  assert.deepEqual(forgottenFor("installation_repositories", { action: "removed" }), []);
 });
 
 // The API with a fake request and response.
