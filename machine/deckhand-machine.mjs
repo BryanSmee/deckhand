@@ -796,7 +796,8 @@ export function createDriver({
       try {
         return await client.call(name, args);
       } catch (error) {
-        if (error instanceof ToolError) throw error;
+        // Refused, but for a copy of Deckhand that stops (a handover): asked again of the next.
+        if (error instanceof ToolError && !/restarting/i.test(error.message)) throw error;
         log(`${name}: ${error.message}: trying again`);
         await sleep(retryMs);
       }
@@ -1030,19 +1031,25 @@ export function createDriver({
       await git(dir, ["checkout", "--quiet", "-b", work.branch, lease || base]);
       return { base, lease };
     }
+    // GitHub has no copy (deleted once its pull request was merged, say), and this one holds
+    // nothing it hasn't pushed already: moved aside, the run starts again from the base.
+    const pushedSha = state.pushed?.[work.key];
+    if (!lease && pushedSha && (await isAncestor(local, pushedSha))) {
+      const kept = aside(work);
+      await git(dir, ["branch", "--quiet", "--force", "-m", work.branch, kept]);
+      await git(dir, ["checkout", "--quiet", "--force", "-b", work.branch, base]);
+      log(
+        `${work.key}: ${work.branch} is gone from GitHub: started again from the base, kept as ${kept}`,
+      );
+      return { base, lease };
+    }
     await git(dir, ["checkout", "--quiet", work.branch]);
     if (!lease) return { base, lease };
-    const behind = await git(dir, ["merge-base", "--is-ancestor", local, lease]).then(
-      () => true,
-      () => false,
-    );
-    const ahead = await git(dir, ["merge-base", "--is-ancestor", lease, local]).then(
-      () => true,
-      () => false,
-    );
+    const behind = await isAncestor(local, lease);
+    const ahead = await isAncestor(lease, local);
     if (behind) await git(dir, ["merge", "--quiet", "--ff-only", lease]);
     else if (!ahead) {
-      const kept = `${work.branch}-before-${work.run}`.replace(/[^\w./-]+/g, "-");
+      const kept = aside(work);
       await git(dir, ["branch", "--quiet", "--force", kept, local]);
       await git(dir, ["reset", "--quiet", "--hard", lease]);
       log(
@@ -1050,6 +1057,23 @@ export function createDriver({
       );
     }
     return { base, lease };
+
+    function isAncestor(a, b) {
+      return git(dir, ["merge-base", "--is-ancestor", a, b]).then(
+        () => true,
+        () => false,
+      );
+    }
+  }
+
+  // Where a branch the run doesn't go on with is kept, in the clone.
+  const aside = (work) => `${work.branch}-before-${work.run}`.replace(/[^\w./-]+/g, "-");
+
+  // The commit GitHub has of the issue's branch, as this machine last left it (state.json):
+  // what checkout() tells pushed work from work never pushed by.
+  function remember(work, sha) {
+    state.pushed = { ...state.pushed, [work.key]: sha };
+    saveState(state);
   }
 
   // The branch pushed when it has commits past its base and isn't GitHub's copy: with a lease on
@@ -1062,7 +1086,10 @@ export function createDriver({
     );
     if (!ahead) return null;
     const head = (await git(dir, ["rev-parse", "HEAD"])).trim();
-    if (head === lease) return { sha: head, now: false };
+    if (head === lease) {
+      remember(work, head);
+      return { sha: head, now: false };
+    }
     await git(dir, [
       "push",
       "--quiet",
@@ -1070,6 +1097,7 @@ export function createDriver({
       "origin",
       `HEAD:refs/heads/${work.branch}`,
     ]);
+    remember(work, head);
     return { sha: head, now: true };
   }
 

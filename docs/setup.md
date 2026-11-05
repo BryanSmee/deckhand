@@ -615,7 +615,8 @@ Windows has none (WSL2 has).
 
 Each run fetches the repository into its clone, checks out the issue's branch (as it is on
 GitHub, ahead of it after a push that failed, or new from the base; one that went another way
-than GitHub's copy is put back on it, its own commits kept on a `<branch>-before-<run>` branch),
+than GitHub's copy is put back on it, its own commits kept on a `<branch>-before-<run>` branch, as is one GitHub no longer has once
+the driver had pushed it all: the run starts again from the base),
 and runs `claude -p` there, its output sent to Deckhand as the
 run's log and the comments that reach it written to its input; `--resume` goes on with the
 issue's session when the machine ran it before. Then the driver pushes the branch with your git

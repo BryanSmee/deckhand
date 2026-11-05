@@ -599,6 +599,21 @@ test("the driver's loop: claim, run, stream, push, finish; its lease kept throug
     "Local only",
   );
 
+  // Its pull request merged, GitHub deletes the branch; the issue comes back to this machine:
+  // the next run starts from the base, not on the merged commits, which are kept aside.
+  git(root, "--git-dir", repo, "branch", "-D", "issue-12-build-the-level");
+  const r6 = work("r6", { resume: true, message: "Once more. COMMIT" });
+  mcp.seen.works.r6 = r6;
+  works.push(r6);
+  await until(() => mcp.seen.finished.r6, { ms: 20_000, what: "r6's finish" });
+  assert.equal(mcp.seen.finished.r6.outcome, "ok");
+  const again = git(root, "--git-dir", repo, "log", "--format=%s", "issue-12-build-the-level");
+  assert.deepEqual(again.split("\n"), ["Turn 1", "Start"]);
+  assert.equal(
+    git(dir12, "log", "-1", "--format=%s", "issue-12-build-the-level-before-r6"),
+    "Rewritten",
+  );
+
   await driver.stop();
   await running;
 });
