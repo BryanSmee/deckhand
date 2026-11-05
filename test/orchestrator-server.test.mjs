@@ -4177,7 +4177,7 @@ allow_capabilities contains "read:pulls"
     assert.equal((await get("/api/runs/org-repo-pr-3-1000/stream", session)).status, 404);
   });
 
-  test("MCP (#480): a client signed in through edge lists the repos, reads a log, reruns a failed run", async (t) => {
+  test("MCP (#482, #480): a client signed in through edge lists the repos, reads a log, reruns a failed run", async (t) => {
     const issue = JSON.stringify({ number: 12, title: "Fix the build", state: "open" });
     const repo = { full_name: "org/repo", html_url: "https://github.com/org/repo" };
     const installed = JSON.stringify({ repositories: [repo] });
@@ -4217,7 +4217,18 @@ allow_capabilities contains "read:pulls"
     // Without a token: where to sign in.
     const none = await post("/mcp", "{}");
     assert.equal(none.status, 401);
-    assert.match(none.headers.get("www-authenticate"), /resource_metadata=/);
+    const metadata = /resource_metadata="([^"]+)"/.exec(none.headers.get("www-authenticate"))[1];
+    // The client's discovery, as the MCP authorization spec has it: the resource's metadata
+    // names its authorization server, whose own names its endpoints. They are the public URL's;
+    // the test reaches them at edge's port.
+    const local = (url) => new URL(url).pathname;
+    const protectedResource = await (await get(local(metadata))).json();
+    const { resource } = protectedResource;
+    assert.equal(resource, "https://hooks.example.com/mcp");
+    const [issuer] = protectedResource.authorization_servers;
+    const server = await (
+      await get(`/.well-known/oauth-authorization-server${local(issuer).replace(/\/$/, "")}`)
+    ).json();
     // alice signs in with GitHub, and allows a client, as `claude mcp add` gets her to.
     const login = await get("/auth/login");
     const to = new URL(login.headers.get("location"));
@@ -4230,7 +4241,7 @@ allow_capabilities contains "read:pulls"
     const redirect = "http://127.0.0.1:9/cb";
     const verifier = "v".repeat(50);
     const registered = await post(
-      "/oauth/register",
+      local(server.registration_endpoint),
       JSON.stringify({ client_name: "Claude Code", redirect_uris: [redirect] }),
       { "content-type": "application/json" },
     );
@@ -4241,11 +4252,14 @@ allow_capabilities contains "read:pulls"
       redirect_uri: redirect,
       code_challenge: createHash("sha256").update(verifier).digest("base64url"),
       code_challenge_method: "S256",
+      resource,
     });
-    const page = await (await get(`/oauth/authorize?${query}`, session)).text();
+    const page = await (
+      await get(`${local(server.authorization_endpoint)}?${query}`, session)
+    ).text();
     const request = /name="request" value="([^"]+)"/.exec(page)[1];
     const allowed = await post(
-      "/oauth/authorize",
+      local(server.authorization_endpoint),
       new URLSearchParams({ request, decision: "allow" }).toString(),
       { ...form, cookie: session, origin: "https://hooks.example.com" },
     );
@@ -4256,8 +4270,10 @@ allow_capabilities contains "read:pulls"
       client_id,
       redirect_uri: redirect,
       code_verifier: verifier,
+      resource,
     });
-    const { access_token } = await (await post("/oauth/token", exchange.toString(), form)).json();
+    const token = await post(local(server.token_endpoint), exchange.toString(), form);
+    const { access_token } = await token.json();
     let id = 0;
     const rpc = async (method, params) => {
       const res = await post("/mcp", JSON.stringify({ jsonrpc: "2.0", id: ++id, method, params }), {
@@ -4278,6 +4294,15 @@ allow_capabilities contains "read:pulls"
     assert.deepEqual(
       repos.structuredContent.repos.map((r) => r.repo),
       ["org/repo"],
+    );
+    // The failed task, as the client sees it before it reruns it.
+    const listed = await call("list_tasks", {});
+    assert.deepEqual(
+      listed.structuredContent.tasks.map((task) => [task.key, task.state, task.rerunnable]),
+      [
+        ["org/repo#12", "error", true],
+        ["org/repo#pr-3", "done", false],
+      ],
     );
     const tasks = await call("list_tasks", { state: "done" });
     assert.deepEqual(
