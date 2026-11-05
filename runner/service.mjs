@@ -96,6 +96,8 @@ const MAX_APPEND = 16 * 1024 * 1024;
 const START_TTL_MS = 7 * 24 * 60 * 60_000;
 // A message's key, against sending it twice.
 const SENT_TTL_MS = 7 * 24 * 60 * 60_000;
+// How often the acting copy claims its prefix again (#858): two docker calls (or two of the API).
+const CLAIM_AGAIN_MS = 60_000;
 // The longest a broker's inbox poll and a log read may wait.
 const MAX_WAIT_MS = 30_000;
 
@@ -228,6 +230,8 @@ export function createRunnerService({
   // The deployment's prefix claimed (../listener/runner/deployment.mjs): the backend's, with
   // the ID in the store. None without one (the tests' fakes).
   claim = runner.claimPrefix ? async () => runner.claimPrefix(await deploymentId(store)) : null,
+  // How often the acting copy claims it again.
+  claimAgainMs = CLAIM_AGAIN_MS,
 }) {
   const guard = serviceGuard({
     service: "runner",
@@ -245,20 +249,28 @@ export function createRunnerService({
   // A stale epoch refused (lib/fence.mjs).
   const fence = createFence({ store, service: "runner", now });
 
-  // The prefix claimed once (#858): until then, no call is taken and no event watched, as the
-  // labels this runner goes by may be another deployment's. A failure is tried again at the
-  // next call, so a marker removed takes effect without a restart; a clash is logged once, and
-  // shown in /health.
+  // The prefix claimed (#858): until then, no call is taken and no event watched, as the labels
+  // this runner goes by may be another deployment's. A failure is tried again at the next call,
+  // so a marker removed takes effect without a restart; a clash is logged once, and shown in
+  // /health. A claim made is made again when this copy takes the lease and every
+  // `claimAgainMs` after (watch()): a marker removed meanwhile (a `docker volume prune`) is put
+  // back before another deployment can take the prefix, or the clash found.
   let claimed = claim ? null : Promise.resolve();
+  let claimedAt = -Infinity; // when the last claim succeeded; Infinity while one is under way
   let clash = null;
-  function claimOnce() {
-    claimed ??= claim().then(
+  function claimOnce({ again = false } = {}) {
+    if (again && claim && now() - claimedAt >= claimAgainMs) claimed = null;
+    if (claimed) return claimed;
+    claimedAt = Infinity;
+    claimed = claim().then(
       () => {
         if (clash) log("Runner: the prefix is this deployment's again");
         clash = null;
+        claimedAt = now();
       },
       (error) => {
         claimed = null;
+        claimedAt = -Infinity;
         if (error instanceof PrefixClash) {
           if (clash !== error.message) (log.error ?? log)(error.message);
           clash = error.message;
@@ -711,9 +723,11 @@ export function createRunnerService({
       runner.leased?.();
       logs.moves?.start();
       clearInterval(watching);
-      // Its problem (a clash) logged by claimOnce() already.
+      // Claimed again now, unless a claim is under way. Its problem (a clash) is logged by
+      // claimOnce() already.
+      if (claimedAt !== Infinity) claimedAt = -Infinity;
       const watch = () =>
-        claimOnce().then(
+        claimOnce({ again: true }).then(
           () => events.watch().catch((error) => log(`Run events: ${error.message}`)),
           () => {},
         );

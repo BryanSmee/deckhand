@@ -2459,6 +2459,14 @@ give each `deckhand:<service>:`, as above and as the Kubernetes component does, 
 its own on it. A deployment that put several services on one prefix moves each to its own with
 the services stopped: they start with an empty store, as when they first moved to Redis.
 
+**The runner's `deployment` key** is the ID that its prefix's marker holds (`<NAME_PREFIX>-deployment`,
+[security.md](security.md#the-runner-service)). Copy it when you move the runner's store. A
+runner that starts with an empty store makes a new ID, and then refuses every call until the
+marker is removed: `docker volume rm <NAME_PREFIX>-deployment` on Docker, or
+`kubectl -n <sandboxes' namespace> delete secret <NAME_PREFIX>-deployment` on Kubernetes. Remove
+it only when no other deployment uses that prefix. The runner then claims the prefix again at its
+next call, without a restart.
+
 A user's key pattern follows its service's prefix: with `?prefix=team-a:orchestrator:`, it is
 `~team-a:orchestrator:*`, else every call is refused with `NOPERM`. A user per service also
 keeps each from reading or writing another's store. `+scan` lists a prefix's keys (a map kept

@@ -1036,8 +1036,14 @@ test("claimPrefix: the prefix's marker volume, made once, refused to another dep
     return true;
   });
   assert.equal(volumes.get("dh-deployment")["deckhand.deployment"], "a1");
-  // A volume of that name that isn't a marker: refused too.
+  // A volume of that name that isn't a marker, or one of another prefix's: refused too.
   volumes.set("dh-deployment", {});
+  await assert.rejects(r.claimPrefix("a1"), PrefixClash);
+  volumes.set("dh-deployment", {
+    "deckhand.owner": "other",
+    "deckhand.role": "deployment",
+    "deckhand.deployment": "a1",
+  });
   await assert.rejects(r.claimPrefix("a1"), PrefixClash);
 });
 

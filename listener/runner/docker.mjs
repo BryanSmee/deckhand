@@ -363,21 +363,16 @@ export function createDockerRunner({
 
   // The prefix claimed for this deployment's `id` (deployment.mjs): its marker volume made
   // with it, unless there is one already (`docker volume create` then keeps that one's labels),
-  // whose ID must be this one.
+  // which must be this deployment's.
   async function claimPrefix(id) {
     const name = markerName(config.prefix);
     const labels = { "deckhand.owner": config.prefix, [ROLE]: MARKER_ROLE, [DEPLOYMENT]: id };
     checked(await docker(["volume", "create", ...labelArgs(labels), name]), `creating ${name}`);
-    const { out } = checked(
-      await docker([
-        ...["volume", "inspect", "--format"],
-        `{{index .Labels "${ROLE}"}}|{{index .Labels "${DEPLOYMENT}"}}`,
-        name,
-      ]),
-      `docker volume inspect ${name}`,
-    );
-    const [role = "", found = ""] = out.split("|");
-    if (role === MARKER_ROLE && found === id) return;
+    const found = await volumeLabels(docker, name);
+    if (!found) throw new Error(`docker volume inspect ${name}: it can't be read`);
+    if (found.owner === config.prefix && found.role === MARKER_ROLE && found.deployment === id) {
+      return;
+    }
     throw prefixClash(config.prefix, {
       where: "this engine",
       what: `its volume ${name}`,

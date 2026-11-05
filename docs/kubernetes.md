@@ -267,7 +267,9 @@ mode and class can't change, so an upgrade that changes them fails on the claims
 change, and going to `redis` leaves the stores' claims (kept, with what they hold) unused. To
 move, scale the services to 0, copy what the claims hold (or let the stores start empty,
 losing what they hold: [setup.md](setup.md#the-store)), delete the claims that change, then
-upgrade. To update, change `image.tag` and
+upgrade. A runner with an empty store refuses every call until its prefix's marker is removed
+(`kubectl -n deckhand-sandboxes delete secret <NAME_PREFIX>-deployment`), unless its
+`deployment` key was copied ([setup.md](setup.md#the-store)). To update, change `image.tag` and
 `helm upgrade deckhand deploy/helm/deckhand -f values.yaml`, from a checkout at the new release:
 the services update as [below](#updating). A change of `server` or `env` renames its ConfigMap,
 as kustomize's hash does, and the pods that read it restart. The old one stays, as

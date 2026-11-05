@@ -154,11 +154,13 @@ case "$1" in
     esac ;;
   volume)
     # The runner's marker of its prefix (listener/runner/deployment.mjs): made once, with the
-    # role and the ID it was made with, which inspect answers.
+    # labels it was made with, which inspect answers as volumeLabels() reads them (owner,
+    # engine, role, deployment).
     if [ "$2" = create ]; then
       case "$*" in *deckhand.role=deployment*)
         marker="$dir/marker-${@: -1}"
-        [ -e "$marker" ] || printf 'deployment|%s\n' "$(printf '%s\n' "$@" | sed -n 's/^deckhand\.deployment=//p')" > "$marker"
+        label() { printf '%s\n' "$@" | sed -n "s/^deckhand\.$1=//p"; }
+        [ -e "$marker" ] || printf '%s||deployment|%s\n' "$(label owner "$@")" "$(label deployment "$@")" > "$marker"
         exit ;;
       esac
     fi
