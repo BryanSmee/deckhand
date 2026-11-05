@@ -4247,7 +4247,8 @@ allow_capabilities contains "read:pulls"
     const init = await rpc("initialize", { protocolVersion: "2025-06-18", capabilities: {} });
     assert.equal(init.serverInfo.name, "deckhand");
     const { tools } = await rpc("tools/list", {});
-    assert.equal(tools.length, 5);
+    // The read tools and the write ones (#483): a client gets both scopes by default.
+    assert.equal(tools.length, 7);
     const call = (name, args) => rpc("tools/call", { name, arguments: args });
     const tasks = await call("list_tasks", {});
     assert.deepEqual(
@@ -4262,6 +4263,10 @@ allow_capabilities contains "read:pulls"
     // The log, read at the runner through the orchestrator.
     const log = await call("get_run_log", { runId: "org-repo-pr-3-1000" });
     assert.match(log.content[0].text, /= result \(ok, 0\.1 min\):\n## Fixed/);
+    // The write tools reach the work area (#483): its refusal is the tool's error.
+    const rerun = await call("rerun", { runId: "nope" });
+    assert.equal(rerun.isError, true);
+    assert.equal(rerun.content[0].text, "No run nope among those you see.");
   });
 
   test("access (#731): a login with no action sees nothing, starts nothing, its routes 404 and 403", async (t) => {

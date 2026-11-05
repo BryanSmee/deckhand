@@ -8,8 +8,10 @@
 //
 // Each tool reads what the dashboard shows its user (`source`, built in http.mjs createHttp()): the same
 // filters, ALLOWED_REPOS, the access decision and each repo's `users`. A run's log may hold a
-// repository's secrets in tool output: its readers are the dashboard's, nobody else.
-import { readBody, send } from "../lib/http.mjs";
+// repository's secrets in tool output: its readers are the dashboard's, nobody else. The write
+// tools (#483) call what the dashboard's work area does (work.mjs), with its checks and its App
+// comments: what it refuses is the tool's error, its message as the dashboard shows it.
+import { Refused, readBody, send } from "../lib/http.mjs";
 import { agentFor } from "./agents/index.mjs";
 import { STATES } from "./board.mjs";
 import { parseKey } from "./events.mjs";
@@ -30,6 +32,7 @@ const MIN_PAGE_BYTES = 1;
 const MAX_LINE_BYTES = 4 * 1024 * 1024;
 
 export const READ = "deckhand:read";
+export const WORK = "deckhand:work";
 
 // What a tool that only reads says of itself (MCP's tool annotations).
 const READ_ONLY = {
@@ -38,11 +41,23 @@ const READ_ONLY = {
   idempotentHint: true,
   openWorldHint: false,
 };
+// And one that acts: it starts or stops runs and comments on GitHub, so clients ask first.
+const WRITES = {
+  readOnlyHint: false,
+  destructiveHint: true,
+  idempotentHint: false,
+  openWorldHint: true,
+};
+
+// The work area's actions a client may ask for (work.mjs checkAction()): not a brainstorm's
+// wrap-up, which the task's own comments ask for.
+export const SCHEDULE_ACTIONS = ["start", "queue", "plan", "dequeue", "cancel"];
 
 const INSTRUCTIONS = `Deckhand runs coding agents on GitHub issues and pull requests. These tools \
 read what its dashboard shows you: your repositories, their tasks (an issue or pull request and \
-its runs), each run's log, and the schedule. A task is named by its key, "owner/repo#12" for an \
-issue, "owner/repo#pr-12" for a pull request.`;
+its runs), each run's log, and the schedule; with the deckhand:work scope, rerun and schedule act \
+as its dashboard does, commenting on the issue as the user. A task is named by its key, \
+"owner/repo#12" for an issue, "owner/repo#pr-12" for a pull request.`;
 
 const RPC = {
   parse: -32700,
@@ -131,10 +146,51 @@ export const TOOLS = [
       "What runs next: the runs going, the tasks waiting for a free slot in their run order, those waiting for other issues to be done (and which), the lanes (named groups of issues), and the backlog: a repository's open issues with nothing going on, or each repository's count without `repo`.",
     inputSchema: object({ repo: REPO }),
   },
-].map((tool) => ({ ...tool, annotations: { title: tool.title, ...READ_ONLY } }));
+  {
+    name: "rerun",
+    title: "Rerun a run",
+    scope: WORK,
+    description:
+      "Runs a task's last run again, when it failed, was interrupted or was stopped, as the dashboard's Rerun does: in its mode, on the comments it ran on, the App commenting on the issue that you asked for it. Refused for any other run, or a task with something running or queued.",
+    inputSchema: object(
+      { runId: { type: "string", description: "The run's id, from list_runs." } },
+      ["runId"],
+    ),
+  },
+  {
+    name: "schedule",
+    title: "Start, queue or cancel an issue",
+    scope: WORK,
+    description:
+      'What dragging an issue on the dashboard\'s graph, or its Stop, does, the App commenting on the issue that you asked for it: "start" runs it now; "queue" makes it wait for issue `after` to be done (closed as completed, or merged); "plan" lays out a parent issue and its open sub-issues from their "blocked by" links (each starting or waiting), after `after` if given; "dequeue" stops it waiting; "cancel" stops its run or drops its queued comments (`pr`: the pull request numbered `number`). An issue with open questions waits for their answers. `mode`: a mode of the repository other than work.',
+    inputSchema: object(
+      {
+        repo: REPO,
+        number: { type: "integer", minimum: 1, description: "The issue's number." },
+        action: { type: "string", enum: SCHEDULE_ACTIONS },
+        after: {
+          type: "integer",
+          minimum: 1,
+          description: 'The issue it waits for: required by "queue", optional for "plan".',
+        },
+        mode: { type: "string", description: "The mode it runs in: work by default." },
+        pr: {
+          type: "boolean",
+          description: '"cancel" only: `number` is a pull request\'s.',
+        },
+      },
+      ["repo", "number", "action"],
+    ),
+  },
+].map(({ scope, ...tool }) => ({
+  ...tool,
+  annotations: { title: tool.title, ...(scope === WORK ? WRITES : READ_ONLY) },
+}));
 
-// Each tool's scope: all of them read.
-const SCOPE = Object.fromEntries(TOOLS.map((t) => [t.name, READ]));
+// Each tool's scope: the read tools need deckhand:read, those that act deckhand:work.
+const SCOPE = Object.fromEntries(
+  TOOLS.map((t) => [t.name, t.annotations.readOnlyHint ? READ : WORK]),
+);
 
 // `source` (http.mjs createHttp()'s), each for the signed-in `user`:
 //   state(user)              api/state, as the dashboard gets it
@@ -143,6 +199,9 @@ const SCOPE = Object.fromEntries(TOOLS.map((t) => [t.name, READ]));
 //   run(user, id)            the run, when `user` may read its log; else null
 //   readLog(id, { offset, length })  its bytes: { size, data } (../runner/client.mjs readLog())
 //   backlog(user, repo)      the work area's backlog (work.mjs), null where `user` can't see it
+//   rerun(user, runId)       the work area's rerun (work.mjs `mcp`): its answer's message, or
+//                            Refused as the dashboard's
+//   schedule(user, repo, body)  its POST …/work, the same way
 // `version`: Deckhand's, which `initialize` says.
 export function createMcp({ source, version = "dev", now = Date.now, log = () => {} }) {
   const tools = {
@@ -151,6 +210,8 @@ export function createMcp({ source, version = "dev", now = Date.now, log = () =>
     list_runs: listRuns,
     get_run_log: getRunLog,
     get_schedule: getSchedule,
+    rerun: rerunTool,
+    schedule: scheduleTool,
   };
 
   // --- The tools ---------------------------------------------------------------------------
@@ -331,6 +392,37 @@ export function createMcp({ source, version = "dev", now = Date.now, log = () =>
       backlog,
     };
     return result(schedule, scheduleText(schedule));
+  }
+
+  async function rerunTool(user, args) {
+    const runId = requiredString(args, "runId");
+    return acted(() => source.rerun(user, runId));
+  }
+
+  async function scheduleTool(user, args) {
+    const repo = requiredString(args, "repo");
+    if (!/^[\w.-]+\/[\w.-]+$/.test(repo)) throw new BadArguments('`repo` is "owner/repo".');
+    const action = requiredString(args, "action");
+    if (!SCHEDULE_ACTIONS.includes(action)) {
+      throw new BadArguments(`\`action\` is one of ${SCHEDULE_ACTIONS.join(", ")}.`);
+    }
+    // The rest is checked as the dashboard's body is (work.mjs checkAction()).
+    const body = { action, number: args.number };
+    for (const name of ["after", "mode", "pr"]) {
+      if (args[name] !== undefined && args[name] !== null) body[name] = args[name];
+    }
+    return acted(() => source.schedule(user, repo, body));
+  }
+
+  // A write's answer: the dashboard's message, or its refusal as the tool's error.
+  async function acted(act) {
+    try {
+      const message = await act();
+      return result({ message }, [message]);
+    } catch (error) {
+      if (error instanceof Refused) return failure(error.message);
+      throw error;
+    }
   }
 
   // --- JSON-RPC --------------------------------------------------------------------------------

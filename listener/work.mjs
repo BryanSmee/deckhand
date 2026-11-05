@@ -94,8 +94,8 @@ import { CONFIG_FILE, modeNames } from "./repo-config.mjs";
 import { latestReview } from "./reviews.mjs";
 import { issueList, waitsFor } from "./waits.mjs";
 import { taskId } from "./spelling.mjs";
-import { readJsonBody, refuse, send } from "../lib/http.mjs";
-import { apiRoute, mustDo } from "./web.mjs";
+import { Refused, readJsonBody, refuse, send } from "../lib/http.mjs";
+import { apiRoute, mustDo, routeChecks } from "./web.mjs";
 
 // How long a repo's open issues are served before they are read again (in the background):
 // the dashboard polls them.
@@ -107,6 +107,8 @@ const MAX_BODY = 4096;
 // The answers' text, and the JSON around it (escapes, indexes).
 const MAX_ANSWER_BODY = 4 * MAX_TEXT;
 const ACTIONS = ["start", "queue", "plan", "dequeue", "stop", "cancel"];
+// The log lines' mark for what an MCP client asked (mcp.mjs).
+const MCP = " (MCP)";
 // What the routes need (permissions.mjs), checked before their handler; `work` and `inbox` check
 // the mode they start (`runs:start:<mode>`), or `runs:manage` to cancel or dequeue.
 const MANAGE = "runs:manage";
@@ -1170,21 +1172,63 @@ export function createWorkApi({
   }
 
   async function work(req, res, user, repo) {
-    const asked = checkAction(await readJsonBody(req, MAX_BODY));
+    send(res, 200, { message: await asks(repo, user, await readJsonBody(req, MAX_BODY)) });
+  }
+
+  // POST …/work's body for `user` on `repo`, from the dashboard or an MCP client (`via`, the
+  // log line's mark): its answer's message. Throws Refused.
+  async function asks(repo, user, body, via = "") {
+    const asked = checkAction(body);
     log(
-      `Work area: ${user} asks ${asked.action} ${taskKey(repo, asked.number)}${asked.after ? ` after #${asked.after}` : ""}`,
+      `Work area: ${user} asks ${asked.action} ${taskKey(repo, asked.number)}${asked.after ? ` after #${asked.after}` : ""}${via}`,
     );
-    const message = await act(repo, user, asked);
-    send(res, 200, { message });
+    return act(repo, user, asked);
   }
 
   async function reruns(req, res, user, repo) {
     const runId = (await readJsonBody(req, MAX_BODY))?.runId;
+    send(res, 200, { message: await rerunAsked(repo, user, runId) });
+  }
+
+  // POST …/rerun's body, as asks() is …/work's.
+  async function rerunAsked(repo, user, runId, via = "") {
     if (typeof runId !== "string" || !/^[\w.-]+$/.test(runId))
       refuse(400, "`runId` is a run's id.");
-    log(`Work area: ${user} reruns ${repo} ${runId}`);
-    send(res, 200, { message: await rerun(repo, user, runId) });
+    log(`Work area: ${user} reruns ${repo} ${runId}${via}`);
+    return rerun(repo, user, runId);
   }
+
+  // The MCP tools' (mcp.mjs) way in: the checks the routes make (apiRoute()'s, but the Origin:
+  // edge checked the client's), then the same bodies, so that a client posts the same App
+  // comments and gets the same refusals. Each throws Refused, as the route would answer.
+  const checks = routeChecks({
+    name: "Work area",
+    allowed: (repo) => repoAllowed(config, repo),
+    permissions,
+    named: nameOf,
+    log,
+  });
+  async function passed(user, repo, what) {
+    const checked = await checks(user, repo, WORK_ACTIONS[what] ?? null);
+    if (checked.status) refuse(checked.status, checked.error);
+    return checked.repo;
+  }
+  const mcp = {
+    // `body`: …/work's ({ action, number, after?, mode?, pr? }).
+    schedule: async (user, repo, body) => asks(await passed(user, repo, "work"), user, body, MCP),
+    // A run by its id alone: one the user can't see, in a hidden repo or a chat of someone
+    // else's, is one that doesn't exist.
+    rerun: async (user, runId) => {
+      const run = typeof runId === "string" ? runOf(runId) : null;
+      const missing = `No run ${runId} among those you see.`;
+      if (!run?.repo || (run.owner && run.owner !== user)) refuse(404, missing);
+      const repo = await passed(user, run.repo, "rerun").catch((error) => {
+        if (error instanceof Refused && error.status === 404) refuse(404, missing);
+        throw error;
+      });
+      return rerunAsked(repo, user, runId, MCP);
+    },
+  };
 
   async function reviewing(req, res, user, repo) {
     const { number, action } = (await readJsonBody(req, MAX_BODY)) ?? {};
@@ -1345,7 +1389,7 @@ export function createWorkApi({
     if (known.last || known.read) readAgain(known);
   }
 
-  return { handle, stale, counts, ticked, backlog: backlogOf };
+  return { handle, stale, counts, ticked, backlog: backlogOf, mcp };
 }
 
 // Which deliveries make a repo's backlog stale: an issue opened, closed, edited, moved or

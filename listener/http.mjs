@@ -330,6 +330,9 @@ export function createHttp(ctx) {
           throw error;
         });
       },
+      // The work area's own checks (work.mjs `mcp`): those of its routes, but the Origin.
+      rerun: (user, runId) => ctx.workApi.mcp.rerun(user, runId),
+      schedule: (user, repo, body) => ctx.workApi.mcp.schedule(user, repo, body),
     },
     log,
   });
