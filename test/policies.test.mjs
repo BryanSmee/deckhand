@@ -10,6 +10,7 @@ import {
   rulesOf,
   unallowed,
   denyKept,
+  MAX_GRANTS,
   MAX_MESSAGE_LENGTH,
   MAX_TEXT,
   pullInput,
@@ -1860,4 +1861,35 @@ test("grants: kept for the same operator policies and repository, asked again on
   clock.now += GRANTS_MS;
   await policies.grants("org/repo");
   assert.ok(asked() > before);
+});
+
+test("grants: kept for MAX_GRANTS repositories at most, the one asked longest ago dropped first (#901)", async (t) => {
+  const names = Array.from({ length: MAX_GRANTS + 1 }, (_, i) => `org/r${i}`);
+  const engine = policyEngineOf(t, {
+    readOperator: () => new Map([["grants.rego", grantsPolicy(["dockerfile"])]]),
+  });
+  // Nothing granted, without opa: the repositories asked of each grant counted.
+  const asked = [];
+  const service = {
+    ...localService(engine),
+    evaluate: async ({ input }) => {
+      asked.push(input.repo.name);
+      return { operator: { allow: false, denies: [] } };
+    },
+  };
+  const clock = { now: 0 };
+  const policies = createPolicies({ config: {}, github: null, service, now: () => clock.now });
+  const times = (name) => asked.filter((a) => a === name).length;
+  // r0 asked first, then again once its answer is past GRANTS_MS, while there is still room,
+  // then the last two: the oldest answer is r1's.
+  await policies.grants("org/r0");
+  const each = times("org/r0");
+  clock.now += GRANTS_MS;
+  for (const name of names.slice(1, -2)) await policies.grants(name);
+  await policies.grants("org/r0");
+  for (const name of names.slice(-2)) await policies.grants(name);
+  await policies.grants("org/r0");
+  assert.equal(times("org/r0"), 2 * each);
+  await policies.grants("org/r1");
+  assert.equal(times("org/r1"), 2 * each);
 });
