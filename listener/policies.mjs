@@ -134,6 +134,24 @@ export function allows(answer, action, repo = true) {
   );
 }
 
+// Whether `action` (a rule's action, or a prefix ending in `*`) is one Deckhand has: it is, or
+// covers, or is covered by one of REPO_ACTIONS or SERVER_ACTIONS (`runs:start:work`, `runs:*`,
+// `*`). A misspelled one (`run:start:work`) gives nothing, and a deny of it takes nothing away.
+export function knownAction(action) {
+  if (typeof action !== "string") return false;
+  return [...REPO_ACTIONS, ...SERVER_ACTIONS].some(
+    (a) => actionMatches(a, action) || actionMatches(action, a),
+  );
+}
+
+// How many of ALLOWED_USERS' logins the access rules' check asks about at most (each costs three
+// inputs: server-wide, a repository private and public).
+export const MAX_CHECKED_LOGINS = 100;
+
+// What the config checks say of an action no rule should name (knownAction()).
+const unknownAction = (rule, action, layer) =>
+  `\`${rule}\` of the ${layer === "repo" ? "repository's" : "operator's"} policies names \`${action}\`, which isn't an action Deckhand knows (${[...REPO_ACTIONS, ...SERVER_ACTIONS].map((a) => `\`${a}\``).join(", ")}, or a prefix of them ending in \`*\`): it ${rule.startsWith("deny_") ? "takes nothing away" : "gives nothing"}`;
+
 // Deckhand's policy/access.rego's one rule: every action, for every login (access()'s shortcut).
 const EVERY_ACTION = /^allow_access\s+contains\s+"\*"\s*(?:#.*)?$/m;
 
@@ -638,12 +656,15 @@ export function createPolicies({
   const evaluateCapabilities = (layers, inputs) => evaluateSets("capabilities", layers, inputs);
 
   // evaluateCapabilities()'s work for the set rules of `family` (SET_FAMILIES), the policy
-  // service's `evaluate<Family>`: each deny names its `capability`, or its `action`.
-  async function evaluateSets(family, layers, inputs) {
+  // service's `evaluate<Family>`: each deny names its `capability`, or its `action`. Without
+  // `operator`, the operator's layer isn't asked (its digest still goes: the service checks it).
+  async function evaluateSets(family, layers, inputs, { operator = true } = {}) {
     const what = SET_FAMILIES[family];
     const method = family === "access" ? "evaluateAccess" : "evaluateCapabilities";
     const failed = (what, errorLayer = null) => ({ error: what, errorLayer });
-    const asked = Object.keys(layers).filter((layer) => layers[layer]?.size);
+    const asked = Object.keys(layers).filter(
+      (layer) => layers[layer]?.size && (operator || layer !== "operator"),
+    );
     const docs = Object.fromEntries(
       Object.entries(inputs).map(([k, doc]) => [k, { version: INPUT_VERSION, ...doc }]),
     );
@@ -740,6 +761,58 @@ export function createPolicies({
       log(`${repo}: capabilities refused: ${message}`);
       return { error: message, errorLayer: said.errorLayer };
     }
+  }
+
+  // The actions `layers`' access rules name that Deckhand doesn't have (knownAction()), for the
+  // config checks (#765): a misspelled deny takes nothing away, unseen otherwise. Only evaluating
+  // the rules says them: on each allowed login (or one nobody has, with none), on `repo` (its
+  // name: private and public) and server-wide (the operator's layer alone: a repository's rules
+  // count only on it). A repository's allow rules are ignored (compile() says so): not read.
+  // Without `operator`, its rules aren't asked, only `layers.repo`'s. Each name said once; the
+  // policies failing, nothing (the compile check says why).
+  async function accessActionWarnings(layers, repo = null, { operator = true } = {}) {
+    // Deckhand's every action alone: nothing to say, without a call.
+    if (operator && (await everyAction({ repo: new Map(), ...layers }))) {
+      return [];
+    }
+    const logins = [...new Set((config?.users ?? []).map((u) => String(u).toLowerCase()))].slice(
+      0,
+      MAX_CHECKED_LOGINS,
+    );
+    if (!logins.length) logins.push("deckhand-config-check");
+    const where = [
+      ...(operator ? [null] : []),
+      ...(repo ? [true, false].map((p) => ({ name: repo.toLowerCase(), private: p })) : []),
+    ];
+    const inputs = {};
+    for (const login of logins) {
+      for (const at of where) {
+        inputs[`${login}@${at ? `${at.name}:${at.private}` : "server"}`] = {
+          decision: "access",
+          user: { login },
+          repo: at,
+        };
+      }
+    }
+    if (!Object.keys(inputs).length) return [];
+    const said = await evaluateSets("access", layers, inputs, { operator });
+    if (said.error) return [];
+    const warnings = new Set();
+    for (const result of Object.values(said.results)) {
+      for (const layer of ["operator", "repo"]) {
+        const rules = result[layer];
+        if (!rules) continue;
+        if (layer === "operator") {
+          for (const action of rules.allow.keys()) {
+            if (!knownAction(action)) warnings.add(unknownAction("allow_access", action, layer));
+          }
+        }
+        for (const d of rules.deny) {
+          if (!knownAction(d.action)) warnings.add(unknownAction("deny_access", d.action, layer));
+        }
+      }
+    }
+    return [...warnings];
   }
 
   // grants()'s answers, by the operator's layer (its digest) and the repository: the same files
@@ -1249,9 +1322,13 @@ export function createPolicies({
       const { deckhand, operator, errors } = await served();
       const error = errors.deckhand ?? errors.operator;
       if (error) throw new Error(error);
-      const checked = await check(new Map([...deckhand, ...operator]));
+      const files = new Map([...deckhand, ...operator]);
+      const checked = await check(files);
       const bots = botsReviewed(operator.get(BOT_REVIEWS));
-      return bots ? { ...checked, warnings: [...checked.warnings, bots] } : checked;
+      const actions = checked.errors.length
+        ? []
+        : await accessActionWarnings({ operator: files, repo: new Map() });
+      return { ...checked, warnings: [...checked.warnings, ...(bots ? [bots] : []), ...actions] };
     } catch (error) {
       return { errors: [error.message ?? String(error)], warnings: [] };
     }
@@ -1268,8 +1345,16 @@ export function createPolicies({
     } catch {
       // Said at start: the repo's own are what this check is about.
     }
-    const checked = await check(own, "repo");
-    return { ...checked, warnings: [...checked.warnings, ...shadowing(own, under)] };
+    const { errors, warnings } = await compile(own, "repo");
+    // Its deny rules on their own, as they apply to every run (the operator's are said at start):
+    // an ignored rule compiles all the same.
+    const actions = errors.some((e) => !e.ignored)
+      ? []
+      : await accessActionWarnings({ operator: under, repo: own }, repo, { operator: false });
+    return {
+      errors: errors.map((e) => e.text),
+      warnings: [...warnings, ...shadowing(own, under), ...actions],
+    };
   }
 
   // What applies on `repo` (its policies on `ref`, its default branch, read now), for the
@@ -1319,6 +1404,8 @@ export function createPolicies({
     ]);
     const review = operator.find((f) => f.name === BOT_REVIEWS);
     const bots = review && botsReviewed(review.text);
+    const broken = [...errors, ...up.errors, ...down.errors].some((e) => !e.ignored);
+    const actions = broken ? [] : await accessActionWarnings(policies, repo);
     return {
       files: files.map(({ text, ...f }) => ({ ...f, rules: rulesOf(text), ...shown(text) })),
       errors: [...errors, ...up.errors, ...down.errors],
@@ -1327,6 +1414,7 @@ export function createPolicies({
         ...down.warnings,
         ...shadowing(policies.repo, policies.operator),
         ...(bots ? [bots] : []),
+        ...actions,
       ],
       policies,
     };

@@ -9,6 +9,7 @@ import {
   actionMatches,
   allows,
   createPolicies,
+  knownAction,
   REPO_ACTIONS,
   SERVER_ACTIONS,
 } from "../listener/policies.mjs";
@@ -64,7 +65,7 @@ function fakeGithub(repos) {
 // createPolicies() on the real opa: Deckhand's files under the operator's (`operator`: name →
 // text, edited in place), the repositories' as `repos` says; `asked()`, the access calls the
 // policy service got.
-function realAccess(t, { operator = {}, repos = {}, now = Date.now } = {}) {
+function realAccess(t, { operator = {}, repos = {}, now = Date.now, config = {} } = {}) {
   const { github, calls } = fakeGithub(repos);
   const local = localService(
     policyEngineOf(t, {
@@ -75,7 +76,7 @@ function realAccess(t, { operator = {}, repos = {}, now = Date.now } = {}) {
   );
   let asked = 0;
   const service = { ...local, evaluateAccess: (body) => (asked++, local.evaluateAccess(body)) };
-  const policies = createPolicies({ config: {}, github, service, now });
+  const policies = createPolicies({ config, github, service, now });
   return { policies, calls, asked: () => asked };
 }
 
@@ -677,5 +678,125 @@ test(
     }
     assert.ok(!(await policies.can("mallory", repo("acme/api"), "tasks:read")));
     assert.ok(await policies.can("bob", repo("acme/api"), "tasks:read"));
+  },
+);
+
+test("knownAction: Deckhand's actions, the patterns covering them or covered by them, nothing else", () => {
+  for (const action of [...REPO_ACTIONS, ...SERVER_ACTIONS]) assert.ok(knownAction(action));
+  for (const action of ["*", "runs:*", "runs:start:work", "server:*", "tasks:*", "repo:*"]) {
+    assert.ok(knownAction(action), action);
+  }
+  for (const action of ["run:start:work", "task:read", "servers:read", "tasks:write", "", null]) {
+    assert.ok(!knownAction(action), String(action));
+  }
+});
+
+test(
+  "the real opa: the checks name the actions no rule should (#765), each once, and only when evaluating says them",
+  { skip: noOpa },
+  async (t) => {
+    const operator = {
+      "access.rego": `${bindings([
+        { users: ["alice"], repos: ["acme/*"], actions: ["tasks:read", "tsks:read"] },
+        { users: ["bob"], repos: ["*/*"], role: "member" },
+      ])}
+allow_access contains "task:read"
+
+deny_access contains {"action": "run:start:work", "reason": "a typo"}
+
+deny_access contains {"action": "runs:start:audit", "reason": "spelled right"}
+`,
+    };
+    const repos = {
+      "acme/api": {
+        private: true,
+        policies: {
+          "deny.rego": `package deckhand
+
+deny_access contains {"action": "logz:read", "reason": "public only"} if not input.repo.private
+
+deny_access contains {"action": "runs:manage", "reason": "spelled right"}
+`,
+        },
+      },
+    };
+    const { policies } = realAccess(t, { operator, repos, config: { users: ["Alice", "bob"] } });
+    const said = (rule, action, layer) =>
+      new RegExp(
+        `^\`${rule}\` of the ${layer} policies names \`${RegExp.escape(action)}\`, which isn't an action Deckhand knows`,
+      );
+    const matching = (warnings, ...expected) => {
+      const found = warnings.filter((w) => w.includes("isn't an action Deckhand knows"));
+      assert.equal(found.length, expected.length, found.join("\n"));
+      for (const re of expected)
+        assert.ok(
+          found.some((w) => re.test(w)),
+          `${re}: ${found}`,
+        );
+    };
+    // At start, server-wide: the rules said whatever the repository; a binding's action only
+    // counts on one.
+    const start = await policies.checkOperator();
+    assert.deepEqual(start.errors, []);
+    matching(
+      start.warnings,
+      said("allow_access", "task:read", "operator's"),
+      said("deny_access", "run:start:work", "operator's"),
+    );
+    assert.match(
+      start.warnings.find((w) => /run:start/.test(w)),
+      /it takes nothing away$/,
+    );
+    // The config panel of a repository: the binding's too, and the repository's deny that only
+    // applies were it public.
+    const described = await policies.describe("acme/api", "main");
+    matching(
+      described.warnings,
+      said("allow_access", "task:read", "operator's"),
+      said("allow_access", "tsks:read", "operator's"),
+      said("deny_access", "run:start:work", "operator's"),
+      said("deny_access", "logz:read", "repository's"),
+    );
+    // The onboarding check: the repository's own rules alone.
+    const checked = await policies.checkRepo("acme/api", "main");
+    assert.deepEqual(checked.errors, []);
+    matching(checked.warnings, said("deny_access", "logz:read", "repository's"));
+  },
+);
+
+test(
+  "the real opa: Deckhand's files alone, or rules that don't compile, say no action and ask nothing more",
+  { skip: noOpa },
+  async (t) => {
+    const plain = realAccess(t, { config: { users: ["alice"] } });
+    assert.deepEqual(await plain.policies.checkOperator(), { errors: [], warnings: [] });
+    assert.equal(plain.asked(), 0);
+    const broken = realAccess(t, {
+      repos: {
+        "acme/api": {
+          policies: { "deny.rego": "package deckhand\n\ndeny_access contains x if {\n" },
+        },
+      },
+    });
+    const checked = await broken.policies.checkRepo("acme/api", "main");
+    assert.equal(checked.errors.length, 1);
+    assert.equal(broken.asked(), 0);
+    // A repository's allow rule is an error, ignored: its deny rules are checked all the same.
+    const ignored = realAccess(t, {
+      repos: {
+        "acme/api": {
+          policies: {
+            "access.rego":
+              'package deckhand\n\nallow_access contains "tsks:read"\n\ndeny_access contains {"action": "logz:read", "reason": "x"}\n',
+          },
+        },
+      },
+    });
+    const both = await ignored.policies.checkRepo("acme/api", "main");
+    assert.equal(both.errors.length, 1);
+    assert.deepEqual(
+      both.warnings.filter((w) => w.includes("isn't an action")).map((w) => w.split(",")[0]),
+      ["`deny_access` of the repository's policies names `logz:read`"],
+    );
   },
 );

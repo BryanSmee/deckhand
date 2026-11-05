@@ -488,17 +488,15 @@ test("describe and the checks: Deckhand's files first, which the operator's repl
   );
   assert.match(described.warnings[0], /doesn't replace the operator's or Deckhand's file/);
   // The start's check compiles Deckhand's files under the operator's, the onboarding's the
-  // repo's alone, as each layer is evaluated.
+  // repo's alone, as each layer is evaluated (the last compile: the access rules are evaluated
+  // after it, #765).
+  const compiled = () => opa.calls.findLast((c) => c.files);
   await policies.checkOperator();
-  assert.deepEqual(Object.keys(opa.calls.at(-1).files).sort(), [
-    "gh-a.rego",
-    "gh-b.rego",
-    "gh-c.rego",
-  ]);
-  assert.equal(opa.calls.at(-1).files["gh-a.rego"], GH);
+  assert.deepEqual(Object.keys(compiled().files).sort(), ["gh-a.rego", "gh-b.rego", "gh-c.rego"]);
+  assert.equal(compiled().files["gh-a.rego"], GH);
   const repo = await policies.checkRepo("org/repo", "main");
-  assert.deepEqual(Object.keys(opa.calls.at(-1).files).sort(), ["gh-a.rego", "gh-c.rego"]);
-  assert.equal(opa.calls.at(-1).files["gh-a.rego"], "package deckhand\n");
+  assert.deepEqual(Object.keys(compiled().files).sort(), ["gh-a.rego", "gh-c.rego"]);
+  assert.equal(compiled().files["gh-a.rego"], "package deckhand\n");
   assert.equal(repo.warnings.length, 2);
 });
 
