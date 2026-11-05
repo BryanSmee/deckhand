@@ -43,6 +43,8 @@ export const PREFS = {
   logErrors: flag("log.errors", true),
   logWrap: flag("log.wrap", false),
   shortcuts: flag("shortcuts", true),
+  // The board's Backlog: sub-issues whose parent is listed left out (WorkQueue.tsx).
+  hideSubIssues: flag("backlog.hideSubIssues", false),
 };
 
 export type Prefs = { [K in keyof typeof PREFS]: (typeof PREFS)[K]["default"] };
@@ -56,17 +58,30 @@ export const nextTheme = (theme: Theme): Theme =>
 // The choices storage refused (private mode, a full quota): kept on this page, for its life.
 const unkept = new Map<string, string | null>();
 
+// What `key` keeps, or null: storage blocked, the default.
+function readKept(key: string): string | null {
+  if (unkept.has(key)) return unkept.get(key)!;
+  try {
+    return localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
+// Null: nothing kept, the default.
+function writeKept(key: string, kept: string | null) {
+  try {
+    if (kept === null) localStorage.removeItem(key);
+    else localStorage.setItem(key, kept);
+    unkept.delete(key);
+  } catch {
+    unkept.set(key, kept);
+  }
+}
+
 export function getPref<K extends PrefName>(name: K): Prefs[K] {
   const pref = PREFS[name] as Pref<Prefs[K]>;
-  const key = `deckhand.${pref.key}`;
-  let kept: string | null = null;
-  if (unkept.has(key)) kept = unkept.get(key)!;
-  else
-    try {
-      kept = localStorage.getItem(key);
-    } catch {
-      // Storage blocked: the default.
-    }
+  const kept = readKept(`deckhand.${pref.key}`);
   if (kept === null) return pref.default;
   if (typeof pref.default === "boolean") return (kept === "1") as Prefs[K];
   return pref.values?.includes(kept as Prefs[K]) ? (kept as Prefs[K]) : pref.default;
@@ -87,25 +102,47 @@ export function setPref<K extends PrefName>(name: K, value: Prefs[K]) {
           ? "1"
           : "0"
         : String(value);
-  try {
-    if (kept === null) localStorage.removeItem(key);
-    else localStorage.setItem(key, kept);
-    unkept.delete(key);
-  } catch {
-    unkept.set(key, kept);
-  }
+  writeKept(key, kept);
   if (name === "theme" || name === "density" || name === "motion" || name === "language")
     applyPrefs();
   tell();
 }
 
-export function usePref<K extends PrefName>(name: K): [Prefs[K], (value: Prefs[K]) => void] {
+// Renders the component again when a choice changes.
+function useChoices() {
   const [, render] = useReducer((n: number, _: void) => n + 1, 0);
   useEffect(() => {
     listeners.add(render);
     return () => void listeners.delete(render);
   }, []);
+}
+
+export function usePref<K extends PrefName>(name: K): [Prefs[K], (value: Prefs[K]) => void] {
+  useChoices();
   return [getPref(name), (value) => setPref(name, value)];
+}
+
+// The board's Backlog's label filter, per repository (WorkQueue.tsx): the labels ticked, ""
+// for "No label", in `deckhand.backlog.labels.<owner/repo>` as JSON. None ticked isn't kept.
+const labelsKey = (repo: string) => `deckhand.backlog.labels.${repo.toLowerCase()}`;
+
+export function getBacklogLabels(repo: string): string[] {
+  try {
+    const kept: unknown = JSON.parse(readKept(labelsKey(repo)) ?? "[]");
+    return Array.isArray(kept) ? kept.filter((l): l is string => typeof l === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
+export function setBacklogLabels(repo: string, labels: readonly string[]) {
+  writeKept(labelsKey(repo), labels.length ? JSON.stringify([...new Set(labels)]) : null);
+  tell();
+}
+
+export function useBacklogLabels(repo: string): [string[], (labels: readonly string[]) => void] {
+  useChoices();
+  return [getBacklogLabels(repo), (labels) => setBacklogLabels(repo, labels)];
 }
 
 const DARK = "(prefers-color-scheme: dark)";

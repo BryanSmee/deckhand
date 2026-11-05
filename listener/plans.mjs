@@ -8,7 +8,7 @@ import { refuse } from "../lib/http.mjs";
 
 // The "owner/name" of an issue as the REST API describes it (sub-issues and blockers may be
 // another repo's), or null.
-function repoOf(issue) {
+export function repoOf(issue) {
   if (issue.repository?.full_name) return issue.repository.full_name;
   return /\/repos\/([^/]+\/[^/]+)$/.exec(issue.repository_url ?? "")?.[1] ?? null;
 }

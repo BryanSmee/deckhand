@@ -49,10 +49,6 @@
   margin: 12px 12px 0;
 }
 
-.filter {
-  padding: 12px 12px 0;
-}
-
 .list {
   display: flex;
   flex-direction: column;
@@ -153,6 +149,27 @@ a.name:hover {
   color: var(--text-3);
   font-size: 12px;
   line-height: 16px;
+}
+
+/* A backlog card's labels: a swatch and a name each, on one line that wraps. */
+.labels {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  color: var(--text-2);
+  font-size: 11.5px;
+  line-height: 16px;
+}
+
+.label {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* An auto-picked card's mark, before its meta line. */

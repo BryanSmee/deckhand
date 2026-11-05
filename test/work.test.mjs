@@ -387,7 +387,7 @@ test("GET issues: the open issues without a task or pull request, and the repo's
   });
   const res = await call(w.api, "GET", "/api/repos/org/app/issues");
   assert.equal(res.status, 200);
-  assert.deepEqual(res.body.issues, [{ number: 1, title: "One", url: "u/1" }]);
+  assert.deepEqual(res.body.issues, [{ number: 1, title: "One", url: "u/1", labels: [] }]);
   assert.deepEqual(res.body.modes, ["work", "brainstorm", "audit"]);
   assert.equal(res.body.errors, false);
   // Cached: GitHub is asked again only after ISSUES_MS.
@@ -436,7 +436,9 @@ test("GET issues: a failed background read keeps the last one, and is tried agai
   await get();
   w.clock += ISSUES_MS;
   w.down = true;
-  assert.deepEqual((await get()).body.issues, [{ number: 1, title: "One", url: "u/1" }]);
+  assert.deepEqual((await get()).body.issues, [
+    { number: 1, title: "One", url: "u/1", labels: [] },
+  ]);
   await settled();
   assert.match(w.logs.at(-1), /org\/app: backlog: GitHub GET \/repos\/org\/app: 502/);
   // Still the last read, and another try.
@@ -802,7 +804,7 @@ test("GET issues: only for the repo's own users, as the dashboard's tasks are", 
   assert.match(res.body.error, /alice is not among org\/app's users/);
   const bob = await call(w.api, "GET", "/api/repos/org/app/issues", { user: "bob" });
   assert.equal(bob.status, 200);
-  assert.deepEqual(bob.body.issues, [{ number: 1, title: "One", url: "u/1" }]);
+  assert.deepEqual(bob.body.issues, [{ number: 1, title: "One", url: "u/1", labels: [] }]);
 });
 
 test("GET issues: how many open sub-issues an issue has, from the list's summary", async () => {
@@ -820,6 +822,95 @@ test("GET issues: how many open sub-issues an issue has, from the list's summary
       [2, undefined],
     ],
   );
+});
+
+test("GET issues: each issue's labels, from the list", async () => {
+  const w = setup({
+    issues: {
+      1: { ...open("Bug"), labels: [{ name: "bug", color: "d73a4a", id: 7 }, "idea"] },
+      2: open("Plain"),
+    },
+  });
+  const res = await call(w.api, "GET", "/api/repos/org/app/issues");
+  assert.deepEqual(
+    res.body.issues.map((i) => [i.number, i.labels]),
+    [
+      [
+        1,
+        [
+          { name: "bug", color: "d73a4a" },
+          { name: "idea", color: null },
+        ],
+      ],
+      [2, []],
+    ],
+  );
+});
+
+test("GET issues: a sub-issue's parent when it is listed, read once per backlog read", async () => {
+  const sub = (title, extra = {}) => ({ ...open(title), ...extra });
+  const w = setup({
+    issues: {
+      1: { ...open("Epic"), subs: [2, 3, 9], sub_issues_summary: { total: 3, completed: 1 } },
+      2: sub("Child"),
+      3: sub("Child elsewhere"),
+      // Closed: not listed, so its open sub-issue keeps no parent.
+      4: { state: "closed", title: "Closed epic", subs: [5] },
+      5: sub("Orphan"),
+      // A parent whose sub-issues are all done isn't asked.
+      6: { ...open("Done epic"), subs: [2], sub_issues_summary: { total: 1, completed: 1 } },
+      // Its sub-issue is beyond the list (closed): nothing to point at it.
+      7: { ...open("Epic of closed"), subs: [8], sub_issues_summary: { total: 1, completed: 0 } },
+      8: { state: "closed", title: "Closed child" },
+    },
+  });
+  // #3 is in another repo, as GitHub describes it there: its number matches a listed issue.
+  w.issues[1].subs = [
+    2,
+    { number: 3, repository_url: "https://api.github.com/repos/org/other", state: "open" },
+    9,
+  ];
+  const subCalls = () => w.calls.filter((c) => c.includes("/sub_issues")).length;
+  const res = await call(w.api, "GET", "/api/repos/org/app/issues");
+  assert.deepEqual(
+    res.body.issues.map((i) => [i.number, i.parent]),
+    [
+      [1, undefined],
+      [2, 1],
+      [3, undefined],
+      [5, undefined],
+      [6, undefined],
+      [7, undefined],
+    ],
+  );
+  assert.equal(subCalls(), 2);
+  // The dashboard's polls take the cached read: no more calls.
+  await call(w.api, "GET", "/api/repos/org/app/issues");
+  await call(w.api, "GET", "/api/repos/org/app/issues");
+  assert.equal(subCalls(), 2);
+});
+
+test("GET issues: a parent's sub-issues that can't be read only lose their parent", async () => {
+  const w = setup({
+    issues: {
+      1: { ...open("Epic"), subs: [2], sub_issues_summary: { total: 1, completed: 0 } },
+      2: open("Child"),
+    },
+  });
+  w.onCall = (method, path) => {
+    if (path.includes("/sub_issues")) w.down = true;
+  };
+  const res = await call(w.api, "GET", "/api/repos/org/app/issues");
+  w.down = false;
+  assert.equal(res.status, 200);
+  assert.deepEqual(
+    res.body.issues.map((i) => [i.number, i.parent]),
+    [
+      [1, undefined],
+      [2, undefined],
+    ],
+  );
+  assert.match(w.logs.join("\n"), /#1's sub-issues/);
 });
 
 test("GET issues: a config with errors offers no mode", async () => {
