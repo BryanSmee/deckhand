@@ -194,7 +194,7 @@ test("before the first paint, public/theme.js sets the same classes", () => {
 });
 
 test("before the first paint, public/theme.js sets the same lang, from the same languages", () => {
-  expect(/var LANGUAGES = (\[.*\]);/.exec(early)?.[1]).toBe(JSON.stringify(LANGUAGES));
+  expect(JSON.parse(/var LANGUAGES = (\[.*\]);/.exec(early)?.[1] ?? "null")).toEqual(LANGUAGES);
   for (const [kept, preferred] of [
     [null, ["en-US"]],
     [null, ["de-DE", "en-gb"]],
@@ -202,6 +202,9 @@ test("before the first paint, public/theme.js sets the same lang, from the same 
     [null, []],
     ["en", ["fr-FR", "en-AU"]],
     ["en", ["fr-FR"]],
+    [null, ["fr-CA", "en-US"]],
+    ["fr", ["en-US"]],
+    ["fr", ["en-US", "fr-BE"]],
     ["klingon", ["en-US"]],
   ] as const) {
     localStorage.clear();

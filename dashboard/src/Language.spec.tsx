@@ -64,6 +64,7 @@ test("picked in Preferences: the shell and the page in it at once, kept, and the
   expect(options).toEqual([
     ["system", "System (English)", ""],
     ["en", "English", "en"],
+    ["fr", "Français", "fr"],
     ["pl", "Polski", "pl"],
   ]);
   expect(field.value).toBe("system");

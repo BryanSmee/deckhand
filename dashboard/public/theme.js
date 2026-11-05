@@ -26,7 +26,7 @@
     root.add("m-reduced");
 
   // The dashboard's catalogs (src/locales/index.ts LANGUAGES: a spec keeps them in step).
-  var LANGUAGES = ["en"];
+  var LANGUAGES = ["en", "fr"];
   var choice = kept("language");
   var chosen = LANGUAGES.indexOf(choice) >= 0;
   var wanted = chosen ? [choice] : LANGUAGES;

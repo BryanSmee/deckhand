@@ -89,8 +89,10 @@ test("the language and locale: the browser's first one with a catalog, with its 
 
 test("locale() follows the browser on System, so dates do too", () => {
   expect(locale()).toBe("en-US");
-  vi.spyOn(navigator, "languages", "get").mockReturnValue(["fr-FR", "en-GB"]);
+  vi.spyOn(navigator, "languages", "get").mockReturnValue(["de-DE", "en-GB"]);
   expect(locale()).toBe("en-GB");
+  vi.spyOn(navigator, "languages", "get").mockReturnValue(["fr-FR", "en-GB"]);
+  expect(locale()).toBe("fr-FR");
   setPref("language", "en");
   expect(locale()).toBe("en-GB");
   vi.spyOn(navigator, "languages", "get").mockReturnValue(["fr-FR"]);
