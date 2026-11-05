@@ -59,6 +59,12 @@ operator, across as many repositories as the App is installed on.
 - **Inboxes.** An ideas issue and a bug reports issue, where each of your comments becomes a
   filed GitHub issue, and a GitHub Discussions category (for example "Ask Claude") where
   Claude answers questions.
+- **Your own machines.** A project that needs what only your computer has (a game engine, a
+  GPU, licensed tools, large local assets) can run its issues there: `deckhand-machine` signs in
+  as you, claims the issues routed to it (`runs-on:<label>` or `/machine`), runs your own Claude
+  Code and pushes with your git, while Deckhand keeps the queue, the comments, needs-input and
+  the review loop. Opt-in three times (the operator's grant, the repository's `.deckhand.yaml`,
+  the machine's own config); see [Your own machine](docs/setup.md#your-own-machine).
 - **Dashboard.** Every issue, pull request and discussion Deckhand worked on, grouped by
   project and repository, with its state and the live log of its runs, and a graph of what
   waits for what (`/after`). Sign-in with GitHub.
@@ -219,6 +225,10 @@ Read this before installing Deckhand on a repository.
 - **The egress proxy decides where data can go.** Every allowed host is trusted entirely:
   anything a sandbox can write to there (its own repository on GitHub, a bucket behind `*`)
   is a way out. Keep the list short.
+- **Nothing is enforced on your own machines.** A machine's agent runs on its own with your
+  files, credentials and network: Deckhand suggests its settings, checks who claims what and
+  what the App writes, and never merges its pull requests by itself
+  ([Machines](docs/security.md#machines)).
 - **What isn't covered:** image builds and the Claude Code install run outside the
   sandboxes' networks: a repository only gets its own Dockerfile built when its grants say so
   (the `dockerfile` grant). DNS lookups may leave the internal networks.
