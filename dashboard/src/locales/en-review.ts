@@ -7,7 +7,7 @@ export const review = {
   "reviewTab.readAgainFailed": "Couldn't read it again: {error}",
   "reviewTab.tryAgain": "Try again",
   "reviewTab.reading": "Reading the last review",
-  // The merge's banner: "Merged #30 by Deckhand, today 14:02".
+  // The merge's banner: "Merged #30 by Deckhand today 14:02".
   "reviewTab.merged": "Merged #{number}",
   "reviewTab.mergedBy": "Merged #{number} by {who}",
   "reviewTab.mergedAt": "{merged} {when}",

@@ -225,6 +225,9 @@ test("a task's Review tab, before and after its merge, with each follow-up's fil
   const head = "aaaaaaa1111111111111111111111111111111";
   const url = "https://github.example.com/acme/app/pull/25";
   const item = { path: "lib/cache.mjs", line: 20, text: "A miss goes out?" };
+  const FILINGS: ReviewFindings["followUps"][number]["filing"][] = [
+    ...(["after-merge", "failed", "left", "off", "unread", "not-filed", "unknown"] as const),
+  ];
   const review: ReviewFindings = {
     url: `${url}#pullrequestreview-7`,
     at: state.now - 60_000,
@@ -239,16 +242,15 @@ test("a task's Review tab, before and after its merge, with each follow-up's fil
       { ...item, severity: "high", tolerated: false },
       { ...item, severity: "medium", tolerated: true },
     ],
-    followUps: (["after-merge", "failed", "left", "off", "unread", "not-filed", "unknown"] as const)
-      .map((filing) => ({ ...item, title: `Follow ${filing}`, filing }))
-      .concat([
-        {
-          ...item,
-          title: "Filed",
-          filing: "issue" as never,
-          issue: { number: 40, state: "closed", url: null },
-        } as never,
-      ]),
+    followUps: [
+      ...FILINGS.map((filing, i) => ({ ...item, title: `Follow-up ${i}`, filing })),
+      {
+        ...item,
+        title: "Filed",
+        filing: "issue",
+        issue: { number: 40, state: "closed", url: null },
+      },
+    ],
     comments: [
       { ...item, blocking: true },
       { ...item, blocking: false },
@@ -269,14 +271,30 @@ test("a task's Review tab, before and after its merge, with each follow-up's fil
         : task,
     ),
   };
-  for (const merged of [null, { at: state.now - 1000, by: "alice", deckhand: false }]) {
+  // Not merged; then merged by Deckhand, by someone, by no one known.
+  for (const merged of [
+    null,
+    { at: state.now - 1000, by: "deckhand-app[bot]", deckhand: true },
+    { at: state.now - 1000, by: "alice", deckhand: false },
+    { at: state.now - 1000, by: null, deckhand: false },
+  ]) {
     const shown = { ...review, merged };
     mockApi({ "api/review": () => shown });
     history.replaceState(null, "", `#/tasks?task=${encodeURIComponent("acme/app#22")}`);
     const view = render(<Dashboard state={reviewed} error={null} />);
     fireEvent.click(screen.getByRole("tab", { name: t("detail.reviewTab") }));
     await screen.findByRole("region", { name: t("reviewTab.comments") });
-    checked(document.body, reviewed, shown, ["@alice", head.slice(0, 7)]);
+    // Only what the tab shows as it was sent: the review's own texts, not its verdict, filings or
+    // issue states, which the catalog writes. `allowed` is the repo's config value, shown so.
+    const sent = [
+      ...[...review.findings, ...review.followUps, ...review.comments].flatMap((f) => [
+        f.text,
+        `${f.path}:${f.line}`,
+      ]),
+      ...review.followUps.map((f) => f.title),
+      ...[review.allowed, "@alice", head.slice(0, 7), "bbbbbbb"],
+    ];
+    checked(document.body, sent);
     view.unmount();
   }
 });

@@ -211,6 +211,7 @@ function MustFix({ review, merged }: { review: ReviewFindings; merged: boolean }
                     {merged ? (
                       <span class={styles.mark}>{t("reviewTab.mergedWith")}</span>
                     ) : f.tolerated ? (
+                      // `allowed`: the repo's config value, as its file writes it, not translated.
                       <span
                         class={styles.mark}
                         title={t("reviewTab.toleratedHelp", { severity: review.allowed })}
