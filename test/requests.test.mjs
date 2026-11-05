@@ -58,7 +58,8 @@ function setup({ store = openStore("memory:"), verdicts = {}, failing = false } 
     chats: {
       subjectOf: (t) => (t.kind === "chat" ? { id: CHAT } : null),
       decideRequest: async (_task, request) => {
-        const verdict = verdicts[request.kind];
+        // A promise: a decision that takes its time (the test resolves it).
+        const verdict = await verdicts[request.kind];
         if (verdict instanceof Error) throw verdict;
         return { ceiling: { hosts: [] }, ...verdict };
       },
@@ -285,4 +286,64 @@ test("a reason: one line, redacted, cut to REASON_MAX", () => {
   assert.equal(long.length, REASON_MAX);
   assert.ok(long.endsWith("…"));
   assert.equal(reasonLine("  <script>alert(1)</script>  "), "<script>alert(1)</script>");
+});
+
+test("an answer under way: its timeout waits for it, a second answer is refused, and the first answer stays", async () => {
+  const verdicts = { host: ASK };
+  const { requests, told, clock, granted } = setup({ verdicts });
+  await requests.received(event(1));
+  let decided;
+  verdicts.host = new Promise((resolve) => (decided = resolve));
+  const approving = requests.answer("alice", CHAT, ID(1), "chat");
+  // The timeout passes while its approval is decided: it waits for the answer.
+  clock.advance(10 * 60_000);
+  assert.equal((await requests.answer("alice", CHAT, ID(1), "deny")).error, 409);
+  decided(ASK);
+  assert.equal((await approving).request.state, "granted");
+  await settled();
+  assert.deepEqual(
+    told.map((t) => t.state),
+    ["granted"],
+  );
+  assert.equal(granted.length, 1);
+});
+
+test("a run ending while its approval is decided: closed as denied, nothing granted", async () => {
+  const verdicts = { host: ASK };
+  const { requests, told, granted, task } = setup({ verdicts });
+  await requests.received(event(1));
+  let decided;
+  verdicts.host = new Promise((resolve) => (decided = resolve));
+  const approving = requests.answer("alice", CHAT, ID(1), "once");
+  requests.ended(RUN);
+  task.live.finishing = true;
+  decided(ASK);
+  assert.equal((await approving).error, 409);
+  await settled();
+  assert.deepEqual(
+    told.map((t) => t.state),
+    ["denied"],
+  );
+  assert.deepEqual(granted, []);
+});
+
+test("a run ending while its request is first decided: nothing armed, nothing asked", async () => {
+  let decided;
+  const { requests, told, clock } = setup({
+    verdicts: { host: new Promise((resolve) => (decided = resolve)) },
+  });
+  const receiving = requests.received(event(1));
+  // Being decided: not answerable yet.
+  assert.equal((await requests.answer("alice", CHAT, ID(1), "chat")).error, 409);
+  requests.ended(RUN);
+  decided(ASK);
+  await receiving;
+  await settled();
+  assert.deepEqual(requests.waitingFor(CHAT), []);
+  clock.advance(10 * 60_000);
+  await settled();
+  assert.deepEqual(
+    told.map((t) => t.state),
+    ["denied"],
+  );
 });

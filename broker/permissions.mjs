@@ -7,7 +7,7 @@
 // which the run token proves, so another run's token never reads it. Only the runs of
 // PERMISSION_MODES may ask: the others' capabilities are decided at their start, with no profile
 // to widen (#479's decision).
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { Refused } from "../lib/http.mjs";
 import { STREAM } from "./runs.mjs";
 
@@ -30,6 +30,8 @@ export const REQUESTS_MAX = 50;
 const STREAM_MAX = 10_000;
 
 export const ID = /^[0-9a-f]{16}$/;
+// What the sandbox names a request by, so that one sent again is the same one.
+const KEY = /^[0-9a-f]{16,64}$/;
 const STATES = ["granted", "denied", "refused"];
 const MESSAGE_MAX = 2000;
 
@@ -45,18 +47,33 @@ export function createPermissions({ store, now = Date.now, sleep = realSleep }) 
     if (!PERMISSION_MODES.includes(record.mode)) {
       return refusal(403, "this run may not ask for permissions: only a chat's may");
     }
-    const { kind, value = "", reason = "" } = body ?? {};
+    const { kind, value = "", reason = "", key = null } = body ?? {};
     if (!KINDS.includes(kind)) return refusal(400, `kind: one of ${KINDS.join(", ")}`);
     if (typeof value !== "string" || value.length > VALUE_MAX) {
       return refusal(400, `value: text, ${VALUE_MAX} characters at most`);
     }
     if (typeof reason !== "string") return refusal(400, "reason: text");
-    const asked = await store.increment(countKey(record.id), 1, { ttlMs: REQUEST_TTL_MS });
-    if (asked > REQUESTS_MAX) {
-      return refusal(429, `this run asked ${REQUESTS_MAX} times already: no more requests`);
+    if (key !== null && !KEY.test(key)) return refusal(400, "key: 16 to 64 hex digits");
+    // Sent again with its `key` (its first answer lost): the same request, said again on the
+    // stream (the orchestrator takes an id once), never a second one.
+    const id = key
+      ? createHash("sha256").update(`${record.id}:${key}`).digest("hex").slice(0, 16)
+      : randomBytes(8).toString("hex");
+    const created = await store.setIfAbsent(
+      requestKey(record.id, id),
+      { state: "pending" },
+      { ttlMs: REQUEST_TTL_MS },
+    );
+    if (created) {
+      const asked = await store.increment(countKey(record.id), 1, { ttlMs: REQUEST_TTL_MS });
+      if (asked > REQUESTS_MAX) {
+        await store.delete(requestKey(record.id, id));
+        return refusal(429, `this run asked ${REQUESTS_MAX} times already: no more requests`);
+      }
+    } else if ((await store.get(requestKey(record.id, id)))?.state !== "pending") {
+      // Answered already: its answer is there to read.
+      return { status: 202, body: { id, state: "answered" } };
     }
-    const id = randomBytes(8).toString("hex");
-    await store.set(requestKey(record.id, id), { state: "pending" }, { ttlMs: REQUEST_TTL_MS });
     await store.append(
       STREAM,
       {

@@ -289,13 +289,22 @@ export function requestVerdict({ kind, value }, { ceiling, profile, live }) {
     if (live.hosts && matchHost(host, live.hosts) !== null) {
       return given(`${host} is reachable from this sandbox already`);
     }
+    // The narrowest entry that covers it: the host itself, the longest `*.domain`, `*` last.
     const entry =
       ceiling.hosts.find((h) => h === host) ??
-      ceiling.hosts.find((h) => matchHost(host, [h]) !== null);
+      ceiling.hosts
+        .filter((h) => h !== "*" && matchHost(host, [h]) !== null)
+        .sort((x, y) => y.length - x.length)[0] ??
+      (ceiling.hosts.includes("*") ? "*" : undefined);
     if (!entry) {
       return beyond(`${host} isn't among the hosts the operator grants this repository`, "hosts");
     }
-    const what = entry === host ? host : `${host} (granted as ${entry})`;
+    const what =
+      entry === host
+        ? host
+        : entry === "*"
+          ? `${host} (granted as *: an approval opens every public host)`
+          : `${host} (granted as ${entry})`;
     const adds = { hosts: [entry] };
     const has = saved.hosts === null || saved.hosts.includes(entry);
     return { verdict: has ? "saved" : "ask", what, adds, live: true };

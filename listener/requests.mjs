@@ -62,6 +62,9 @@ export function createRequests(
   // refused; `told`: whether the broker has its answer.
   const requests = new Map();
   const timers = new Map();
+  // The requests being decided (received()) or answered (answer()): a second answer is refused
+  // meanwhile, and their timeout waits for the answer under way.
+  const busy = new Set();
   let stopped = false;
 
   async function load() {
@@ -107,7 +110,11 @@ export function createRequests(
       owner: task?.owner ?? null,
       kind: String(kind),
       value: String(value ?? "").slice(0, 256),
-      reason: reasonLine(reason, operatorSecrets(ctx)),
+      // Redacted as the run's log is: the operator's secrets and the run's own tokens.
+      reason: reasonLine(reason, [
+        ...(ctx.broker?.secretsOf?.(run) ?? []),
+        ...operatorSecrets(ctx),
+      ]),
       what: null,
       adds: null,
       live: false,
@@ -136,7 +143,15 @@ export function createRequests(
         `Refused: ${WAITING_MAX} requests of yours wait for an answer already; ask again once they have one.`,
       );
     }
-    const decided = await decide(task, record);
+    busy.add(id);
+    let decided;
+    try {
+      decided = await decide(task, record);
+    } finally {
+      busy.delete(id);
+    }
+    // Its run ended meanwhile (ended()): closed already.
+    if (record.state !== "pending") return;
     if (decided.verdict === "ask") {
       Object.assign(record, { what: decided.what, adds: decided.adds, live: decided.live });
       arm(record);
@@ -178,7 +193,10 @@ export function createRequests(
   }
 
   // Its answer: kept, said in the run's log, and told to the broker.
+  // A record closed already (its run ended, its timeout passed) keeps its first answer, as the
+  // broker does.
   async function close(record, state, message, { scope = null, by = null } = {}) {
+    if (record.state !== "pending") return;
     clearTimer(timers.get(record.id));
     timers.delete(record.id);
     Object.assign(record, { state, message, scope, by, answeredAt: now() });
@@ -215,6 +233,8 @@ export function createRequests(
   function expire(record) {
     timers.delete(record.id);
     if (stopped || record.state !== "pending") return;
+    // An answer under way settles it: its owner answered in time.
+    if (busy.has(record.id)) return;
     const minutes = Math.round(config.chatPermissionMs / 60_000);
     close(record, "denied", `Denied: ${record.owner} didn't answer within ${minutes} min.`).catch(
       (error) => log(`Permission requests: ${error.stack ?? error}`),
@@ -233,17 +253,35 @@ export function createRequests(
     if (record.state !== "pending") {
       return { error: 409, message: "This request has its answer already." };
     }
+    if (busy.has(id)) return { error: 409, message: "This request is being answered already." };
+    busy.add(id);
+    try {
+      return await answering(record, String(user).toLowerCase(), choice);
+    } finally {
+      busy.delete(id);
+      // Its timeout passed meanwhile, and the answer didn't close it (a failure).
+      if (record.state === "pending" && record.expiresAt <= now()) expire(record);
+    }
+  }
+
+  // answer()'s, the request held: each wait may end with the request closed (its run ended),
+  // which nothing here undoes.
+  const gone = () => ({ error: 409, message: "Its sandbox has stopped: the request is closed." });
+  async function answering(record, by, choice) {
     const task = taskOfRun(record.run);
-    const by = String(user).toLowerCase();
     if (!task) {
       await close(record, "denied", "Denied: this sandbox's run has ended.");
-      return { error: 409, message: "Its sandbox has stopped: the request is closed." };
+      return gone();
     }
     if (choice === "deny") {
       await close(record, "denied", `Denied by ${by}.`, { by });
       return { request: shown(record) };
     }
     const decided = await decide(task, record);
+    if (record.state !== "pending" || !taskOfRun(record.run)) {
+      await close(record, "denied", "Denied: this sandbox's run has ended.");
+      return gone();
+    }
     if (decided.verdict !== "ask") {
       await settle(task, record, decided);
       return { request: shown(record) };

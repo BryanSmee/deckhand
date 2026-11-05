@@ -646,6 +646,11 @@ export function createChats(
   async function grantRequest(task, record, scope, limit) {
     const chat = subjectOf(task);
     if (!chat) refuse(404, "No such chat.");
+    // The profile checked first: a refusal changes nothing, the sandbox's hosts included.
+    const kept = scope === "chat" && checkProfile(widened(chat.profile, record.adds), limit);
+    if (kept && kept.errors.length) {
+      refuse(409, `It no longer fits this chat's ceiling: ${kept.errors.join("; ")}`);
+    }
     const live = task.live;
     if (record.live && live?.hosts) {
       for (const host of record.adds.hosts ?? []) {
@@ -654,11 +659,8 @@ export function createChats(
       }
       ctx.saveLive?.(task);
     }
-    if (scope === "chat") {
-      const { profile, errors } = checkProfile(widened(chat.profile, record.adds), limit);
-      if (errors.length) refuse(409, `It no longer fits this chat's ceiling: ${errors.join("; ")}`);
-      chat.profile = profile;
-    } else if (scope === "once" && !record.live) {
+    if (kept) chat.profile = kept.profile;
+    else if (scope === "once" && !record.live) {
       chat.once = widened(chat.once ?? { capabilities: [], hosts: [], mounts: [] }, record.adds);
     }
     if (scope) {

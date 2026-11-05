@@ -1015,7 +1015,15 @@ test("a request's answer: waited for, a run asking in a loop stopped at REQUESTS
     state: "denied",
     message: "Denied by alice.",
   });
-  for (let i = 1; i < REQUESTS_MAX; i++) await permissions.ask(record, { kind: "engine" });
+  // Sent again with its key (its 202 lost): the same request, said again, counted once.
+  const key = "0123456789abcdef0123456789abcdef";
+  const first = await permissions.ask(record, { kind: "engine", key });
+  const again = await permissions.ask(record, { kind: "engine", key });
+  assert.equal(again.body.id, first.body.id);
+  assert.equal((await permissions.ask(record, { kind: "engine", key: "nope" })).status, 400);
+  await permissions.answer("run-c", first.body.id, { state: "granted", message: "ok" });
+  assert.equal((await permissions.ask(record, { kind: "engine", key })).body.state, "answered");
+  for (let i = 2; i < REQUESTS_MAX; i++) await permissions.ask(record, { kind: "engine" });
   const over = await permissions.ask(record, { kind: "engine" });
   assert.equal(over.status, 429);
 });

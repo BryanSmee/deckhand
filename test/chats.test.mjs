@@ -894,6 +894,12 @@ test("requests: what is approved once for a start goes to the next one alone (st
   assert.deepEqual(chats.profileOf(task).capabilities, ["pull"]);
   assert.deepEqual(chats.startProfile(task).capabilities, ["pull", "setup"]);
   assert.deepEqual(chats.startProfile(task).capabilities, ["pull"]);
+  // Saved for the chat only within its ceiling: refused, the sandbox's hosts untouched.
+  const host = { kind: "host", what: "x", adds: { hosts: ["evil.example"] }, live: true };
+  task.live.hosts = ["github.com"];
+  await chats.setPermissions("alice", chat.id, { profile: { capabilities: ["pull"], hosts: [] } });
+  await assert.rejects(chats.grantRequest(task, host, "chat", decided.ceiling), { status: 409 });
+  assert.deepEqual(task.live.hosts, ["github.com"]);
   // Another run's task has no chat to ask.
   assert.equal(chats.subjectOf({ kind: "issue", id: "12" }), null);
 });

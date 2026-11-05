@@ -303,3 +303,14 @@ test("widened(): an approval grows a list, `everything` stays null, and the resu
   const within = checkProfile(widened(profile, { capabilities: ["pull", "docker"] }), c);
   assert.deepEqual(within.errors, []);
 });
+
+test("a host under several grant entries: the narrowest one, `*` last and said so", () => {
+  const grant = { hosts: ["*", "*.org", "*.example.org"] };
+  const c = ceilingOf({ outcome: outcome(CHAT, undefined, grant), grant, mounts: [] });
+  const narrowed = { ...DEFAULT_PROFILE, hosts: [] };
+  const sub = verdict({ kind: "host", value: "cdn.example.org" }, { c, profile: narrowed });
+  assert.deepEqual(sub.adds, { hosts: ["*.example.org"] });
+  const any = verdict({ kind: "host", value: "pypi.io" }, { c, profile: narrowed });
+  assert.deepEqual(any.adds, { hosts: ["*"] });
+  assert.equal(any.what, "pypi.io (granted as *: an approval opens every public host)");
+});

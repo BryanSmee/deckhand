@@ -15,6 +15,7 @@
 // orchestrator's CHAT_PERMISSION_TIMEOUT passes. It holds no token of its own.
 "use strict";
 const { execFileSync } = require("node:child_process");
+const { randomBytes } = require("node:crypto");
 const { createInterface } = require("node:readline");
 
 const BASE = process.env.TASK_PERMISSIONS || "";
@@ -72,7 +73,9 @@ async function ask(kind, value, reason) {
       message: "Refused: this run can't ask for permissions (not a chat).",
     };
   }
-  const body = JSON.stringify({ kind, value: value ?? "", reason: reason ?? "" });
+  // Its key: the same request when it is sent again (an answer lost on the way back).
+  const key = randomBytes(16).toString("hex");
+  const body = JSON.stringify({ kind, value: value ?? "", reason: reason ?? "", key });
   let id = null;
   let pause = 500;
   const until = Date.now() + GIVE_UP_MS;

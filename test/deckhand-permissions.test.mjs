@@ -100,7 +100,10 @@ test(
         ["GET", "/run/permissions/00112233aabbccdd", "Bearer run-token"],
       ],
     );
-    assert.deepEqual(JSON.parse(broker.calls[0].body), {
+    const { key, ...sent } = JSON.parse(broker.calls[0].body);
+    // Its key, so that a POST sent again is the same request.
+    assert.match(key, /^[0-9a-f]{32}$/);
+    assert.deepEqual(sent, {
       kind: "host",
       value: "pypi.org",
       reason: "pip install",
@@ -125,7 +128,8 @@ test(
       }),
     );
     assert.deepEqual(ok, { code: 0, out: "Granted.\n" });
-    assert.deepEqual(JSON.parse(granted.calls[0].body), {
+    const { key: _, ...sent } = JSON.parse(granted.calls[0].body);
+    assert.deepEqual(sent, {
       kind: "engine",
       value: "",
       reason: "docker build the image",
