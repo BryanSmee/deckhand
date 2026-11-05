@@ -26,6 +26,7 @@ import { PHASE_TITLES, shortDuration } from "./logModel";
 import type { Chat, Run } from "./types";
 import { Button, IconButton } from "./ui/Button";
 import { Fold } from "./ui/Fold";
+import { Markdown } from "./ui/Markdown";
 import * as Icon from "./ui/icons";
 import { StatusDot } from "./ui/Status";
 import styles from "./Conversation.module.css";
@@ -276,7 +277,7 @@ function TurnView({
     case "agent":
       return (
         <div class={`${styles.turn} ${styles.agent}`}>
-          <p class={styles.bubble}>{turn.text}</p>
+          <Markdown class={styles.bubble} text={turn.text} />
         </div>
       );
     case "note":

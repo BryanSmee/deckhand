@@ -354,6 +354,23 @@ test("the conversation: your messages and the agent's answers from the runs' log
   expect(screen.getByText("Its sandbox waits for your next message.")).toBeTruthy();
 });
 
+test("the agent's answers render as Markdown; your messages stay as typed", async () => {
+  history.replaceState(null, "", "#/chats/0123456789abcdef");
+  show(
+    makeChats([makeChat({ status: "idle", runs: [chatRun({ status: "ok", finishedAt: 5_000 })] })]),
+  );
+  await waitFor(() => expect(FakeSource.opened.length).toBe(1));
+  FakeSource.opened[0].emit("entries", [
+    { kind: "phase", phase: "work", at: 1_000 },
+    { kind: "message", text: "Is **this** bold?" },
+    { kind: "text", text: "It **is**:\n\n```js\nrun();\n```" },
+  ] satisfies Entry[]);
+  const log = screen.getByRole("log", { name: "Conversation" });
+  expect(await within(log).findByText("Is **this** bold?")).toBeTruthy();
+  expect(within(log).getByText("is").tagName).toBe("STRONG");
+  expect(within(log).getByText("run();").closest("pre")).toBeTruthy();
+});
+
 test("sending: Enter sends, Shift Enter doesn't; a message queued while the sandbox resumes stays shown", async () => {
   history.replaceState(null, "", "#/chats/0123456789abcdef");
   const list = makeChats([makeChat()]);
