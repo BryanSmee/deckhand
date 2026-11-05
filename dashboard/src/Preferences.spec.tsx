@@ -6,6 +6,7 @@ import { beforeEach, expect, onTestFinished, test, vi } from "vitest";
 import early from "../public/theme.js?raw";
 import type { RepoList } from "./api";
 import { Dashboard } from "./App";
+import { LANGUAGES } from "./locales";
 import { applyPrefs, followPrefs, setPref } from "./prefs";
 import { makeState } from "./testUtils";
 import type { State, Task } from "./types";
@@ -147,6 +148,14 @@ test("on System, the device's settings switch the page; Full and Light stay put"
   expect(classes()).toEqual(["t-light"]);
 });
 
+test("on System, the browser's languages changing set the root's lang again", () => {
+  onTestFinished(followPrefs());
+  expect(root.lang).toBe("en-US");
+  vi.spyOn(navigator, "languages", "get").mockReturnValue(["en-GB"]);
+  dispatchEvent(new Event("languagechange"));
+  expect(root.lang).toBe("en-GB");
+});
+
 test("another tab's change shows here", () => {
   showPreferences();
   onTestFinished(followPrefs());
@@ -182,6 +191,30 @@ test("before the first paint, public/theme.js sets the same classes", () => {
     applyPrefs();
     expect(before).toEqual(classes());
   }
+});
+
+test("before the first paint, public/theme.js sets the same lang, from the same languages", () => {
+  expect(/var LANGUAGES = (\[.*\]);/.exec(early)?.[1]).toBe(JSON.stringify(LANGUAGES));
+  for (const [kept, preferred] of [
+    [null, ["en-US"]],
+    [null, ["de-DE", "en-gb"]],
+    [null, ["de-DE"]],
+    [null, []],
+    ["en", ["fr-FR", "en-AU"]],
+    ["en", ["fr-FR"]],
+    ["klingon", ["en-US"]],
+  ] as const) {
+    localStorage.clear();
+    if (kept) localStorage.setItem("deckhand.language", kept);
+    vi.spyOn(navigator, "languages", "get").mockReturnValue([...preferred]);
+    root.lang = "";
+    new Function(early)();
+    const before = root.lang;
+    root.lang = "";
+    applyPrefs();
+    expect(before).toBe(root.lang);
+  }
+  expect(root.lang).toBe("en-US");
 });
 
 test("Open on: the repository open last, or every repository's", () => {

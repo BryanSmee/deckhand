@@ -8,6 +8,7 @@ import { useCan } from "./access";
 import { sendDiscussionComment, useThread } from "./api";
 import { ago, plural } from "./format";
 import { useSubmit } from "./hooks";
+import { locale } from "./i18n";
 import type { DiscussionComment, Post, Task, WorkResult } from "./types";
 import styles from "./Thread.module.css";
 
@@ -107,7 +108,7 @@ function Message({ post, now, opening = false }: { post: Post; now: number; open
       <header class={styles.by}>
         <b>{post.deckhand ? "Deckhand" : post.author ? `@${post.author}` : "ghost"}</b>
         {!Number.isNaN(at) && (
-          <time dateTime={post.at!} title={new Date(at).toLocaleString()}>
+          <time dateTime={post.at!} title={new Date(at).toLocaleString(locale())}>
             {ago(at, now)}
           </time>
         )}

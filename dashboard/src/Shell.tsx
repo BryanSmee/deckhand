@@ -10,7 +10,6 @@ import { useEffect, useRef, useState } from "preact/hooks";
 import { type Can, useCan } from "./access";
 import type { RepoList } from "./api";
 import {
-  plural,
   type RepoCounts,
   repoCounts,
   reservedText,
@@ -19,6 +18,7 @@ import {
   shortRepo,
 } from "./format";
 import { HealthAlert } from "./Health";
+import { t } from "./i18n";
 import { withKey } from "./keys";
 import type { Permission } from "./notify";
 import { requestKinds } from "./NewRequest";
@@ -26,6 +26,7 @@ import { needingYou } from "./Repos";
 import { SettingsTabs } from "./Settings";
 import { formatRoute, isOverview, type Route } from "./route";
 import type { Syncer } from "./Sync";
+import type { Plain } from "./locales";
 import type { Chats, Health, State } from "./types";
 import { Button, IconButton } from "./ui/Button";
 import { type Segment, Segmented } from "./ui/Choice";
@@ -42,10 +43,10 @@ import styles from "./Shell.module.css";
 // What New request's menu opens: the dialog, on that kind (NewRequest.tsx).
 export type Request = "idea" | "bug" | "analyze";
 
-const REQUESTS: { id: Request; label: string; icon: ComponentChildren }[] = [
-  { id: "idea", label: "Idea", icon: <Icon.Idea /> },
-  { id: "bug", label: "Bug report", icon: <Icon.Bug /> },
-  { id: "analyze", label: "Analyze runs", icon: <Icon.Chart /> },
+const REQUESTS: { id: Request; label: Plain; icon: ComponentChildren }[] = [
+  { id: "idea", label: "shell.requestIdea", icon: <Icon.Idea /> },
+  { id: "bug", label: "shell.requestBug", icon: <Icon.Bug /> },
+  { id: "analyze", label: "shell.requestAnalyze", icon: <Icon.Chart /> },
 ];
 
 // The menu's kinds the user may send somewhere (access.ts): none, no New request.
@@ -98,13 +99,14 @@ export function Sidebar(props: SidebarProps) {
   const requests = menuRequests(useCan());
   const counts = repoCounts(state?.tasks ?? [], route.repo);
   const waiting = needingYou(repos?.repos ?? null, state?.tasks ?? []);
+  const fold = t(rail ? "shell.expand" : "shell.collapse");
   const toggle = (
     <IconButton
       variant="ghost"
       size={rail ? "default" : "small"}
       class={rail ? "" : styles.collapse}
-      label={rail ? "Expand the sidebar" : "Collapse the sidebar"}
-      title={withKey(rail ? "Expand the sidebar" : "Collapse the sidebar", "sidebar")}
+      label={fold}
+      title={withKey(fold, "sidebar")}
       icon={<Icon.Sidebar />}
       onClick={() => onRail(!rail)}
     />
@@ -133,13 +135,11 @@ export function Sidebar(props: SidebarProps) {
           <NavItem
             href={formatRoute({ repo: null, task: null, run: null, page: "settings" })}
             icon={<Icon.Settings size={rail ? 17 : 16} />}
-            label="Settings"
+            label={t("shell.settings")}
             current={route.page === "settings"}
             count={waiting}
             title={withKey(
-              waiting
-                ? `${plural(waiting, "repository", "repositories")} ${waiting === 1 ? "needs" : "need"} you`
-                : "Settings",
+              waiting ? t("shell.settingsWaiting", { count: waiting }) : t("shell.settings"),
               "settings",
             )}
             rail={rail}
@@ -149,8 +149,8 @@ export function Sidebar(props: SidebarProps) {
           <NavItem
             onClick={notify.ask}
             icon={<Icon.Bell size={rail ? 17 : 16} />}
-            label="Notify me when ready"
-            title="Browser notifications while this page is open: a pull request ready for review, a run that needs your answers (Settings › Preferences picks which)"
+            label={t("shell.notify")}
+            title={t("shell.notifyHelp")}
             rail={rail}
           />
         )}
@@ -181,12 +181,15 @@ function RepoLinks({
     </span>
   );
   return (
-    <nav class={`${styles.repos} ${touch ? styles.touch : ""}`} aria-label="Repositories">
-      {!rail && !touch && <h2 class={styles.heading}>Repositories</h2>}
+    <nav
+      class={`${styles.repos} ${touch ? styles.touch : ""}`}
+      aria-label={t("shell.repositories")}
+    >
+      {!rail && !touch && <h2 class={styles.heading}>{t("shell.repositories")}</h2>}
       <NavItem
         href={repoHref(route, null)}
         icon={<Icon.Overview size={rail ? 17 : 16} />}
-        label="All repositories"
+        label={t("shell.allRepositories")}
         current={shown && !route.repo}
         count={counts.all.input}
         hot
@@ -198,7 +201,7 @@ function RepoLinks({
           href={repoHref(route, c.repo)}
           icon={rail ? <span class={styles.short}>{shortRepo(c.repo)}</span> : dot(c)}
           label={c.repo}
-          title={c.live ? `${c.repo}: ${c.live} running` : c.repo}
+          title={c.live ? t("shell.repoRunning", { repo: c.repo, count: c.live }) : c.repo}
           current={shown && sameRepo(route.repo, c.repo)}
           count={c.input}
           hot
@@ -221,7 +224,7 @@ function RunSlots({
   // Sync is server:sync's (access.ts).
   const syncs = useCan().server("server:sync");
   if (error) {
-    const text = `Can't reach the listener (${error})`;
+    const text = t("shell.unreachable", { error });
     return rail ? (
       <span class={styles.railError} role="img" aria-label={text} title={text}>
         <Icon.Alert size={18} />
@@ -232,10 +235,10 @@ function RunSlots({
       </div>
     );
   }
-  if (!state) return rail ? null : <div class={styles.slots}>Loading…</div>;
+  if (!state) return rail ? null : <div class={styles.slots}>{t("shell.loading")}</div>;
   const { running, maxParallel: max, queued } = state;
   const summary = runningText(state);
-  const rest = [`${queued} queued`, reservedText(state) ?? ""].filter(Boolean);
+  const rest = [t("slots.queued", { count: queued }), reservedText(state) ?? ""].filter(Boolean);
   const meter = (
     <Meter
       running={running}
@@ -250,15 +253,11 @@ function RunSlots({
       variant="ghost"
       size={rail ? "default" : "small"}
       class={rail && said?.failed ? styles.railFailed : undefined}
-      label="Sync with GitHub"
+      label={t("shell.sync")}
       icon={<Icon.Sync size={rail ? 17 : 15} />}
       pending={syncing}
       onClick={() => void sync()}
-      title={
-        rail && said
-          ? said.text
-          : "Ask GitHub again for the webhook deliveries it couldn't hand over, and for the open pull requests' states"
-      }
+      title={rail && said ? said.text : t("shell.syncHelp")}
     />
   );
   if (rail)
@@ -289,7 +288,7 @@ function RunSlots({
 function User({ user }: { user: string }) {
   return (
     <div class={styles.user}>
-      <span class={styles.login} title={`Signed in as @${user}`}>
+      <span class={styles.login} title={t("shell.signedIn", { user })}>
         @{user}
       </span>
       <ThemeSwitch class={styles.theme} />
@@ -298,7 +297,7 @@ function User({ user }: { user: string }) {
           type="submit"
           variant="ghost"
           size="small"
-          label="Sign out"
+          label={t("shell.signOut")}
           icon={<Icon.SignOut size={15} />}
         />
       </form>
@@ -352,15 +351,15 @@ function NewRequest({
     <div class={`${styles.request} ${styles[form]}`} ref={box}>
       {form === "full" ? (
         <Button {...attrs} class={styles.requestButton} icon={<Icon.Plus />} shortcut="request">
-          New request
+          {t("shell.newRequest")}
         </Button>
       ) : (
         <IconButton
           {...attrs}
           variant={form === "bar" ? "ghost" : "secondary"}
           size={form === "bar" ? "touch" : "default"}
-          label="New request"
-          title={withKey("New request", "request")}
+          label={t("shell.newRequest")}
+          title={withKey(t("shell.newRequest"), "request")}
           icon={<Icon.Plus size={form === "bar" ? 20 : 16} />}
         />
       )}
@@ -368,7 +367,7 @@ function NewRequest({
         <div
           class={styles.menu}
           role="menu"
-          aria-label="New request"
+          aria-label={t("shell.newRequest")}
           ref={menu}
           style={form === "icon" ? { top: `${at.top}px`, left: `${at.left}px` } : undefined}
         >
@@ -387,7 +386,7 @@ function NewRequest({
               }}
             >
               {r.icon}
-              {r.label}
+              {t(r.label)}
             </button>
           ))}
         </div>
@@ -424,33 +423,33 @@ export function PageHeader({
     ? [
         {
           value: "tasks",
-          label: "Tasks",
+          label: t("shell.tasks"),
           icon: <Icon.Tasks size={14} />,
           href: tasksOf(repo),
-          title: withKey("Tasks", "tasks"),
+          title: withKey(t("shell.tasks"), "tasks"),
         },
         {
           value: "board",
-          label: "Board",
+          label: t("shell.board"),
           icon: <Icon.Board size={14} />,
           href: boardOf(repo),
-          title: withKey("Board", "board"),
+          title: withKey(t("shell.board"), "board"),
         },
       ]
     : [
         {
           value: "overview",
-          label: "Overview",
+          label: t("shell.overview"),
           icon: <Icon.Overview size={14} />,
           href: tasksOf(null),
-          title: withKey("Overview", "overview"),
+          title: withKey(t("shell.overview"), "overview"),
         },
         {
           value: "tasks",
-          label: "Tasks",
+          label: t("shell.tasks"),
           icon: <Icon.Tasks size={14} />,
           href: allTasks,
-          title: withKey("Tasks", "tasks"),
+          title: withKey(t("shell.tasks"), "tasks"),
         },
       ];
   // The user's chats on the repository shown, every repository's on All. How many they keep
@@ -458,12 +457,12 @@ export function PageHeader({
   if (chatsShown(can, chats)) {
     views.push({
       value: "chats",
-      label: "Chats",
+      label: t("shell.chats"),
       icon: <Icon.Talk size={14} />,
       href: chatsOf(repo),
       extra: (
-        <span class={styles.kept} title="The chats you keep, of the most you may">
-          {chats!.chats.length} of {chats!.limit}
+        <span class={styles.kept} title={t("shell.chatsKeptHelp")}>
+          {t("shell.chatsKept", { count: chats!.chats.length, limit: chats!.limit })}
         </span>
       ),
     });
@@ -478,25 +477,23 @@ export function PageHeader({
   return (
     <header class={`${styles.header} ${settings ? styles.tabbed : ""}`}>
       <div class={styles.title}>
-        <h1>{settings ? "Settings" : (repo ?? "All repositories")}</h1>
+        <h1>{settings ? t("shell.settings") : (repo ?? t("shell.allRepositories"))}</h1>
         {repo && (
           <a
             class={styles.github}
             href={`${github}/${repo}`}
             target="_blank"
             rel="noreferrer"
-            aria-label={`${repo} on GitHub`}
-            title="Open on GitHub"
+            aria-label={t("shell.github", { repo })}
+            title={t("shell.openGithub")}
           >
             <Icon.External size={14} />
           </a>
         )}
       </div>
       {settings && <SettingsTabs route={route} count={needs} class={styles.headerTabs} />}
-      {!settings && <Segmented label="View" options={views} value={view} />}
-      {!settings && !chatting && !repo && (
-        <span class={styles.hint}>The board is per repository: open one to plan its work.</span>
-      )}
+      {!settings && <Segmented label={t("shell.view")} options={views} value={view} />}
+      {!settings && !chatting && !repo && <span class={styles.hint}>{t("shell.boardHint")}</span>}
       {!settings && state && (
         <PlanBars plans={state.plans} now={state.now} form="compact" class={styles.headerPlans} />
       )}
@@ -524,7 +521,7 @@ export function TopBar(props: TopBarProps) {
   const shown = settings ? null : route.repo;
   const counts = repoCounts(state?.tasks ?? [], shown);
   const current = shown ? counts.repos.find((c) => sameRepo(c.repo, shown)) : null;
-  const label = settings ? "Settings" : (current?.repo ?? "All repositories");
+  const label = settings ? t("shell.settings") : (current?.repo ?? t("shell.allRepositories"));
   return (
     <>
       <header class={styles.topbar}>
@@ -533,7 +530,7 @@ export function TopBar(props: TopBarProps) {
           class={styles.switcher}
           aria-haspopup="dialog"
           aria-expanded={sheet}
-          aria-label={`${label}: switch repository`}
+          aria-label={t("shell.switchRepo", { label })}
           onClick={() => setSheet(true)}
         >
           {current && <StatusDot tone={current.live ? "run" : "idle"} pulse={current.moving} />}
@@ -546,14 +543,14 @@ export function TopBar(props: TopBarProps) {
           <IconButton
             variant="ghost"
             size="touch"
-            label="Search tasks"
+            label={t("shell.searchTasks")}
             icon={<Icon.Search size={20} />}
             onClick={onSearch}
           />
         )}
         {state && requests.length > 0 && <NewRequest onPick={onRequest} form="bar" />}
         {sheet && (
-          <Sheet title="Repositories" onClose={() => setSheet(false)}>
+          <Sheet title={t("shell.repositories")} onClose={() => setSheet(false)}>
             <RepoLinks counts={counts} route={route} touch />
             <RunSlots {...props} />
             {state && <PlanBars plans={state.plans} now={state.now} class={styles.sheetPlans} />}
@@ -563,7 +560,7 @@ export function TopBar(props: TopBarProps) {
       </header>
       {error && (
         <p class={styles.banner} role="alert">
-          Can't reach the listener ({error})
+          {t("shell.unreachable", { error })}
         </p>
       )}
     </>
@@ -582,20 +579,23 @@ export function TabBar({ state, route, lastRepo, chats }: Common & { lastRepo: s
   const repo = route.repo ?? lastRepo ?? counts.repos[0]?.repo ?? null;
   const tabs = [
     {
-      label: "Overview",
+      id: "overview",
+      label: t("shell.overview"),
       icon: <Icon.Overview size={22} />,
       href: tasksOf(null),
       current: isOverview(route),
       count: counts.all.input,
     },
     {
-      label: "Tasks",
+      id: "tasks",
+      label: t("shell.tasks"),
       icon: <Icon.Tasks size={22} />,
       href: tasksRepo ? tasksOf(tasksRepo) : allTasks,
       current: onTasks(route),
     },
     {
-      label: "Board",
+      id: "board",
+      label: t("shell.board"),
       icon: <Icon.Board size={22} />,
       href: repo ? boardOf(repo) : tasksOf(null),
       current: route.page === "board",
@@ -603,7 +603,8 @@ export function TabBar({ state, route, lastRepo, chats }: Common & { lastRepo: s
     ...(chatsShown(can, chats)
       ? [
           {
-            label: "Chats",
+            id: "chats",
+            label: t("shell.chats"),
             icon: <Icon.Talk size={22} />,
             href: chatsOf(chatsRepo),
             current: route.page === "chats",
@@ -611,26 +612,29 @@ export function TabBar({ state, route, lastRepo, chats }: Common & { lastRepo: s
         ]
       : []),
     {
-      label: "Settings",
+      id: "settings",
+      label: t("shell.settings"),
       icon: <Icon.Settings size={22} />,
       href: formatRoute({ repo: null, task: null, run: null, page: "settings" }),
       current: route.page === "settings",
     },
   ];
   return (
-    <nav class={styles.tabbar} aria-label="Pages">
-      {tabs.map((t) => (
+    <nav class={styles.tabbar} aria-label={t("shell.pages")}>
+      {tabs.map((tab) => (
         <a
-          key={t.label}
-          href={t.href}
-          aria-current={t.current ? "page" : undefined}
-          aria-label={t.count ? `${t.label} (${t.count} waiting on you)` : undefined}
+          key={tab.id}
+          href={tab.href}
+          aria-current={tab.current ? "page" : undefined}
+          aria-label={
+            tab.count ? t("shell.waitingOnYou", { label: tab.label, count: tab.count }) : undefined
+          }
         >
-          {t.icon}
-          {t.label}
-          {!!t.count && (
+          {tab.icon}
+          {tab.label}
+          {!!tab.count && (
             <span class={styles.pip} aria-hidden="true">
-              {t.count}
+              {tab.count}
             </span>
           )}
         </a>

@@ -1,4 +1,5 @@
 // Names, groups and times the views share.
+import { and, locale, t } from "./i18n";
 import type {
   Auth,
   Kind,
@@ -135,10 +136,10 @@ export function reviewTrend(history: ReviewRound[]): "better" | "worse" | null {
 // What a loop that ended blocking left, for the ready rows and its notification: "2 high
 // findings left after 3 fix rounds", "1 critical and 1 high finding left after the review";
 // null when it ended clean or still goes on. The blocking findings are the most severe ones.
-export function findingsLeft(t: Pick<Task, "review">): string | null {
-  const r = t.review;
+export function findingsLeft(task: Pick<Task, "review">): string | null {
+  const r = task.review;
   // The CI step stopped before any review of this head: CI fails, nothing was reviewed.
-  if (r?.loop === "ci-failed") return "CI failed, not reviewed";
+  if (r?.loop === "ci-failed") return t("review.ciFailed");
   const last = r?.history.at(-1);
   if (!r || !["rounds-out", "stopped"].includes(r.loop) || !last?.blocking) return null;
   const parts: string[] = [];
@@ -150,12 +151,15 @@ export function findingsLeft(t: Pick<Task, "review">): string | null {
     left -= n;
     if (!left) break;
   }
-  const what = parts.length > 1 ? `${parts.slice(0, -1).join(", ")} and ${parts.at(-1)}` : parts[0];
-  const after = last.round ? `after ${plural(last.round, "fix round")}` : "after the review";
+  const after = last.round
+    ? t("review.afterRounds", { count: last.round })
+    : t("review.afterReview");
   const findings = last.blocking - comments;
-  const found = findings ? `${what ?? findings} ${findings === 1 ? "finding" : "findings"}` : null;
-  const said = comments ? plural(comments, "blocking comment") : null;
-  return `${[found, said].filter(Boolean).join(" and ")} left ${after}`;
+  const found = findings
+    ? t("review.findings", { count: findings, what: and(parts) || String(findings) })
+    : null;
+  const said = comments ? t("review.blockingComments", { count: comments }) : null;
+  return t("review.left", { what: and([found, said].filter((p) => p !== null)), after });
 }
 
 // The loop's ends, where the task page offers to review its pull request again.
@@ -207,10 +211,10 @@ export const shortSha = (sha: string) => sha.slice(0, 7);
 export function roundCounts(r: ReviewRound): string {
   const parts = SEVERITIES.filter((s) => r.counts[s]).map((s) => `${r.counts[s]} ${s}`);
   const { blocking = 0, notes = 0 } = r.comments ?? {};
-  if (blocking) parts.push(plural(blocking, "blocking comment"));
-  if (notes) parts.push(plural(notes, "note"));
-  if (r.followUps) parts.push(plural(r.followUps, "follow-up"));
-  return parts.join(" · ") || "no findings";
+  if (blocking) parts.push(t("review.blockingComments", { count: blocking }));
+  if (notes) parts.push(t("review.notes", { count: notes }));
+  if (r.followUps) parts.push(t("review.followUps", { count: r.followUps }));
+  return parts.join(" · ") || t("review.noFindings");
 }
 
 // A review that still blocks on as many findings as the one before it, or more: the fix run
@@ -369,7 +373,8 @@ export const isPrTask = (t: Pick<Task, "key" | "number">) =>
 // "app" for "org/app".
 export const shortRepo = (repo: string) => repo.slice(repo.indexOf("/") + 1);
 
-// "1 run", "3 runs"; `many` when adding an s won't do ("replies").
+// "1 run", "3 runs"; `many` when adding an s won't do ("replies"). English only: what still
+// calls it moves to t() (i18n.ts), whose catalogs have each language's plurals.
 export const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 
 // The top bar's run count: "2 of 3 running". Auto-pickup's share is reservedText()'s.
@@ -377,7 +382,7 @@ export function runningText({
   running,
   maxParallel,
 }: Pick<State, "running" | "maxParallel">): string {
-  return `${running} of ${maxParallel} running`;
+  return t("slots.running", { running, max: maxParallel });
 }
 
 // Auto-pickup's reserved slots and how they are used: "1 auto-pickup slot (1 in use)", "… (free)",
@@ -388,14 +393,19 @@ export function reservedText(state: Pick<State, "autoPickup">): string | null {
   if (!slots) return null;
   const running = state.autoPickup?.running ?? 0;
   const held = heldText(state);
-  const use = [running > 0 && `${running} in use`, held].filter(Boolean);
-  return `${plural(slots, "auto-pickup slot")} (${use.length ? use.join(", ") : "free"})`;
+  const use = [running > 0 && t("slots.inUse", { count: running }), held].filter(
+    (u) => typeof u === "string",
+  );
+  return t("slots.reserved", {
+    count: slots,
+    use: use.length ? use.join(t("list.comma")) : t("slots.free"),
+  });
 }
 
 // "1 held between runs": the reserved slots picks hold while not running, or null.
 export function heldText(state: Pick<State, "autoPickup">): string | null {
   const { running = 0, taken = 0 } = state.autoPickup ?? {};
-  return taken > running ? `${taken - running} held between runs` : null;
+  return taken > running ? t("slots.held", { count: taken - running }) : null;
 }
 
 // The mode a task runs in, where its kind doesn't say it already: an issue's or a pull
@@ -445,22 +455,23 @@ export function githubUrl(t: Task, base: string): string | null {
 
 export function ago(ms: number, now: number): string {
   const s = Math.round((now - ms) / 1000);
-  if (s < 60) return `${Math.max(0, s)}s ago`;
-  if (s < 3600) return `${Math.round(s / 60)} min ago`;
-  if (s < 86400) return `${Math.round(s / 3600)} h ago`;
-  return new Date(ms).toLocaleDateString();
+  if (s < 60) return t("time.secondsAgo", { n: Math.max(0, s) });
+  if (s < 3600) return t("time.minutesAgo", { n: Math.round(s / 60) });
+  if (s < 86400) return t("time.hoursAgo", { n: Math.round(s / 3600) });
+  return new Date(ms).toLocaleDateString(locale());
 }
 
 // When something happened, by the clock: "today 14:31", "yesterday 18:40", "Oct 14, 09:30";
 // without `words`, "14:31" today and the date on any other day.
 export function dayTime(at: number, now: number, words = true): string {
   const d = new Date(at);
-  const time = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  const time = d.toLocaleTimeString(locale(), { hour: "2-digit", minute: "2-digit" });
   const day = new Date(now);
-  if (d.toDateString() === day.toDateString()) return words ? `today ${time}` : time;
+  if (d.toDateString() === day.toDateString()) return words ? t("time.today", { time }) : time;
   day.setDate(day.getDate() - 1);
-  if (words && d.toDateString() === day.toDateString()) return `yesterday ${time}`;
-  return `${d.toLocaleDateString([], { month: "short", day: "numeric" })}, ${time}`;
+  if (words && d.toDateString() === day.toDateString()) return t("time.yesterday", { time });
+  const date = d.toLocaleDateString(locale(), { month: "short", day: "numeric" });
+  return t("time.dayTime", { date, time });
 }
 
 // "3 d 4 h", "4 h 12 min", "12 min": how long the listener has been up, by the server's clock.
