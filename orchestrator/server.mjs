@@ -1237,8 +1237,8 @@ reconciling.unref();
 brokerService.consume({
   handlers: {
     renewed: async ({ run }) => ctx.broker.runOf(run) && ctx.broker.recall(run),
-    // A run's request for more permissions (#479).
-    permission: (event) => ctx.requests.received(event),
+    // A run's request for more permissions (#479): kept, then decided apart from the stream.
+    permission: (event) => ctx.requests.take(event),
   },
 });
 // The screenshots this orchestrator kept before the broker did go to it, while it goes on: asked

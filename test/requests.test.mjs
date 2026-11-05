@@ -369,3 +369,39 @@ test("a run ending while an approval is saved: granted, as it was applied, and t
     ["granted"],
   );
 });
+
+test("take(): kept and stored before its decision, which goes on apart; no card until it is decided", async () => {
+  let decided;
+  const store = openStore("memory:");
+  const { requests, told } = setup({
+    store,
+    verdicts: { host: new Promise((resolve) => (decided = resolve)) },
+  });
+  await requests.take(event(1));
+  // In the store already: a copy stopping now loses nothing.
+  assert.equal((await store.get(REQUESTS_KEY))[ID(1)].state, "pending");
+  assert.deepEqual(requests.waitingFor(CHAT), []);
+  decided(ASK);
+  await settled();
+  await settled();
+  assert.equal(requests.waitingFor(CHAT).length, 1);
+  assert.deepEqual(told, []);
+});
+
+test("a request kept undecided by the copy before: decided by the next one, not asked as it was", async () => {
+  const store = openStore("memory:");
+  const first = setup({ store, verdicts: { host: new Promise(() => {}) } });
+  await first.requests.take(event(1));
+  first.requests.stop();
+  const message =
+    "Refused: evil.example isn't among the hosts the operator grants this repository.";
+  const next = setup({ store, verdicts: { host: { verdict: "beyond", message } } });
+  await next.requests.load();
+  next.requests.start();
+  await settled();
+  await settled();
+  assert.deepEqual(
+    next.told.map((t) => [t.id, t.state]),
+    [[ID(1), "refused"]],
+  );
+});

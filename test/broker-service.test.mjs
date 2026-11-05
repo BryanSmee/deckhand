@@ -1018,8 +1018,16 @@ test("a request's answer: waited for, a run asking in a loop stopped at REQUESTS
   // Sent again with its key (its 202 lost): the same request, said again, counted once.
   const key = "0123456789abcdef0123456789abcdef";
   const first = await permissions.ask(record, { kind: "engine", key });
-  const again = await permissions.ask(record, { kind: "engine", key });
-  assert.equal(again.body.id, first.body.id);
+  const said = async () =>
+    (await store.read("runs", "orchestrator", { count: 1000 })).filter(
+      (e) => e.event.id === first.body.id,
+    ).length;
+  for (let i = 0; i < 20; i++) {
+    const again = await permissions.ask(record, { kind: "engine", key });
+    assert.equal(again.body.id, first.body.id);
+  }
+  // Said once on the stream every run shares, however often it is sent again.
+  assert.equal(await said(), 1);
   assert.equal((await permissions.ask(record, { kind: "engine", key: "nope" })).status, 400);
   await permissions.answer("run-c", first.body.id, { state: "granted", message: "ok" });
   assert.equal((await permissions.ask(record, { kind: "engine", key })).body.state, "answered");

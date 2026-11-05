@@ -54,8 +54,8 @@ export function createPermissions({ store, now = Date.now, sleep = realSleep }) 
     }
     if (typeof reason !== "string") return refusal(400, "reason: text");
     if (key !== null && !KEY.test(key)) return refusal(400, "key: 16 to 64 hex digits");
-    // Sent again with its `key` (its first answer lost): the same request, said again on the
-    // stream (the orchestrator takes an id once), never a second one.
+    // Sent again with its `key` (its first answer lost): the same request, never a second one,
+    // said on the stream again only if its first POST may not have said it (`said` unset).
     const id = key
       ? createHash("sha256").update(`${record.id}:${key}`).digest("hex").slice(0, 16)
       : randomBytes(8).toString("hex");
@@ -71,9 +71,12 @@ export function createPermissions({ store, now = Date.now, sleep = realSleep }) 
         await store.delete(requestKey(record.id, id));
         return refusal(429, `this run asked ${REQUESTS_MAX} times already: no more requests`);
       }
-    } else if ((await store.get(requestKey(record.id, id)))?.state !== "pending") {
+    } else {
+      const found = await store.get(requestKey(record.id, id));
       // Answered already: its answer is there to read.
-      return { status: 202, body: { id, state: "answered" } };
+      if (found?.state !== "pending") return { status: 202, body: { id, state: "answered" } };
+      // Said already: a sandbox sending it in a loop adds nothing to the stream every run shares.
+      if (found.said) return { status: 202, body: { id, state: "pending" } };
     }
     await store.append(
       STREAM,
@@ -87,6 +90,13 @@ export function createPermissions({ store, now = Date.now, sleep = realSleep }) 
         reason: reason.slice(0, REASON_MAX),
       },
       { maxLength: STREAM_MAX },
+    );
+    // Marked said, unless it was answered meanwhile (that answer stays).
+    await store.compareAndSet(
+      requestKey(record.id, id),
+      { state: "pending" },
+      { state: "pending", said: true },
+      { ttlMs: REQUEST_TTL_MS },
     );
     return { status: 202, body: { id, state: "pending" } };
   }

@@ -382,7 +382,8 @@ agent_mcp playwright playwright-mcp "${browser[@]}"
 # where the broker takes its requests (TASK_PERMISSIONS, a chat's run). Its tool call waits for
 # their answer, up to the orchestrator's CHAT_PERMISSION_TIMEOUT (an hour at most): the agents'
 # own timeouts for a tool call go past it (Claude Code's MCP_TOOL_TIMEOUT, in ms; Codex's
-# tool_timeout_sec, from DECKHAND_MCP_TIMEOUT).
+# tool_timeout_sec, from DECKHAND_MCP_TIMEOUT). Claude Code has no timeout per server, only that
+# one for every MCP tool: a chat's Playwright calls get it too.
 if [ -n "${TASK_PERMISSIONS:-}" ]; then
   export MCP_TOOL_TIMEOUT=${MCP_TOOL_TIMEOUT:-3900000}
   DECKHAND_MCP_TIMEOUT=3900 agent_mcp deckhand-permissions deckhand-permissions mcp

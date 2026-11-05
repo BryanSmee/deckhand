@@ -92,14 +92,30 @@ export function createRequests(
     [...ctx.tasks.values()].find((t) => t.live?.id === run && !t.live.finishing) ?? null;
   const note = (run, message) => ctx.broker?.runOf(run)?.note?.(message);
 
-  // A request said on the broker's stream: { run, id, kind, value, reason }. Read again until it
-  // is handled (an error here leaves it unacknowledged): one known already is only told again.
-  async function received({ run, id, kind, value, reason }) {
-    if (!ID.test(id ?? "")) return;
+  // A request said on the broker's stream: { run, id, kind, value, reason }. received() resolves
+  // once it is decided (the tests'); take() once it is kept, deciding it after (the stream's:
+  // a policy decision would hold every other run's events back). Either way read again until
+  // it is kept (an error leaves it unacknowledged), and one known already is only told again.
+  async function received(event) {
+    const decide = await stored(event);
+    if (decide) await decide();
+  }
+
+  async function take(event) {
+    const decide = await stored(event);
+    if (decide) {
+      decide().catch((error) => log(`Permission requests: ${error.stack ?? error}`));
+    }
+  }
+
+  // The request kept, in the store too: a copy stopping now finds it undecided (start()). →
+  // what decides it, or null when it is closed or known already.
+  async function stored({ run, id, kind, value, reason }) {
+    if (!ID.test(id ?? "")) return null;
     const known = requests.get(id);
     if (known) {
       if (known.state !== "pending" && !known.told) tell(known);
-      return;
+      return null;
     }
     const task = taskOfRun(run);
     const record = {
@@ -128,21 +144,30 @@ export function createRequests(
       told: false,
     };
     requests.set(id, record);
-    if (!task) return close(record, "denied", "Denied: this sandbox's run has ended.");
+    const closed = async (state, message) => (await close(record, state, message), null);
+    if (!task) return closed("denied", "Denied: this sandbox's run has ended.");
     // Only a chat's run may ask (the broker refuses the others first).
     const subject = ctx.chats?.subjectOf?.(task);
     if (!subject || !task.owner) {
-      return close(record, "refused", "Refused: this run may not ask for permissions.");
+      return closed("refused", "Refused: this run may not ask for permissions.");
     }
     record.chat = subject.id;
     const waiting = [...requests.values()].filter((r) => r.run === run && r.state === "pending");
     if (waiting.length > WAITING_MAX) {
-      return close(
-        record,
+      return closed(
         "refused",
         `Refused: ${WAITING_MAX} requests of yours wait for an answer already; ask again once they have one.`,
       );
     }
+    busy.add(id);
+    await save();
+    return () => first(task, record);
+  }
+
+  // A request kept, decided (busy meanwhile, stored() marked it): refused, granted, or held for
+  // its owner.
+  async function first(task, record) {
+    const { id, run } = record;
     busy.add(id);
     let decided;
     try {
@@ -325,7 +350,8 @@ export function createRequests(
   // What the dashboard shows of a chat's requests waiting for its owner, oldest first.
   const waitingFor = (chatId) =>
     [...requests.values()]
-      .filter((r) => r.chat === chatId && r.state === "pending")
+      // Decided to ask: one still being decided has no question to show yet.
+      .filter((r) => r.chat === chatId && r.state === "pending" && r.what !== null)
       .sort((a, b) => a.at - b.at)
       .map(shown);
 
@@ -348,7 +374,12 @@ export function createRequests(
       if (record.state !== "pending") {
         if (!record.told) tell(record);
       } else if (!taskOfRun(record.run)) ended(record.run);
-      else arm(record);
+      // Kept before its decision, which the copy before didn't finish: decided now.
+      else if (record.what === null) {
+        first(taskOfRun(record.run), record).catch((error) =>
+          log(`Permission requests: ${error.stack ?? error}`),
+        );
+      } else arm(record);
     }
   }
 
@@ -363,6 +394,7 @@ export function createRequests(
     start,
     stop,
     received,
+    take,
     answer,
     ended,
     forget,
