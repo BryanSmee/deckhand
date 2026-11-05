@@ -2333,7 +2333,9 @@ client, and no sandbox service, run token or git gateway is on the machine.
   task sticks to, or its name or label), in a repository offered to it now (above), within its
   capacity. The claim holds a lease of 2 minutes that the machine's heartbeat renews; one that
   runs out gives the task's comments back, for that machine. Another owner's `/machine` on the
-  task is refused while its owner is a user here.
+  task is refused while its owner is a user here; taking its `runs-on` label off (anyone who
+  may edit labels) ends a label route, as `/machine none` does: the task goes back to
+  sandboxes, Deckhand's default, and the comments held for its owner are queued.
 - **What reaches the machine**: the work a sandbox run would get (the repository, the issue, its
   branch's name, the mode, the prompt and the comments' text), no token, no secret of the
   operator's. Only the owner's comments reach its runs: another user's are held on the task,

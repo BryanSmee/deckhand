@@ -2184,7 +2184,7 @@ still caps the repository's runs, auto-picked ones included.
 
 An issue is skipped, and the next one picked, while it has something live on the dashboard,
 the needs-input label (see Open questions), an open issue it is "blocked by", or an open pull
-request of Deckhand's. The run is for the person who last added the label: one who isn't in
+request of Deckhand's, and any issue with a `runs-on:<label>` label, `machines:` or not. The run is for the person who last added the label: one who isn't in
 `users` (or `ALLOWED_USERS`), or a bot, starts nothing. Nor does an issue whose title or
 description anyone but an allowed user changed at any point after the label went on. Such an
 issue keeps the label, and the App comments once to say why; an allowed user adds the label

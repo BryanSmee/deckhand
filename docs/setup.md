@@ -223,7 +223,7 @@ run's reply says who stopped it, its session and pushed commits stay, and the ne
 resumes it. On a queued task (waiting for a slot), `/cancel` and the page's **Remove from queue**
 drop its queued comments: it is back in the backlog. With nothing running or queued, `/cancel`
 gets a reply saying so.
-`/mode`, `/after`, `/agent`, `/model`, `/effort` and `/speed` may share the trigger's line, alone or
+`/mode`, `/after`, `/machine`, `/agent`, `/model`, `/effort` and `/speed` may share the trigger's line, alone or
 together (`Deckhand /agent codex /mode brainstorm`), as well as follow it on lines of their
 own; anything else on that line and it isn't the trigger. In an inbox entry (an idea, a bug, a
 discussion), `/agent`, `/model`, `/effort` and `/speed` may end any line (`Dark mode /effort high`)
@@ -512,7 +512,7 @@ there.
 | `register_machine`   | Registers a machine (`name`, unique among yours; `labels`; `capacity`, 1 by default; `repos`, `owner/name` or `owner/*`), or again under the same name: its id, and the repositories offered to it now               |
 | `heartbeat`          | Says the machine (`machine`, its id) is there, every 30 s: it is online while its last heartbeat is under 90 s old, and its claims' leases (2 min) are renewed, those of `runs` alone when given; returns its claims |
 | `claim`              | Waits up to 25 s for the next task routed to the machine and claims it: repository, issue, branch, mode, prompt and message (`resume`: its session goes on), or none                                                 |
-| `release`            | Gives a claim (`run`) back: its task waits again for this machine                                                                                                                                                    |
+| `release`            | Gives a claim (`run`) back: its task waits again for this machine (until #597 ends a claim on its own, its comments are claimed again, as after a lease that runs out)                                               |
 | `unregister_machine` | Removes the machine, as its **Remove** in Settings › MCP clients does: its claims end                                                                                                                                |
 
 A repository is offered to a machine only when the operator's policies grant it `machines`

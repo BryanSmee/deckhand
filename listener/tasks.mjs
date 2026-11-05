@@ -34,6 +34,10 @@ import { sameTask, taskId } from "./spelling.mjs";
 import { createTaskModes } from "./task-modes.mjs";
 import { itemMay, startAction } from "./permissions.mjs";
 
+// How long Deckhand's own item waits before it is queued again, when its task's machine route
+// can't be read (queue()).
+export const ROUTE_RETRY_MS = 60_000;
+
 // Why a queued comment may no longer run, or null: its repo left ALLOWED_REPOS, or its author
 // left ALLOWED_USERS or (`settings`, when known) the repo's `users`. Checked again when it was
 // queued before a restart, and when its run begins. Items the listener makes itself
@@ -450,14 +454,36 @@ export function createTasks(ctx) {
     // On its owner's machines (claims.mjs), or sandboxes; neither when its labeller may not run
     // it (said on the issue), nor when its route can't be read: it may be meant for a machine.
     let route = null;
+    // A person's comment, not Deckhand's own item (a review's fix round, a CI fix, a rebase).
+    const person = !!item.author && !item.reason;
     try {
       route = ctx.claims ? await ctx.claims.routeFor(item, labelsOf.get(item) ?? null) : null;
     } catch (error) {
-      log(`${key}: not queued, its machine route can't be read: ${error.message ?? error}`);
-      return null;
+      const why = error.message ?? error;
+      route = ctx.claims.kept(item);
+      if (route) log(`${key}: its machine route can't be read (${why}): the kept one goes on`);
+      else if (!person) {
+        // Deckhand's own: asked again later rather than lost (a loop's step).
+        const retryMs = ctx.routeRetryMs ?? ROUTE_RETRY_MS;
+        log(`${key}: its machine route can't be read (${why}): queued again in ${retryMs} ms`);
+        const timer = setTimeout(
+          () => accept(item).catch((e) => log(`${key}: ${e.stack ?? e}`)),
+          retryMs,
+        );
+        timer.unref?.();
+        return null;
+      } else {
+        log(`${key}: not queued, its machine route can't be read: ${why}`);
+        const text = `Not queued: whether #${item.number} runs on a machine (its \`runs-on\` label) can't be read from GitHub now. Comment again to retry.`;
+        await ctx.reply(item.repo, item.replyTo, text).catch((e) => log(`${key}: ${e}`));
+        await ctx.settle(item, "refused");
+        return null;
+      }
     }
     if (route?.refused) {
       log(`${key}: not queued, ${route.refused}`);
+      // Its reply was posted once, for the labelling (claims.mjs routeFor()): its 👀 off.
+      if (person) await ctx.settle(item, "refused");
       return null;
     }
     ctx.titles.set(key, item.title);

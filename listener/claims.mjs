@@ -122,11 +122,25 @@ export function createClaims(
   // Task `task` put in the pool `route` (null: none) says: shared again without one. A sandbox
   // that runs for it meanwhile keeps its slot where it started (tasks.mjs countRun()); what
   // queues after it goes by the pool.
+  // No longer anyone's alone (`/machine none`, its `runs-on` label taken off): the comments held
+  // for its owner are queued as any other's.
   function place(task, route) {
     const before = poolOf(task);
     task.pool = route ? (route.machine ? machinePool(route.machine) : MACHINES) : SHARED;
     if (before !== task.pool) log(`${keyOf(task)}: now in the ${task.pool} pool`);
+    if (route || !task.held.length) return;
+    const items = task.held.splice(0);
+    task.pending.push(...items);
+    log(`${keyOf(task)}: ${items.length} held comment(s) queued, the task no longer a machine's`);
+    ctx.saveQueue?.();
   }
+
+  // The route kept for `item`'s task, as it was last read: what its items go by when its
+  // `runs-on` label can't be read now (tasks.mjs queue()).
+  const kept = (item) =>
+    item.kind === "issue" && item.settings?.machines
+      ? active(routeOf(taskKey(item.repo, item.id)))
+      : null;
 
   // --- Routing -----------------------------------------------------------------------------
 
@@ -527,7 +541,10 @@ export function createClaims(
     const route = routed(t);
     if (!route) return null;
     const online = ctx.machines?.onlineOf(route.owner) ?? [];
-    const stuck = route.machine ? online.find((m) => m.id === route.machine) : null;
+    // Online or not: the one it waits for.
+    const stuck = route.machine
+      ? ctx.machines?.list(route.owner).find((m) => m.id === route.machine)
+      : null;
     return {
       owner: route.owner,
       want: route.want,
@@ -571,6 +588,7 @@ export function createClaims(
 
   return {
     routeFor,
+    kept,
     command,
     admit,
     claim,

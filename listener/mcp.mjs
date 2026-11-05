@@ -288,7 +288,7 @@ const TOOL_SPECS = [
     title: "Give a claimed task back",
     scope: MACHINE,
     description:
-      "Gives a claim back: its comments wait again, for this machine (the issue sticks to it), as soon as it claims again.",
+      "Gives a claim back: its comments wait again, for this machine (the issue sticks to it), as soon as it claims again. No claim ends as done yet (#597): a released claim, like one whose lease ran out, is claimed again.",
     inputSchema: object(
       {
         machine: { type: "string", description: "Its id, from register_machine." },

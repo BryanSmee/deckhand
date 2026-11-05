@@ -33,7 +33,10 @@ function bench({
     if (url.pathname === "/repos/org/repo/issues/12/events") {
       return Response.json(url.searchParams.get("page") === "1" ? events : []);
     }
-    if (url.pathname === "/repos/org/repo/issues/12") return Response.json({ number: 12, labels });
+    if (url.pathname === "/repos/org/repo/issues/12") {
+      if (t.labelsFail) return new Response("{}", { status: 502 });
+      return Response.json({ number: 12, labels: t.labels ?? labels });
+    }
     return new Response("{}", { status: 404 });
   };
   const ctx = {
@@ -66,6 +69,7 @@ function bench({
     waits: { reserve: () => null, release: async () => {}, request: async () => false },
     policies: { decide: async () => ({ applied: false, messages: [] }) },
     github,
+    routeRetryMs: 20,
   };
   Object.assign(ctx, createTasks(ctx));
   ctx.cancel = (key, by) => {
@@ -465,4 +469,87 @@ test("/machine during a sandbox's run: that run keeps its slot, what comes next 
   t.ready();
   assert.deepEqual(t.started, ["12"]);
   assert.equal((await ctx.claims.claim("alice", desk)).message, "On the desk now.");
+});
+
+// Deckhand's own fix round on issue 12, as reviews.mjs queues it.
+const fixRound = (settings) => ({
+  repo: "org/repo",
+  id: "12",
+  kind: "issue",
+  number: 12,
+  trigger: "work",
+  modeLine: null,
+  text: "Fix the findings.",
+  replyTo: 30,
+  comment: null,
+  base: "main",
+  settings,
+  sender: null,
+  reason: "review-fix",
+});
+
+test("a route that ends queues the comments held for its owner: /machine none, or its label taken off", async () => {
+  const none = bench();
+  none.t.register("alice", "Desk");
+  await none.t.say("alice", "Deckhand\n/machine Desk");
+  await none.t.say("bob", "Also do the menu.", { id: 101 });
+  assert.equal(none.ctx.claims.heldOf(KEY).length, 1);
+  await none.t.say("alice", "/machine none", { id: 102 });
+  assert.deepEqual(none.ctx.claims.heldOf(KEY), []);
+  none.t.ready();
+  assert.deepEqual(none.t.started, ["12"]);
+
+  const labels = [{ name: "runs-on:unreal" }];
+  const label = bench({ labels, events: [labelledBy("alice")] });
+  await label.t.say("alice", "Deckhand");
+  await label.t.say("bob", "Also do the menu.", { id: 101 });
+  assert.equal(label.ctx.claims.heldOf(KEY).length, 1);
+  // The label off: bob's next comment finds no route, and his first goes with it.
+  await label.t.say("bob", "And the credits.", { id: 102, issueLabels: [] });
+  assert.deepEqual(label.ctx.claims.heldOf(KEY), []);
+  assert.deepEqual(
+    label.t.task().pending.map((i) => i.text),
+    ["", "Also do the menu.", "And the credits."],
+  );
+});
+
+test("a route that can't be read: the kept one goes on; a person is told; Deckhand's own item is queued again", async () => {
+  const { t, ctx } = bench({ labels: [{ name: "runs-on:unreal" }], events: [labelledBy("alice")] });
+  t.labelsFail = true;
+  // No route kept yet: alice's comment from the dashboard is refused with a reply, its 👀 off.
+  await ctx.accept({
+    repo: "org/repo",
+    id: "12",
+    kind: "issue",
+    number: 12,
+    trigger: "work",
+    modeLine: null,
+    text: "Go.",
+    replyTo: 12,
+    comment: { id: 100 },
+    base: "main",
+    author: "alice",
+    settings: (await ctx.repoSettings()).settings,
+  });
+  assert.match(t.replies.at(-1), /^Not queued: whether #12 runs on a machine/);
+  assert.deepEqual(t.settled.at(-1), [100, "refused"]);
+  assert.equal(t.task()?.pending.length ?? 0, 0);
+  // A fix round: queued again once GitHub answers.
+  const { settings } = await ctx.repoSettings();
+  await ctx.accept(fixRound(settings));
+  assert.equal(t.task()?.pending.length ?? 0, 0);
+  t.labelsFail = false;
+  for (let i = 0; i < 50 && !t.task()?.pending.length; i++) {
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  assert.deepEqual(
+    t.task().pending.map((i) => i.reason),
+    ["review-fix"],
+  );
+  assert.equal(poolOf(t.task()), "machines");
+  // Its route kept now: a read that fails goes by it.
+  t.labelsFail = true;
+  await ctx.accept({ ...fixRound(settings), text: "Again." });
+  assert.equal(t.task().pending.length, 2);
+  assert.equal(poolOf(t.task()), "machines");
 });
