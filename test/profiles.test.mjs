@@ -264,6 +264,7 @@ test("the engine: refused without the policies' and the operator's grant, asked 
     without.message,
     /^Refused: the container engine: no allow rule of the operator's policies gives it\./,
   );
+  assert.match(without.message, /in their grants folder\. Don't ask again/);
   const c = withEngine();
   const off = { ...DEFAULT_PROFILE, capabilities: ["pull", "setup"] };
   assert.deepEqual(verdict({ kind: "engine" }, { c, profile: off }), {
@@ -290,6 +291,9 @@ test("the engine: refused without the policies' and the operator's grant, asked 
     refused.message,
     /^Refused: the container engine: the operator hasn't set SANDBOX_ENGINE, so no run gets one\./,
   );
+  // A setting, not a grant: the agent isn't sent to the grants folder (#885).
+  assert.match(refused.message, /in their deployment's settings\. Don't ask again/);
+  assert.doesNotMatch(refused.message, /grants folder/);
 });
 
 test("without SANDBOX_ENGINE, the engine isn't offered: greyed out with its reason, refused in a profile, left out at a start", () => {
