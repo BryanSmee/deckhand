@@ -952,6 +952,8 @@ export function createPolicies({
           }
         }
       }
+      // Moved last, as listings are, so that the answer given longest ago is first to go.
+      actionsKept.delete(key);
       if (actionsKept.size >= MAX_ACCESS) actionsKept.delete(actionsKept.keys().next().value);
       actionsKept.set(key, { at: now(), said: [...warnings] });
       return [...warnings];
@@ -1258,6 +1260,8 @@ export function createPolicies({
           error: null,
         };
       }
+      // Moved last too: an expired entry asked again isn't the first to go.
+      accessKept.delete(key);
       if (accessKept.size >= MAX_ACCESS) accessKept.delete(accessKept.keys().next().value);
       answer = frozen(answer);
       accessKept.set(key, { at: now(), said: answer });
