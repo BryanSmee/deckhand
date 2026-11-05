@@ -176,8 +176,8 @@ export function Dashboard({ state, error, repos, refresh, onOverview }: Props) {
   const onBoard = route.page === "board";
   const onChats = route.page === "chats";
   // The user's chats: polled often on their page, else now and then for the sidebar's count,
-  // and not at all for a user who may start none (their page still reads those they keep).
-  const chats = useChats(onChats, onChats || canFrom(state?.access).anywhere("chat"));
+  // or read once for a user who may start none (api.ts useChats()).
+  const chats = useChats(onChats, canFrom(state?.access).anywhere("chat"));
   const overview = isOverview(route);
   useEffect(() => onOverview?.(overview), [overview]);
   // The address takes the sidebar's spelling, so links copied from it are the canonical ones.

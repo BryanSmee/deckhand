@@ -319,19 +319,36 @@ test("holdMessages: the same text twice is two messages; one sent is held from t
   expect(shown).toEqual(["ok", "ok", "go"]);
 });
 
-test("a message delivered before its run's log streams: still shown, as on its way", async () => {
+test("a message delivered to the sandbox: shown once, as sent until its run's log has it", async () => {
   history.replaceState(null, "", "#/chats/0123456789abcdef");
-  const list = makeChats([makeChat({ status: "idle" })]);
-  show(list, {
-    // Delivered at once: the answer lists it nowhere.
-    "POST api/chats/0123456789abcdef/messages": () => ({ chat: makeChat({ status: "running" }) }),
+  const run = chatRun({ id: "run-1" });
+  const chat = makeChat({ status: "idle", runs: [run] });
+  let streamFirst = true;
+  show(makeChats([chat]), {
+    // Delivered at once: the answer lists it nowhere. The first one's log line streams in
+    // before the answer comes.
+    "POST api/chats/0123456789abcdef/messages": ({ body }) => {
+      if (streamFirst) FakeSource.last!.emit("entries", [{ kind: "message", text: body.text }]);
+      return { chat: { ...chat, status: "running" } };
+    },
   });
   const box = await screen.findByRole("textbox", { name: "Message" });
+  await waitFor(() => expect(FakeSource.last?.url).toBe("api/runs/run-1/stream"));
+  const log = screen.getByRole("log", { name: "Conversation" });
   fireEvent.input(box, { target: { value: "Run the tests" } });
   fireEvent.keyDown(box, { key: "Enter" });
-  const log = screen.getByRole("log", { name: "Conversation" });
-  await waitFor(() => expect(within(log).getByText(/^Queued/)).toBeTruthy());
-  expect(within(log).getByText("Run the tests")).toBeTruthy();
+  await waitFor(() => expect(within(log).queryByText("Sending…")).toBeNull());
+  expect(within(log).getAllByText("Run the tests").length).toBe(1);
+  expect(within(log).queryByText("Sent")).toBeNull();
+  // The next one's log line comes after the answer: shown as sent meanwhile, then once.
+  streamFirst = false;
+  fireEvent.input(box, { target: { value: "And the lint" } });
+  fireEvent.keyDown(box, { key: "Enter" });
+  expect(await within(log).findByText("Sent")).toBeTruthy();
+  expect(within(log).queryByText(/^Queued/)).toBeNull();
+  FakeSource.last!.emit("entries", [{ kind: "message", text: "And the lint" }]);
+  await waitFor(() => expect(within(log).queryByText("Sent")).toBeNull());
+  expect(within(log).getAllByText("And the lint").length).toBe(1);
 });
 
 test("after a reset: starting afresh, not resuming, and the reset marked in the conversation", async () => {
@@ -363,4 +380,32 @@ test("a long chat: its last runs' logs streamed, the earlier ones on demand", as
   fireEvent.click(more);
   await waitFor(() => expect(FakeSource.opened.length).toBe(7));
   expect(screen.queryByRole("button", { name: /Show earlier/ })).toBeNull();
+});
+
+test("a reset before the runs shown: marked above them, the earlier runs not loaded", async () => {
+  history.replaceState(null, "", "#/chats/0123456789abcdef");
+  const runs = Array.from({ length: 7 }, (_, i) =>
+    chatRun({ id: `run-${7 - i}`, status: "ok", startedAt: (7 - i) * 1_000 }),
+  );
+  // Reset after run 2, which isn't shown.
+  show(makeChats([makeChat({ runs, resetAt: 2_500 })]));
+  const log = await screen.findByRole("log", { name: "Conversation" });
+  expect(await screen.findByRole("button", { name: /Show earlier/ })).toBeTruthy();
+  const lines = within(log)
+    .getAllByText(/^(Sandbox started|Chat reset)/)
+    .map((p) => p.textContent!.split(" ")[1]);
+  expect(lines).toEqual(["reset", "started", "started", "started", "started", "started"]);
+});
+
+test("a user who may start no chat but keeps some: the Chats link all the same", async () => {
+  history.replaceState(null, "", "#/");
+  const repo = { actions: ["tasks:read"], starts: ["work"], startsDenied: [] };
+  mockApi({ "api/chats": () => makeChats([makeChat({ reachable: false })]) });
+  render(
+    <Dashboard
+      state={makeState({ access: { server: [], repos: { "acme/app": repo } } })}
+      error={null}
+    />,
+  );
+  expect(await screen.findByRole("link", { name: /Chats\s*1 of 4/ })).toBeTruthy();
 });

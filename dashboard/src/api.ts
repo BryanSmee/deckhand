@@ -574,12 +574,13 @@ export const restartChat = (id: string) => postJson<{ message: string }>(`api/ch
 
 // The user's chats (listener/chats.mjs): their status, their runs (whose logs stream on their
 // own) and their messages still on their way. Polled as api/state is on the Chats page
-// (`often`), else now and then for the sidebar's count; not at all when `allowed` is false (a
-// user who may start none, off the page: App.tsx).
+// (`often`), else now and then for the sidebar's count; for a user who may start none
+// (`starts` false, App.tsx), read once, as they open the dashboard and leave the page: the
+// chats they keep still get their link, Delete being all that is left of them.
 export const CHATS_MS = 60_000;
 
-export function useChats(often: boolean, allowed = true): Polled<Chats> {
-  return usePolled<Chats>(allowed ? "api/chats" : null, often ? POLL_MS : CHATS_MS);
+export function useChats(often: boolean, starts = true): Polled<Chats> {
+  return usePolled<Chats>("api/chats", often ? POLL_MS : starts ? CHATS_MS : null);
 }
 
 const chatUrl = (id: string, then = "") => `api/chats/${encodeURIComponent(id)}${then}`;

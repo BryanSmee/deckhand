@@ -80,10 +80,7 @@ export function Conversation({ chat, now, touch, onChat }: Props) {
     logged,
   });
   held.current = hold.held;
-  const waiting = waitingTurns(
-    { ...chat, pending: [...chat.pending, ...hold.shown.map((text) => ({ text, queuedAt: 0 }))] },
-    sending,
-  );
+  const waiting = waitingTurns(chat, sending, hold.shown);
   const all = [...turns, ...waiting];
   const state = chatState(chat);
 
@@ -106,6 +103,8 @@ export function Conversation({ chat, now, touch, onChat }: Props) {
     setError(null);
     setFollowing(true);
     setSending((s) => [...s, message]);
+    // The logged messages before it: its own may stream in before the listener answers.
+    const before = loggedNow.current;
     const said = await sendChatMessage(chat.id, message);
     setSending((s) => {
       const i = s.indexOf(message);
@@ -121,7 +120,7 @@ export function Conversation({ chat, now, touch, onChat }: Props) {
       now,
       pending: [],
       sent: [message],
-      logged: loggedNow.current,
+      logged: before,
     }).held;
     onChat(said.chat);
   };
@@ -235,6 +234,14 @@ function resetTurn(at: number, now: number): Turn {
   };
 }
 
+// What a message on its way says: sent from here, waiting in the listener's queue, or taken
+// by a run whose log hasn't shown it yet.
+const WAITING = {
+  sending: "Sending…",
+  queued: "Queued: the agent gets it once its sandbox is ready",
+  sent: "Sent",
+};
+
 function TurnView({
   turn,
   isOpen,
@@ -249,13 +256,7 @@ function TurnView({
       return (
         <div class={`${styles.turn} ${styles.you}`}>
           <p class={`${styles.bubble} ${turn.waiting ? styles.waiting : ""}`}>{turn.text}</p>
-          {turn.waiting && (
-            <span class={styles.meta}>
-              {turn.waiting === "sending"
-                ? "Sending…"
-                : "Queued: the agent gets it once its sandbox is ready"}
-            </span>
-          )}
+          {turn.waiting && <span class={styles.meta}>{WAITING[turn.waiting]}</span>}
         </div>
       );
     case "agent":

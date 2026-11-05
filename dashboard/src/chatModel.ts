@@ -7,7 +7,7 @@ import { type Item, logSections } from "./logModel";
 import type { Chat, Entry, Phase, Run } from "./types";
 
 export type Turn =
-  | { kind: "you"; id: string; text: string; waiting?: "queued" | "sending" }
+  | { kind: "you"; id: string; text: string; waiting?: "queued" | "sent" | "sending" }
   | { kind: "agent"; id: string; text: string }
   // The agent's tool calls between two turns, and the listener's or the agent's notes.
   | { kind: "activity"; id: string; items: Item[] }
@@ -77,13 +77,20 @@ export function runTurns(run: Run, entries: Entry[], end: number): Turn[] {
 }
 
 // The messages still on their way, after the logs': the listener's `pending` (waiting for the
-// sandbox or a slot), and those sent that it hasn't answered yet.
-export function waitingTurns(chat: Chat, sending: string[]): Turn[] {
+// sandbox or a slot), those it took that no log shows yet (`held`, holdMessages()), and those
+// sent that it hasn't answered yet.
+export function waitingTurns(chat: Chat, sending: string[], held: string[] = []): Turn[] {
   const queued: Turn[] = chat.pending.map((p, i) => ({
     kind: "you",
     id: `pending:${p.queuedAt}:${i}`,
     text: p.text,
     waiting: "queued",
+  }));
+  const taken: Turn[] = held.map((text, i) => ({
+    kind: "you",
+    id: `held:${i}`,
+    text,
+    waiting: "sent",
   }));
   const sent: Turn[] = sending.map((text, i) => ({
     kind: "you",
@@ -91,7 +98,7 @@ export function waitingTurns(chat: Chat, sending: string[]): Turn[] {
     text,
     waiting: "sending",
   }));
-  return [...queued, ...sent];
+  return [...queued, ...taken, ...sent];
 }
 
 // How long a message that left `pending` stays shown before a log has it: a run takes it as it
@@ -120,6 +127,9 @@ export function holdMessages(
   }: { now: number; pending: string[]; sent?: string[]; logged: { id: string; text: string }[] },
 ): { held: Held[]; shown: string[] } {
   const ids = logged.map((l) => l.id);
+  // Loose on purpose: a delivery joins the messages it takes into one text, so a held message is
+  // any later logged message's part. A short one ("ok") may go early, inside a longer one: it is
+  // only held HOLD_MS anyway.
   const isLogged = (h: Held) =>
     logged.some((l) => !h.before.includes(l.id) && l.text.includes(h.text.trim()));
   // Each pending message takes one held message of its text, the oldest.
