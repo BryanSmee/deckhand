@@ -256,7 +256,7 @@ Antigravity CLI's `AGY_VERSION`, with the sha256 of its tarballs in `AGY_SHA256`
 
 ## Development
 
-Node 26; no runtime dependencies but graphql-js, bundled into the github service's image. Tests: `node --test --test-force-exit --import ./test/blocking-stdout.mjs`; syntax: `node --check
+Node 26; no runtime dependencies but graphql-js, bundled into the github service's image. Tests: `node --test --test-force-exit --import ./test/blocking-stdout.mjs --test-timeout=120000`; syntax: `node --check
 edge/server.mjs orchestrator/server.mjs runner/server.mjs broker/server.mjs github/server.mjs models/server.mjs`, `bash -n` on `sandbox/`'s shell scripts and the tests' fake docker, and `node --check
 sandbox/deckhand-inbox sandbox/deckhand-files` (the list: [AGENTS.md](AGENTS.md#commands)); format: `npx --yes prettier@3 --check .`.
 The dashboard (`dashboard/`, Preact + Vite + TypeScript) is built into edge's image;

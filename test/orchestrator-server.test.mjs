@@ -3053,12 +3053,12 @@ mounts:
 
   // The orchestrator's handover (#506), with its two copies: issue 12's run held, a comment on
   // issue 13 queued behind it (one run at a time), the next copy waiting for the lease.
-  async function handingOver(t) {
+  async function handingOver(t, { lease = 8 } = {}) {
     // A lease far longer than a handover: taking it at once shows it was released.
     // GITHUB_URL: the dashboard's sign-in, through the fake GitHub.
     const ctx = await holding(t, "Deckhand", (dir, github) => ({
       MAX_PARALLEL: "1",
-      LEASE_SECONDS: "8",
+      LEASE_SECONDS: String(lease),
       GITHUB_URL: github.url,
     }));
     const queued = comment("alice");
@@ -3105,12 +3105,13 @@ mounts:
     assert.equal(broker.status, 409, await broker.text());
   }
 
-  for (const [signal, how] of [
-    ["SIGTERM", "on SIGTERM: the lease released, taken at once"],
-    ["SIGKILL", "after a crash: the lease taken once it expired"],
+  // A crash's lease is waited out, twice: 4 s rather than 8, still past a handover's time.
+  for (const [signal, how, lease] of [
+    ["SIGTERM", "on SIGTERM: the lease released, taken at once", 8],
+    ["SIGKILL", "after a crash: the lease taken once it expired", 4],
   ]) {
     test(`a handover ${how}; a queued comment runs once, a run's end gets one reply, the old epoch is refused`, async (t) => {
-      const ctx = await handingOver(t);
+      const ctx = await handingOver(t, { lease });
       const { dir, github } = ctx;
       // The next copy's metrics (lib/metrics.mjs): its lease not held while it waits, then held.
       const scrape = async (copy) => {
@@ -3141,9 +3142,9 @@ mounts:
         // Not a lease's life (8 s here, 15 by default): the waiting copy took it at once.
         assert.ok(took < 3000, `${took} ms`);
       } else {
-        // Its lease left to expire: at least what was left of it, its last renewal 8/3 s ago
-        // at most.
-        assert.ok(took > 4000, `${took} ms`);
+        // Its lease left to expire: at least what was left of it (2.7 s), its last renewal 4/3 s
+        // ago at most.
+        assert.ok(took > 2000, `${took} ms`);
       }
       assert.ok(next > epoch, `${next} after ${epoch}`);
       // Issue 12's run ended across the handover: one reply. Then 13's, from the queue: one run.
