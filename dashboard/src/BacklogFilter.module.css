@@ -1,0 +1,104 @@
+/* The Backlog's filters: the text field on a row of its own, the labels' button and "Hide
+   sub-issues" under it, then the labels to tick when opened. */
+.filters {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 12px 0;
+}
+
+.row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.text {
+  flex: 1 1 100%;
+}
+
+.touch {
+  padding: 8px 16px 0;
+}
+
+/* The chip as tall as the buttons beside it: 28 px, 44 px on a phone (doubled: over the
+   chip's own height). */
+.chip.chip {
+  height: 28px;
+}
+
+.touchChip.touchChip {
+  height: 44px;
+  padding: 0 14px;
+  font-size: 13.5px;
+}
+
+.count {
+  margin-left: 6px;
+}
+
+.labels {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-2);
+}
+
+.options {
+  display: flex;
+  flex-direction: column;
+  max-height: 220px;
+  margin: 0;
+  padding: 0;
+  overflow: auto;
+  list-style: none;
+}
+
+.option {
+  display: flex;
+  width: 100%;
+  min-height: 30px;
+  padding: 0 6px;
+  border-radius: 6px;
+  box-sizing: border-box;
+}
+
+.option:hover {
+  background: var(--surface-3);
+}
+
+.touch .option {
+  min-height: 44px;
+  font-size: 14px;
+}
+
+.swatch {
+  flex: none;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--border-strong);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text) 18%, transparent);
+}
+
+.name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.n {
+  color: var(--text-3);
+  font-family: var(--mono);
+  font-size: 11.5px;
+}
+
+.clear {
+  align-self: flex-end;
+}

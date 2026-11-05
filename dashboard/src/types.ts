@@ -1004,9 +1004,20 @@ export interface BacklogIssue {
   number: number;
   title: string | null;
   url: string;
+  // Its labels, as GitHub lists them (`color`: hex, no "#"; null when GitHub doesn't say);
+  // none from a listener older than them.
+  labels?: BacklogLabel[];
   // How many of its sub-issues are open, when any are: dropped on the graph, it is laid out
   // with them ("plan").
   subIssues?: number;
+  // Its parent's number, when it is a sub-issue of another listed issue: the Backlog can
+  // hide it, its parent laying it out.
+  parent?: number;
+}
+
+export interface BacklogLabel {
+  name: string;
+  color: string | null;
 }
 
 // GET api/repos/<owner>/<repo>/issues

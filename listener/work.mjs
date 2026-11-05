@@ -84,11 +84,11 @@ import {
   taskKey,
   unmarked,
 } from "./events.mjs";
-import { getJson } from "./github.mjs";
+import { getJson, paginate } from "./github.mjs";
 import { createInputSeeder } from "./inputs.mjs";
 import { createRepoCheck } from "./repo-check.mjs";
 import { MAX_NAME, createLanes, laneName } from "./lanes.mjs";
-import { leadsTo, planSummary, readTree, waitsOf } from "./plans.mjs";
+import { leadsTo, planSummary, readTree, repoOf, waitsOf } from "./plans.mjs";
 import { isApart } from "./modes.mjs";
 import { CONFIG_FILE, modeNames } from "./repo-config.mjs";
 import { latestReview } from "./reviews.mjs";
@@ -96,6 +96,9 @@ import { issueList, waitsFor } from "./waits.mjs";
 import { taskId } from "./spelling.mjs";
 import { Refused, readJsonBody, refuse, send } from "../lib/http.mjs";
 import { apiRoute, mustDo, routeChecks } from "./web.mjs";
+
+// How many parents' sub-issues a backlog read asks GitHub for at once (parentsOf()).
+const SUB_ISSUE_READS = 4;
 
 // How long a repo's open issues are served before they are read again (in the background):
 // the dashboard polls them.
@@ -213,7 +216,8 @@ export function createWorkApi({
   const { seed: seedInputs } = createInputSeeder({ config, github, label, inputs, boardKeys, log });
 
   // The repo's open issues, newest first (pull requests are issues to this API: left out),
-  // with their open sub-issues (subIssues()), and the modes the dashboard offers: onboarding
+  // with their labels, their open sub-issues (subIssues()) and their listed parent
+  // (parentsOf()), and the modes the dashboard offers: onboarding
   // is the listener's own, research only with its grant (access.mjs researchRefusal()).
   async function readBacklog(repo) {
     const base = await baseOf(repo);
@@ -222,17 +226,19 @@ export function createWorkApi({
     const list = await getJson(github, repo, path);
     if (!Array.isArray(list)) throw new Error(`GitHub GET ${path}: no list`);
     if (!errors.length) await seedInputs(repo, list, settings.users);
+    const issues = list.filter((i) => !i.pull_request);
+    const parents = await parentsOf(repo, issues);
     return {
       // A full page: there may be more open issues than it has (counts()).
       more: list.length === 100,
-      issues: list
-        .filter((i) => !i.pull_request)
-        .map((i) => ({
-          number: i.number,
-          title: i.title ?? null,
-          url: i.html_url,
-          ...subIssues(i),
-        })),
+      issues: issues.map((i) => ({
+        number: i.number,
+        title: i.title ?? null,
+        url: i.html_url,
+        labels: (i.labels ?? []).map(labelOf).filter((l) => l.name),
+        ...subIssues(i),
+        ...(parents.has(i.number) && { parent: parents.get(i.number) }),
+      })),
       modes: errors.length ? [] : await offeredModes(repo, settings),
       errors: errors.length > 0,
       // Who may see it, as for the dashboard's tasks: unknown while the config has errors.
@@ -245,6 +251,41 @@ export function createWorkApi({
   function subIssues(issue) {
     const { total = 0, completed = 0 } = issue.sub_issues_summary ?? {};
     return total > completed ? { subIssues: total - completed } : {};
+  }
+
+  // A label as the list has it: an object, or its name alone (GitHub's older shape).
+  function labelOf(label) {
+    if (typeof label === "string") return { name: label, color: null };
+    return { name: label?.name ?? "", color: label?.color ?? null };
+  }
+
+  // Sub-issue number → its parent's, for those whose parent is listed too: the dashboard can
+  // hide them, a drop of their parent laying them out. The list doesn't say an issue's parent
+  // (its parent_issue_url is null there), so each listed issue with open sub-issues is asked
+  // for them: once per read, which the dashboard's polls share. One that fails only loses its
+  // sub-issues' `parent`; a closed parent isn't listed, so its sub-issues have none.
+  async function parentsOf(repo, issues) {
+    const listed = new Set(issues.map((i) => i.number));
+    const parents = new Map();
+    const get = (path) => github(repo, "GET", path);
+    const pending = issues.filter((i) => subIssues(i).subIssues);
+    // A few at a time: GitHub's secondary rate limits penalise many calls at once.
+    const reader = async () => {
+      for (let i = pending.shift(); i; i = pending.shift()) {
+        const path = `/repos/${repo}/issues/${i.number}/sub_issues`;
+        try {
+          for (const sub of await paginate(get, path)) {
+            const here = !repoOf(sub) || sameRepo(repoOf(sub), repo);
+            if (here && listed.has(sub.number) && sub.number !== i.number)
+              parents.set(sub.number, i.number);
+          }
+        } catch (error) {
+          log(`Work area: ${repo}: #${i.number}'s sub-issues: ${error.message ?? error}`);
+        }
+      }
+    };
+    await Promise.all(Array.from({ length: SUB_ISSUE_READS }, reader));
+    return parents;
   }
 
   // Not `policy`: a dry run of a pull request's policies, never an issue's run.
