@@ -612,7 +612,6 @@ What every sandbox may reach and its limits aren't settings: they go in
 | `DOCKER_SOCKET`                                                                                   | none: compose's                                                                                   | `/var/run/docker.sock`                                                       | the host's Docker socket, which compose mounts into the runner                                                                                                                                                                                     |
 | `DECKHAND_VERSION`                                                                                | none: compose's                                                                                   | `latest`                                                                     | the release compose runs (`1.2.3`, `1.2`), or `edge` to follow `main`: see [Updating](#updating)                                                                                                                                                   |
 | `DECKHAND_REGISTRY`                                                                               | none: compose's                                                                                   | `ghcr.io/bryansmee`                                                          | where compose pulls the images from                                                                                                                                                                                                                |
-| `SHOTS_VOLUME`                                                                                    | none: compose's                                                                                   | `deckhand-screenshots`                                                       | name of the screenshots volume compose creates and mounts into the orchestrator only: what it kept before the broker did (#609), moved to the broker at its start                                                                                  |
 
 Each running sandbox has a Docker network of its own (see
 [Security model](security.md#network)). By default Docker takes their subnets from its default
@@ -635,8 +634,8 @@ Docker's own pools, so list those first and add yours after them, for example
 `"default-address-pools": [{"base": "172.16.0.0/12", "size": 16}, {"base": "192.168.0.0/16", "size": 20}, {"base": "10.200.0.0/16", "size": 28}]`
 (the last one: 4096 networks of 16 addresses).
 
-Each run leaves its log in `logs/<run>.log` on the data volume (the agent's whole output, often
-a few MB), a summary in the orchestrator's store (`summaries/<run>`, what the dashboard lists
+Each run leaves its log at the runner, in its store (the agent's whole output, often a few
+MB), a summary in the orchestrator's store (`summaries/<run>`, what the dashboard lists
 after a restart or a handover, so the orchestrator doesn't read the logs to start: [The
 store](#the-store)), and the broker keeps its screenshots (in blob
 storage, or its store without it: [Blob storage](#blob-storage)). At start and then daily, the
@@ -1198,7 +1197,7 @@ else set it in the service's `environment`, for example in a `compose.override.y
 | `SERVICE_NETWORKS`                                                                                                                 | none                              | none: no call taken                                                                                     | which network each calling service is on, by its subnet (on the orchestrator `runner=…,edge=…`; on the runner `orchestrator=…,models=…`): a call from elsewhere, or with another's token, is refused; `none` where the network can't tell (Kubernetes, with NetworkPolicies and the callers' service accounts: [kubernetes.md](kubernetes.md#what-the-manifests-set-up-and-why)). Compose sets them from `RUNNER_SUBNET`, `EDGE_ORCHESTRATOR_SUBNET` and `RUNNER_MODELS_SUBNET` |
 | `RUNNER_SUBNET` (compose)                                                                                                          | none                              | `10.231.250.48/28`                                                                                      | the subnet of the network the orchestrator and the runner share (`runner`) (`.env`), should it overlap one of the host's                                                                                                                                                                                                                                                                                                                                                        |
 | `EDGE_ORCHESTRATOR_SUBNET` (compose)                                                                                               | none                              | `10.231.250.192/28`                                                                                     | the subnet of the network edge and the orchestrator share (`edge-orchestrator`), should it overlap one of the host's                                                                                                                                                                                                                                                                                                                                                            |
-| `STORE_URL`                                                                                                                        | none                              | `file://<DATA_DIR>/store`                                                                               | the service's [store](#the-store): the orchestrator's queue, its lease and fencing epoch, the runs' summaries; edge's (below); the runner's logs, events and lease. `file://` for one node (several copies on it included), `redis://` for copies on several                                                                                                                                                                                                                    |
+| `STORE_URL`                                                                                                                        | none                              | `file://<DATA_DIR>/store`                                                                               | the service's [store](#the-store): the orchestrator's queue, its lease and fencing epoch, the deliveries it handled, its maps, the live runs' states, the runs' summaries (all of its state, #619); edge's (below); the runner's logs, events and lease. `file://` for one node (several copies on it included), `redis://` for copies on several                                                                                                                               |
 | `LEASE_SECONDS` (orchestrator)                                                                                                     | none                              | `15`                                                                                                    | how long the acting copy's lease lasts, renewed every third of it: a crashed copy's is taken by the waiting one once it expires; a stopping one releases it at once (see [Two copies](#two-copies))                                                                                                                                                                                                                                                                             |
 | `EDGE_URL` (orchestrator)                                                                                                          | none                              | `http://edge:8083`                                                                                      | edge's internal port: where the orchestrator reads the deliveries' stream and the App's public parts; compose sets it                                                                                                                                                                                                                                                                                                                                                           |
 | `INTERNAL_PORT` (edge)                                                                                                             | none                              | `8083`                                                                                                  | the port the orchestrator calls edge on (the deliveries' stream, the App's public parts), on their network alone; never `PORT`'s, which the internet reaches                                                                                                                                                                                                                                                                                                                    |
@@ -1774,6 +1773,79 @@ The policy service reads your server folder as the `node` user (uid 1000): your 
 its `policy/` must be readable by that user (the usual `0644` files and `0755` folders are), or
 every policy decision is refused, and the orchestrator's log says why at start.
 
+### Upgrading: the orchestrator without a volume (#619)
+
+The orchestrator writes nothing beside its [store](#the-store) now: the queue, its lease, its
+maps, the live runs' states and the runs' summaries are all there (#615–#618), the screenshots at
+the broker (#609). With the file store (`file:///data/store`, the default), its `data` volume
+holds the store's folder alone; with Redis it needs no volume at all, runs on a read-only root,
+and its copies go to any node. What changes for you:
+
+- **The first start after the update needs the old volume**, mounted as before: the one-time
+  moves of #609 and #615–#618 still run there, reading what a release before left in `/data`
+  (the maps' `<name>.json`, `logs/<run>.live.json` and `.queued.json`, `logs/<run>.json` and
+  `.summary.json`, `shots/`). On Compose and Kubernetes' base, it stays mounted: nothing to do.
+  With Redis (the `redis` component, Helm's `store: redis`, or your own override), this release
+  no longer mounts it: if the orchestrator of the release before #619 has started once (its start
+  did those moves), there is nothing left to move; else update to that release first, or keep
+  the claim mounted for that one start with a patch in your overlay:
+
+  ```yaml
+  patches:
+    # For the first start on this release alone: the old claim, mounted again (#619).
+    - patch: |
+        apiVersion: apps/v1
+        kind: Deployment
+        metadata:
+          name: orchestrator
+          namespace: deckhand
+        spec:
+          template:
+            spec:
+              containers:
+                - name: orchestrator
+                  volumeMounts:
+                    - name: data
+                      mountPath: /data
+              volumes:
+                - name: data
+                  persistentVolumeClaim:
+                    claimName: orchestrator-data
+  ```
+
+- **The older moves are gone**: a listener's `queue.json` (from before the store), its App's
+  credentials (`app.json` with its key, `session.key`, `sessions.json`, `redeliveries.json`,
+  handed to the github service and edge), its `reactions.json` (the github service's since
+  #458), and the run logs it kept itself before the runner service (`logs/<run>.log`, #503). An
+  install that still has any of those in `/data` (one that never ran a release with the
+  services, #557, or the runner service) updates first to the last release before #619
+  (following `edge`: an image built before #619), lets the orchestrator start once there, then
+  updates to this one. This release doesn't read them: their comments, credentials and logs would
+  be left out.
+- **The screenshots' volume is gone from Compose** (`SHOTS_VOLUME`, `deckhand-screenshots`, at
+  `/data/shots`): the broker has kept the screenshots since #609. An install from before #609
+  whose screenshots are still there goes through the release before #619 first, or mounts that
+  volume at `/data/shots` for one start (a `compose.override.yaml`). On Kubernetes, the
+  `orchestrator-screenshots` claim is gone from the base and the chart
+  (`persistence.sizes.orchestrator-screenshots`).
+- **What is left in `/data`**: once moved, the orchestrator removes the emptied `logs/` and
+  `shots/`, and names in its log anything else beside the store that nothing reads any more
+  (`/data holds <names>, which no longer is read: remove it`). Remove them then. Once the
+  orchestrator has started once on this release, the screenshots' volume can go, and with Redis
+  its `data` volume too. Compose: `docker volume rm deckhand-screenshots`, and
+  `docker volume rm <project>_data` (`docker volume ls` names it). Kubernetes:
+  `kubectl -n deckhand delete pvc orchestrator-screenshots`, and `orchestrator-data`. Kustomize
+  doesn't delete a claim by itself, and the chart's carry `helm.sh/resource-policy: keep`: a
+  `helm upgrade` leaves them too.
+- **A summary the store refuses at a run's end** is no longer kept in
+  `logs/<run>.summary.json`: the run's end tries the store again every 5 seconds until it lands,
+  the run keeping its sandbox, its state and its task meanwhile. A copy that stops first leaves
+  the run as it is, for the next copy to end again. Those a release before left are moved at
+  the next start.
+- **At start**, the orchestrator checks that it can write the whole `/data` only while a
+  release before left something there beside the store (#536's check); else the store's folder
+  alone, and nothing when its store is elsewhere and `/data` is empty.
+
 ### Upgrading: access control (#725)
 
 Nothing to do: Deckhand's `policy/access.rego` gives every login of `ALLOWED_USERS` every
@@ -1856,7 +1928,8 @@ crash midway moves them again at the next start, the same values. A file it can'
 or cut short) is left where it is, and its log says why. Fix its owner (`chown`, `chmod`), and it is moved at
 the next start, filling only what the store lacks. Remove one cut short rather than edit it:
 an edited file counts as written after the store's items, and replaces them. `reactions.json`, which the
-github service took over before (#458), is removed once handed over.
+github service took over before (#458), was removed once handed over; since #619 it is no longer
+read: go through a release before it first ([#619](#upgrading-the-orchestrator-without-a-volume-619)).
 
 With Redis as the store, these items are Redis keys under the store's prefix
 (`deckhand:titles/…`): plan for a few thousand more. While the store is away, the orchestrator
@@ -1909,8 +1982,9 @@ each `logs/<run>.live.json` left there to the store, tells the broker the tokens
 removes it; a `logs/<run>.queued.json` (a task's queue a run's end couldn't write to the store)
 is read with the queue and removed once the queue is written. A `logs/<run>.live.json` that
 isn't a run's state (unreadable, or missing its `id`, `task` or `record`) is no live run's: it
-is left where it is, logged at each start (`<file>: not a run's state, left there`), and that
-run's log is summarized and sent to the runner as an ended run's. Look at it, then remove it.
+is left where it is, logged at each start (`<file>: not a run's state, left there`) (and,
+before #619, that run's log was summarized and sent to the runner as an ended run's). Look at it,
+then remove it.
 Nothing else to do, but:
 
 - **Update the broker with the orchestrator** (the same release, as compose and the manifests
@@ -1928,9 +2002,10 @@ orchestrator writes those left in `logs/` to its store, then removes them (`Run 
 moved from /data/logs to the store` in its log), before the dashboard lists the runs: about a
 second for 4,500 with the file store or Redis. A file that isn't a summary is logged (`Listing
 the run of <file>: not a run's summary`) and left in `logs/`, out of the history, as it was
-before; one the store didn't take stays for the next start, and so does a summary the store
-refuses at a run's end (`logs/<run>.summary.json`, moved at the next start). The run logs left
-there from before the runner service are moved as before.
+before; one the store didn't take stays for the next start, and so did a summary the store
+refused at a run's end (`logs/<run>.summary.json`, moved at the next start): since #619, the
+run's end tries the store again instead. The run logs left there from before the runner service
+were moved as before, until #619.
 
 ### Upgrading: the paths from before the services are gone (#567)
 
@@ -2239,8 +2314,9 @@ Deckhand's services ([services.md](services.md)) keep their state in a store, wh
 the orchestrator its queue, its lease and its fencing epoch, and the state that holds data alone
 (the titles, closed states and pull requests the dashboard shows, the dismissals, the run order,
 the onboarded repositories, the lanes' names, the issues' modes, the rebase attempts, the last
-dry runs, the reviewers requested) and the runs' summaries, one key per item, so that a change
-writes only what changed (the rest of its state in `/data`, for now: #613);
+dry runs, the reviewers requested), the waits, reviews and brainstorms, the live runs' states and
+the runs' summaries, one key per item, so that a change writes only what changed: all of its
+state, nothing beside it (#619);
 edge the deliveries it took, the sessions' epochs and the deliveries' stream the orchestrator
 reads.
 
@@ -2290,6 +2366,35 @@ its lease.
 
 On Kubernetes, `deploy/kubernetes/`'s `redis` component runs it this way, one user per service
 ([kubernetes.md](kubernetes.md#several-nodes)).
+
+With Redis, the orchestrator needs no volume (#619): it writes nothing outside its store, on a
+read-only root. On Compose, a `compose.override.yaml` beside `compose.yaml` (Docker Compose 2.24
+or later, for `!override`), with the Redis above on a network of its own and a user for the
+orchestrator (`ORCHESTRATOR_REDIS_PASSWORD` in `.env`):
+
+```yaml
+services:
+  orchestrator:
+    environment:
+      STORE_URL: redis://deckhand@redis:6379?prefix=deckhand:orchestrator:
+      REDIS_PASSWORD: ${ORCHESTRATOR_REDIS_PASSWORD}
+    networks:
+      store:
+    # Its data volume gone: the server folder alone (and the mount roots you grant).
+    volumes: !override
+      - ${DECKHAND_SERVER_DIR:-./server}:/etc/deckhand:ro
+  redis:
+    networks:
+      store:
+networks:
+  # Redis and its callers alone, no way out.
+  store:
+    internal: true
+```
+
+The user's key pattern follows that prefix (`~deckhand:orchestrator:*`). Coming from a release
+before #619, keep the old volume mounted for the first start, which moves what it left there:
+[Upgrading: the orchestrator without a volume](#upgrading-the-orchestrator-without-a-volume-619).
 
 **What the run history takes in it**: the orchestrator keeps each run's summary in its store
 (`summaries/<run>`, what the dashboard's history is rebuilt from), until `LOG_RETENTION_DAYS`
