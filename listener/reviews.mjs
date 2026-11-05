@@ -1131,10 +1131,15 @@ export async function mergeRefusal(
   if (await waitsForInput(github, config, repo, pr, issue)) {
     return { why: `it or #${issue} waits for the maintainer's input (${config.needsInputLabel})` };
   }
-  if (busy(taskKey(repo, String(issue)))) return { why: `#${issue} has a run going or queued` };
+  // `rebase`: a refusal a conflict run may have caused (a run going, its push), which its end
+  // lifts (createReviews() rebased()).
+  if (busy(taskKey(repo, String(issue)))) {
+    return { why: `#${issue} has a run going or queued`, rebase: true };
+  }
   if (!sha || pr.head?.sha !== sha) {
     return {
       why: `a commit was pushed after the review (reviewed ${short(sha)}, now ${short(pr.head?.sha)})`,
+      rebase: true,
     };
   }
   const info = await getJson(github, repo, `/repos/${repo}`);
@@ -1179,10 +1184,12 @@ export async function mergeRefusal(
     await sleep(MERGEABLE_WAIT_MS);
     pr = await getJson(github, repo, `/repos/${repo}/pulls/${number}`);
   }
-  if (pr.head?.sha !== sha) return { why: "a commit was pushed after the review" };
+  if (pr.head?.sha !== sha) return { why: "a commit was pushed after the review", rebase: true };
   const state = pr.mergeable_state ?? "unknown";
   const notClean = {
     why: `GitHub doesn't call it cleanly mergeable (\`mergeable_state: ${state}\`)`,
+    // A conflict with its base: the conflict watcher's run rebases it.
+    ...(state === "dirty" && { rebase: true }),
   };
   // A conflict or a branch behind its base: no check finishing changes that.
   if (!AWAITABLE.has(state)) return notClean;
@@ -1482,10 +1489,12 @@ const ROUNDS_KEPT = 20;
 
 // Where the fix loop of a pull request is, for the dashboard (board.mjs), from its entry in
 // `reviews` and `step`, the reason of its task's run going or queued ("review",
-// "review-fix", "ci-fix"; null for none, or a maintainer's comment) → { loop, round, rounds,
-// history, manual? } or null when Deckhand never reviewed it. `loop`:
+// "review-fix", "ci-fix", "conflict"; null for none, or a maintainer's comment) → { loop, round,
+// rounds, history, manual? } or null when Deckhand never reviewed it. `loop`:
 //   reviewing, fixing  a review or fix run of the loop is queued or running
 //   ci-fix             a CI fix run (`review.ci`) is queued or running
+//   rebasing           a conflict run (conflicts.mjs) is queued or running on a pull request
+//                      the loop reviewed: its end reviews the rebased head (rebased())
 //   ci                 the review waits for the head commit's Actions runs (`review.ci`)
 //   ci-failed          CI failed and the CI step stopped without a review: a CI fix run was
 //                      refused, failed or pushed nothing (`ciStopped`), and no maintainer's
@@ -1510,6 +1519,8 @@ const ROUNDS_KEPT = 20;
 // `manual`: true when no loop ran, only maintainers' reviews (the dashboard's "Reviews").
 export function reviewLoop(entry, step = null, { settling = null } = {}) {
   const history = entry?.rounds ?? [];
+  // A conflict run is the loop's only on a pull request the loop reviewed (rebased()).
+  if (step === "conflict" && !entry?.head) step = null;
   if (!step && entry?.deciding) step = entry.deciding;
   const own = settling && settling.startedAt >= (entry?.nextAt ?? 0);
   if (!step && own && entry?.next === settling.reason) step = settling.reason;
@@ -1529,6 +1540,7 @@ export function reviewLoop(entry, step = null, { settling = null } = {}) {
   if (step === "review") return { loop: "reviewing", ...at };
   if (step === "review-fix") return { loop: "fixing", ...at };
   if (step === "ci-fix") return { loop: "ci-fix", ...at };
+  if (step === "conflict") return { loop: "rebasing", ...at };
   if (step === "ci" || entry?.ciWaiting) return { loop: "ci", ...at };
   // A maintainer's review of that head since (recordRound()) is the latest: the loop goes by
   // it. Not an older head's review that ended after CI stopped on a push. The mark stays, for
@@ -1560,10 +1572,11 @@ export function loopState(entry, last, queued = null) {
 
 // reviewLoop()'s states between two of the loop's runs: the task is in review (board.mjs), and
 // an auto-picked one keeps its reserved slot (tasks.mjs loopGoing()).
-export const LOOPING = ["reviewing", "fixing", "checks", "ci", "ci-fix"];
+export const LOOPING = ["reviewing", "fixing", "checks", "ci", "ci-fix", "rebasing"];
 
-// The reasons of the loop's own runs.
-export const LOOP_STEPS = ["review", "review-fix", "ci-fix"];
+// The reasons of the loop's own runs, and a conflict run's, whose end the loop goes on from
+// (rebased(); reviewLoop() counts it only on a pull request the loop reviewed).
+export const LOOP_STEPS = ["review", "review-fix", "ci-fix", "conflict"];
 
 // Which pull requests have a review or fix run of their loop running or queued, among `tasks`
 // (tasks.mjs, their `pending` items and their live run's `handled` ones) → going(repo, number),
@@ -1942,7 +1955,7 @@ export function createReviews({
 }) {
   // "org/repo#pr-5" → { head, at, fixes, fixedAt, reviewedFixes, roundsOutAt, mergeAt,
   // waiting, rounds, fixRounds, next, nextAt, unreviewedFix, ciWaiting, ciFixes, ciFixedAt,
-  // ciSettled, grantedTo, asked, askedFrom } of its last automatic review,
+  // ciSettled, grantedTo, asked, askedFrom, rebaseRetry } of its last automatic review,
   // how many fix runs it had and when the last one was queued, how many of them had their
   // review queued, the comment saying the rounds ran out, and its auto-merge (merged or
   // refused), or the auto-merge waiting for its checks (decide()); each review's counts (the
@@ -1952,7 +1965,10 @@ export function createReviews({
   // the CI step's wait ({ sha, since, base, author }), its CI fix runs, when the last one was
   // queued and how many of them were settled (reviewAfterCi(), ciFailed(), ciFixed()); the
   // last fix round maintainers granted from the dashboard beyond `review.fix`, and the last round
-  // one asked for there, whose push is always reviewed (startFix()).
+  // one asked for there, whose push is always reviewed (startFix()); whether the loop stopped on
+  // what a conflict run may have caused (`rebaseRetry`: its merge refused for a conflict, a run
+  // going or a moved head, its fix run skipped for a run going), which a rebase lifts
+  // (rebased()).
   // Entries from before the rounds have fixedAt and rereviewAt (fixesOf()); from before the
   // dashboard's, no `rounds`.
   // Pull request key → { step } while the listener decides about its loop's step, in memory
@@ -2174,8 +2190,13 @@ export function createReviews({
     const issue = linkedIssue(pr, repo, config.bot);
     const queued = issue ? linkTo(item, issue) : item;
     const key = taskKey(repo, prId(pr.number));
-    if (reviewed.get(key)?.ciStopped || reviewed.get(key)?.ciDropped) {
-      remember(key, reviewed.get(key).head ?? null, { ciStopped: undefined, ciDropped: undefined });
+    const known = reviewed.get(key);
+    if (known?.ciStopped || known?.ciDropped || known?.rebaseRetry) {
+      remember(key, known.head ?? null, {
+        ciStopped: undefined,
+        ciDropped: undefined,
+        rebaseRetry: undefined,
+      });
     }
     nextStep(key, "review");
     await accept(queued);
@@ -2295,6 +2316,12 @@ export function createReviews({
       log(`${key}: no fix run, ${why}`);
       return { item: null, why };
     };
+    // The loop's own fix run skipped for a run going or queued, maybe a conflict run's: its end
+    // reviews the rebased head (rebased()), which starts the fix run then.
+    const busySkip = (why) => {
+      if (!asked) keep(key, { rebaseRetry: true });
+      return skip(why);
+    };
     const entry = reviewed.get(key) ?? {};
     // The loop going on: what follows a run being decided, the auto-merge or CI waited for. Its
     // step's run queued or running is busy() below; `next` alone isn't: a review run that
@@ -2327,7 +2354,7 @@ export function createReviews({
     if (!issue || pr.state !== "open") return skip("not an open pull request of Deckhand's own");
     const task = taskKey(repo, String(issue));
     // A maintainer's comment came first, or the maintainer is to answer.
-    if (busy(task)) return skip(`#${issue} has a run going or queued`);
+    if (busy(task)) return busySkip(`#${issue} has a run going or queued`);
     if (await waitsForInput(github, config, repo, pr, issue)) {
       return skip("it waits for the maintainer's input");
     }
@@ -2374,7 +2401,7 @@ export function createReviews({
       }
     }
     // Checked again: a comment may have come during the calls above.
-    if (busy(task)) return skip(`#${issue} has a run going or queued`);
+    if (busy(task)) return busySkip(`#${issue} has a run going or queued`);
     const comment = asked ? await asked.announce(round, rounds, blockingText(review)) : null;
     // And again after the App's comment, a GitHub call: a comment queued meanwhile would join
     // the fix run, a fix run queued meanwhile has this round, a loop started again has its own
@@ -2403,7 +2430,9 @@ export function createReviews({
         roundsOutAt: undefined,
       }),
     });
-    if (!(await counted(key, before, task))) return skip(`#${issue} has a run going or queued`);
+    if (!(await counted(key, before, task))) {
+      return busySkip(`#${issue} has a run going or queued`);
+    }
     const of = rounds > 1 ? ` (${round} of ${rounds})` : "";
     log(
       asked
@@ -2464,11 +2493,13 @@ export function createReviews({
       return run.settings?.review?.fix ? deciding(key, "review", manual) : manual();
     }
     const since = reviewed.get(key)?.nextAt;
-    recordRound(run, posted);
-    await lateFollowUps(run, posted);
     let item = null;
+    // From the start, synchronously in the run's end (runs.mjs cleanUp()): the conflict
+    // watcher starts no rebase run meanwhile (looping()).
     return deciding(key, "review", async () => {
       try {
+        recordRound(run, posted);
+        await lateFollowUps(run, posted);
         const started = await startFix(run, posted);
         item = started.item;
         if (item) return item;
@@ -2640,6 +2671,7 @@ export function createReviews({
     // The review was queued at entry.head: a push before it posted means it may have read
     // another commit than the one it was posted on.
     if (entry.head && sha !== entry.head) {
+      keep(key, { rebaseRetry: true });
       return refuse(key, repo, number, "a commit was pushed while the review ran");
     }
     // What the task's page needs of the pull request to file the policies' decision (asking()).
@@ -2665,9 +2697,11 @@ export function createReviews({
     const fixes = waiting.fixes ?? (waiting.fixed ? 1 : 0);
     const minutes = settings.review.mergeWait ?? 0;
     const inTime = () => now() - waiting.since < minutes * 60_000;
-    const decided = () => remember(key, sha, { mergeAt: now(), waiting: undefined });
-    const final = (why) => {
-      decided();
+    const decided = (fields = {}) =>
+      remember(key, sha, { mergeAt: now(), waiting: undefined, ...fields });
+    // `rebase`: a conflict run's end decides it again (rebased()).
+    const final = (why, rebase = false) => {
+      decided(rebase ? { rebaseRetry: true } : {});
       return refuse(key, repo, number, why);
     };
     let gate;
@@ -2710,7 +2744,7 @@ export function createReviews({
           log(`${key}: not merged, ${gate.why}`);
           return null;
         }
-        return final(gate.why);
+        return final(gate.why, !!gate.rebase);
       }
       // Before the merge: whatever happens next, never a second one.
       decided();
@@ -3573,6 +3607,79 @@ export function createReviews({
     });
   }
 
+  // A conflict run is over (runs.mjs cleanUp(), conflicts.mjs, `status` its outcome, `from` the
+  // head it started from): the loop goes on from the rebased head, as after a fix run. Its
+  // review, after the CI step, leads to a fix run or the merge as usual; it uses up no fix
+  // round. Only for a pull request the loop reviewed (`head`), with `review.on: ready` still.
+  // What the conflict ended is cleared: a merge refused for the conflict, a run going or a
+  // moved head, a fix run skipped (`rebaseRetry`), or a merge waiting for the old head's checks.
+  // Any other merge decision stands (mergeAt): the review says what the rebase changed, and
+  // merges nothing. A rebase that failed, stopped to ask or pushed nothing leaves the pull
+  // request as it was. Its own (head, base) pair is the conflict watcher's: no second rebase.
+  async function rebased(run) {
+    const key = taskKey(run.repo, prId(run.number));
+    const since = reviewed.get(key)?.nextAt;
+    let item = null;
+    return deciding(key, "review", async () => {
+      try {
+        item = await afterRebase(run);
+        return item;
+      } finally {
+        if (!item) nextStep(key, null, since);
+      }
+    });
+  }
+
+  // rebased()'s work: the review queued, or null (waiting for CI, or nothing to do).
+  async function afterRebase({ repo, number, base, status, from = null }) {
+    const key = taskKey(repo, prId(number));
+    const entry = reviewed.get(key);
+    if (!entry?.head) return null;
+    const leave = (why) => {
+      log(`${key}: no review after the rebase run, ${why}`);
+      return null;
+    };
+    if (status !== "ok") return leave(`it ended with \`${status}\``);
+    const { settings, errors } = await repoSettings(repo, base);
+    if (errors.length || settings.review?.on !== "ready") {
+      return leave(`no automatic review in ${repo} now`);
+    }
+    const pr = await getJson(github, repo, `/repos/${repo}/pulls/${number}`, [404]);
+    if (!pr || pr.state !== "open" || pr.draft)
+      return leave("the pull request isn't open and ready");
+    const head = pr.head?.sha ?? null;
+    // Before queued items carried it, the reviewed head: what the loop knew last.
+    if (!head || head === (from ?? entry.head)) return leave("it pushed nothing");
+    if (head === entry.head) return leave(`${short(head)} was reviewed already`);
+    const issue = linkedIssue(pr, repo, config.bot);
+    if (await waitsForInput(github, config, repo, pr, issue)) {
+      return leave("it waits for the maintainer's input");
+    }
+    // Its CI step follows the new head itself (pushed(), ciDecide()).
+    if (entry.ciWaiting) return ciRecheck(key);
+    const denied = await denyReview(repo, base, pr, [
+      passed("Rebase run pushed"),
+      passed("Deckhand's own pull request"),
+    ]);
+    if (denied.length) return leave(policyWhy("deny_review", denied));
+    const lifted = entry.rebaseRetry || (entry.waiting && !entry.mergeAt);
+    remember(key, head, {
+      rebaseRetry: undefined,
+      ...(lifted && { mergeAt: undefined, waiting: undefined }),
+    });
+    log(`${key}: the rebase run pushed ${short(head)}, starting its review`);
+    return reviewAfterCi({ repo, base, pr, settings });
+  }
+
+  // Whether the loop of pull request `number` is between two of its steps: what follows a
+  // run being decided (`decisions`, from the run's end on), or waiting for CI. The conflict
+  // watcher starts no rebase run then (conflicts.mjs). Not a merge waiting for checks: a
+  // conflict refuses it anyway, and the rebase's end goes on with the loop (rebased()).
+  function looping(repo, number) {
+    const key = taskKey(repo, prId(number));
+    return decisions.has(key) || !!reviewed.get(key)?.ciWaiting;
+  }
+
   // Rekeyed with spelled() (restart.mjs unifySpellings()). Both spellings of one pull request:
   // the later review's, with what only the other had (an auto-merge), and the most fix runs
   // either counted, so none happens twice.
@@ -3882,6 +3989,8 @@ export function createReviews({
     pushed,
     closed,
     ciFixed,
+    rebased,
+    looping,
     runEnded,
     tick,
     start,

@@ -927,6 +927,22 @@ after every run, decides again. A wait dropped (closed, a draft again) sets `ciD
 head it never reviewed, and a stopped CI step keeps its head in `ciStopped.sha`: `consider()`
 skips neither head as reviewed already.
 
+A conflict run (`reason: "conflict"`, its item's `rebaseFrom` the head it rebases) goes back to
+the loop too: its end in `cleanUp()` calls `reviews.rebased()`, which marks the loop
+(`deciding()`) at once. On a pull request the loop reviewed (its entry's `head`), still under
+`review.on: ready`, open, not waiting for input, whose head moved from `rebaseFrom`, after a run
+that ended `ok` (not `error`, `cancelled` or `needs-input`): `deny_review` is asked, then what
+the conflict stopped is cleared (`rebaseRetry`, set by `decide()` when `mergeRefusal()` says
+`rebase`: `dirty`, a run going, a moved head; by `autoMerge()` on a head moved during the
+review; by `queueFix()` when a busy task skipped the loop's fix run; and a `waiting` merge of the
+old head), and the new head goes through `reviewAfterCi()`, counting no fix round. Another
+`mergeAt` stays. With `ciWaiting`, `ciRecheck()` moves the wait instead. The watcher, for its
+part, skips a pull request while `reviews.looping()` says the loop is between steps
+(`decisions`, which `settle()`, `fixed()`, `ciFixed()` and `rebased()` set synchronously from
+the run's end, or `ciWaiting`), before the pair is kept, so the next check tries again; a merge
+`waiting` for checks doesn't hold it. `reviewLoop()` shows `rebasing` while a conflict run is
+queued or running on a pull request the loop reviewed (`conflict` is in `LOOP_STEPS`).
+
 The dashboard follows the loop. Before `startFix()`, `settle()` appends each automatic review
 to its pull request's `rounds` in the store's `reviews` (`recordRound()`): `{ round, at, head,
 counts: { critical, high, medium, low }, blocking }`, `round` the fix runs before it (0 for the

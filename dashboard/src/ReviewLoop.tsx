@@ -60,6 +60,7 @@ const ENDS: Record<string, Plain> = {
   checks: "reviewLoop.checks",
   ci: "reviewLoop.ci",
   "ci-fix": "reviewLoop.ciFix",
+  rebasing: "reviewLoop.rebasing",
   "ci-failed": "reviewLoop.ciFailed",
   clean: "reviewLoop.clean",
   "rounds-out": "reviewLoop.roundsOut",

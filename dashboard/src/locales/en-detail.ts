@@ -141,6 +141,7 @@ export const detail = {
   "reviewLoop.checks": "Waiting for checks",
   "reviewLoop.ci": "Waiting for CI",
   "reviewLoop.ciFix": "Fixing CI",
+  "reviewLoop.rebasing": "Rebasing",
   "reviewLoop.ciFailed": "CI failed, not reviewed",
   "reviewLoop.clean": "Nothing blocking",
   "reviewLoop.roundsOut": "Fix rounds ran out",

@@ -103,19 +103,21 @@ export function inChip(chip: ChipId, t: Task): boolean {
 export const isReady = (t: Pick<Task, "pr" | "review">) => t.pr?.state === "ready" && !inLoop(t);
 
 // The loop's states while it goes on: a review or fix run of it queued or running, its
-// auto-merge waiting for checks, its review waiting for CI or a CI fix run (listener/reviews.mjs
-// reviewLoop()).
-const LOOPING: LoopState[] = ["reviewing", "fixing", "checks", "ci", "ci-fix"];
+// auto-merge waiting for checks, its review waiting for CI or a CI fix run, a conflict run whose
+// end it goes on from (listener/reviews.mjs reviewLoop()).
+const LOOPING: LoopState[] = ["reviewing", "fixing", "checks", "ci", "ci-fix", "rebasing"];
 export const inLoop = (t: Pick<Task, "review">) => !!t.review && LOOPING.includes(t.review.loop);
 
 // A loop still going, for a row: "Review · first review", "Review · round 2 of 3", "Review ·
-// waiting for checks", "Review · waiting for CI", "Review · fixing CI"; null otherwise.
+// waiting for checks", "Review · waiting for CI", "Review · fixing CI", "Review · rebasing"; null
+// otherwise.
 export function loopLine(t: Pick<Task, "review">): string | null {
   const r = t.review;
   if (!r || !inLoop(t)) return null;
   if (r.loop === "checks") return tr("loop.checks");
   if (r.loop === "ci") return tr("loop.ci");
   if (r.loop === "ci-fix") return tr("loop.ciFix");
+  if (r.loop === "rebasing") return tr("loop.rebasing");
   if (!r.round) return tr("loop.first");
   return r.rounds
     ? tr("loop.roundOf", { round: r.round, rounds: r.rounds })
