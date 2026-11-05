@@ -179,17 +179,25 @@ export async function until(check, { ms = 5000, what = "the condition" } = {}) {
   }
 }
 
+// Where the services startService() starts keep their compiled modules: kept from one run to
+// the next, since a process killed (most of them, SIGKILL) writes none. In the clone, ignored
+// (.gitignore, and test/ is out of the images): its owner's alone, never a shared /tmp path
+// another user could fill with compiled code first. Node checks each entry against its file's
+// contents and its own version: a stale one is compiled again.
+const COMPILE_CACHE = process.env.NODE_COMPILE_CACHE || join(import.meta.dirname, ".compile-cache");
+
 // A service's entry point (`script`, from the repository's root: "edge/server.mjs"…), started
 // for real with `env` alone, its logs in text, which the tests read (lib/log.mjs's own tests
 // cover JSON). Killed after `t` (null: the caller kills `child` itself). `also()`: more output
 // output() and until() read, other processes' (what a run does is logged on every side).
 // until(text or RegExp) → the output once it has it, rejected if the service exits first;
 // exited → { code, out } once it did, its output read to the end ("close", not "exit": the
-// line it logged before exiting too).
+// line it logged before exiting too). NODE_COMPILE_CACHE: orchestrator-server.test.mjs alone
+// starts some 800 of them, each compiling the same modules otherwise.
 export function startService(t, script, env, { also } = {}) {
   const child = spawn(process.execPath, [script], {
     cwd: join(import.meta.dirname, ".."),
-    env: { LOG_FORMAT: "text", ...env },
+    env: { LOG_FORMAT: "text", NODE_COMPILE_CACHE: COMPILE_CACHE, ...env },
     stdio: ["ignore", "pipe", "pipe"],
   });
   if (t) t.after(() => child.kill("SIGKILL"));

@@ -18,7 +18,7 @@ import {
   MARGIN_MS,
   proxyTarget,
 } from "../listener/runner/kube-gate.mjs";
-import { listening } from "./helpers.mjs";
+import { closedPort, listening } from "./helpers.mjs";
 
 // TEST-NET-1 (RFC 5737): no host has it, so nothing ever answers there, whatever else runs.
 const NOWHERE = { host: "192.0.2.1", port: 9 };
@@ -43,11 +43,12 @@ async function gate(targets, waitMs) {
   return { code, out: out.trim(), err };
 }
 
+// Out of reach as a refused connection: the next test but one waits out one that never answers.
 test("GATE_SCRIPT: done once what it mustn't reach is out of reach and the proxy answers", async (t) => {
   const proxy = await open(t);
   const { code, out, err } = await gate(
     [
-      { what: "the API server", ...NOWHERE, reach: false },
+      { what: "the API server", host: "127.0.0.1", port: await closedPort(), reach: false },
       { what: "the egress proxy", host: "127.0.0.1", port: proxy.port, reach: true },
     ],
     60_000,

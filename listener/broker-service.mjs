@@ -46,13 +46,16 @@ function regularFile(path, max) {
 
 // `caller`: lib/broker-client.mjs createBrokerCaller()'s.
 // `epoch()`: the orchestrator's fencing epoch, on each of its calls but a GET (#506); null for
-// a service that has none (edge, the github service: they only read the keys).
+// a service that has none (edge, the github service: they only read the keys). `retryMs`: how
+// soon a failed call is made again, and how long the stream pauses before reading again the
+// events a batch left unhandled (a test's shorter, so it doesn't wait out 5 s).
 export function createBrokerService({
   caller: unfenced,
   epoch = () => null,
   log = () => {},
   setTimer = setTimeout,
   clearTimer = clearTimeout,
+  retryMs = RETRY_MS,
 }) {
   const caller = {
     ...unfenced,
@@ -118,7 +121,7 @@ export function createBrokerService({
       later(refreshKeys, KEYS_EVERY_MS);
     } catch (error) {
       log(`Broker: its keys (${error.message}), asking again`);
-      later(refreshKeys, RETRY_MS);
+      later(refreshKeys, retryMs);
     }
   }
 
@@ -131,7 +134,7 @@ export function createBrokerService({
       ending.delete(id);
     } catch (error) {
       log(`Broker: run ${id} ended, not heard yet (${error.message}), telling it again`);
-      later(() => ending.has(id) && end(id).catch(() => {}), RETRY_MS);
+      later(() => ending.has(id) && end(id).catch(() => {}), retryMs);
     }
   }
 
@@ -216,7 +219,7 @@ export function createBrokerService({
     state.chain = done.catch((error) => {
       log(`Broker: run ${run}'s inbox (${error.message}), trying again`);
       // Unless the run ended meanwhile (forget()).
-      later(() => inboxes.get(run) === state && sync(run, bytesFrom).catch(() => {}), RETRY_MS);
+      later(() => inboxes.get(run) === state && sync(run, bytesFrom).catch(() => {}), retryMs);
     });
     return done;
   }
@@ -257,11 +260,11 @@ export function createBrokerService({
           }
           if (done.length)
             await ok(await caller.call("POST", "/events/ack", { body: { ids: done } }), "an ack");
-          if (done.length < res.json().events.length) await sleep(RETRY_MS);
+          if (done.length < res.json().events.length) await sleep(retryMs);
         } catch (error) {
           if (stopped) break;
           log(`Broker: its events (${error.message}), asking again`);
-          await sleep(RETRY_MS);
+          await sleep(retryMs);
         }
       }
     })();
@@ -350,7 +353,7 @@ export function createBrokerService({
     return fn().catch((error) => {
       if (stopped) return;
       log(`Broker: ${what} (${error.message}), trying again`);
-      return sleep(RETRY_MS).then(() => !stopped && persist(what, fn));
+      return sleep(retryMs).then(() => !stopped && persist(what, fn));
     });
   }
 

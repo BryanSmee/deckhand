@@ -54,12 +54,14 @@ async function service(t, { store = openStore("memory:"), key = testKey(), port 
 }
 
 // `as`: the service calling, the orchestrator (its runs, its stream) or the runner (the inboxes
-// and files it copies there).
+// and files it copies there). A failed call tried again after 100 ms, not 5 s: a broker away is
+// caught up with as soon as it is back.
 function remote(t, broker, { as = "orchestrator", logged = [] } = {}) {
   const made = createBrokerService({
     caller: createBrokerCaller({ url: `http://${AT[as]}:${broker.port}` }),
     epoch: () => 1,
     log: (line) => logged.push(line),
+    retryMs: 100,
   });
   t.after(() => made.stop());
   return made;
