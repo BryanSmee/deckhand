@@ -274,6 +274,10 @@ async function fakeGitHub(files = {}) {
       if (req.method === "GET" && changed) {
         return res.end(req.url.endsWith("page=1") ? (files[`files:${changed[1]}`] ?? "[]") : "[]");
       }
+      // A head compared with its base (an auto-merge's gate): up to date.
+      if (req.method === "GET" && req.url.startsWith("/repos/org/repo/compare/")) {
+        return res.end(JSON.stringify({ status: "ahead", behind_by: 0 }));
+      }
       if (req.method === "GET" && req.url.startsWith("/repos/org/repo/actions/runs?")) {
         return res.end(files.runs ?? JSON.stringify({ workflow_runs: [] }));
       }
