@@ -1,6 +1,8 @@
 // Runs: one sandbox per run, started, followed and removed through the runner
 // (runner/docker.mjs). They run detached, so they outlive a listener restart: the next
 // listener picks them up (restart.mjs). Each run's reply, reactions and label once it is over.
+// An external run (#597) has no sandbox: a user's machine claimed its task (claims.mjs) and
+// reports its life through /mcp, its log's lines, its end; the rest is a sandbox run's.
 import { engineNote, recheckMounts, RunError, validateRun } from "./access.mjs";
 import { agentFor } from "./agents/index.mjs";
 import { authOf, entryLabel, nextFallback, resolved, resolveEntry } from "./agents/select.mjs";
@@ -30,6 +32,7 @@ import {
 } from "./runlog.mjs";
 import { endWait, logSent, QUEUE_RETRY_MS } from "./restart.mjs";
 import { sandboxSpec, sessionName, sessionOf } from "./sandbox-spec.mjs";
+import { NEEDS_INPUT, asksInput } from "./questions.mjs";
 import { countRun, isChat, noLongerAllowed, pickedTask, refusedItems } from "./tasks.mjs";
 import { operatorSecrets, redact } from "./secrets.mjs";
 import { newLogContext, newRequestId, withLogContext } from "../lib/log.mjs";
@@ -146,7 +149,8 @@ export function createRuns(ctx) {
 
   // Where comments that arrive during the run go (deliver()), and what a listener that
   // restarts meanwhile needs to carry on with it (saveLive()).
-  function newLive(task, items) {
+  // `id` and `external` (the machine whose claim it is): an external run's (startExternal()).
+  function newLive(task, items, { id = `${task.name}-${Date.now()}`, external = null } = {}) {
     const replyTo = items.at(-1).replyTo;
     // The last comment decides: a work trigger after a brainstorm comment means work.
     const mode = items.at(-1).mode;
@@ -154,7 +158,6 @@ export function createRuns(ctx) {
     // `light`, as runs before #498 did.
     const light = isApart(mode);
     const key = taskKey(task.repo, task.id);
-    const id = `${task.name}-${Date.now()}`;
     const { reason = null, round = null, rounds = null } = items.at(-1);
     const record = newRecord(
       task,
@@ -176,18 +179,26 @@ export function createRuns(ctx) {
     // them for one limited to this repo) or the operator's credential, name it by its id while
     // it lasts. Signed once its sandbox's network is known (sandbox-spec.mjs).
     // Whether it pushes is its capabilities' (broker.mjs grant()), once its start decided them.
-    ctx.broker.register(task.repo, {
-      id,
-      mode,
-      issue: task.number,
-      base: task.base,
-      created,
-      reruns,
-      reason,
-    });
+    // An external run has none: nothing of Deckhand's runs on its machine.
+    if (!external) {
+      ctx.broker.register(task.repo, {
+        id,
+        mode,
+        issue: task.number,
+        base: task.base,
+        created,
+        reruns,
+        reason,
+      });
+    }
     return {
       id,
       key,
+      // The machine of an external run: { machine, name, owner } (claims.mjs); null for a sandbox's.
+      external,
+      // An external run's inbox: the messages delivered to it, which its machine reads from an
+      // offset (next_message) so that none is lost or read twice across a handover.
+      outbox: [],
       mode,
       talk: mode === "brainstorm" || mode === "stop",
       light,
@@ -583,6 +594,8 @@ export function createRuns(ctx) {
     const message = `Stopped as failed: ${overflowMessage(live)}`;
     writeEvent(live.logFile, "note", { message });
     log(`${live.key}: ${message}`);
+    // No sandbox to stop: its end is now, its machine told by its claim's end.
+    if (live.external) return void end(task);
     ctx
       .saveLive(task)
       .then(() => ctx.runner.kill(task.name))
@@ -645,7 +658,9 @@ export function createRuns(ctx) {
     const live = task.live;
     if (!live.open) return;
     live.open = false;
-    ctx.runner.close(live.id);
+    // An external run's machine reads the close with its next message (claims.mjs nextMessage()).
+    if (live.external) ctx.claims?.wake();
+    else ctx.runner.close(live.id);
   }
 
   function end(task, error = null) {
@@ -665,9 +680,19 @@ export function createRuns(ctx) {
   function cancel(key, by) {
     const task = ctx.tasks.get(key);
     if (!task) return null;
-    // A machine's claim (claims.mjs): over, its machine told at its next heartbeat.
-    if (task.claim && ctx.claims?.cancel(task, by)) return "running";
     const live = task.live;
+    // An external run (#597): ended now, as cancelled; its machine told at its next heartbeat,
+    // which no longer lists its claim.
+    if (live?.external && !live.finishing && !live.cancelled) {
+      live.cancelled = { by, at: Date.now() };
+      live.open = false;
+      writeEvent(live.logFile, "cancelled", live.cancelled);
+      log(`${key}: cancelled by ${by}`);
+      end(task);
+      return "running";
+    }
+    // A machine's claim without a run (claims.mjs): over, its machine told at its next heartbeat.
+    if (task.claim && !live && ctx.claims?.cancel(task, by)) return "running";
     if (live && !live.finishing && !live.cancelled) {
       live.cancelled = { by, at: Date.now() };
       clearTimeout(live.lingering);
@@ -860,12 +885,17 @@ export function createRuns(ctx) {
       const status = outcome(live.result);
       // What its agent's calls last got, from the models service (#504), for an error's
       // fallback and reply.
-      const api = status === "error" && !live.replied ? await ctx.models.apiOf(live.id) : {};
+      // An external run's agent called its own provider, not Deckhand's.
+      const api =
+        status === "error" && !live.replied && !live.external
+          ? await ctx.models.apiOf(live.id)
+          : {};
       const { apiStatus, apiReset } = api;
       live.apiError = api.apiError ?? null;
       // Not a chat's: its messages would all be sent again to the next entry.
+      // Nor an external run's: its machine runs the agent it has.
       const fallback =
-        status === "error" && !live.replied && !isChat(task)
+        status === "error" && !live.replied && !isChat(task) && !live.external
           ? nextFallback(config, record, live.result, apiStatus, { apiReset, now: Date.now() })
           : null;
       if (fallback) fallBack(task, fallback);
@@ -1015,15 +1045,18 @@ export function createRuns(ctx) {
   async function teardown(task) {
     const live = task.live;
     live.record.phase = null;
-    // What it did on GitHub, the github service's: its reruns, for the CI step (cleanUp()).
-    const state = await githubState(live);
-    if (Array.isArray(state?.reruns)) live.reruns.splice(0, live.reruns.length, ...state.reruns);
-    if (Array.isArray(state?.created))
-      live.created.splice(0, live.created.length, ...state.created);
-    // The broker service hears it first, so its tokens renew nowhere once its network goes; a
-    // broker that doesn't answer soon is told again later (broker-service.mjs end()).
-    const revoked = ctx.broker.revoke(live.id);
-    await Promise.race([revoked, new Promise((resolve) => setTimeout(resolve, 5000).unref())]);
+    // An external run has no state at the github service, no tokens, no sandbox (#597).
+    if (!live.external) {
+      // What it did on GitHub, the github service's: its reruns, for the CI step (cleanUp()).
+      const state = await githubState(live);
+      if (Array.isArray(state?.reruns)) live.reruns.splice(0, live.reruns.length, ...state.reruns);
+      if (Array.isArray(state?.created))
+        live.created.splice(0, live.created.length, ...state.created);
+      // The broker service hears it first, so its tokens renew nowhere once its network goes; a
+      // broker that doesn't answer soon is told again later (broker-service.mjs end()).
+      const revoked = ctx.broker.revoke(live.id);
+      await Promise.race([revoked, new Promise((resolve) => setTimeout(resolve, 5000).unref())]);
+    }
     live.record.finishedAt = Date.now();
     // Its summary before anything of the run goes: tried again while the store is away, as the
     // orchestrator keeps it nowhere else (#619). A copy that stops meanwhile leaves the run's
@@ -1034,10 +1067,15 @@ export function createRuns(ctx) {
     // there after it (../runner/logs.mjs).
     await logSent(live);
     live.logFile?.close?.();
-    await ctx.runner.remove(task.name, live.id).catch((e) => log(`${live.key}: ${e}`));
+    if (!live.external) {
+      await ctx.runner.remove(task.name, live.id).catch((e) => log(`${live.key}: ${e}`));
+    }
     live.over = true;
     clearTimeout(live.soon);
     await live.saving;
+    // Its machine's claim ends with it, in the queue's write below: its next heartbeat no longer
+    // lists it.
+    if (live.external && task.claim?.id === live.id) task.claim = null;
     // What it puts back in the queue (unanswered comments, a fallback's) is saved before its
     // own state goes, tried again until it is (restart.mjs removeLive()): a listener killed
     // between the two finds them in both, and the run's win.
@@ -1045,6 +1083,8 @@ export function createRuns(ctx) {
     task.live = null;
     task.running = false;
     countRun(ctx, task, -1);
+    // Its machine's requests waiting on it answer, and its machine may claim again.
+    if (live.external) ctx.claims?.wake();
     return true;
   }
 
@@ -1145,7 +1185,166 @@ export function createRuns(ctx) {
     }
   }
 
-  return { run, follow, ending, dropRefused, cancel, queuedTask, unqueue, rest, teardown };
+  // --- External runs (#597) ----------------------------------------------------------------
+
+  // A machine's claim (claims.mjs take()), its comments `items` taken: its run, with the record,
+  // log, reactions and label of a sandbox run's, though nothing of Deckhand's starts. `work`:
+  // what the claim returns (its run's id, mode, first message); `m`: the machine; `reported`:
+  // the agent, model and effort its driver says it runs ({ agent, model, effort }, each or none);
+  // `settings`: the repo's, as the claim read them.
+  function startExternal(task, items, work, m, reported = {}, settings = null) {
+    return newLogContext({ ...runLogContext(task), run: work.run }, () => {
+      countRun(ctx, task, 1);
+      task.settings = settings;
+      task.settingsAt = Date.now();
+      const external = { machine: m.id, name: m.name, owner: m.owner };
+      const live = newLive(task, items, { id: work.run, external });
+      task.live = live;
+      const { record, logFile } = live;
+      Object.assign(record, {
+        agent: agentFor(reported.agent).name,
+        model: reported.model ?? null,
+        effort: reported.effort ?? null,
+        machine: m.name,
+        mode: work.resume ? "continue" : "start",
+      });
+      addRun(ctx, record);
+      log(
+        `${live.key}: running on ${m.owner}'s ${m.name} (${live.mode}, ${record.mode}, ${record.agent}${record.model ? ` ${record.model}` : ""}), log ${record.id}`,
+      );
+      logFile.write(JSON.stringify({ type: "listener", ...record, message: work.message }) + "\n");
+      ctx.metrics?.runStarted(live);
+      writeEvent(logFile, "session", { mode: record.mode, capabilities: null });
+      writeEvent(logFile, "note", {
+        message: `Claimed by ${m.owner}'s machine ${m.name}: its agent runs there, its lines reported through /mcp.`,
+      });
+      enterPhase(live, "work");
+      live.open = true;
+      // In its saved state before they leave the saved queue, as a sandbox run's (restart.mjs).
+      if (ctx.take) ctx.take(task, items);
+      else ctx.saveLive(task);
+      // As start() does: a new comment answers the questions, the issue no longer waits.
+      if (config.needsInputLabel && task.kind === "issue") {
+        ctx.track?.(
+          Promise.resolve(ctx.label(task.repo, task.number, false)).catch((error) =>
+            log(`${live.key}: its label: ${error.message ?? error}`),
+          ),
+        );
+      }
+      ctx.projects
+        ?.started(task, (message) => writeEvent(logFile, "note", { message }), [])
+        .catch((error) => log(`${live.key}: projects: ${error.stack ?? error}`));
+      return live;
+    });
+  }
+
+  // The agent's stream-json lines `lines` its machine reports (post_events), from the line
+  // `from` of its output (null: after those it had), into the run's log as a sandbox's output
+  // is: redacted, cut at RUN_LOG_MAX_MB, its phases, its results. Lines it had already (a
+  // driver sending again what a handover may have lost) are skipped. → how many it has now.
+  async function externalLines(task, lines, from = null) {
+    const live = task.live;
+    const had = live.lines.out;
+    const skip = from === null ? 0 : had - from;
+    if (skip < 0) {
+      throw new RangeError(`Lines from ${from} sent, but the run has ${had}: send from ${had}.`);
+    }
+    for (const raw of lines.slice(skip)) {
+      if (task.live !== live || live.finishing || live.overflow) break;
+      externalLine(task, raw);
+    }
+    // Saved before the machine is told: a handover never loses a line it was told was taken.
+    if (task.live === live && !live.over) await ctx.saveLive(task);
+    return live.lines.out;
+  }
+
+  function externalLine(task, raw) {
+    const live = task.live;
+    const line = hidden(live, String(raw));
+    const events = agentOf(task).normalize(line);
+    const phase = fits(live, line) ? phaseOf(live.logPhase, events) : null;
+    if (phase) enterPhase(live, phase);
+    const kept = keep(task, line);
+    live.lines.out++;
+    if (!kept) return;
+    const event = events.findLast((e) => e.type === "result");
+    if (!event) return;
+    // One result per turn, as output()'s; the comments still in their pause go now, or its
+    // inbox closes and the agent ends with this as its answer.
+    live.result = { ...event, durationMs: (live.result?.durationMs ?? 0) + event.durationMs };
+    live.unanswered = [];
+    clearTimeout(task.timer);
+    if (!ctx.deliver(task)) close(task);
+  }
+
+  // A message for the external run's agent (tasks.mjs deliver()): in its outbox, which its
+  // machine reads (claims.mjs nextMessage()).
+  function sendExternal(task, message) {
+    task.live.outbox.push(message);
+    ctx.claims?.wake();
+  }
+
+  // Its machine says it is over (finish, or ask: `outcome` "needs-input"): `reply`, or its last
+  // result's text, posted as the App, then the end of a sandbox run's (finish(), cleanUp()).
+  // `outcome`: "ok", "error" or "needs-input", the reply's marker added for the last.
+  function finishExternal(task, { outcome: said = "ok", reply = null } = {}) {
+    const live = task.live;
+    let text = reply ?? live.result?.text ?? "";
+    if (said === "needs-input" && !asksInput(text)) text = `${NEEDS_INPUT}\n\n${text}`;
+    // How long its agent's turns took, as its results said; the whole claim without one.
+    const durationMs = live.result?.durationMs ?? Math.max(0, Date.now() - live.record.startedAt);
+    live.result = { ...live.result, type: "result", ok: said !== "error", text, durationMs };
+    writeEvent(live.logFile, "note", { message: `Its machine says it is over (${said}).` });
+    enterPhase(live, "wrap-up");
+    live.answered = true;
+    return end(task);
+  }
+
+  // The external run ends as interrupted (its machine released its claim, or its lease ran out,
+  // or the machine was removed: claims.mjs giveBack()): its issue told, its comments back first
+  // in the queue for that machine's next claim, as a sandbox that never started (restart.mjs
+  // requeue()).
+  async function interruptExternal(task, why) {
+    const live = task.live;
+    if (!live?.external || live.finishing) return;
+    live.open = false;
+    live.finishing = true;
+    const { key, record } = live;
+    record.status = "interrupted";
+    record.summary = `Interrupted: ${why}`;
+    record.questions = null;
+    writeEvent(live.logFile, "note", { message: record.summary });
+    log(`${key}: done (interrupted: ${why})`);
+    task.pending.unshift(...live.handled.filter((item) => !task.pending.includes(item)));
+    ctx.metrics?.runFinished(live);
+    if (task.kind === "issue") {
+      const text = `${live.external.name}'s run was interrupted: ${why}. Its comments wait for that machine's next claim; \`/machine none\` sends the issue back to sandboxes.`;
+      await Promise.resolve(ctx.reply(task.repo, task.number, text)).catch((error) =>
+        log(`${key}: ${error.message ?? error}`),
+      );
+    }
+    if (!(await teardown(task))) return;
+    if (task.pending.length) ctx.startLater(task, 0);
+    ctx.schedule();
+  }
+
+  return {
+    run,
+    follow,
+    ending,
+    dropRefused,
+    cancel,
+    queuedTask,
+    unqueue,
+    rest,
+    teardown,
+    startExternal,
+    endExternal: end,
+    externalLines,
+    sendExternal,
+    finishExternal,
+    interruptExternal,
+  };
 }
 
 // A chat task's id ("chat-<id>") → the chat's.

@@ -228,7 +228,17 @@ test("MCP: a token without deckhand:read lists no read tool, and calls none", as
   const scopes = "deckhand:machine";
   assert.deepEqual(
     (await rpc("tools/list", {}, { scopes })).tools.map((x) => x.name),
-    ["register_machine", "heartbeat", "claim", "release", "unregister_machine"],
+    [
+      "register_machine",
+      "heartbeat",
+      "claim",
+      "post_events",
+      "next_message",
+      "ask",
+      "finish",
+      "release",
+      "unregister_machine",
+    ],
   );
   const refused = await tool("list_repos", {}, { scopes });
   assert.equal(refused.isError, true);
@@ -968,6 +978,97 @@ test("MCP: claim, heartbeat with the claims' runs, and release, with deckhand:ma
     ["release", "alice", id, "r1"],
     ["release", "alice", id, "r2"],
   ]);
+});
+
+test("MCP: a claim's run tools (#597): its output, messages, question and end, under the protocol it speaks", async (t) => {
+  const { ctx } = orchestrator();
+  withMachines(ctx);
+  const asked = [];
+  ctx.claims = {
+    claim: async (user, id, options) => (asked.push(["claim", options.reported]), null),
+    post: async (user, id, run, lines, from) => {
+      asked.push(["post", run, lines.length, from]);
+      if (from > 3) throw new Refused(409, "Lines from 9 sent, but the run has 3: send from 3.");
+      return { key: "org/repo#12", next: (from ?? 0) + lines.length };
+    },
+    nextMessage: async (user, id, run, from) => (
+      asked.push(["next", run, from]),
+      { messages: ["New comment: the menu."], next: from + 1, closed: false }
+    ),
+    ask: async (user, id, run, question) => (
+      asked.push(["ask", run, question]),
+      { key: "org/repo#12", status: "needs-input" }
+    ),
+    finish: async (user, id, run, end) => (
+      asked.push(["finish", run, end]),
+      { key: "org/repo#12", status: end.outcome }
+    ),
+  };
+  const { tool, url } = await serveMcp(t, ctx);
+  const desk = await tool("register_machine", { name: "desk", repos: ["org/repo"] }, MACHINE);
+  const machine = desk.structuredContent.machine.id;
+  await tool("claim", { machine, agent: "codex", model: "gpt-5", protocol: 1 }, MACHINE);
+  const unknown = await tool("claim", { machine, agent: "gpt-7" }, MACHINE);
+  assert.equal(unknown.isError, true);
+  // A protocol this copy doesn't speak: the driver is told to update.
+  const newer = await tool("post_events", { machine, run: "r1", lines: [], protocol: 2 }, MACHINE);
+  assert.equal(newer.isError, true);
+  assert.match(newer.content[0].text, /`protocol` 2 isn't one this Deckhand speaks: 1\. Update/);
+  // Its lines, a large batch included: a machine's call may be up to 1 MB.
+  const line = JSON.stringify({ type: "assistant", pad: "x".repeat(200_000) });
+  const posted = await tool("post_events", { machine, run: "r1", lines: [line], from: 0 }, MACHINE);
+  assert.deepEqual(posted.structuredContent, { next: 1 });
+  assert.equal(posted.content[0].text, "1 line taken: send from 1.");
+  const late = await tool("post_events", { machine, run: "r1", lines: ["{}"], from: 9 }, MACHINE);
+  assert.equal(late.isError, true);
+  assert.match(late.content[0].text, /send from 3/);
+  const many = Array.from({ length: 1001 }, () => "{}");
+  assert.equal(
+    (await tool("post_events", { machine, run: "r1", lines: many }, MACHINE)).isError,
+    true,
+  );
+  const message = await tool("next_message", { machine, run: "r1", from: 2 }, MACHINE);
+  assert.deepEqual(message.structuredContent, {
+    messages: ["New comment: the menu."],
+    next: 3,
+    closed: false,
+  });
+  const question = await tool(
+    "ask",
+    { machine, run: "r1", question: "1. **Menu**: which?" },
+    MACHINE,
+  );
+  assert.deepEqual(question.structuredContent, { key: "org/repo#12", status: "needs-input" });
+  const wrong = await tool("finish", { machine, run: "r1", outcome: "great" }, MACHINE);
+  assert.equal(wrong.isError, true);
+  const done = await tool(
+    "finish",
+    { machine, run: "r1", outcome: "ok", reply: "Built." },
+    MACHINE,
+  );
+  assert.deepEqual(done.structuredContent, { key: "org/repo#12", status: "ok" });
+  // Not with another scope.
+  const work = await tool(
+    "finish",
+    { machine, run: "r1", outcome: "ok" },
+    { scopes: "deckhand:work" },
+  );
+  assert.match(work.content[0].text, /deckhand:machine/);
+  assert.deepEqual(asked, [
+    ["claim", { agent: "codex", model: "gpt-5", effort: null }],
+    ["post", "r1", 1, 0],
+    ["post", "r1", 1, 9],
+    ["next", "r1", 2],
+    ["ask", "r1", "1. **Menu**: which?"],
+    ["finish", "r1", { outcome: "ok", reply: "Built." }],
+  ]);
+  // The same body without deckhand:machine is past what the other tools' calls take.
+  const large = await fetch(`${url}/mcp`, {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-user": "alice", "x-scopes": "deckhand:read" },
+    body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "ping", pad: line }),
+  }).catch((error) => error);
+  assert.ok(large instanceof Error || large.status >= 400);
 });
 
 test("MCP: a machine is listed and reached by its owner alone", async (t) => {

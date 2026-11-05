@@ -54,5 +54,9 @@ export function replyFooter(record, result, hint, later) {
   const state = result?.fastMode ?? "on";
   const fast = record.speed !== "fast" ? "" : Object.hasOwn(FAST, state) ? FAST[state] : " · fast";
   const speedNote = record.speedNote ? ` · ${record.speedNote}` : "";
-  return `<sub>🤖 ${agent.displayName}${provider} ${record.model} · ${record.effort} effort${fast}${took !== null ? ` · ${took} min` : ""}${switched}${speedNote}${hint}${next}</sub>`;
+  // An external run's (#597): its machine, and its model and effort only as its driver said them.
+  const model = record.model ? ` ${record.model}` : "";
+  const effort = record.effort ? ` · ${record.effort} effort` : "";
+  const on = record.machine ? ` · on ${record.machine}` : "";
+  return `<sub>🤖 ${agent.displayName}${provider}${model}${effort}${on}${fast}${took !== null ? ` · ${took} min` : ""}${switched}${speedNote}${hint}${next}</sub>`;
 }

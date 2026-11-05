@@ -25,9 +25,17 @@
 // claim is saved with the queue (restart.mjs): the copy that takes over has it, with a fresh
 // lease.
 //
+// Its run (#597). A claim starts an external run (runs.mjs startExternal()): a sandbox run's
+// record, log, reactions and end, without a sandbox. Its machine reports on it with the claim's
+// run id: post() its agent's stream-json lines, nextMessage() the comments that reach it
+// meanwhile, ask() or finish() its end, whose reply the App posts before what follows any run's
+// end (runs.mjs cleanUp()). A release, a lease that runs out or the machine removed ends it as
+// interrupted, the issue told. Only the machine holding the claim reaches its run (going()).
+//
 // Only its owner reaches it: a comment by another allowed user on a routed task is held, shown on
 // the dashboard, until the owner delivers it (or drops it). Deckhand's own items (a review's fix
 // round, a CI fix, a rebase) are delivered as on any task.
+import { AGENTS } from "./agents/index.mjs";
 import { labeller, labellerRefusal } from "./auto-pickup.mjs";
 import { commentsText, taskKey } from "./events.mjs";
 import { getJson, paginate } from "./github.mjs";
@@ -45,6 +53,11 @@ import { Refused } from "../lib/http.mjs";
 export const CLAIM_WAIT_MS = 25_000;
 // How long a claim lasts without the machine's heartbeat (every 30 s, machines.mjs).
 export const LEASE_MS = 2 * 60_000;
+// The version of the run tools' protocol (claim, post_events, next_message, ask, finish) this
+// copy speaks, and those it still takes: an update keeps the previous one, as an endpoint
+// sandboxes call is kept through one update (AGENTS.md).
+export const MACHINE_PROTOCOL = 1;
+export const MACHINE_PROTOCOLS = [1];
 // How often the leases are looked at.
 const EXPIRE_EVERY_MS = 5000;
 
@@ -291,7 +304,7 @@ export function createClaims(
     [...tasks.values()].filter((t) => t.claim?.machine === id).map((t) => t.claim);
 
   // The next task the owner's machine `m` may take now, claimed: its work, or null.
-  async function next(owner, m) {
+  async function next(owner, m, reported) {
     const since = (t) => t.pending[0]?.queuedAt ?? 0;
     const candidates = [...tasks.values()]
       .filter((t) => isMachinePool(poolOf(t)) && !t.running && t.ready && t.pending.length)
@@ -333,15 +346,16 @@ export function createClaims(
       }
       if (!work) continue;
       if (claimsOf(m.id).length >= m.capacity) return null;
-      take(task, route, m, items, work);
+      take(task, route, m, items, work, reported, settings);
       return work;
     }
     return null;
   }
 
   // Its queued comments, theirs from now (as runs.mjs runTask() takes them), the route stuck to
-  // the machine, the claim saved with the queue.
-  function take(task, route, m, items, work) {
+  // the machine, the claim saved with the queue; then its external run (runs.mjs
+  // startExternal()), the record, log and reactions of a sandbox run's.
+  function take(task, route, m, items, work, reported, settings) {
     const key = keyOf(task);
     task.pending.splice(0, items.length);
     clearTimeout(task.timer);
@@ -362,8 +376,10 @@ export function createClaims(
     };
     task.next = {};
     ctx.order?.drop(key);
-    ctx.saveQueue?.();
     log(`${key}: claimed by ${m.owner}'s ${m.name} (${m.id}), run ${work.run}`);
+    // Its run writes its state, then the queue with the claim (restart.mjs take()).
+    if (ctx.startExternal) ctx.startExternal(task, items, work, m, reported, settings);
+    else ctx.saveQueue?.();
   }
 
   // What a claim returns: the work as a sandbox run gets it (its prompt and first message), for
@@ -409,32 +425,42 @@ export function createClaims(
       message: firstMessage({ mode, text, restored: false, started: resume }),
       options,
       leaseSeconds: leaseMs / 1000,
+      protocol: MACHINE_PROTOCOL,
     };
   }
 
   // The next work for the owner's machine `id`, waiting up to `wait` ms for one: → its work, or
-  // null when none came. Refused (404) for a machine that isn't the owner's.
-  async function claim(owner, id, { wait = waitMs } = {}) {
+  // null when none came. Refused (404) for a machine that isn't the owner's. `reported`: the
+  // agent, model and effort its driver runs ({ agent, model, effort }, each or none), its run's.
+  async function claim(owner, id, { wait = waitMs, reported = {} } = {}) {
+    if (reported.agent != null && !Object.hasOwn(AGENTS, reported.agent)) {
+      throw new Refused(400, `\`agent\` is one of ${Object.keys(AGENTS).join(", ")}.`);
+    }
     const until = now() + wait;
     for (;;) {
       // Again at each try: removed, or its owner no longer a user, meanwhile.
       const m = ctx.machines.get(owner, id);
       ctx.machines.heartbeat(owner, id);
       if (ctx.stopping) return null;
-      const work = await next(owner, m);
+      const work = await next(owner, m, reported);
       if (work) return work;
       const left = until - now();
       if (left <= 0) return null;
-      await new Promise((resolve) => {
-        const done = () => {
-          waiting.delete(done);
-          clearTimeout(timeout);
-          resolve();
-        };
-        const timeout = later(done, left);
-        waiting.add(done);
-      });
+      await pause(left);
     }
+  }
+
+  // Until wake(), or `ms` on.
+  function pause(ms) {
+    return new Promise((resolve) => {
+      const done = () => {
+        waiting.delete(done);
+        clearTimeout(timeout);
+        resolve();
+      };
+      const timeout = later(done, ms);
+      waiting.add(done);
+    });
   }
 
   // Something may be claimable now (a task ready, a claim given back): the waiting claims look.
@@ -451,10 +477,18 @@ export function createClaims(
   }
 
   // Its claim over: its comments back first in the queue, for that machine (it sticks to it) as
-  // soon as it claims again. `why`: the log's.
+  // soon as it claims again. `why`: the log's, and its external run's, which ends as interrupted
+  // with the issue told (runs.mjs interruptExternal(): its comments queued again there).
   function giveBack(task, why) {
     const { claim: c } = task;
     task.claim = null;
+    if (task.live?.external && task.live.id === c.id) {
+      log(`${keyOf(task)}: ${c.name}'s claim ${c.id} given back: ${why}`);
+      ctx.saveQueue?.();
+      ctx.track?.(ctx.interruptExternal(task, why));
+      wake();
+      return;
+    }
     task.running = false;
     task.pending.unshift(...c.items.filter((item) => !task.pending.includes(item)));
     log(`${keyOf(task)}: ${c.name}'s claim ${c.id} given back: ${why}`);
@@ -479,16 +513,81 @@ export function createClaims(
   // The machine gives its claim `run` back: → the task's key.
   function release(owner, id, run) {
     const task = claimed(owner, id, run);
-    giveBack(task, "released by the machine");
+    giveBack(task, `${task.claim.name} released it`);
     return keyOf(task);
   }
+
+  // --- Its run (#597) -----------------------------------------------------------------------
+
+  // The external run of the owner's machine `id`'s claim `run` (runs.mjs startExternal()), still
+  // going: → its task. Refused (404) for another's machine or claim, (409) for a run that ends.
+  function going(owner, id, run) {
+    const task = claimed(owner, id, run);
+    const live = task.live;
+    if (!live?.external || live.id !== run) {
+      throw new Refused(404, `No run ${String(run).slice(0, 80)} on this machine.`);
+    }
+    if (live.finishing || live.cancelled || live.overflow) {
+      throw new Refused(409, "Its run is ending: stop its agent.");
+    }
+    return task;
+  }
+
+  // The agent's stream-json lines, from the line `from` of its output (null: after what it has),
+  // in the run's log: → { key, next } (the line its next call sends from). Refused (409) for a
+  // `from` past what it has, (503) while this copy stops: sent again, to the next one.
+  async function post(owner, id, run, lines, from = null) {
+    const task = going(owner, id, run);
+    if (ctx.stopping) throw new Refused(503, "Deckhand is restarting: send them again.");
+    try {
+      return { key: keyOf(task), next: await ctx.externalLines(task, lines, from) };
+    } catch (error) {
+      if (error instanceof RangeError) throw new Refused(409, error.message);
+      throw error;
+    }
+  }
+
+  // The messages for the run's agent from the `from`th (an earlier answer's `next`), waiting up
+  // to `wait` ms for one: → { messages, next, closed }, `closed` once its inbox is (the agent
+  // ends with its answer, then finish). Only its owner's comments reach it (admit()), and
+  // Deckhand's own.
+  async function nextMessage(owner, id, run, from = 0, { wait = waitMs } = {}) {
+    const until = now() + wait;
+    for (;;) {
+      const live = going(owner, id, run).live;
+      if (from > live.outbox.length) {
+        throw new Refused(400, `\`from\` is ${live.outbox.length} at most: the messages it has.`);
+      }
+      const messages = live.outbox.slice(from);
+      const next = from + messages.length;
+      if (messages.length || !live.open) return { messages, next, closed: !live.open };
+      const left = until - now();
+      if (left <= 0 || ctx.stopping) return { messages, next, closed: false };
+      await pause(left);
+    }
+  }
+
+  // The run is over, as its machine says: `outcome` "ok", "error" or "needs-input" (ask), its
+  // `reply` posted as the App (its last result's text without one), then what follows a sandbox
+  // run's end (runs.mjs cleanUp()). → { key, status }.
+  async function finish(owner, id, run, { outcome = "ok", reply = null } = {}) {
+    const task = going(owner, id, run);
+    const { record } = task.live;
+    await ctx.finishExternal(task, { outcome, reply });
+    return { key: keyOf(task), status: record.status };
+  }
+
+  // The run stops to ask: `question` its reply, with the needs-input marker of a sandbox run's.
+  const ask = (owner, id, run, question) =>
+    finish(owner, id, run, { outcome: "needs-input", reply: question });
 
   // The claims whose lease ran out: their runs interrupted, as a sandbox that died, their
   // comments waiting again for that machine. → the keys.
   function expire() {
     const at = now();
     const gone = [...tasks.values()].filter((t) => t.claim && t.claim.leaseUntil <= at);
-    for (const task of gone) giveBack(task, "its lease ran out, without the machine's heartbeat");
+    for (const task of gone)
+      giveBack(task, `its lease ran out, without ${task.claim.name}'s heartbeat`);
     return gone.map(keyOf);
   }
 
@@ -629,6 +728,10 @@ export function createClaims(
     wake,
     renew,
     release,
+    post,
+    nextMessage,
+    finish,
+    ask,
     expire,
     cancel,
     machineGone,

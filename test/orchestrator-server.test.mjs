@@ -4361,13 +4361,13 @@ allow_capabilities contains "read:pulls"
     assert.match(readFileSync(join(dir, "run-env"), "utf8"), /^TASK_ISSUE=12$/m);
   });
 
-  test("machines (#595, #596): a machine registered through edge is offered the repositories that opt in, and claims the issue routed to it", async (t) => {
+  test("machines (#595, #596, #597): a machine registered through edge is offered the repositories that opt in, claims the issue routed to it and reports on its run, which a handover keeps", async (t) => {
     const repos = ["org/repo", "org/other", "org/plain"].map((full_name) => ({
       full_name,
       html_url: `https://github.com/${full_name}`,
       default_branch: "trunk",
     }));
-    const { port, dir, send, listener } = await listen(
+    const listened = await listen(
       t,
       {
         installed: JSON.stringify({ repositories: repos }),
@@ -4380,12 +4380,23 @@ allow_capabilities contains "read:pulls"
         return { GITHUB_URL: github.url };
       },
     );
+    const { port, dir, send, github } = listened;
     // A machine's driver asks for deckhand:machine alone: its tools, none of the others.
     const { rpc } = await mcpClient(port, "deckhand:machine");
     const { tools } = await rpc("tools/list", {});
     assert.deepEqual(
       tools.map((x) => x.name),
-      ["register_machine", "heartbeat", "claim", "release", "unregister_machine"],
+      [
+        "register_machine",
+        "heartbeat",
+        "claim",
+        "post_events",
+        "next_message",
+        "ask",
+        "finish",
+        "release",
+        "unregister_machine",
+      ],
     );
     const call = (name, args) => rpc("tools/call", { name, arguments: args });
     assert.equal((await call("list_repos", {})).isError, true);
@@ -4401,8 +4412,8 @@ allow_capabilities contains "read:pulls"
     assert.equal(beat.structuredContent.machine.online, true);
     // Alice routes #12 to it: no sandbox starts, the machine's claim takes it, then gives it back.
     await send(comment("alice", "Deckhand\n/machine studio\nBuild it."));
-    await listener.until("org/repo#12: queued");
-    const claimed = await call("claim", { machine: machine.id });
+    await listened.listener.until("org/repo#12: queued");
+    const claimed = await call("claim", { machine: machine.id, model: "opus" });
     assert.equal(claimed.isError, undefined, claimed.content[0].text);
     const { work } = claimed.structuredContent;
     assert.deepEqual([work.repository, work.issue, work.mode], ["org/repo", 12, "work"]);
@@ -4413,8 +4424,53 @@ allow_capabilities contains "read:pulls"
       renewed.structuredContent.claims.map((c) => [c.run, c.key]),
       [[work.run, "org/repo#12"]],
     );
+    // Given back: its run ends as interrupted, the issue told.
     const released = await call("release", { machine: machine.id, run: work.run });
     assert.equal(released.structuredContent.key, "org/repo#12");
+    const comments = "/repos/org/repo/issues/12/comments";
+    const told = await github.waitFor((r) => r.method === "POST" && r.path === comments);
+    assert.match(JSON.parse(told.body).body, /^studio's run was interrupted: studio released it/);
+    // Claimed again: its run's record, as a sandbox run's, and its output through edge (a line
+    // past the 64 KB of the other tools' calls: a file its agent read).
+    const again = (await call("claim", { machine: machine.id, model: "opus" })).structuredContent
+      .work;
+    assert.equal(again.resume, true);
+    const big = JSON.stringify({
+      type: "user",
+      message: {
+        content: [{ type: "tool_result", tool_use_id: "t1", content: "x".repeat(100_000) }],
+      },
+    });
+    const posted = await call("post_events", {
+      machine: machine.id,
+      run: again.run,
+      lines: [
+        big,
+        JSON.stringify({ type: "result", is_error: false, result: "Built.", duration_ms: 6000 }),
+      ],
+      from: 0,
+    });
+    assert.equal(posted.isError, undefined, posted.content[0].text);
+    assert.equal(posted.structuredContent.next, 2);
+    // A handover: the next copy keeps the run and its claim, and the driver goes on with it.
+    await listened.handOver();
+    const kept = await call("heartbeat", { machine: machine.id, runs: [again.run] });
+    assert.deepEqual(
+      kept.structuredContent.claims.map((c) => c.run),
+      [again.run],
+    );
+    const inbox = await call("next_message", { machine: machine.id, run: again.run });
+    assert.equal(inbox.structuredContent.closed, true);
+    const finished = await call("finish", { machine: machine.id, run: again.run, outcome: "ok" });
+    assert.equal(finished.isError, undefined, finished.content[0].text);
+    assert.equal(finished.structuredContent.status, "ok");
+    const reply = await github.waitFor(
+      (r) => r.method === "POST" && r.path === comments && /^Built\./.test(JSON.parse(r.body).body),
+    );
+    assert.match(JSON.parse(reply.body).body, /🤖 Claude opus · on studio · 0\.1 min/);
+    // Its claim is over with it.
+    const over = await call("heartbeat", { machine: machine.id });
+    assert.deepEqual(over.structuredContent.claims, []);
     const gone = await call("unregister_machine", { machine: machine.id });
     assert.equal(gone.isError, undefined);
     assert.equal((await call("heartbeat", { machine: machine.id })).isError, true);
