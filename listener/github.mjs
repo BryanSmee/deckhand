@@ -48,6 +48,30 @@ export class GitHubUnavailable extends Error {
   }
 }
 
+// The most a status read before a failure is taken as GitHub's at the time: three of the github
+// service's reads (../github/status.mjs INTERVAL_MS).
+export const STATUS_MAX_AGE_MS = 15 * 60_000;
+
+// What GitHub's own status page said when a run failed on its 5xx (#943), from `status`: the
+// github service's last read (GET /status, ../github/status.mjs current()). One sentence, the
+// incidents linked with `links` (a reply's Markdown); null when there is nothing to tell (not
+// watched, not read yet, or read too long before `now`), rather than a guess.
+export function incidentNote(status, { now = Date.now(), links = false } = {}) {
+  if (!status?.watched || !status.indicator || !Number.isFinite(status.checkedAt)) return null;
+  if (now - status.checkedAt > STATUS_MAX_AGE_MS) return null;
+  const incidents = Array.isArray(status.incidents) ? status.incidents : [];
+  if (incidents.length) {
+    const named = incidents.map(({ name, status: state, url }) => {
+      const title = links && url ? `[${name}](${url})` : `“${name}”`;
+      return state ? `${title} (${state})` : title;
+    });
+    const many = named.length > 1;
+    return `GitHub's status page reported ${many ? `${named.length} open incidents` : "an open incident"} then: ${named.join("; ")}.`;
+  }
+  if (status.indicator === "none") return "GitHub's status page reported no incident then.";
+  return `GitHub's status page said then: ${status.description || status.indicator}.`;
+}
+
 // Whether GitHub's failed answer `res` is its own unavailability (GitHubUnavailable).
 export async function unavailable(res) {
   return res.status >= 500 || (await rateLimited(res));

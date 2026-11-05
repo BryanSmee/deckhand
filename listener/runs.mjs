@@ -8,7 +8,7 @@ import { agentFor } from "./agents/index.mjs";
 import { authOf, entryLabel, nextFallback, resolved, resolveEntry } from "./agents/select.mjs";
 import { ReplyError } from "./comments.mjs";
 import { commentsText, dashboardLink, taskKey } from "./events.mjs";
-import { GitHubUnavailable } from "./github.mjs";
+import { GitHubUnavailable, incidentNote } from "./github.mjs";
 import { nextStep, replyFooter, setupText } from "./footer.mjs";
 import { brainstormDefaults, customMode, entryRun, isApart, isFresh } from "./modes.mjs";
 import { answersOnly } from "./capabilities.mjs";
@@ -925,11 +925,13 @@ export function createRuns(ctx) {
       if (error instanceof ReplyError) {
         // Its comments get 👎 (cleanUp()), and the dashboard says why.
         log(`${key}: done (error, its reply refused): ${error.message}`);
-        record.summary = `The reply couldn't be posted: ${error.reason}`;
+        // GitHub's own 5xx: whether its status page reported an incident then (#943).
+        const said = error.status >= 500 ? await githubSaid() : null;
+        record.summary = `The reply couldn't be posted: ${error.reason}${said ? `. ${said}` : ""}`;
         record.questions = null;
         writeEvent(live.logFile, "note", { message: `${record.summary} (${error.message})` });
       } else if (error instanceof GitHubUnavailable) {
-        const gaveUp = githubDown(task, error);
+        const gaveUp = await githubDown(task, error);
         if (gaveUp && !live.replied && !isChat(task)) {
           await ctx.answer(target(task, live.asked), gaveUp).catch((e) => log(`${key}: ${e}`));
         }
@@ -952,22 +954,29 @@ export function createRuns(ctx) {
 
   // GitHub failing a call the run's start needed (GitHubUnavailable): the run ends as failed,
   // its log and the dashboard saying why, and its comments go back in the queue for a run
-  // GITHUB_REQUEUE_MS later (`live.retryAt`, cleanUp()), keeping their 👀. → the reply's text once
-  // those tries are over, else null.
-  function githubDown(task, error) {
+  // GITHUB_REQUEUE_MS later (`live.retryAt`, cleanUp()), keeping their 👀. Its summary, log and
+  // reply say whether GitHub's status page reported an incident then (#943). → the reply's text
+  // once those tries are over, else null.
+  async function githubDown(task, error) {
     const { live } = task;
     const delays = ctx.githubRequeueMs ?? GITHUB_REQUEUE_MS;
     const tries = Math.max(0, ...live.handled.map((item) => item.githubTries ?? 0));
     const ms = delays[tries];
+    const status = error.status >= 500 ? await githubStatus() : null;
+    const said = incidentNote(status);
+    const then = said ? `. ${said}` : "";
     if (ms === undefined) {
-      live.record.summary = `Failed: ${error.message}`;
+      live.record.summary = `Failed: ${error.message}${then}`;
       log(`${live.key}: done (error, GitHub unavailable): ${error.message}, ${tries + 1} tries`);
-      writeEvent(live.logFile, "note", { message: `${live.record.summary}, ${tries + 1} tries` });
+      writeEvent(live.logFile, "note", {
+        message: `Failed: ${error.message}, ${tries + 1} tries${then}`,
+      });
       for (const item of live.handled) delete item.githubTries;
-      return `${agentOf(task).displayName} couldn't start: ${error.message}, ${tries + 1} times. Comment again once GitHub answers.`;
+      const linked = incidentNote(status, { links: true });
+      return `${agentOf(task).displayName} couldn't start: ${error.message}, ${tries + 1} times.${linked ? ` ${linked}` : ""} Comment again once GitHub answers.`;
     }
     const later = ms < 60_000 ? `${Math.round(ms / 1000)} s` : `${minutes(ms)} min`;
-    live.record.summary = `Failed: ${error.message}. Tried again in ${later}`;
+    live.record.summary = `Failed: ${error.message}. Tried again in ${later}${then}`;
     log(`${live.key}: done (error, GitHub unavailable): ${error.message}, tried again in ${later}`);
     writeEvent(live.logFile, "note", { message: live.record.summary });
     for (const item of live.handled) item.githubTries = tries + 1;
@@ -975,6 +984,19 @@ export function createRuns(ctx) {
     live.retryAt = Date.now() + ms;
     return null;
   }
+
+  // GitHub's own status as the github service last read it (GET /status), or null when it can't
+  // say: a failed run's outcome goes without it rather than waiting.
+  function githubStatus() {
+    return Promise.resolve()
+      .then(() => ctx.githubStatus?.() ?? null)
+      .catch((e) => {
+        log(`GitHub's status: ${e.message ?? e}`);
+        return null;
+      });
+  }
+
+  const githubSaid = async () => incidentNote(await githubStatus());
 
   // The provider failed: the run's comments go back in the queue, marked for the next entry of
   // FALLBACKS (entryFor()), with the last result for the agent that takes over. No reply:

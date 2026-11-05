@@ -1587,7 +1587,11 @@ blob id; the orchestrator GitHub's own status as it last read it (`GET /status`,
   `GitHubUnavailable`, `github.mjs`) ends as `error`, its log and summary saying GitHub's
   status, method and path, and its comments go back in the queue, 👀 kept, for a run 1, 5 then
   15 minutes later (`runs.mjs` `githubDown()`, `GITHUB_REQUEUE_MS`); after those, its reply
-  says GitHub failed. A comment whose admission it stops (`tasks.mjs` `admit()`, which reads
+  says GitHub failed. When it was a `5xx` (or a reply GitHub kept refusing with one), its
+  summary, log and reply also say what GitHub's status page reported then (#943, `github.mjs`
+  `incidentNote()`): its open incidents (linked in the reply), none, or its description. Nothing
+  is said when the github service can't tell: not read, off github.com, or read more than 15
+  minutes before. A comment whose admission it stops (`tasks.mjs` `admit()`, which reads
   `.deckhand.yaml` before anything is queued, #939) is held rather than dropped, in the
   orchestrator's `admissions` map so that a handover keeps it, and admitted again 1, 5 then 15
   minutes later (`holdAdmission()`, `ADMIT_RETRY_MS`), or at once behind a later comment on its
