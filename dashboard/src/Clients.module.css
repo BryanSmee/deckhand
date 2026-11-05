@@ -56,7 +56,8 @@
   min-width: 0;
 }
 
-.text b {
+.text b,
+.title b {
   font-weight: 500;
 }
 
@@ -71,7 +72,9 @@
   overflow-wrap: anywhere;
 }
 
-.title {
+.text > .title {
+  color: var(--text);
+  font-size: inherit;
   display: flex;
   flex-wrap: wrap;
   align-items: center;
