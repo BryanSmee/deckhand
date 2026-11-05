@@ -308,7 +308,9 @@ test("access (#783): api/state asks about the repos as last listed, a log stream
     { alice: { "org/repo": ["*"] } },
     { infoOf: (repo) => (repo.toLowerCase() === "org/repo" ? info : null) },
   );
-  const url = await serveHttp(t, oneRun({ permissions }));
+  const ctx = oneRun({ permissions });
+  ctx.status = (shows) => ({ shown: shows("org/repo") });
+  const url = await serveHttp(t, ctx);
   const get = (path) => fetch(url + path, { headers: { "x-user": "alice" } });
   const state = await (await get("/api/state")).json();
   assert.deepEqual(
@@ -317,6 +319,11 @@ test("access (#783): api/state asks about the repos as last listed, a log stream
   );
   assert.ok(permissions.asked.length);
   assert.ok(permissions.asked.every(([, repo]) => repo === info || repo === null));
+  // /status too: what it shows of the repos.
+  permissions.asked.length = 0;
+  assert.deepEqual(await (await get("/status")).json(), { shown: true });
+  assert.ok(permissions.asked.length);
+  assert.ok(permissions.asked.every(([, repo]) => repo === info));
   // The stream guards the logs on its own: asked by name, read as a single decision is.
   permissions.asked.length = 0;
   const open = await get("/api/runs/org-repo-pr-3-1000/stream");

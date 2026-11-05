@@ -118,6 +118,9 @@ export function createPermissions({ policies = null, usersOf = () => null, infoO
     if (typeof login !== "string" || !login) return null;
     if (repo != null && outside(login, repo)) return null;
     if (!policies) return { actions: ["*"], denied: [], files: {}, error: null };
+    // A repo renamed since its listing isn't listed under the name asked: read by it. One still
+    // listed under an old name keeps what access() kept under it (a push's forget() goes by the
+    // current one) until the next listing, as what the dashboard shows of it.
     const asked = (listed && repo != null && infoOf(repo)) || repo;
     // access() says its own failures; one it didn't foresee gives nothing too.
     return policies.access(login, asked).catch(() => null);

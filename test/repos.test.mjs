@@ -1102,6 +1102,30 @@ test("known() and usersOf(): the repos read, with their inbox issues (the dashbo
   assert.deepEqual(list.listed(), ["Org/App", "org/lib"]);
 });
 
+test("access (#783): the list asks about each repo as GitHub listed it, not by its name", async () => {
+  let repoList = null;
+  const permissions = permissionsOf(
+    { bob: { "org/app": VIEWER, "org/lib": VIEWER } },
+    { infoOf: (repo) => repoList.infoOf(repo) },
+  );
+  const s = apiSetup({
+    first: [info("org/app", { default_branch: "trunk" }), info("org/lib"), info("org/hidden")],
+    permissions,
+  });
+  repoList = s.list;
+  const list = await call(s.api, "GET", "/api/repos", { user: "bob" });
+  assert.deepEqual(
+    list.body.repos.map((r) => r.repo),
+    ["org/app", "org/lib"],
+  );
+  const repos = permissions.asked.map(([, repo]) => repo).filter((repo) => repo !== null);
+  assert.deepEqual(repos, [
+    { full_name: "org/app", private: true, default_branch: "trunk" },
+    { full_name: "org/hidden", private: true, default_branch: "main" },
+    { full_name: "org/lib", private: true, default_branch: "main" },
+  ]);
+});
+
 test("access: the list keeps the repos with an action, the config needs repo:config:read", async () => {
   const asked = [];
   const { api, started } = apiSetup({
