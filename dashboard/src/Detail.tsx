@@ -6,10 +6,12 @@
 // and its log. Waiting for input: its open questions, as a form to answer them. A discussion:
 // its thread first, to read and reply to, with the last reply and Rerun, then its runs. A
 // Policies tab when its pull request's policies decided something (with a badge when one kept
-// it from merging by itself). A phone's log search takes the header's place. Its shortcuts: O
-// opens it on GitHub, A goes to its questions, R reruns, Shift S stops (asking first), Shift R
-// reviews its pull request again and Shift F asks for one more fix round once its review loop
-// is over, [ and ] go through its thread, every run (those without a tab too) and its policies.
+// it from merging by itself), and a Review tab once Deckhand reviewed it: the last review's
+// findings, follow-ups and comments (ReviewTab.tsx). A phone's log search takes the header's
+// place. Its shortcuts: O opens it on GitHub, A goes to its questions, R reruns, Shift S stops
+// (asking first), Shift R reviews its pull request again and Shift F asks for one more fix
+// round once its review loop is over, [ and ] go through its thread, every run (those without a
+// tab too), its policies and its review.
 import { useEffect, useRef, useState } from "preact/hooks";
 import { useCan } from "./access";
 import { sendCancel, sendDismiss, sendRerun, sendReview, useRunLog } from "./api";
@@ -40,6 +42,7 @@ import { AuthTag, Outcome } from "./Outcome";
 import { heldMerge, PolicyTab } from "./Policies";
 import { Questions } from "./Questions";
 import { ReviewRounds } from "./ReviewLoop";
+import { ReviewTab } from "./ReviewTab";
 import { RunMenu } from "./RunMenu";
 import { StopDialog } from "./Stop";
 import { Thread } from "./Thread";
@@ -69,9 +72,10 @@ interface Props {
 
 // The states a run is going on in, which Stop ends.
 const STOPPABLE: Task["state"][] = ["scheduled", "building-image", "working", "stopping"];
-// A discussion's tab before its runs', and the Policies tab after them.
+// A discussion's tab before its runs', and the Policies and Review tabs after them.
 const THREAD = "thread";
 const POLICIES = "policies";
+const REVIEW = "review";
 const PANEL = "task-view";
 // Up to this many runs, each has a tab; past it, the latest and the one shown only.
 const ALL_TABS = 3;
@@ -98,8 +102,8 @@ export function Detail({
   );
   // A discussion's page shows its thread, or a run's log.
   const [showLog, setShowLog] = useState(false);
-  // The task whose Policies tab is open.
-  const [policiesOf, setPoliciesOf] = useState<string | null>(null);
+  // The task whose Policies or Review tab is open, and which.
+  const [paneOf, setPaneOf] = useState<{ key: string; id: string } | null>(null);
   // The task whose Stop asks, and the one whose stop is on its way.
   const [confirming, setConfirming] = useState<string | null>(null);
   const [stopping, setStopping] = useState<string | null>(null);
@@ -146,10 +150,14 @@ export function Detail({
   const dismissable = canDismiss(t) && manages ? t.runs[0] : null;
   const discussion = t.kind === "discussion" && t.number !== null;
   const decided = !!t.decisions?.length;
-  const policies = decided && policiesOf === t.key;
-  const thread = discussion && !showLog && !policies;
+  // Deckhand posted a review on its pull request (the loop's or a maintainer's).
+  const reviewed = !!t.pr && !!t.review?.history.length;
+  const pane = paneOf?.key === t.key ? paneOf.id : null;
+  const policies = decided && pane === POLICIES;
+  const reviewShown = reviewed && pane === REVIEW;
+  const thread = discussion && !showLog && !policies && !reviewShown;
   const held = heldMerge(t);
-  const logShown = !thread && !policies && !!r && reads;
+  const logShown = !thread && !policies && !reviewShown && !!r && reads;
   const hidden = !!touch && searching && logShown;
   // A phone's More menu, for a run's log.
   const menu = !!touch && logShown;
@@ -276,21 +284,26 @@ export function Detail({
       ),
     })),
     ...(decided ? [{ id: POLICIES, label: "Policies", count: t.decisions!.length }] : []),
+    ...(reviewed ? [{ id: REVIEW, label: "Review" }] : []),
   ];
-  const tabsLabel = discussion
-    ? decided
-      ? "Thread, runs and policies"
-      : "Thread and runs"
-    : decided
-      ? "Runs and policies"
-      : "Runs";
+  // "Thread, runs, policies and review", what the tabs are.
+  const named = [
+    discussion && "thread",
+    "runs",
+    decided && "policies",
+    reviewed && "review",
+  ].filter((x): x is string => !!x);
+  const listed =
+    named.length > 1 ? `${named.slice(0, -1).join(", ")} and ${named.at(-1)}` : named[0];
+  const tabsLabel = listed[0].toUpperCase() + listed.slice(1);
   const pick = (id: string) => {
-    setPoliciesOf(id === POLICIES ? t.key : null);
-    if (id === POLICIES) return;
+    const aside = id === POLICIES || id === REVIEW;
+    setPaneOf(aside ? { key: t.key, id } : null);
+    if (aside) return;
     setShowLog(id !== THREAD);
     if (id !== THREAD) onRun(id === t.runs[0]?.id ? null : id);
   };
-  const selected = policies ? POLICIES : thread ? THREAD : (r?.id ?? "");
+  const selected = policies ? POLICIES : reviewShown ? REVIEW : thread ? THREAD : (r?.id ?? "");
   keys.github = () => (url ? void window.open(url, "_blank", "noreferrer") : false);
   keys.answer = () => {
     const field = root.current?.querySelector<HTMLElement>(
@@ -314,6 +327,7 @@ export function Detail({
     ...(discussion ? [THREAD] : []),
     ...t.runs.map((x) => x.id),
     ...(decided ? [POLICIES] : []),
+    ...(reviewed ? [REVIEW] : []),
   ];
   keys.nextRun = (i) => {
     const next = order[order.indexOf(selected) + (i === 0 ? 1 : -1)];
@@ -599,6 +613,10 @@ export function Detail({
       {policies ? (
         <div id={PANEL} role="tabpanel" class={styles.panel}>
           <PolicyTab task={t} now={now} />
+        </div>
+      ) : reviewShown ? (
+        <div id={PANEL} role="tabpanel" class={styles.panel}>
+          <ReviewTab key={t.key} task={t} now={now} />
         </div>
       ) : thread ? (
         <div id={PANEL} role="tabpanel" class={styles.panel}>

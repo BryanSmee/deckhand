@@ -683,6 +683,18 @@ review` gets the "unknown mode" reply. `review: true` (or a block without `on`, 
   requests are refused, the dashboard saying why, for someone outside the repo's `users`, a
   closed pull request, or one with a run going or queued.
 
+  Once Deckhand posted a review on the pull request (the loop's, or one a maintainer asked
+  for), the task page has a **Review** tab, after Policies: the last review's verdict, round
+  and reviewed commit, linked to the review on GitHub, then its sections. Must fix by severity
+  (each `path:line` linked to the file at the reviewed commit, "tolerated" when
+  `max_allowed_severity` lets it through), the follow-ups ("filed after merge", then each one's
+  issue and its state once Deckhand filed it, or why it wasn't) and the comments (blocking or
+  note). Once merged, a banner says by whom, the follow-ups come first and the findings left
+  are what it was merged with. The tab reads the review from GitHub when it opens, and again
+  on a new round or a merge: the findings aren't kept in the orchestrator's store nor sent with
+  the dashboard's state, and they show as text, never as HTML or links of the model's. A review
+  GitHub refused, posted as a plain comment, isn't shown there.
+
 - **Security risk of `fix`**: the review's findings, a model's output, become the message of a run
   that can push. A comment written to steer the reviewer (a prompt injection) could turn into a
   finding the fix run carries out. Deckhand narrows it: the review reads only the comments of

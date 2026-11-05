@@ -1,7 +1,7 @@
 // The listener's API: api/state polled, a run's log streamed (server-sent events), the
 // repositories listed, onboarded and their config read, the graph's backlog and its actions,
 // answers to open questions, a failed run again or a run stopped, feedback and discussions,
-// run analyses.
+// run analyses, a pull request's last review (its Review tab).
 // Relative URLs, like the assets: the page works under any path.
 import { useEffect, useRef, useState } from "preact/hooks";
 import type {
@@ -33,6 +33,7 @@ import type {
   Repo,
   RepoConfig,
   Repos,
+  ReviewFindings,
   State,
   Thread,
   WorkAction,
@@ -536,6 +537,54 @@ export const startAnalysis = (repo: string, selection: AnalysisSelection) =>
 // discussion it became and its task, or why it was refused.
 export const startDiscussion = (repo: string, start: DiscussionStart) =>
   postJson<DiscussionResult>(`api/repos/${repo}/discussions`, start);
+
+export interface ReviewView {
+  review: ReviewFindings | null;
+  error: string | null;
+  // No review of Deckhand's to show (a 404): none in its format, one GitHub refused and the
+  // listener posted as a plain comment, say. Not a failure: trying again changes nothing.
+  missing: boolean;
+  loading: boolean;
+  reload: () => void;
+}
+
+// The last review Deckhand posted on pull request `number` (GET /api/review), read when the
+// Review tab opens and again whenever `version` changes (a new round, the pull request merged).
+// A read that fails keeps the review already shown, with the error beside it.
+export function useReview(repo: string, number: number, version: string): ReviewView {
+  const [view, setView] = useState<Omit<ReviewView, "reload">>({
+    review: null,
+    error: null,
+    missing: false,
+    loading: true,
+  });
+  const [asked, setAsked] = useState(0);
+  useEffect(() => {
+    let live = true;
+    setView((v) => ({ ...v, loading: true }));
+    const query = new URLSearchParams({ repo, number: String(number) });
+    // The review, none to show, or why it couldn't be read.
+    const read = async (): Promise<{ review?: ReviewFindings; missing?: true; error?: string }> => {
+      try {
+        const res = await fetch(`api/review?${query}`, { cache: "no-store" });
+        if (res.status === 404) return { missing: true };
+        const { error, ...review } = await answer<ReviewFindings>(res);
+        return error ? { error } : { review };
+      } catch (e) {
+        return { error: message(e) };
+      }
+    };
+    void read().then((got) => {
+      if (!live) return;
+      if (got.error) return setView((v) => ({ ...v, error: got.error!, loading: false }));
+      setView({ review: got.review ?? null, error: null, missing: !!got.missing, loading: false });
+    });
+    return () => {
+      live = false;
+    };
+  }, [repo, number, version, asked]);
+  return { ...view, reload: () => setAsked((n) => n + 1) };
+}
 
 // A comment in discussion `number`, in a thread when `replyTo` says which.
 export const sendDiscussionComment = (repo: string, number: number, comment: DiscussionComment) =>

@@ -437,6 +437,9 @@ function postedItem(section, line) {
   return { severity: section, ...at };
 }
 
+// A review's item as the dashboard gets it: its place and its text, nothing else.
+const placed = ({ path, line, text }) => ({ path, line, text });
+
 // "`listener/x.mjs:42`: what" → { path, line, text }; no location: path and line null.
 function located(text) {
   const m = /^`([^`\s]+?):(\d+)(?:[-–]\d+)?`\s*[:–—-]?\s*/.exec(text);
@@ -655,6 +658,14 @@ export async function postReview(
 // read back from GitHub with tolerance `allowed` (parsePostedReview()), with `head` the commit
 // it reviewed, or null: none, or not in the review's format. `config.bot`: the App's login.
 export async function latestReview(github, config, repo, number, allowed = "low") {
+  const last = await lastPosted(github, config, repo, number);
+  const review = parsePostedReview(last?.body, { allowed });
+  return review && { ...review, head: last.commit_id ?? null };
+}
+
+// The latest review the App posted on pull request `number`, with its marker, as GitHub lists
+// it ({ id, body, commit_id, html_url, submitted_at… }), or null.
+async function lastPosted(github, config, repo, number) {
   const bot = config.bot?.toLowerCase();
   if (!bot) return null;
   const all = await paginate(
@@ -664,8 +675,7 @@ export async function latestReview(github, config, repo, number, allowed = "low"
   const own = all.filter(
     (r) => r.user?.login?.toLowerCase() === bot && (r.body ?? "").includes(MARKER),
   );
-  const review = parsePostedReview(own.at(-1)?.body, { allowed });
-  return review && { ...review, head: own.at(-1).commit_id ?? null };
+  return own.at(-1) ?? null;
 }
 
 // "2 high and 1 medium findings", "1 high finding and 1 blocking comment": what of `review`
@@ -2658,7 +2668,12 @@ export function createReviews({
     // nothing is filed twice. Asked again here, with no wait before the mark: a redelivery that
     // came during the reads above may have marked it since.
     if (!late && reviewed.get(key)?.followUpsAt) return null;
-    keep(key, { followUpsAt: now() });
+    // `followUpIssues` with it, empty: an entry with the mark and without the list was filed
+    // before the listener kept which issue each follow-up became (followUpsOf()).
+    keep(key, {
+      followUpsAt: now(),
+      followUpIssues: reviewed.get(key)?.followUpIssues ?? [],
+    });
     // Its colour and description, should the repo not have it yet.
     await ensureLabel(
       github,
@@ -2679,9 +2694,24 @@ export function createReviews({
     // the titles only, listed for the maintainer.
     const before = reviewed.get(key)?.followUpsFiled ?? 0;
     const left = [];
+    // Which issue each follow-up is (`followUpIssues`, by title, filed now or before) and which
+    // GitHub refused (`followUpsRefused`): the dashboard's Review tab says so (findings()).
+    const issues = new Map(
+      (reviewed.get(key)?.followUpIssues ?? []).map((x) => [x.title, x.issue]),
+    );
+    const refused = new Set(reviewed.get(key)?.followUpsRefused ?? []);
+    // Kept as each one is known: a throw midway leaves the rest to the maintainer, not these.
+    const note = () =>
+      keep(key, {
+        followUpIssues: [...issues].map(([title, issue]) => ({ title, issue })),
+        followUpsRefused: refused.size ? [...refused] : undefined,
+      });
     for (const [id, f] of found) {
       if (known.has(id)) {
         linked.push(known.get(id));
+        issues.set(id, known.get(id));
+        refused.delete(id);
+        note();
         continue;
       }
       if (before + filed.length >= FOLLOW_UPS_MAX) {
@@ -2697,11 +2727,16 @@ export function createReviews({
       });
       if (!res.ok) {
         log(`${key}: GitHub refused the follow-up issue "${f.title}" (${res.status})`);
+        refused.add(id);
+        note();
         continue;
       }
       const made = await res.json();
       known.set(id, made.number);
       filed.push(made.number);
+      issues.set(id, made.number);
+      refused.delete(id);
+      note();
       // What vouches for the App's labelling (followUpPick()): the merger, and the label's
       // time, the issue's creation's. Kept at once: a sweep may read the issue any time now.
       if (pickup?.by) {
@@ -3428,12 +3463,133 @@ export function createReviews({
     return { text, denials: decided.reduce((n, r) => n + r.messages.length, 0) };
   }
 
+  // The last review the App posted on pull request `number` of `repo`, for the dashboard's
+  // Review tab (GET /api/review, http.mjs), read from GitHub as the tab opens: the findings are
+  // long and come from a model that read untrusted diffs, so neither this store nor api/state
+  // keeps them. The review is read with the repo's tolerance (`review.max_allowed_severity`,
+  // as the dashboard's Fix reads it), its follow-ups with the issues fileFollowUps() made of
+  // them. → null when the pull request has none in Deckhand's format, else { url, at, verdict,
+  // rating, head, round, manual, blob, allowed, findings: [{ severity, path, line, text,
+  // tolerated }], followUps: [{ title, path, line, text, filing, issue? }], comments: [{
+  // blocking, path, line, text }], merged: { at, by, deckhand } | null }. A review posted as a
+  // plain comment (GitHub refused it) isn't read, as for the Fix.
+  async function findings(repo, number) {
+    const key = taskKey(repo, prId(number));
+    const pr = await getJson(github, repo, `/repos/${repo}/pulls/${number}`, [404]);
+    if (!pr) return null;
+    const posted = await lastPosted(github, config, repo, number);
+    if (!posted) return null;
+    let settings = null;
+    try {
+      const read = await repoSettings(repo, pr.base?.repo?.default_branch || "main");
+      if (!read.errors.length) settings = read.settings;
+    } catch (error) {
+      log(`${key}: its config for the Review tab: ${error.message ?? error}`);
+    }
+    const allowed = settings?.review?.maxAllowedSeverity ?? "low";
+    const review = parsePostedReview(posted.body, { allowed });
+    if (!review) return null;
+    const entry = reviewed.get(key);
+    const head = posted.commit_id ?? null;
+    const round = head ? entry?.rounds?.findLast((r) => r.head === head) : null;
+    const site = pr.base?.repo?.html_url ?? null;
+    const by = pr.merged_by?.login ?? null;
+    const merged = pr.merged_at
+      ? {
+          at: Date.parse(pr.merged_at),
+          by,
+          deckhand: !!by && by.toLowerCase() === config.bot?.toLowerCase(),
+        }
+      : null;
+    const blocking = blockingSeverities(allowed);
+    return {
+      url: posted.html_url ?? null,
+      at: posted.submitted_at ? Date.parse(posted.submitted_at) : null,
+      verdict: review.verdict,
+      rating: review.rating,
+      head,
+      round: round?.round ?? null,
+      manual: !!round?.manual,
+      blob: site && head ? `${site}/blob/${head}` : null,
+      allowed,
+      findings: review.findings.map((f) => ({
+        ...placed(f),
+        severity: f.severity,
+        tolerated: BLOCKING.has(f.severity) && !blocking.includes(f.severity),
+      })),
+      followUps: await followUpsOf(repo, key, review.followUps, { entry, merged, settings, site }),
+      // An unclear comment is posted only when it blocked (commentSection()).
+      comments: review.comments.map((c) => ({
+        ...placed(c),
+        blocking: !!(c.blocking || c.unclear),
+      })),
+      merged,
+    };
+  }
+
+  // A follow-up's filing, for findings(): "issue" (with `issue`: { number, state, url }, its
+  // state null when it couldn't be read), "failed" (GitHub refused it), "left" (past
+  // FOLLOW_UPS_MAX), "off" (the repo's config, read now, files none: `review.follow_ups:
+  // false` or no `review`), "unread" (that config can't be read now), "after-merge" (not
+  // merged yet, or its filing is on its way), "not-filed" (merged, and nothing filed it: the
+  // filing was skipped at the merge, its config failing then, or stopped midway), "unknown"
+  // (filed before the listener kept which issue each one became). `key`: the pull request's.
+  async function followUpsOf(repo, key, list, { entry, merged, settings, site }) {
+    const issues = new Map((entry?.followUpIssues ?? []).map((x) => [x.title, x.issue]));
+    const refused = new Set(entry?.followUpsRefused ?? []);
+    const left = new Set(entry?.followUpsLeft ?? []);
+    const off = settings && (!settings.review || settings.review.followUps === false);
+    // Its merge's (or a late review's) filing still going, in this orchestrator.
+    const going = filing.has(key);
+    const unfiled = () => {
+      if (going) return "after-merge";
+      if (entry?.followUpsAt) return entry.followUpIssues ? "not-filed" : "unknown";
+      // Never started: skipped at the merge, which the config now may say why.
+      return off ? "off" : settings ? "not-filed" : "unread";
+    };
+    const waiting = () => (off ? "off" : settings ? "after-merge" : "unread");
+    const numbers = [...new Set(list.map((f) => issues.get(titleKey(f.title))).filter(Boolean))];
+    const states = new Map(
+      await Promise.all(
+        numbers.map(async (n) => {
+          try {
+            const issue = await getJson(github, repo, `/repos/${repo}/issues/${n}`, [404, 410]);
+            return [n, issue?.state ?? null];
+          } catch (error) {
+            log(`${repo}#${n}: the follow-up's state: ${error.message ?? error}`);
+            return [n, null];
+          }
+        }),
+      ),
+    );
+    return list.map((f) => {
+      const id = titleKey(f.title);
+      const n = issues.get(id);
+      const how = n
+        ? "issue"
+        : refused.has(id)
+          ? "failed"
+          : left.has(id)
+            ? "left"
+            : merged
+              ? unfiled()
+              : waiting();
+      const issue = n && {
+        number: n,
+        state: states.get(n),
+        url: site ? `${site}/issues/${n}` : null,
+      };
+      return { ...placed(f), title: f.title, filing: how, ...(issue && { issue }) };
+    });
+  }
+
   return {
     consider,
     dryRun,
     fix,
     // A maintainer's Fix from the dashboard (work.mjs): startFix() with `asked`.
     fixAsked: (run, posted, asked) => startFix(run, posted, asked),
+    findings,
     settle,
     fixed,
     tolerance,
