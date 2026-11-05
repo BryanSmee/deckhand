@@ -32,8 +32,9 @@ export const browserLanguages = (): readonly string[] => globalThis.navigator?.l
 export function resolveLanguage(
   choice: Language | "system",
   preferred: readonly string[],
+  languages: readonly string[] = LANGUAGES,
 ): { language: Language; locale: string } {
-  const wanted: readonly string[] = choice === "system" ? LANGUAGES : [choice];
+  const wanted = choice === "system" ? languages : [choice];
   for (const tag of preferred) {
     const primary = tag.split("-")[0].toLowerCase();
     if (!wanted.includes(primary)) continue;
