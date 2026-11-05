@@ -12,6 +12,9 @@
 // there headless (`claude -p`, stream-json in and out, `--resume` when the issue has a session
 // on this machine), its lines sent to post_events, the comments that reach the run (next_message)
 // written to its input. Then the branch is pushed with your own git, and finish ends the run.
+// What Claude Code would ask you (its --permission-prompt-tool) goes to approve_permission (#600)
+// through this same file run as its MCP server (`permissions`), which asks the driver: the
+// sign-in's token never reaches the agent.
 //
 // Deckhand enforces nothing here. The driver writes, per run, settings it suggests to Claude Code
 // (settingsFor(): the run's folder writable, the usual credential stores unreadable, the
@@ -54,6 +57,10 @@ const MAX_LINES = 1000;
 const MAX_BATCH = 900 * 1024;
 const MAX_LINE = 512 * 1024;
 const RETRY_MS = 3000;
+
+// Claude Code's MCP server for its permission prompts (`permissions`), and its one tool.
+const RELAY_SERVER = "deckhand";
+const PROMPT_TOOL = `mcp__${RELAY_SERVER}__approve`;
 
 const pathsOf = (platform) => (platform === "win32" ? win32 : posix);
 
@@ -642,8 +649,11 @@ export function createDriver({
   heartbeatMs = null,
   retryMs = RETRY_MS,
   env = process.env,
+  driverFile = fileURLToPath(import.meta.url),
 }) {
   const runs = new Map(); // run id → its run (startRun())
+  const secrets = new Map(); // a run's relay secret → its run
+  let relay = null; // the permission relay (permissionRelay()): its URL and close()
   let machine = null;
   let beat = null;
   let stopping = false;
@@ -737,6 +747,7 @@ export function createDriver({
       id: work.run,
       key: work.key,
       claimedAt: Date.now(),
+      secret: base64url(randomBytes(24)),
       child: null,
       cancelled: null,
       cancel(why) {
@@ -747,6 +758,7 @@ export function createDriver({
       },
     };
     runs.set(run.id, run);
+    secrets.set(run.secret, run);
     log(
       `${work.key}: claimed (run ${work.run}, ${work.branch}${work.resume ? ", its session goes on" : ""})`,
     );
@@ -754,6 +766,7 @@ export function createDriver({
       .catch((error) => log(`${work.key}: ${error.stack ?? error}`))
       .finally(() => {
         runs.delete(run.id);
+        secrets.delete(run.secret);
         wakeSlot();
       });
     return run;
@@ -819,6 +832,19 @@ export function createDriver({
       ...(config.model ? ["--model", config.model] : []),
       ...(config.effort ? ["--effort", config.effort] : []),
     ];
+    // What Claude Code would ask you goes to approve_permission (#600), through this file run as
+    // its MCP server (`permissions`), which asks the driver: the sign-in's token stays here.
+    if (relay) {
+      const mcpFile = p.join(files, `${work.run}.mcp.json`);
+      const server = {
+        type: "stdio",
+        command: process.execPath,
+        args: [driverFile, "permissions"],
+        env: { DECKHAND_MACHINE_RELAY: relay.url, DECKHAND_MACHINE_RUN: run.secret },
+      };
+      writeFileSync(mcpFile, JSON.stringify({ mcpServers: { [RELAY_SERVER]: server } }, null, 2));
+      args.push("--mcp-config", mcpFile, "--permission-prompt-tool", PROMPT_TOOL);
+    }
     if (config.suggestedSettings) {
       const settingsFile = p.join(files, `${work.run}.settings.json`);
       const settings = settingsFor({
@@ -1023,7 +1049,43 @@ export function createDriver({
     });
   }
 
+  // A tool call Claude Code asks about (its --permission-prompt-tool, through `permissions`):
+  // the owner's answer through approve_permission, asked again while it is pending. → Claude
+  // Code's answer: { behavior: "allow", updatedInput } or { behavior: "deny", message }.
+  async function approve(run, { tool_name, input, tool_use_id }) {
+    const deny = (message) => ({ behavior: "deny", message });
+    for (;;) {
+      if (run.cancelled || stopping)
+        return deny(`The run stopped: ${run.cancelled ?? "the driver stops"}.`);
+      let answer;
+      try {
+        answer = await client.call("approve_permission", {
+          machine,
+          run: run.id,
+          tool_name,
+          input,
+          tool_use_id,
+          protocol: PROTOCOL,
+        });
+      } catch (error) {
+        if (error instanceof ToolError)
+          return deny(`Deckhand refused the request: ${error.message}`);
+        log(`approve_permission: ${error.message}: trying again`);
+        await sleep(retryMs);
+        continue;
+      }
+      if (answer.state === "pending") continue;
+      if (answer.behavior === "allow")
+        return { behavior: "allow", updatedInput: answer.updatedInput ?? input };
+      return deny(answer.message ?? "Denied.");
+    }
+  }
+
   async function start() {
+    relay = await permissionRelay((secret, call) => {
+      const run = secrets.get(secret);
+      return run ? approve(run, call) : null;
+    });
     const answer = await register();
     const every = heartbeatMs ?? (answer.heartbeatSeconds ?? 30) * 1000;
     beat = setInterval(heartbeat, every);
@@ -1034,6 +1096,7 @@ export function createDriver({
   async function stop() {
     stopping = true;
     clearInterval(beat);
+    relay?.close();
     wakeSlot();
     const going = [...runs.values()];
     for (const run of going) run.cancel("the driver stops");
@@ -1048,6 +1111,116 @@ export function createDriver({
   }
 
   return { start, stop, register, heartbeat, runs, machineId: () => machine };
+}
+
+// The driver's side of the permission prompts: a server on the loopback that `permissions` calls
+// with a run's secret and a tool call; `answer(secret, call)` → Claude Code's answer, or null for
+// an unknown secret (403). → { url, close() }.
+function permissionRelay(answer) {
+  return new Promise((resolve, reject) => {
+    const server = createServer(async (req, res) => {
+      const secret = /^Bearer (.+)$/.exec(req.headers.authorization ?? "")?.[1] ?? "";
+      let body = "";
+      for await (const chunk of req) {
+        body += chunk;
+        if (body.length > 1024 * 1024) return res.writeHead(413).end();
+      }
+      let call;
+      try {
+        call = JSON.parse(body);
+      } catch {
+        return res.writeHead(400).end();
+      }
+      const said = await answer(secret, call);
+      if (!said) return res.writeHead(403).end();
+      res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify(said));
+    });
+    server.on("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      server.unref();
+      resolve({
+        url: `http://127.0.0.1:${server.address().port}/approve`,
+        close: () => server.close(),
+      });
+    });
+  });
+}
+
+// `deckhand-machine permissions`: the MCP server Claude Code starts for its permission prompts
+// (stdio, a JSON-RPC message a line), whose one tool, `approve`, asks the driver that started the
+// run (DECKHAND_MACHINE_RELAY, with the run's DECKHAND_MACHINE_RUN): no token of its own. Its
+// answer is Claude Code's, as text; anything that fails denies.
+export async function permissionServer({
+  input = process.stdin,
+  output = process.stdout,
+  env = process.env,
+  fetch = globalThis.fetch,
+} = {}) {
+  const say = (message) => output.write(JSON.stringify({ jsonrpc: "2.0", ...message }) + "\n");
+  const tool = {
+    name: "approve",
+    description: "Asks the run's owner, through Deckhand, whether a tool call may go ahead.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        tool_name: { type: "string" },
+        input: { type: "object" },
+        tool_use_id: { type: "string" },
+      },
+      required: ["tool_name", "input"],
+    },
+  };
+  async function ask(args) {
+    try {
+      const res = await fetch(env.DECKHAND_MACHINE_RELAY, {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${env.DECKHAND_MACHINE_RUN}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          tool_name: args.tool_name,
+          input: args.input ?? {},
+          tool_use_id: args.tool_use_id ?? randomUUID(),
+        }),
+      });
+      if (!res.ok) throw new Error(`the driver answered ${res.status}`);
+      return await res.json();
+    } catch (error) {
+      return { behavior: "deny", message: `Not asked: ${error.message}.` };
+    }
+  }
+  const pending = [];
+  for await (const line of createInterface({ input, crlfDelay: Infinity })) {
+    let message;
+    try {
+      message = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    const { id, method, params } = message;
+    if (id === undefined) continue;
+    if (method === "initialize") {
+      say({
+        id,
+        result: {
+          protocolVersion: params?.protocolVersion ?? "2025-06-18",
+          capabilities: { tools: {} },
+          serverInfo: { name: "deckhand-machine", version: VERSION },
+        },
+      });
+    } else if (method === "tools/list") say({ id, result: { tools: [tool] } });
+    else if (method === "tools/call" && params?.name === tool.name) {
+      // Answered as they come: Claude Code may ask about two calls at once.
+      pending.push(
+        ask(params.arguments ?? {}).then((answer) =>
+          say({ id, result: { content: [{ type: "text", text: JSON.stringify(answer) }] } }),
+        ),
+      );
+    } else if (method === "ping") say({ id, result: {} });
+    else say({ id, error: { code: -32601, message: `No method ${method}.` } });
+  }
+  await Promise.all(pending);
 }
 
 // The lines of `lines` from `from` that one post_events call takes.
@@ -1195,6 +1368,7 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
     await driver.start();
     return;
   }
+  if (command === "permissions") return permissionServer({ env });
   if (command === "--version" || command === "version") return console.log(VERSION);
   console.log(USAGE);
   if (command && command !== "help" && command !== "--help") process.exitCode = 2;

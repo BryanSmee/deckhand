@@ -246,7 +246,15 @@ test("login: a client registered, PKCE and the loopback redirect, deckhand:machi
 // each run's lines, messages and end recorded. A message for the run goes out at its first
 // result line; its inbox closes at the next result (or at the first with `once`).
 async function fakeMcp(t, works) {
-  const seen = { calls: [], claims: [], heartbeats: [], lines: {}, finished: {}, refreshed: 0 };
+  const seen = {
+    calls: [],
+    claims: [],
+    heartbeats: [],
+    lines: {},
+    finished: {},
+    refreshed: 0,
+    approvals: [],
+  };
   const outbox = {};
   const closed = {};
   const held = new Set();
@@ -313,6 +321,12 @@ async function fakeMcp(t, works) {
       return { status: a.outcome };
     },
     release: (a) => (held.delete(a.run), { released: a.run }),
+    // Pending at first, as while the owner hasn't answered; then allowed.
+    approve_permission: (a) => {
+      seen.approvals.push(a);
+      if (seen.approvals.length === 1) return { request: "q1", state: "pending" };
+      return { request: "q1", state: "granted", behavior: "allow", updatedInput: a.input };
+    },
   };
   seen.works = Object.fromEntries(works.map((w) => [w.run, w]));
   const { url } = await serve(t, async (req, res) => {
@@ -398,7 +412,8 @@ test("the driver's loop: claim, run, stream, push, finish; its lease kept throug
       comment: "Also the menu. COMMIT",
     }),
     // The issue's next run, on this machine again: its session goes on.
-    work("r2", { resume: true, message: "And the sound. COMMIT" }),
+    // Its agent asks for a permission: relayed to approve_permission, the owner's answer back.
+    work("r2", { resume: true, message: "And the sound. ASK COMMIT" }),
     // A run whose claim ends (cancelled on the dashboard) while its agent works.
     work("r3", { resume: true, message: "Slowly. SLEEP 5000" }),
     // An agent that fails: the run ends as an error, with what it said on stderr.
@@ -489,6 +504,26 @@ test("the driver's loop: claim, run, stream, push, finish; its lease kept throug
   const second = JSON.parse(readFileSync(log, "utf8").split("\n")[1]);
   assert.equal(arg("--resume", second.args), session);
   assert.ok(!second.args.includes("--session-id"));
+  // Its permission prompt: through the driver's own MCP server, to approve_permission, asked
+  // again while pending, with no token in the agent's reach.
+  assert.equal(arg("--permission-prompt-tool", second.args), "mcp__deckhand__approve");
+  assert.ok(!readFileSync(arg("--mcp-config", second.args), "utf8").includes("fresh"));
+  assert.equal(mcp.seen.approvals.length, 2);
+  assert.deepEqual(mcp.seen.approvals[1], {
+    machine: "m1",
+    run: "r2",
+    tool_name: "Bash",
+    input: { command: "rm -rf build" },
+    tool_use_id: "toolu_1",
+    protocol: 1,
+  });
+  const asked = mcp.seen.lines.r2
+    .map((l) => JSON.parse(l))
+    .find((e) => /Asked/.test(JSON.stringify(e)));
+  assert.equal(
+    asked.message.content[0].text,
+    'Asked: {"behavior":"allow","updatedInput":{"command":"rm -rf build"}}',
+  );
   const after = execFileSync(
     "git",
     ["--git-dir", repo, "log", "--format=%s", "issue-12-build-the-level"],

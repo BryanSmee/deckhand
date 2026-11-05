@@ -632,8 +632,9 @@ rules still add up. They:
 - give its sandbox the hosts a sandbox run of the repository may reach as its only domains: the
   agent's, GitHub's and the operator's grant;
 - turn its sandbox on where Claude Code has one, refusing to start without it
-  (`failIfUnavailable`), and `bypassPermissions` off: an unattended agent refuses what its
-  permission mode would ask you (part 6 relays those questions, #600).
+  (`failIfUnavailable`), and `bypassPermissions` off: what its permission mode would ask you
+  goes to `approve_permission` (above), through the driver itself run as Claude Code's
+  permission prompt tool, which holds no token.
 
 What they don't stop: they are Claude Code's to apply, not Deckhand's. The sandbox confines the
 commands it runs and their network, the permission rules its file tools; neither covers your

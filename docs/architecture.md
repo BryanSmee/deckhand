@@ -1128,7 +1128,10 @@ branch, sha, ready }` (or `ask`). Before the run ends, the orchestrator checks i
   claim's run clones or fetches into `<workspace>/<owner>/<repo>/issue-<n>`, writes its settings
   (`settingsFor()`) and runs `claude -p` with stream-json in and out, its lines batched to
   `post_events`, `next_message`'s comments written to its input, its input closed once the
-  inbox is; then it pushes the branch with the owner's git and calls `finish`.
+  inbox is; then it pushes the branch with the owner's git and calls `finish`. Claude Code's
+  `--permission-prompt-tool` is the driver file itself run as a stdio MCP server
+  (`permissions`), which asks the driver over the loopback with the run's secret; the driver
+  calls `approve_permission` (#600) until it is answered.
 - **Versions**: the run tools take a `protocol` (`claims.mjs` `MACHINE_PROTOCOL`, 1, which
   `claim`'s work says). A copy keeps taking the previous one through the update that moves to the
   next (`MACHINE_PROTOCOLS`), as an endpoint sandboxes call is kept through one update; a driver
