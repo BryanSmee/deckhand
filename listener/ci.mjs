@@ -3,6 +3,7 @@
 // for the merge gate and the review's CI step (reviews.mjs), which pass it Actions runs only so
 // far (`mergeable_state` stands for the rest there), and the dashboard's CI status of a task's
 // pull request (pulls.mjs, #436), over all three (commitCi()).
+import { rateLimited } from "./github.mjs";
 
 // Conclusions that pass, of an Actions run or a check run: they neither stop a merge nor start
 // a CI fix run.
@@ -157,15 +158,10 @@ export async function commitCi(github, repo, sha) {
 const REFUSED = [403, 404, 422];
 
 // Whether `res` refuses that part for good (refused()), not for now: a 403 that is a rate limit
-// (no requests left, a `retry-after`, or a body that says so) is a failure, as a 5xx is: read
-// without that part, CI could say passed when it failed.
+// (rateLimited()) is a failure, as a 5xx is: read without that part, CI could say passed when it
+// failed.
 async function refused(res) {
-  if (!REFUSED.includes(res.status)) return false;
-  if (res.status !== 403) return true;
-  if (res.headers?.get?.("x-ratelimit-remaining") === "0") return false;
-  if (res.headers?.get?.("retry-after")) return false;
-  const text = await res.text().catch(() => "");
-  return !/rate limit/i.test(text);
+  return REFUSED.includes(res.status) && !(await rateLimited(res));
 }
 const CI_PER_PAGE = 100;
 // The pages read of each list at most: 1,000 runs, check runs or statuses of one commit.

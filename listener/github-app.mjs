@@ -258,11 +258,13 @@ export function createGitHubApp({
     });
   }
 
-  // GitHub's status on the error, for callers that tell a refusal from an outage.
+  // GitHub's status and headers on the error, for callers that tell a refusal from an outage (a
+  // rate limit: github.mjs rateLimited(), on the status, the headers and the message).
   async function json(res, what) {
     if (!res.ok) {
       throw Object.assign(new Error(`${what}: ${res.status} ${await res.text()}`), {
         status: res.status,
+        headers: res.headers,
       });
     }
     return res.json();

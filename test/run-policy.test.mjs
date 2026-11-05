@@ -6,6 +6,7 @@ import { test } from "node:test";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { createPolicies, SHIPPED_RUN_SHA256 } from "../listener/policies.mjs";
+import { createPermissions } from "../listener/permissions.mjs";
 import { builtInPolicies } from "../policy-service/engine.mjs";
 import { opaBinary } from "../policy-service/opa.mjs";
 import { parseRepoConfig } from "../listener/repo-config.mjs";
@@ -690,6 +691,118 @@ test("Deckhand's defaults alone: GitHub failing to list the repo's policies agai
   });
   assert.equal(await fresh(work(), "work", "Org/Repo#12"), false);
   assert.match(replies[0], /policy error: the policies can't be read .*Post the comment again/);
+});
+
+test("Deckhand's defaults alone, with permissions: GitHub failing on the repository keeps what it last said (#785)", async (t) => {
+  let clock = 0;
+  // null, or what GitHub answers every path with: a status (and its headers), or a throw.
+  let down = null;
+  const answering =
+    (status, headers = {}) =>
+    () =>
+      new Response("{}", { status, headers });
+  const noAnswer = () => {
+    throw new Error("socket hang up");
+  };
+  // The github service's own answer (../github/client.mjs): thrown, with its status.
+  const service = (status) => () => {
+    throw Object.assign(new Error(`the github service: ${status}`), { status });
+  };
+  const reads = [];
+  const logs = [];
+  const policies = createPolicies({
+    config: {},
+    github: async (repo, method, path) => {
+      if (path === "/repos/Org/Repo") reads.push(down ? "down" : 200);
+      if (down) return down();
+      if (path === "/repos/Org/Repo") {
+        return Response.json({ full_name: "Org/Repo", private: true, default_branch: "main" });
+      }
+      return new Response("{}", { status: 404 });
+    },
+    service: localService(
+      policyEngineOf(t, {
+        opa: { run: async () => assert.fail("no opa"), serve: async () => assert.fail("no opa") },
+        readBuiltIn: () => builtInPolicies(),
+      }),
+    ),
+    log: (line) => logs.push(line),
+    now: () => clock,
+  });
+  const replies = [];
+  const allowed = createRunPolicy({
+    policies,
+    permissions: createPermissions({ policies }),
+    log: () => {},
+    answer: async (item, text) => replies.push(text),
+  });
+  const work = () => itemOf({ trigger: "work" });
+  assert.equal(await allowed(work(), "work", "Org/Repo#12"), true);
+  // Past what GitHub said of it (60 s) and the listing (10 minutes), GitHub fails: both hold.
+  clock = 11 * 60_000;
+  down = answering(502);
+  assert.equal(await allowed(work(), "work", "Org/Repo#12"), true);
+  assert.ok(await policies.can("alice", "Org/Repo", "logs:read"));
+  assert.deepEqual(reads.slice(0, 2), [200, "down"]);
+  assert.ok(logs.some((l) => /Org\/Repo: reading the repository: .*last said kept/.test(l)));
+  assert.deepEqual(replies, []);
+  // No answer at all, a 429, and a 403 saying it is a rate limit are hiccups too.
+  for (const hiccup of [
+    noAnswer,
+    answering(429),
+    answering(403, { "x-ratelimit-remaining": "0" }),
+    answering(403, { "retry-after": "60" }),
+    // A secondary rate limit may send neither header: its body says it.
+    () =>
+      new Response(JSON.stringify({ message: "You have exceeded a secondary rate limit." }), {
+        status: 403,
+      }),
+    service(500),
+    service(503),
+  ]) {
+    down = hiccup;
+    assert.equal(await allowed(work(), "work", "Org/Repo#12"), true);
+    assert.equal((await policies.access("alice", "Org/Repo")).error, null);
+  }
+  down = answering(502);
+  // Past an hour: nothing, as every other decision.
+  clock = 61 * 60_000;
+  assert.equal(await allowed(work(), "work", "Org/Repo#12"), false);
+  assert.match((await policies.access("alice", "Org/Repo")).error, /can't be read/);
+  // Back: read again. Its push forgets it: GitHub down then gives nothing.
+  down = null;
+  assert.ok(await policies.can("alice", "Org/Repo", "logs:read"));
+  policies.forget("Org/Repo");
+  down = answering(502);
+  assert.match((await policies.access("alice", "Org/Repo")).error, /can't be read/);
+  // A 404 (deleted, or out of the App's reach) or a plain 403 (the App's access gone, the
+  // repository blocked) isn't a hiccup: nothing, at once, each after a fresh read. And what
+  // GitHub said before goes with it: a hiccup next doesn't bring it back.
+  for (const [answer, status] of [
+    [answering(404), /404/],
+    [answering(403), /403/],
+    [answering(403, { "x-ratelimit-remaining": "12" }), /403/],
+    [
+      () => Response.json({ message: "Resource not accessible by integration" }, { status: 403 }),
+      /403: Resource not accessible/,
+    ],
+    // The github service's refusals: no App yet, a repository out of the App's reach.
+    [service(412), /412/],
+    [service(404), /404/],
+  ]) {
+    down = null;
+    clock += 60_000;
+    assert.ok(await policies.can("alice", "Org/Repo", "logs:read"));
+    clock += 60_000;
+    down = answer;
+    assert.equal(await allowed(work(), "work", "Org/Repo#12"), false);
+    assert.match((await policies.access("alice", "Org/Repo")).error, status);
+    down = answering(502);
+    assert.equal(await allowed(work(), "work", "Org/Repo#12"), false);
+    assert.match((await policies.access("alice", "Org/Repo")).error, /can't be read/);
+  }
+  // Nothing posted for any of it: a refused or undecided author gets no reply.
+  assert.deepEqual(replies, []);
 });
 
 test("waits.mjs reserve(): a blocker done while a new comment is decided starts nothing until it is released", async (t) => {
