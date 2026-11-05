@@ -20,7 +20,7 @@ import {
 } from "../models/metrics.mjs";
 import { baseOf, createApiProxy } from "../models/upstream.mjs";
 import { createUsage } from "../models/usage.mjs";
-import { serve, tempDir, tokenBroker } from "./helpers.mjs";
+import { closedPort, serve, tempDir, tokenBroker } from "./helpers.mjs";
 
 // `text`'s value of the sample `series` (`name{labels}`), or undefined.
 const sample = (text, series) =>
@@ -271,6 +271,26 @@ test("a provider that can't be reached, or a login that can't be used: counted a
   // Never sent: no length.
   assert.equal(
     sample(text, 'deckhand_model_call_duration_seconds_count{provider="anthropic"}'),
+    undefined,
+  );
+});
+
+// #802: forward() says 502, `lost`, before unreachable() answers, whether the request went out or
+// not: the call is counted, as unreachable.
+test("a connection refused, or a provider silent till the call is cut: counted as unreachable", async (t) => {
+  const port = await closedPort();
+  const refused = await counted(t, () => assert.fail("nothing listens"), {
+    routeOf: () => ({ base: baseOf(`http://127.0.0.1:${port}`), what: "Provider" }),
+  });
+  assert.equal((await refused.call()).status, 502);
+  assert.equal(sample(await refused.counting(1), series("unreachable")), "1");
+  const silent = await counted(t, () => {}, { idleMs: 50 });
+  assert.equal((await silent.call()).status, 502);
+  const text = await silent.counting(1);
+  assert.equal(sample(text, series("unreachable")), "1");
+  // Never answered: not a stream cut short.
+  assert.equal(
+    sample(text, 'deckhand_model_streams_interrupted_total{provider="anthropic"}'),
     undefined,
   );
 });

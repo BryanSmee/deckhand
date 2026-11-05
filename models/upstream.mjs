@@ -178,7 +178,9 @@ export function createApiProxy({
         answered(run, code, headers, answer);
       },
     });
-    // The agent gave up before an answer: no call of the provider's to count.
+    // The agent gave up before an answer: no call of the provider's to count. A provider that
+    // can't be reached is counted: forward() calls answered(502, {}, true) before unreachable(),
+    // its status "unreachable" (#802).
     if (status === null) return;
     metrics?.called({
       provider,
