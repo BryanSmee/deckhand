@@ -185,7 +185,8 @@ export function chatNote(chat: Chat, state: ChatState = chatState(chat)): string
     return "No sandbox now: your next message starts it, from a fresh clone of the repository.";
   }
   if (state === "working" && chat.requests.length) {
-    return "The agent waits for your answer to its request above.";
+    const which = chat.requests.length === 1 ? "its request" : "its requests";
+    return `The agent waits for your answer to ${which} above.`;
   }
   return CHAT_STATES[state].note;
 }

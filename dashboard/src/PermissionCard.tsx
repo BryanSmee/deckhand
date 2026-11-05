@@ -45,7 +45,13 @@ export function PermissionCard({ chatId, request, now, onChat }: Props) {
       <p class={styles.title}>
         <Icon.Alert size={16} />
         <span>
-          The agent asks for {KINDS[request.kind]}: <span class={styles.what}>{request.what}</span>
+          The agent asks for {KINDS[request.kind]}
+          {/* The engine's name says no more than its kind. */}
+          {request.what !== KINDS[request.kind] && (
+            <>
+              : <span class={styles.what}>{request.what}</span>
+            </>
+          )}
         </span>
       </p>
       {request.reason && <p class={styles.reason}>{request.reason}</p>}
