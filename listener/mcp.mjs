@@ -35,7 +35,8 @@ export const TASKS_PAGE = 25;
 export const MAX_TASKS_PAGE = 100;
 // How far a page reads on to end a line longer than itself (an agent's event that is one line).
 const MAX_LINE_BYTES = 4 * 1024 * 1024;
-// How much the newest page reads back at once to find the start of the line it would cut.
+// How much a search for a line's start reads back first: twice as much each time after, up to a
+// page, since that line is most often short.
 const LINE_STEP = 4 * 1024;
 
 export const READ = "deckhand:read";
@@ -324,7 +325,7 @@ export function createMcp({ source, version = "dev", now = Date.now, log = () =>
     // The newest page starts inside a line, most often: it starts at that line's start, when
     // that is `limit` bytes back at most, rather than at the next one, which may leave it a
     // single short entry.
-    if (from === null && start > 0) start = await nearLineStart(run.id, start, limit);
+    if (from === null && start > 0) start = await lineStart(run.id, start + 1, start - limit);
     // The newest page runs to the log's end, however far back it starts.
     const end = from === null ? size : Math.min(size, start + limit);
     const page = await readPage(run.id, start, end, size, !running);
@@ -592,33 +593,20 @@ export function createMcp({ source, version = "dev", now = Date.now, log = () =>
     }
   }
 
-  // The start of the line holding byte `a - 1` (no new line), read back from it a page at a
-  // time: `a` itself (cut there) for a line longer than MAX_LINE_BYTES, which then never sends
-  // a page back to where it came from.
-  async function lineStart(id, a) {
-    let end = a - 1;
-    while (end > 0) {
-      const start = Math.max(0, end - PAGE_BYTES, a - MAX_LINE_BYTES);
-      if (start >= end) return a;
-      const chunk = await readRange(id, start, end);
-      const nl = chunk.lastIndexOf(10);
-      if (nl >= 0) return start + nl + 1;
-      end = start;
-    }
-    return 0;
-  }
-
-  // The start of the line holding byte `a`, when it is `within` bytes before `a` at most; else
-  // `a`. Read back a little at a time: that line is most often short.
-  async function nearLineStart(id, a, within) {
-    const least = Math.max(0, a - within);
-    for (let end = a; end > least;) {
-      const start = Math.max(least, end - LINE_STEP);
+  // The start of the line holding byte `a - 1` (no new line), read back from it: `a` itself
+  // when that line starts before byte `least` (by default, it is longer than MAX_LINE_BYTES,
+  // cut there, which then never sends a page back to where it came from).
+  async function lineStart(id, a, least = a - MAX_LINE_BYTES) {
+    // A line starting at `least` has its new line just before it.
+    const bottom = Math.max(0, least - 1);
+    let step = LINE_STEP;
+    for (let end = a - 1; end > bottom; step = Math.min(2 * step, PAGE_BYTES)) {
+      const start = Math.max(bottom, end - step);
       const nl = (await readRange(id, start, end)).lastIndexOf(10);
       if (nl >= 0) return start + nl + 1;
       end = start;
     }
-    return least === 0 ? 0 : a;
+    return least <= 0 ? 0 : a;
   }
 
   const slice = (data, from, to) => ({
@@ -656,7 +644,7 @@ export function createMcp({ source, version = "dev", now = Date.now, log = () =>
       ...(t.position && { position: t.position }),
       ...(t.waitingFor && { waitingFor: t.waitingFor }),
       // How many open questions it has (board.mjs): from its last run's reply, or its issue's body.
-      ...(t.questions && { questions: t.questions.items?.length ?? 0 }),
+      ...(t.questions?.items?.length && { questions: t.questions.items.length }),
       runs,
       lastRun: last ? { id: last.id, status: last.status } : null,
       ...(t.rerunnable && { rerunnable: true }),

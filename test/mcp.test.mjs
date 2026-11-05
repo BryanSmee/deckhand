@@ -382,6 +382,33 @@ test("MCP: list_tasks gives a page of tasks at a time, and where the next starts
   assert.equal((await tool("list_tasks", { offset: -1 })).isError, true);
 });
 
+test("MCP: a task's row says its mode, wait and questions only when it has them", async (t) => {
+  const asked = { items: [{ title: "Phones", text: "Which way?" }], raw: "1. Which way?" };
+  const runs = [
+    runOf("org/repo#1", "org-repo-1-1000", { taskMode: "review" }),
+    runOf("org/repo#2", "org-repo-2-1000", { status: "needs-input", questions: asked }),
+    runOf("org/repo#3", "org-repo-3-1000", { status: "error", items: [{ text: "go" }] }),
+  ];
+  const waits = [
+    { key: "org/repo#4", repo: "org/repo", kind: "issue", mode: "work", blockers: [1], since: 10 },
+  ];
+  const { ctx } = orchestrator({ runs, extra: { waits: { list: () => waits } } });
+  const { tool } = await serveMcp(t, ctx);
+  const rows = Object.fromEntries(
+    (await tool("list_tasks")).structuredContent.tasks.map((x) => [x.key, x]),
+  );
+  const extras = (row) =>
+    Object.fromEntries(
+      ["mode", "position", "waitingFor", "questions", "rerunnable"]
+        .filter((k) => k in row)
+        .map((k) => [k, row[k]]),
+    );
+  assert.deepEqual(extras(rows["org/repo#1"]), { mode: "review" });
+  assert.deepEqual(extras(rows["org/repo#2"]), { questions: 1 });
+  assert.deepEqual(extras(rows["org/repo#3"]), { rerunnable: true });
+  assert.deepEqual(extras(rows["org/repo#4"]), { waitingFor: [1] });
+});
+
 test("MCP: a chat's run is its owner's alone, as on the dashboard", async (t) => {
   const run = runOf("org/repo#chat-1", "chat-1-1000", { owner: "bob" });
   const { ctx } = orchestrator({ runs: [run], logs: { [run.id]: text("mine") } });
@@ -471,6 +498,25 @@ test("MCP: the newest page of a log takes in the line it would cut, when it is n
     ["end"],
   );
   assert.equal(tight.previous.from + tight.previous.limit, tight.from);
+});
+
+test("MCP: the newest page takes in a line starting exactly `limit` bytes before it, no further", async (t) => {
+  // A long line, then a short one, so that `limit` (half their length) puts the page's start
+  // inside the long line, exactly `limit` bytes after the long line's start.
+  const end = Buffer.byteLength(text("end"));
+  let long = text("x".repeat(80));
+  if ((Buffer.byteLength(long) + end) % 2) long = text("x".repeat(81));
+  const log = line({ type: "listener", key: "org/repo#1" }) + long + text("end");
+  const runs = [runOf("org/repo#1", "org-repo-1-1000")];
+  const { ctx } = orchestrator({ runs, logs: { "org-repo-1-1000": log } });
+  const { tool } = await serveMcp(t, ctx);
+  const limit = (Buffer.byteLength(long) + end) / 2;
+  const at = (n) => tool("get_run_log", { runId: "org-repo-1-1000", limit: n });
+  const exact = (await at(limit)).structuredContent;
+  assert.equal(exact.from, Buffer.byteLength(log) - Buffer.byteLength(long) - end);
+  // A byte less: that line starts further back than `limit`, so the page starts after it.
+  const less = (await at(limit - 1)).structuredContent;
+  assert.equal(less.from, Buffer.byteLength(log) - end);
 });
 
 // Every page of a run's log, from its newest back to its start (`previous`), oldest first: each
