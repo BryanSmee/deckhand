@@ -132,3 +132,16 @@ test("what would stop the next run whatever the profile, and a panel that can't 
   render(<ChatPermissions chatId="0123456789abcdef" />);
   expect((await screen.findByRole("alert")).textContent).toContain("No such chat.");
 });
+
+test("with the open internet on, the host toggles have no effect: greyed out, and said", async () => {
+  api.routes[URL] = () => ({
+    ...VIEW,
+    ceiling: { ...VIEW.ceiling, capabilities: [...VIEW.ceiling.capabilities, row("internet")] },
+    effective: { ...VIEW.effective, capabilities: [...VIEW.effective.capabilities, "internet"] },
+  });
+  render(<ChatPermissions chatId="0123456789abcdef" />);
+  expect((await screen.findByRole("switch", { name: /pypi\.org/ })).hasAttribute("disabled")).toBe(
+    true,
+  );
+  expect(screen.getByText(/reaches any public host/)).toBeTruthy();
+});

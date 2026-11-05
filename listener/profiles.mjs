@@ -72,6 +72,9 @@ export function ceilingOf({ outcome, grant, mounts = [] }) {
       changed = true;
     }
   }
+  // Never true while `push` is in NEVER: a chat's mounts are all read-only, the reason alone
+  // saying whether the grant or the chat makes them so. Kept so that a chat level that pushes
+  // (LEVELS) needs no change here.
   const push = capabilities.some((c) => c.name === "push" && c.allowed);
   return {
     capabilities,

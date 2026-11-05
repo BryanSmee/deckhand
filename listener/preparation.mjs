@@ -218,7 +218,7 @@ export function createPreparation(ctx) {
   function narrowHosts(access, profile, agent) {
     const hosts = access.grant.hosts.filter((h) => profile.hosts.includes(h.toLowerCase()));
     access.hosts = operatorHosts(config, { ...access.grant, hosts }, agent);
-    access.trusted = operatorHosts(config, { ...access.grant, hosts }, agent);
+    access.trusted = [...access.hosts];
   }
 
   // Whether GitHub says `repo` is private: null when it can't say, which the risky combinations

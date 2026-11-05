@@ -675,14 +675,18 @@ test("restart: the chat's sandbox rests (its session kept), so its next message 
   const { chats, ctx, calls } = await setup(t);
   const chat = await chats.create("alice", { repo: "org/repo", message: "hi" });
   // No sandbox going yet: nothing to stop.
-  assert.equal(chats.restart("alice", chat.id), false);
+  assert.equal(chats.restart("alice", chat.id), null);
   const task = ctx.tasks.get(chatKey(chat));
   task.live = { open: true };
-  assert.equal(chats.restart("alice", chat.id), true);
+  assert.equal(chats.restart("alice", chat.id), "rested");
   assert.deepEqual(calls.rested, [task.name]);
   // Nothing removed: the session stays.
   assert.deepEqual(calls.removed, []);
   assert.throws(() => chats.restart("bob", chat.id), { status: 404 });
+  // One that answered already and lingers: on its way out, nothing rested again.
+  task.live = { answered: true };
+  assert.equal(chats.restart("alice", chat.id), "stopping");
+  assert.deepEqual(calls.rested, [task.name]);
 });
 
 test("the API: GET and POST /api/chats/<id>/permissions, a 422 listing what would widen it, POST restart", async (t) => {

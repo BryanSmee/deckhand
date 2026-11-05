@@ -7,6 +7,7 @@ import { gzipSync } from "node:zlib";
 import { readsOf } from "../listener/github-app.mjs";
 import { createGraphqlChecks } from "../listener/github-graphql.mjs";
 import {
+  CHAT_READS,
   createGithubGateway,
   explained,
   logStorage,
@@ -1604,6 +1605,42 @@ test("without read:issues: its own issue over REST, with a token that reads issu
   const list = await gw.call("/api/v3/repos/org/repo/issues?state=open", { secret: all.secret });
   assert.equal(list.status, 200);
   assert.equal(gw.minted.at(-1)[1].issues, "read");
+});
+
+test("a chat's GitHub level is read only: a write its policies allow (an operator's allow_github) refused all the same (#478)", async (t) => {
+  // checkWrite and checkGraphql pass everything: the policies allow these writes.
+  const gw = await gateway(t, {
+    checkGraphql: async (run, body) => ({ body, write: body.includes("mutation"), creates: [] }),
+  });
+  const chat = gw.register({ mode: "chat", issue: null, caps: ["pull", "read:issues"] });
+  const work = gw.register({ mode: "work", push: true, issue: 1 });
+  const comment = (secret) =>
+    gw.call("/api/v3/repos/org/repo/issues/1/comments", {
+      secret,
+      method: "POST",
+      body: '{"body": "hi"}',
+    });
+  const mutation = (secret) =>
+    gw.call("/api/graphql", {
+      secret,
+      method: "POST",
+      body: JSON.stringify({ query: "mutation { addComment(input: {}) { clientMutationId } }" }),
+    });
+  const sent = gw.calls.length;
+  for (const res of [await comment(chat.secret), await mutation(chat.secret)]) {
+    assert.equal(res.status, 403);
+    assert.equal((await res.json()).message, `Deckhand: ${CHAT_READS}`);
+  }
+  assert.equal(gw.calls.length, sent);
+  // Its reads, a GraphQL query included, go on; a work run's writes too.
+  const query = await gw.call("/api/graphql", {
+    secret: chat.secret,
+    method: "POST",
+    body: JSON.stringify({ query: "{ viewer { login } }" }),
+  });
+  assert.equal(query.status, 200);
+  assert.equal((await comment(work.secret)).status, 200);
+  assert.equal((await mutation(work.secret)).status, 200);
 });
 
 test("a chat whose permissions profile turned off read:issues: no issue at all, its pull requests still (#478)", async (t) => {

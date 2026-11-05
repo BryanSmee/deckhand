@@ -557,16 +557,19 @@ export function createChats(
   }
 
   // Its sandbox stopped once its agent has answered (runs.mjs rest()), its session kept: the
-  // next message starts it again, with the permissions saved now. → whether one was going. Its
-  // owner's session only, as reset(): it starts nothing (the next message is checked as any),
-  // and a user who lost access can still stop what they left going.
+  // next message starts it again, with the permissions saved now. Its owner's session only, as
+  // reset(): it starts nothing (the next message is checked as any), and a user who lost access
+  // can still stop what they left going. → "rested", "stopping" (it had answered already and is
+  // on its way out: a message waits for its end), or null (no sandbox going).
   function restart(user, id) {
     const chat = mine(user, id);
     open(chat);
-    const task = taskOf(chat);
-    if (!task?.live || !ctx.rest(task)) return false;
+    const live = taskOf(chat)?.live;
+    if (!live) return null;
+    if (live.answered || live.finishing || live.cancelled) return "stopping";
+    if (!ctx.rest(taskOf(chat))) return null;
     log(`${chatKey(chat)}: restarted by its owner, for its permissions`);
-    return true;
+    return "rested";
   }
 
   // The chats going whose owner may no longer run the agent on their repository: stopped. Every
@@ -662,12 +665,10 @@ export function createChats(
         send(res, 200, said);
       },
       restart: async (req, res, user, _, { id }) => {
-        const going = restart(user, id);
+        const said = restart(user, id);
         send(res, 200, {
           chat: await view(mine(user, id)),
-          message: going
-            ? "Its sandbox stops once its agent has answered: your next message starts it again with these permissions, in the same session."
-            : "No sandbox is going: your next message starts one with these permissions.",
+          message: RESTARTED[said ?? "none"],
         });
       },
     },
@@ -703,6 +704,15 @@ export function createChats(
     stop: stopAll,
   };
 }
+
+// What POST /api/chats/<id>/restart says, by restart()'s answer.
+const RESTARTED = {
+  rested:
+    "Its sandbox stops once its agent has answered: your next message starts it again with these permissions, in the same session.",
+  stopping:
+    "Its sandbox is already stopping: your next message starts it again with these permissions, in the same session.",
+  none: "No sandbox is going: your next message starts one with these permissions.",
+};
 
 // A chat's title, for the dashboard: its first message's first line, clipped.
 function titleOf(text) {

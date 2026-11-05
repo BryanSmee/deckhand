@@ -3050,7 +3050,9 @@ edited as toggles in the chat's panel (never as policy text: policies stay files
 folder and of the repository's default branch):
 
 - **GitHub**: one level, read only for now. A chat writes nothing to GitHub whatever the
-  policies allow it: a profile asking for comments or pushes is refused, and so is `push`.
+  policies allow it: a profile asking for comments or pushes is refused, and so is `push`; the
+  GitHub gateway refuses every write of a chat's run (a REST write, a GraphQL mutation), even
+  one an `allow_github` rule of yours allows, and `deny_github` still sees `mode: "chat"`.
 - **Capabilities**: those a `chat` run gets, each on or off (`docker`, the container engine, is
   one, offered only when the repository is granted one and asks for it). `pull` stays on: a
   chat works in its clone. One turned off takes what needs it along.

@@ -239,6 +239,8 @@ export function ChatPermissions({ chatId }: { chatId: string }) {
                 <Switch
                   label={<code>{h}</code>}
                   checked={draft.hosts.includes(h)}
+                  // With the open internet, every public host is reachable: no effect then.
+                  disabled={internet}
                   onChange={(on) =>
                     set({
                       hosts: ceiling.hosts.filter((x) => (x === h ? on : draft.hosts.includes(x))),
