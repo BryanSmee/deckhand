@@ -124,7 +124,8 @@ export function headInRepo(pr, repo) {
 }
 
 // The command on the first line ("work" for the trigger, "stop" for "/stop", "cancel" for
-// "/cancel": stop the running run, tasks.mjs), the mode a
+// "/cancel": stop the running run, tasks.mjs; "allow" or "deny" for "/allow" or "/deny", a machine
+// run's owner answering its request, with `permission`: parseAnswer()), the mode a
 // "/mode <name>" line asks for (lowercase, or null), what an "/after #12" line waits for
 // (parseAfter(), or null), the machine a "/machine <name or label>" line routes the issue to
 // (parseMachine(), or null: claims.mjs) and the rest of the comment; trigger null and the whole
@@ -136,6 +137,12 @@ export function splitTrigger(config, body) {
   const [first, ...rest] = body.split(/\r?\n/);
   if (first.trim().toLowerCase() === "/stop") return takeCommands(rest.join("\n"), "stop");
   if (first.trim().toLowerCase() === "/cancel") return takeCommands(rest.join("\n"), "cancel");
+  const answer = /^\s*\/(allow|deny)(?:\s+(.*?))?\s*$/i.exec(first);
+  if (answer) {
+    const command = answer[1].toLowerCase();
+    const said = takeCommands(rest.join("\n"), command);
+    return { ...said, permission: parseAnswer(command, answer[2] ?? "") };
+  }
   // Each command its own line, as if written below; anything else on the line and it isn't
   // the trigger line ("Deckhand /mode brainstorm please", "Deckhand /effort huge").
   const inline = trailingCommands(first, ["mode", "after", "machine", ...OPTIONS]);
@@ -199,6 +206,31 @@ export function parseMachine(text) {
     };
   }
   return { want };
+}
+
+// How much of a machine run's request's id its comment shows (requests.mjs), and `/allow <id>`
+// takes at least.
+export const SHORT_ID = 6;
+
+// What follows `/allow` or `/deny` on the first line of a comment (splitTrigger(), requests.mjs):
+// { choice, id } (`id`: the start of a request's, or null: the only one waiting), or { error }.
+export function parseAnswer(command, rest) {
+  const words = String(rest ?? "")
+    .trim()
+    .toLowerCase()
+    .split(/\s+/)
+    .filter(Boolean);
+  const id = words[0] && /^[0-9a-f]+$/.test(words[0]) ? words.shift() : null;
+  const run = command === "allow" && words[0] === "run" ? words.shift() : null;
+  if (words.length || (id && (id.length < SHORT_ID || id.length > 16))) {
+    return {
+      error:
+        command === "allow"
+          ? "`/allow` takes `run` (that tool's calls for the rest of the run) and, when several requests wait, the id of the one it answers: `/allow a1b2c3 run`."
+          : "`/deny` takes, when several requests wait, the id of the one it answers: `/deny a1b2c3`.",
+    };
+  }
+  return { choice: command === "deny" ? "deny" : run ? "run" : "once", id };
 }
 
 // What follows "/after": { numbers } (issues or pull requests of the same repo), { none: true }
@@ -358,9 +390,10 @@ function issueCommentItem(config, event, p, skip) {
   if (p.action !== "created") return undefined;
   const repo = p.repository.full_name;
   const body = p.comment.body ?? "";
-  const { trigger, mode, after, machine, text } = splitTrigger(config, body);
+  const { trigger, mode, after, machine, permission, text } = splitTrigger(config, body);
   if (p.issue.pull_request) {
-    return prItem(config, skip, repo, p.issue, { trigger, mode, after, machine }, text, p.comment);
+    const commands = { trigger, mode, after, machine, permission };
+    return prItem(config, skip, repo, p.issue, commands, text, p.comment);
   }
   // Every comment on an inbox issue is an entry: trigger lines don't apply there, but for
   // `/cancel`, which stops the entry's run.
@@ -377,6 +410,7 @@ function issueCommentItem(config, event, p, skip) {
     modeLine: mode,
     after,
     machine,
+    ...(permission && { permission }),
     text,
   });
 }
@@ -684,7 +718,7 @@ function prItem(
   skip,
   repo,
   pull,
-  { trigger, mode, after = null, machine = null },
+  { trigger, mode, after = null, machine = null, permission = null },
   text,
   comment,
 ) {
@@ -699,6 +733,7 @@ function prItem(
     modeLine: mode,
     after,
     machine,
+    ...(permission && { permission }),
     text,
     replyTo: pr,
     comment,

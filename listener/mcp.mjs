@@ -93,7 +93,7 @@ const INSTRUCTIONS = `Deckhand runs coding agents on GitHub issues and pull requ
 read what its dashboard shows you: your repositories, their tasks (an issue or pull request and \
 its runs), each run's log, and the schedule; with the deckhand:work scope, rerun and schedule act \
 as its dashboard does, commenting on the issue as the user; with deckhand:machine, a machine's \
-driver registers it, says it is there, claims the tasks routed to it and reports on their runs. A task is named by its key, \
+driver registers it, says it is there, claims the tasks routed to it, reports on their runs and asks their owner for their agents' tool calls. A task is named by its key, \
 "owner/repo#12" for an issue, "owner/repo#pr-12" for a pull request.`;
 
 const RPC = {
@@ -391,6 +391,26 @@ const TOOL_SPECS = [
     ),
   },
   {
+    name: "approve_permission",
+    title: "Ask the owner for a tool call",
+    scope: MACHINE,
+    description: `Asks the claimed run's owner whether its agent may make a tool call, for Claude Code's \`--permission-prompt-tool\`: shown on the dashboard and in a comment on the issue (the tool and its input, one line, redacted), answered there with Allow once, Allow for this run (that tool's calls from then on) or Deny, by the owner alone; no answer within the owner's timeout (10 minutes by default) denies it. Waits up to ${CLAIM_WAIT_MS / 1000} s for the answer, renewing the claim's lease: while it still waits, \`state\` is "pending": call again with the same \`tool_use_id\`, which finds the same request. Once answered, the text is Claude Code's answer as it reads it ({"behavior":"allow","updatedInput":…} or {"behavior":"deny","message":…}). Deckhand enforces nothing on the machine: what it allows or denies without asking is the driver's.`,
+    inputSchema: object(
+      {
+        machine: { type: "string", description: "Its id, from register_machine." },
+        run: { type: "string", description: "The claim's run, from claim." },
+        tool_name: { type: "string", description: "The tool the agent calls, as it names it." },
+        input: { type: "object", description: "The tool call's input." },
+        tool_use_id: {
+          type: "string",
+          description: "The tool call's id: the same one asks again for the same request.",
+        },
+        protocol: PROTOCOL,
+      },
+      ["machine", "run", "tool_name", "input", "tool_use_id"],
+    ),
+  },
+  {
     name: "release",
     title: "Give a claimed task back",
     scope: MACHINE,
@@ -440,7 +460,8 @@ export const TOOLS = TOOL_SPECS.map(({ scope = READ, ...tool }) => ({
 //   machines                 the user's machines (machines.mjs createMachines()): register(),
 //                            heartbeat() (its claims' leases renewed), remove(), offers(), its
 //                            claims' claim() and release(), and their runs' post(),
-//                            nextMessage(), ask() and finish() (claims.mjs), each throwing Refused
+//                            nextMessage(), ask(), finish() and approve() (claims.mjs), each
+//                            throwing Refused
 // `version`: Deckhand's, which `initialize` says.
 export function createMcp({ source, version = "dev", now = Date.now, log = () => {} }) {
   const tools = {
@@ -459,6 +480,7 @@ export function createMcp({ source, version = "dev", now = Date.now, log = () =>
     next_message: nextMessage,
     ask: askTool,
     finish: finishTool,
+    approve_permission: approvePermission,
     release: releaseTool,
   };
 
@@ -821,6 +843,34 @@ export function createMcp({ source, version = "dev", now = Date.now, log = () =>
     return machineAct(
       () => source.machines.finish(user, id, run, { outcome, reply }),
       ({ key, status }) => result({ key, status }, [`${key}: done (${status}).`]),
+    );
+  }
+
+  async function approvePermission(user, args) {
+    const id = requiredString(args, "machine");
+    const run = requiredString(args, "run");
+    protocolOf(args);
+    const tool = requiredString(args, "tool_name");
+    const toolUseId = requiredString(args, "tool_use_id");
+    const input = args.input;
+    if (!input || typeof input !== "object" || Array.isArray(input)) {
+      throw new BadArguments("`input` is an object: the tool call's input.");
+    }
+    return machineAct(
+      () => source.machines.approve(user, id, run, { tool, input, toolUseId }),
+      ({ request, state, message }) => {
+        if (state === "pending") {
+          return result({ request, state }, [
+            "Still waiting for the owner's answer: call again with the same tool_use_id.",
+          ]);
+        }
+        // Claude Code's permission prompt answer, as it reads the text.
+        const answer =
+          state === "granted"
+            ? { behavior: "allow", updatedInput: input }
+            : { behavior: "deny", message };
+        return result({ request, state, message, ...answer }, [JSON.stringify(answer)]);
+      },
     );
   }
 

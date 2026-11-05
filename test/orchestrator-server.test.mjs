@@ -4383,7 +4383,7 @@ allow_capabilities contains "read:pulls"
     assert.match(readFileSync(join(dir, "run-env"), "utf8"), /^TASK_ISSUE=12$/m);
   });
 
-  test("machines (#595, #596, #597): a machine registered through edge is offered the repositories that opt in, claims the issue routed to it and reports on its run, which a handover keeps", async (t) => {
+  test("machines (#595, #596, #597, #600): a machine registered through edge is offered the repositories that opt in, claims the issue routed to it and reports on its run, whose tool call its owner allows on the issue, which a handover keeps", async (t) => {
     const repos = ["org/repo", "org/other", "org/plain"].map((full_name) => ({
       full_name,
       html_url: `https://github.com/${full_name}`,
@@ -4416,6 +4416,7 @@ allow_capabilities contains "read:pulls"
         "next_message",
         "ask",
         "finish",
+        "approve_permission",
         "release",
         "unregister_machine",
       ],
@@ -4474,6 +4475,29 @@ allow_capabilities contains "read:pulls"
     });
     assert.equal(posted.isError, undefined, posted.content[0].text);
     assert.equal(posted.structuredContent.next, 2);
+    // Its agent asks for a tool call: a comment on the issue asks alice, whose `/allow` there
+    // reaches the call waiting.
+    const asking = call("approve_permission", {
+      machine: machine.id,
+      run: again.run,
+      tool_name: "Bash",
+      input: { command: "make level" },
+      tool_use_id: "toolu_1",
+    });
+    const asked = await github.waitFor(
+      (r) =>
+        r.method === "POST" &&
+        r.path === comments &&
+        /asks to use a tool/.test(JSON.parse(r.body).body),
+    );
+    assert.match(JSON.parse(asked.body).body, /\n```text\nBash: make level\n```\n/);
+    await send(comment("alice", "/allow"));
+    const allowed = await asking;
+    assert.equal(allowed.isError, undefined, allowed.content[0].text);
+    assert.deepEqual(JSON.parse(allowed.content[0].text), {
+      behavior: "allow",
+      updatedInput: { command: "make level" },
+    });
     // A handover: the next copy keeps the run and its claim, and the driver goes on with it.
     await listened.handOver();
     const kept = await call("heartbeat", { machine: machine.id, runs: [again.run] });

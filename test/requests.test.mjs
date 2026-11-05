@@ -3,7 +3,14 @@
 // verdicts and approvals chats.test.mjs and profiles.test.mjs cover against a real ceiling).
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { createRequests, REASON_MAX, reasonLine, REQUESTS_KEY } from "../listener/requests.mjs";
+import {
+  createRequests,
+  fenced,
+  inputLine,
+  REASON_MAX,
+  reasonLine,
+  REQUESTS_KEY,
+} from "../listener/requests.mjs";
 import { openStore } from "../lib/store.mjs";
 
 const RUN = "org-repo-chat-0123456789abcdef-1";
@@ -439,4 +446,18 @@ test("a request the store didn't take: forgotten, its event left to read again, 
   failing = false;
   await requests.take(event(1));
   assert.equal((await store.get(REQUESTS_KEY))[ID(1)].state, "pending");
+});
+
+test("a machine run's tool call (#600): its input's lead field or JSON, one line, redacted, cut; fenced as text", () => {
+  assert.equal(inputLine({ command: "make\n  level", description: "Build" }), "make level");
+  assert.equal(inputLine({ file_path: "/w/Level.umap", content: "…" }), "/w/Level.umap");
+  assert.equal(inputLine({ query: "unreal" }), '{"query":"unreal"}');
+  const secret = `sk-ant-${"q".repeat(40)}`;
+  const line = inputLine({ command: `curl -H 'x-api-key: ${secret}'` }, [secret]);
+  assert.equal(line.includes(secret), false);
+  assert.match(line, /^curl -H 'x-api-key: /);
+  assert.equal(inputLine({ command: "x".repeat(500) }).length, REASON_MAX);
+  assert.equal(fenced("Bash: ls"), "```text\nBash: ls\n```");
+  // Longer than any run of backticks inside: none ends it.
+  assert.equal(fenced("a ```` b ` c"), "`````text\na ```` b ` c\n`````");
 });

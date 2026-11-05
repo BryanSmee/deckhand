@@ -173,8 +173,9 @@ export const SETTINGS = {
   CHATS_PER_USER: { default: 2, parse: whole("a whole number of chats (0: none)") },
   CHAT_IDLE_MINUTES: { default: 30, parse: aboveZero("a whole number of minutes above 0") },
   MAX_RUNNING_CHATS: { default: 2, parse: whole("a whole number of sandboxes (0: none)") },
-  // How long a chat's request for more permissions waits for its owner's answer (requests.mjs),
-  // denied past it: an hour at most, as the sandbox's tool call waits that long.
+  // How long a chat's request for more permissions, or a machine run's tool call (#600), waits
+  // for its owner's answer (requests.mjs), denied past it: an hour at most, as the sandbox's
+  // tool call waits that long.
   CHAT_PERMISSION_TIMEOUT: { default: 10, parse: minutesUpTo(60) },
   // Slots within MAX_PARALLEL kept for the open issues labelled AUTO_PICKUP_LABEL, which the
   // listener starts by itself, oldest first, in the repos whose `auto_pickup` opts in
