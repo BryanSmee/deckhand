@@ -137,7 +137,10 @@ export function ChatPermissions({ chatId }: { chatId: string }) {
     const said = await saveChatPermissions(chatId, profileOf(draft!, view!));
     setPending(null);
     if (said.error) {
-      setRefused(said.errors?.length ? said.errors : [said.error]);
+      // The listener's reasons quote names as Markdown: plain text here.
+      setRefused(
+        (said.errors?.length ? said.errors : [said.error]).map((e) => e.replaceAll("`", "")),
+      );
       return;
     }
     setView(said);
