@@ -1,0 +1,140 @@
+/* An agent's Markdown, sized for a chat bubble: its blocks spaced, headings scaled down, code
+   and tables scrolling sideways rather than widening it. */
+.markdown {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.markdown > :first-child,
+.markdown li > :first-child,
+.markdown blockquote > :first-child {
+  margin-top: 0;
+}
+
+.markdown > :last-child,
+.markdown li > :last-child,
+.markdown blockquote > :last-child {
+  margin-bottom: 0;
+}
+
+.markdown p,
+.markdown ul,
+.markdown ol,
+.markdown blockquote,
+.markdown pre,
+.markdown .table {
+  margin: 0 0 10px;
+}
+
+.markdown h1,
+.markdown h2,
+.markdown h3,
+.markdown h4,
+.markdown h5,
+.markdown h6 {
+  margin: 14px 0 6px;
+  font-weight: 650;
+  line-height: 1.35;
+}
+
+.markdown h1 {
+  font-size: 17px;
+}
+
+.markdown h2 {
+  font-size: 16px;
+}
+
+.markdown h3 {
+  font-size: 15px;
+}
+
+.markdown h4,
+.markdown h5,
+.markdown h6 {
+  font-size: 14px;
+}
+
+.markdown h6 {
+  color: var(--text-2);
+}
+
+.markdown ul,
+.markdown ol {
+  padding-left: 22px;
+}
+
+.markdown li + li {
+  margin-top: 2px;
+}
+
+.markdown li > ul,
+.markdown li > ol {
+  margin: 2px 0 0;
+}
+
+.markdown blockquote {
+  padding: 0 0 0 12px;
+  border-left: 3px solid var(--border-strong);
+  color: var(--text-2);
+}
+
+.markdown hr {
+  margin: 12px 0;
+  border: 0;
+  border-top: 1px solid var(--border);
+}
+
+.markdown a {
+  color: var(--focus);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.markdown code {
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: var(--surface-2);
+  font: 400 12.5px/1.5 var(--mono);
+}
+
+.code {
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  overflow-x: auto;
+  overflow-wrap: normal;
+}
+
+.code code {
+  padding: 0;
+  background: none;
+  font: 400 12.5px/20px var(--mono);
+  white-space: pre;
+}
+
+.table {
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.table table {
+  border-collapse: collapse;
+  font-size: 13px;
+  line-height: 19px;
+}
+
+.table th,
+.table td {
+  padding: 5px 10px;
+  border: 1px solid var(--border);
+  text-align: left;
+  vertical-align: top;
+  overflow-wrap: normal;
+}
+
+.table th {
+  background: var(--surface-2);
+  font-weight: 600;
+}
