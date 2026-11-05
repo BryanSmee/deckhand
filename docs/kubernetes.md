@@ -705,7 +705,14 @@ enforces, not on how fast it applies it), it tries a TCP connection, 3 s at most
   sandboxes get no DNS server, but one reached by its address could carry data out in its
   lookups;
 - the API server, at the `kubernetes` Service's address (`KUBERNETES_SERVICE_HOST`);
-- a public address, `1.1.1.1:443`.
+- a public address, `1.1.1.1:443`;
+- another pod labelled as a sandbox, on port 8080: a peer pod, `<prefix>-network-peer-<random>`,
+  that the runner starts first, with the probe pod's labels and spec (its gate too), and that
+  listens there. It is Ready once its port answers from inside it (an exec probe: a kubelet's
+  TCP probe comes from the node, which some plugins let through), so a refusal from it is a
+  policy's. A plugin that kept the services out of reach but let one pod of the namespace
+  reach another would pass every other target. Its gate still reaching the API server or the
+  DNS is a verdict too, as the probe pod's.
 
 Every one has to be out of reach, and the egress proxy's Service has to answer, so that a pod
 with no network at all doesn't pass as isolated: on `EGRESS_PROXY`'s port, and on the engines'
@@ -715,16 +722,17 @@ run, the reply on the issue (and the dashboard) naming what the probe reached: u
 enforces NetworkPolicies (Calico, Cilium, k3s's kube-router; Flannel alone doesn't). On a plugin
 that doesn't, the probe pod's gate never sees the API server or the DNS out of reach: that
 verdict comes once it gives up, after `KUBERNETES_PENDING_MINUTES`, the runs meanwhile waiting
-for it. The probe
-pod is removed whatever it found, and its verdict kept until the NetworkPolicies of either
-namespace change (the runner reads them before every run) or the runner takes its lease again:
-after a change of plugin, restart it (`kubectl -n deckhand rollout restart deploy/runner`). A
-probe that couldn't tell refuses that run alone, and the next one probes again: its pod didn't
-end within `KUBERNETES_PENDING_MINUTES` and a minute, say, or its gate never reached the egress
-proxy (not ready yet on a fresh install, its pod evicted), or the probe itself didn't. Each
-probe's pod has a name of its own, so a runner copy taking over doesn't remove the other's
-mid-probe; one older than a probe lasts (a runner stopped mid-probe) is removed at the next
-probe. Its log lines start with
+for it. The probe pod and its peer are removed whatever they found, and its verdict kept until
+the NetworkPolicies of either namespace change (the runner reads them before every run) or the
+runner takes its lease again: after a change of plugin, restart it
+(`kubectl -n deckhand rollout restart deploy/runner`). A probe that couldn't tell refuses that
+run alone, and the next one probes again: its pod didn't end within `KUBERNETES_PENDING_MINUTES`
+and a minute, say (nor its peer get ready in as long), its peer stopped listening before it
+ended, its gate never reached the egress proxy (not ready yet on a fresh install, its pod
+evicted), or the probe itself didn't. Each probe's pods have names of their own, so a runner
+copy taking over doesn't remove the other's mid-probe; one older than a probe lasts (a runner
+stopped mid-probe) is removed at the next probe, and a peer left behind ends by itself by then
+(`activeDeadlineSeconds`). Its log lines start with
 `Network probe:`. The API server's own addresses, behind the `kubernetes` Service, and the
 DNS pods' aren't tried: the runner has no right to read them.
 
