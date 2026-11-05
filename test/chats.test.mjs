@@ -2,15 +2,13 @@
 // machinery (runs.mjs and tasks.mjs, whose part runs.test.mjs and orchestrator-server.test.mjs
 // cover), and the dashboard's real checks (repo-check.mjs) over a fake GitHub.
 import assert from "node:assert/strict";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
 import { test } from "node:test";
 import { chatKey, createChats } from "../listener/chats.mjs";
 import { createRepoCheck } from "../listener/repo-check.mjs";
 import { parseRepoConfig } from "../listener/repo-config.mjs";
-import { summaryPath } from "../listener/runlog.mjs";
+import { summaryKey } from "../listener/runlog.mjs";
 import { openStore } from "../lib/store.mjs";
-import { serve, tempDir, testConfig } from "./helpers.mjs";
+import { serve, testConfig } from "./helpers.mjs";
 
 // A clock and timers the test moves (`advance(ms)`).
 function fakeClock(start = 1_000_000) {
@@ -42,9 +40,9 @@ async function setup(
     yaml = null,
     env = {},
     installed = true,
-    dir = tempDir(t),
     users,
     store = openStore("memory:"),
+    permissions = null,
   } = {},
 ) {
   const config = testConfig({
@@ -54,7 +52,15 @@ async function setup(
     ...env,
   });
   const clock = fakeClock();
-  const calls = { started: [], delivered: [], rested: [], cancelled: [], removed: [], logs: [] };
+  const calls = {
+    started: [],
+    delivered: [],
+    rested: [],
+    cancelled: [],
+    removed: [],
+    logs: [],
+    shots: [],
+  };
   const lines = [];
   const ctx = {
     config,
@@ -63,8 +69,6 @@ async function setup(
     runs: [],
     runsById: new Map(),
     store,
-    logDir: dir,
-    shotsDir: dir,
     stopping: false,
     saveQueue: async () => true,
     publicUrl: () => "https://deck.example",
@@ -92,6 +96,8 @@ async function setup(
       },
     },
     runLogs: { remove: async (id) => calls.logs.push(id) },
+    removeShots: async (folder) => calls.shots.push(folder),
+    permissions,
   };
   const github = async (_repo, _method, path) => {
     if (path === "/repos/org/repo" && installed) {
@@ -115,7 +121,7 @@ async function setup(
   });
   ctx.chats = chats;
   await chats.load();
-  return { chats, ctx, calls, clock, config, lines, dir, store };
+  return { chats, ctx, calls, clock, config, lines, store };
 }
 
 const refusal = async (promise) => {
@@ -160,7 +166,7 @@ test("a chat: created on a repository, its first message starts its sandbox, the
   // Its sandbox waits for the next message: it goes to its inbox.
   task.pending.splice(0);
   Object.assign(task, { running: true, live: { open: true, result: {}, unanswered: [] } });
-  assert.equal(chats.list("alice")[0].status, "idle");
+  assert.equal((await chats.list("alice"))[0].status, "idle");
   const after = await chats.message("alice", chat.id, "And follow()?");
   assert.deepEqual(calls.delivered, [["And follow()?"]]);
   assert.equal(after.status, "idle");
@@ -206,6 +212,53 @@ test("the dashboard's checks: the App installed, a config without errors, the us
   });
 });
 
+test("the access decision: a hidden repo is a 404, no runs:start:chat a 403 that stops its sandbox, one undecided a 503", async (t) => {
+  // login → { ok, error } per action (null: some action at all), as permissions.mjs decide().
+  const access = { alice: {}, bob: { null: true, [`runs:start:chat`]: true, "logs:read": true } };
+  const permissions = {
+    decide: async (login, _repo, action) => {
+      const said = access[login]?.[action];
+      return said === "error" ? { ok: false, error: "policy away" } : { ok: !!said, error: null };
+    },
+  };
+  const { chats, ctx, calls } = await setup(t, { permissions });
+  // Alice sees nothing there: as a repo outside ALLOWED_REPOS.
+  assert.deepEqual(await refusal(chats.create("alice", { repo: "org/repo" })), {
+    status: 404,
+    message: "org/repo isn't one of this dashboard's repositories.",
+  });
+  access.alice = { null: true, "logs:read": true };
+  assert.deepEqual(await refusal(chats.create("alice", { repo: "org/repo" })), {
+    status: 403,
+    message: "You can't do this on org/repo: it needs the `runs:start:chat` action.",
+  });
+  access.alice["runs:start:chat"] = true;
+  const chat = await chats.create("alice", { repo: "org/repo", message: "hi" });
+  const key = chatKey(chat);
+  const task = ctx.tasks.get(key);
+  Object.assign(task, { running: true, live: { open: true } });
+  task.pending.splice(0);
+  ctx.runs.push({ id: "run-1", key, chat: chat.id, status: "ok", startedAt: 1 });
+  // Undecided: the message refused, nothing stopped, the sweep neither.
+  access.alice["runs:start:chat"] = "error";
+  assert.equal((await refusal(chats.message("alice", chat.id, "next"))).status, 503);
+  await chats.sweep();
+  assert.deepEqual(calls.cancelled, []);
+  // Its runs listed while its owner reads its logs.
+  assert.equal((await chats.list("alice"))[0].runs.length, 1);
+  access.alice["logs:read"] = false;
+  assert.deepEqual((await chats.list("alice"))[0].runs, []);
+  // Refused: the sweep stops it.
+  access.alice["runs:start:chat"] = false;
+  await chats.sweep();
+  assert.deepEqual(calls.cancelled, [[key, "Deckhand"]]);
+  // As does a message, once its repo is hidden.
+  task.running = true;
+  access.alice = {};
+  assert.equal((await refusal(chats.message("alice", chat.id, "again"))).status, 404);
+  assert.deepEqual(calls.cancelled.at(-1), [key, "Deckhand"]);
+});
+
 test("CHATS_PER_USER: a user's chats on every repository count, running or not; a repo's lower value too", async (t) => {
   const { chats } = await setup(t);
   await chats.create("alice", { repo: "org/repo" });
@@ -240,11 +293,11 @@ test("a user lists and reaches their own chats only", async (t) => {
   const mine = await chats.create("alice", { repo: "org/repo" });
   const theirs = await chats.create("bob", { repo: "org/repo" });
   assert.deepEqual(
-    chats.list("alice").map((c) => c.id),
+    (await chats.list("alice")).map((c) => c.id),
     [mine.id],
   );
   assert.deepEqual(
-    chats.list("BOB").map((c) => c.id),
+    (await chats.list("BOB")).map((c) => c.id),
     [theirs.id],
   );
   for (const attempt of [
@@ -255,7 +308,7 @@ test("a user lists and reaches their own chats only", async (t) => {
   ]) {
     assert.deepEqual(await refusal(attempt), { status: 404, message: "No such chat." });
   }
-  assert.equal(chats.list("bob").length, 1);
+  assert.equal((await chats.list("bob")).length, 1);
 });
 
 test("CHAT_IDLE_MINUTES after its last message, a chat's sandbox stops; a message in between waits longer", async (t) => {
@@ -284,7 +337,7 @@ test("chats survive a restart: listed again, their idle timers armed from their 
   const chat = await first.chats.create("alice", { repo: "org/repo", message: "hi" });
   const next = await setup(t, { store });
   assert.deepEqual(
-    next.chats.list("alice").map((c) => [c.id, c.status]),
+    (await next.chats.list("alice")).map((c) => [c.id, c.status]),
     [[chat.id, "stopped"]],
   );
   // Its run came back with the queue (restart.mjs): its timer fires 30 min after its message.
@@ -312,33 +365,41 @@ test("reset: its sandbox stopped, then its volumes removed; the chat stays, its 
   assert.deepEqual(task.next, {});
   assert.equal(reset.status, "stopped");
   assert.equal(typeof reset.resetAt, "number");
-  assert.equal(chats.list("alice").length, 1);
+  assert.equal((await chats.list("alice")).length, 1);
   await chats.message("alice", chat.id, "again");
   assert.deepEqual(calls.started.at(-1), ["again"]);
 });
 
 test("delete: its sandbox, volumes, runs' logs and task gone, and the chat itself", async (t) => {
-  const { chats, ctx, calls, dir, store } = await setup(t);
+  const { chats, ctx, calls, store } = await setup(t);
   const chat = await chats.create("alice", { repo: "org/repo", message: "hi" });
   const other = await chats.create("alice", { repo: "org/repo" });
   const key = chatKey(chat);
   const task = ctx.tasks.get(key);
   Object.assign(task, { running: true, live: { open: true } });
   task.pending.splice(0);
-  const run = { id: "run-1", key, chat: chat.id, status: "ok", startedAt: 1 };
+  const run = {
+    id: "run-1",
+    key,
+    chat: chat.id,
+    status: "ok",
+    startedAt: 1,
+    shots: "0123456789abcdef01234567",
+  };
   const kept = { id: "run-2", key: "org/repo#12", status: "ok", startedAt: 1 };
-  writeFileSync(summaryPath(dir, run.id), JSON.stringify(run));
+  await store.set(summaryKey(run.id), run);
   ctx.runs.push(run, kept);
   ctx.runsById.set(run.id, run).set(kept.id, kept);
   await chats.remove("alice", chat.id);
   assert.deepEqual(calls.cancelled, [[key, "Deckhand"]]);
   assert.deepEqual(calls.removed, [[task.name, key]]);
   assert.deepEqual(calls.logs, ["run-1"]);
-  assert.equal(existsSync(summaryPath(dir, run.id)), false);
+  assert.deepEqual(calls.shots, ["0123456789abcdef01234567"]);
+  assert.equal(await store.get(summaryKey(run.id)), null);
   assert.deepEqual(ctx.runs, [kept]);
   assert.equal(ctx.tasks.has(key), false);
   assert.deepEqual(
-    chats.list("alice").map((c) => c.id),
+    (await chats.list("alice")).map((c) => c.id),
     [other.id],
   );
   assert.equal(chats.has(key), false);
@@ -363,7 +424,7 @@ test("a user no longer allowed: their message refused and their chat's sandbox s
   const theirs = await narrowed.chats.create("alice", { repo: "org/repo", message: "hi" });
   const going = narrowed.ctx.tasks.get(chatKey(theirs));
   going.running = true;
-  narrowed.chats.sweep();
+  await narrowed.chats.sweep();
   assert.deepEqual(narrowed.calls.cancelled, [[chatKey(theirs), "Deckhand"]]);
   assert.ok(
     narrowed.lines.some((l) => /stopped, alice is no longer among org\/repo's users/.test(l)),
@@ -456,10 +517,10 @@ test("a chat its owner can no longer reach: listed, so they can delete it, witho
   ctx.usersOf = () => users.list;
   const chat = await chats.create("alice", { repo: "org/repo" });
   ctx.runs.push({ id: "run-1", key: chatKey(chat), chat: chat.id, status: "ok", startedAt: 1 });
-  assert.equal(chats.list("alice")[0].runs.length, 1);
+  assert.equal((await chats.list("alice"))[0].runs.length, 1);
   users.list = ["bob"];
-  const [listed] = chats.list("alice");
+  const [listed] = await chats.list("alice");
   assert.deepEqual([listed.reachable, listed.runs], [false, []]);
   await chats.remove("alice", chat.id);
-  assert.deepEqual(chats.list("alice"), []);
+  assert.deepEqual(await chats.list("alice"), []);
 });

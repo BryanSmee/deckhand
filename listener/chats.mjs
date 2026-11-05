@@ -13,6 +13,8 @@
 //   closes and the sandbox stops (runs.mjs rest()); the next message starts it again in the same
 //   session, from its own volumes (light-like: never shared with the repository's work runs,
 //   modes.mjs);
+// - who may chat: ALLOWED_USERS, the repository's `users` and the access decision
+//   (permissions.mjs), `runs:start:chat` there, as any start from the dashboard;
 // - CHATS_PER_USER, which a repository's `chats.per_user` may lower, counted across the
 //   repositories;
 // - its reset (its volumes and session dropped, the chat kept) and its deletion.
@@ -22,12 +24,13 @@ import { randomBytes } from "node:crypto";
 import { repoAllowed } from "./config.mjs";
 import { EFFORTS, MODEL_NAME, taskKey } from "./events.mjs";
 import { removeRun } from "./history.mjs";
+import { refusal as accessRefusal, startAction } from "./permissions.mjs";
 import { pickProblem } from "./agents/select.mjs";
 import { sandboxName } from "./repo-config.mjs";
 import { queueId } from "./restart.mjs";
 import { publicRun } from "./runlog.mjs";
 import { CHATS, newTask } from "./tasks.mjs";
-import { apiRoute } from "./web.mjs";
+import { apiRoute, hidden, mustDo } from "./web.mjs";
 import { readJsonBody, Refused, refuse, send } from "../lib/http.mjs";
 
 // The store's key of the chats: all of them, as one value (the store lists no keys).
@@ -46,6 +49,11 @@ const CHECK_MS = 60_000;
 const RETRY_MS = 60_000;
 // How long a reset or a deletion waits for the chat's sandbox to be gone.
 const STOP_WAIT_MS = 120_000;
+
+// What a chat's owner needs on its repository (permissions.mjs): to start its runs, and to read
+// their logs, its conversation.
+const START = startAction("chat");
+const LOGS = "logs:read";
 
 // The chat's task id and key, as tasks.mjs and runs.mjs have them.
 export const chatTaskId = (id) => `chat-${id}`;
@@ -145,15 +153,19 @@ export function createChats(
   }
 
   // Whether its owner may still reach it: ALLOWED_REPOS, ALLOWED_USERS and the repo's `users` as
-  // the orchestrator last read them (refusal()).
-  const reachable = (chat) => !refusal(chat);
+  // the orchestrator last read them (refusal()), and `logs:read` there (a decision that failed
+  // reaches nothing, as http.mjs refuses its logs then).
+  async function reachable(chat) {
+    if (refusal(chat)) return false;
+    return !ctx.permissions || (await ctx.permissions.decide(chat.owner, chat.repo, LOGS)).ok;
+  }
 
   // What the dashboard shows of a chat: its runs (their logs are its conversation) newest first.
   // A chat its owner can no longer reach shows without them (its logs are refused too,
   // http.mjs), so that they can still delete it.
-  function view(chat) {
+  async function view(chat) {
     const task = taskOf(chat);
-    const open = reachable(chat);
+    const open = await reachable(chat);
     return {
       ...chat,
       status: statusOf(chat),
@@ -165,10 +177,10 @@ export function createChats(
   }
 
   function list(user) {
-    return [...chats.values()]
+    const mine = [...chats.values()]
       .filter((chat) => own(chat, user))
-      .sort((a, b) => b.lastActiveAt - a.lastActiveAt)
-      .map((chat) => view(chat));
+      .sort((a, b) => b.lastActiveAt - a.lastActiveAt);
+    return Promise.all(mine.map(view));
   }
 
   // The agent, model and effort a chat was created with, each that it names (runs.mjs begin(),
@@ -181,10 +193,20 @@ export function createChats(
     );
   }
 
-  // The checks of the dashboard's other actions on `repo` (repo-check.mjs checkedRepo()), as
-  // GitHub spells it. → { settings, base, repo }.
+  // The checks of the dashboard's other actions on `repo`: as a route of theirs (web.mjs
+  // apiRoute()), a repo the user doesn't see answers as one outside ALLOWED_REPOS, one without
+  // `runs:start:chat` a 403 and one whose access can't be decided a 503; then repo-check.mjs
+  // checkedRepo(), as GitHub spells it. → { settings, base, repo }.
   async function checked(repo, user) {
-    if (!repoAllowed(config, repo)) refuse(404, `${repo} is not in ALLOWED_REPOS.`);
+    if (!repoAllowed(config, repo)) refuse(404, hidden(repo).error);
+    if (ctx.permissions) {
+      const sees = await ctx.permissions.decide(user, repo, null);
+      if (!sees.ok) {
+        if (sees.error) log(`Chats: ${repo}: hidden: ${accessRefusal(sees, user, null)}`);
+        refuse(404, hidden(repo).error);
+      }
+      await mustDo(ctx.permissions, user, repo, START);
+    }
     const name = await checks.nameOf(repo);
     return { ...(await checks.checkedRepo(name, user)), repo: name };
   }
@@ -255,7 +277,8 @@ export function createChats(
 
   // The user's next message: it starts the chat's sandbox, or goes to the one waiting for it.
   // Refused, and a sandbox still going stopped, once the user may no longer run the agent there
-  // (ALLOWED_USERS, the repo's `users`, its config's errors).
+  // (ALLOWED_USERS, the repo's `users`, the access decision, its config's errors); a decision
+  // that failed refuses the message alone.
   async function message(user, id, text) {
     const chat = mine(user, id);
     textOf(text);
@@ -264,7 +287,9 @@ export function createChats(
     try {
       read = await checked(chat.repo, user);
     } catch (error) {
-      if (error instanceof Refused && error.status === 403) stop(chat, "no longer allowed");
+      if (error instanceof Refused && (error.status === 403 || error.status === 404)) {
+        stop(chat, "no longer allowed");
+      }
       throw error;
     }
     await queue(chat, user, text, read.settings, read.base);
@@ -419,16 +444,25 @@ export function createChats(
   }
 
   // The chats going whose owner may no longer run the agent on their repository: stopped. Every
-  // CHECK_MS, from what the orchestrator read of the repos' `users` last (ctx.usersOf()); a
-  // message reads them again (checked()).
-  function sweep() {
+  // CHECK_MS, from what the orchestrator read of the repos' `users` last (ctx.usersOf()) and the
+  // access decision (a decision that failed stops nothing, as runs.mjs keeps a queued comment
+  // then); a message reads them again (checked()).
+  async function sweep() {
     for (const chat of chats.values()) {
       const task = taskOf(chat);
       if (!task?.running && !task?.pending.length) continue;
-      const why = refusal(chat);
+      const why = refusal(chat) ?? (await denied(chat));
       if (why) stop(chat, why);
     }
   }
+
+  async function denied(chat) {
+    if (!ctx.permissions) return null;
+    const said = await ctx.permissions.decide(chat.owner, chat.repo, START);
+    return said.ok || said.error ? null : accessRefusal(said, chat.owner, START);
+  }
+
+  const sweepLogged = () => sweep().catch((error) => log(`Chats: ${error.stack ?? error}`));
 
   function refusal(chat) {
     if (!repoAllowed(config, chat.repo)) return `${chat.repo} is no longer in ALLOWED_REPOS`;
@@ -444,8 +478,8 @@ export function createChats(
   // again from each chat's last message, and the checks of who may go on.
   function start() {
     for (const chat of chats.values()) arm(chat);
-    sweep();
-    sweeping = every(sweep, checkMs);
+    sweepLogged();
+    sweeping = every(sweepLogged, checkMs);
     sweeping?.unref?.();
   }
 
@@ -475,13 +509,14 @@ export function createChats(
       return m && { what: m[2] ?? "chat", id: m[1] };
     },
     gets: {
-      chats: (req, res, user) => send(res, 200, { chats: list(user) }),
-      chat: (req, res, user, _, { id }) => send(res, 200, { chat: view(mine(user, id)) }),
+      chats: async (req, res, user) => send(res, 200, { chats: await list(user) }),
+      chat: async (req, res, user, _, { id }) =>
+        send(res, 200, { chat: await view(mine(user, id)) }),
     },
     posts: {
       chats: async (req, res, user) => {
         const chat = await create(user, await readJsonBody(req, MAX_BODY));
-        send(res, 201, { chat: view(chat) });
+        send(res, 201, { chat: await view(chat) });
       },
       messages: async (req, res, user, _, { id }) => {
         const body = await readJsonBody(req, MAX_BODY);

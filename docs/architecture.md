@@ -165,7 +165,8 @@ sandbox, tokens, capabilities, inbox, log and restarts. What differs:
   `runner/spec-check.mjs` `chatSandbox()`); a deletion removes its runs' logs and summaries too
   (`history.mjs` `removeRun()`);
 - every minute (`sweep()`), and at each message, a chat whose owner left `ALLOWED_USERS` or the
-  repository's `users` (as last read) is stopped; its messages are refused, its volumes stay
+  repository's `users` (as last read), or lost `runs:start:chat` there (`permissions.mjs`), is
+  stopped; its messages are refused, its volumes stay
   until it is deleted.
 
 ### Modes

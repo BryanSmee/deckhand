@@ -21,7 +21,7 @@ export function sameOrigin(req, publicUrl) {
 
 // A repo outside ALLOWED_REPOS, or one the user has no action on: the same answer, so that
 // neither tells the other apart.
-const hidden = (repo) => ({ error: `${repo} isn't one of this dashboard's repositories.` });
+export const hidden = (repo) => ({ error: `${repo} isn't one of this dashboard's repositories.` });
 
 // A route whose action couldn't be decided (a policy error, a policy service away): refused,
 // saying so, once the repo is known to be visible (else it is hidden()).

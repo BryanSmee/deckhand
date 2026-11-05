@@ -1642,7 +1642,7 @@ first (again after a push to its default branch).
 
 **Where they are asked**: each dashboard route needs its action (the backlog and a
 discussion's thread `tasks:read`; starting, queueing or laying out work, the inbox, Analyze, a
-discussion and onboarding `runs:start:<mode>` for the mode they start, wrapping a brainstorm up `runs:start:stop`; cancelling, rerunning,
+discussion, onboarding and a chat's creation and messages `runs:start:<mode>` for the mode they start (`chat` for a chat), wrapping a brainstorm up `runs:start:stop`; cancelling, rerunning,
 answering, Review and Fix, dismissing, lanes and the run order `runs:manage`, and what starts a
 run among them (a rerun, Review, Fix, answers a session goes on with) its mode's start too, before
 anything is posted; a repository's config and its refresh `repo:config:read`; Settings › Server,

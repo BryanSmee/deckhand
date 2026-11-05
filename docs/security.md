@@ -2400,15 +2400,17 @@ these).
 A chat (`/api/chats`, `listener/chats.mjs`, [architecture.md](architecture.md#chats)) is
 created, and each of its messages sent, with the repository's half of these checks (same
 origin, the repository in `ALLOWED_REPOS` and the App installed on it, a config without
-errors, the user in `ALLOWED_USERS` and the repository's `users`), at each request: a user
-taken out of either can't send another message, and a sandbox of theirs still going is
-stopped, then and within a minute anyway (from the repository's `users` as last read). Their
-chats' volumes stay until they are deleted. A chat is its owner's alone: another user doesn't
+errors, the user in `ALLOWED_USERS` and the repository's `users`, with the
+`runs:start:chat` [action](#access) there, a repository they have no action on answering as one
+outside `ALLOWED_REPOS`), at each request: a user taken out of any of them can't send another
+message, and a sandbox of theirs still going is stopped, then and within a minute anyway (from
+the repository's `users` as last read, and the access decision; one that fails stops nothing).
+Their chats' volumes stay until they are deleted. A chat is its owner's alone: another user doesn't
 list it, can't send it a message, reset or delete it (a `404`, as for a chat that doesn't
 exist), nor read its runs' logs (`GET /api/runs/<id>/stream`), which the board, `/status` and
 the run analyses leave out. Reset and Delete take the same origin and the owner's session
 only, so a user who lost access can still drop what they left: their chat still lists for them,
-without its runs, whose logs are refused them too. `CHATS_PER_USER` caps the chats
+without its runs (listed with `logs:read` only), whose logs are refused them too. `CHATS_PER_USER` caps the chats
 a user keeps across the repositories (a repository's `chats.per_user` lowers it, never raises
 it), and `MAX_RUNNING_CHATS` the chats' sandboxes running at once, apart from `MAX_PARALLEL`.
 

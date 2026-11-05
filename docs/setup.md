@@ -742,8 +742,9 @@ of them is a run of its own, a new sandbox in the same conversation, which stops
 answered.
 
 A chat's reset drops its volumes and its conversation, and keeps it; deleting it removes its
-volumes and its runs' logs too. A user taken out of `ALLOWED_USERS` or a repository's `users`
-can no longer send a message there, and their chat's sandbox stops; its volumes stay until it
+volumes and its runs' logs too. A user taken out of `ALLOWED_USERS` or a repository's `users`,
+or whose [access](repo-config.md#access) there no longer gives `runs:start:chat`, can no longer
+send a message there, and their chat's sandbox stops; its volumes stay until it
 is deleted.
 
 ### Fast mode
