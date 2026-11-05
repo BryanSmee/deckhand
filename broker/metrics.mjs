@@ -76,3 +76,6 @@ export function brokerMetrics(registry, { runs }) {
     },
   };
 }
+
+// Every metric its server declares, and test/metrics-services.test.mjs: brokerMetrics()'s alone.
+export const declareMetrics = brokerMetrics;

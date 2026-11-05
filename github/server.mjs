@@ -28,7 +28,7 @@ import { grantFor, grantOf, grantsBy, loadGrants } from "../listener/grants.mjs"
 import { createPolicies } from "../listener/policies.mjs";
 import { policyClient } from "../listener/policy-client.mjs";
 import { createAppHolder } from "./app.mjs";
-import { githubMetrics } from "./metrics.mjs";
+import { declareMetrics } from "./metrics.mjs";
 import { createGithubService } from "./service.mjs";
 
 const env = process.env;
@@ -57,7 +57,7 @@ const { config, bound, graceMs } = started;
 // Its metrics, on their own port when METRICS_PORT is set: GitHub's calls, its rate limit and
 // the git operations (metrics.mjs).
 const mirrorDir = join(config.dataDir, "git-mirrors");
-const metrics = githubMetrics(
+const metrics = declareMetrics(
   startMetrics({ service: "github", port: config.metricsPort, log }).registry,
   {
     mirrorDir,

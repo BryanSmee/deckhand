@@ -259,3 +259,6 @@ export function modelMetrics(registry, { readUsage = async () => [], now = Date.
       }),
   };
 }
+
+// Every metric its server declares, and test/metrics-services.test.mjs: modelMetrics()'s alone.
+export const declareMetrics = modelMetrics;

@@ -8,7 +8,7 @@ import { repoAllowed } from "./config.mjs";
 import { APP_EVENTS } from "./github-app.mjs";
 import { BUILT_IN } from "./modes.mjs";
 import { pickedTask } from "./tasks.mjs";
-import { STATUS_LABELS, statusLabel } from "../lib/metrics.mjs";
+import { leaseMetric, STATUS_LABELS, statusLabel } from "../lib/metrics.mjs";
 
 // A run's length, in seconds: from under a minute to hours.
 export const RUN_BUCKETS = [30, 60, 120, 300, 600, 900, 1800, 2700, 3600, 5400, 7200, 14400, 28800];
@@ -312,3 +312,15 @@ export const fallbacksMetric = (registry) =>
     "Runs whose provider failed, put back for the next entry of FALLBACKS (from, to: agent@provider[:credential]).",
     { labels: ["from", "to"], values: { from: ENTRIES, to: ENTRIES } },
   );
+
+// Every metric the orchestrator's server declares (../orchestrator/server.mjs), and
+// test/metrics-services.test.mjs: its calls to the other services, its lease (`acting()`), its
+// own (`ctx`: orchestratorMetrics()'s) and the fallbacks. → each one's hooks.
+export function declareMetrics(registry, { acting, ctx }) {
+  return {
+    calls: serviceCallMetrics(registry),
+    leases: leaseMetric(registry, { orchestrator: acting }),
+    counted: orchestratorMetrics(registry, { ctx }),
+    fallbacks: fallbacksMetric(registry),
+  };
+}

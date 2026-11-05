@@ -31,7 +31,7 @@ import { writeFileAtomic } from "../lib/files.mjs";
 import { createBrokerCaller } from "../lib/broker-client.mjs";
 import { drain } from "../lib/drain.mjs";
 import { createLogger } from "../lib/log.mjs";
-import { leaseMetric, startMetrics } from "../lib/metrics.mjs";
+import { startMetrics } from "../lib/metrics.mjs";
 import { serviceClient } from "../lib/service-client.mjs";
 import { networkCallers } from "../lib/service-token.mjs";
 import { openStore } from "../lib/store.mjs";
@@ -47,7 +47,7 @@ import { createForwarder } from "./forward.mjs";
 import { createEdgeHttp, DRAIN_MS, takenDelivery } from "./http.mjs";
 import { createShots } from "./shots.mjs";
 import { createEdgeInternal } from "./internal.mjs";
-import { edgeMetrics } from "./metrics.mjs";
+import { declareMetrics } from "./metrics.mjs";
 import { createOAuth } from "./oauth.mjs";
 
 const env = process.env;
@@ -113,8 +113,14 @@ const store = openStore(env.STORE_URL || pathToFileURL(join(dataDir, "store")).h
   password: env.REDIS_PASSWORD,
   secrets,
 });
-// What reaches it from outside (metrics.mjs): its users counted in the store both copies share.
-const counted = edgeMetrics(metrics.registry, { store });
+// The redeliveries' poller, once made (below).
+let poller = null;
+// What reaches it from outside (metrics.mjs): its users counted in the store both copies share;
+// and the poller's lease.
+const { counted, leases } = declareMetrics(metrics.registry, {
+  store,
+  redeliveries: () => Boolean(poller?.active()),
+});
 
 // The github service, as edge: reads, /setup's conversion and the redeliveries, never a write
 // of a run's (../github/service.mjs ROUTES).
@@ -225,7 +231,7 @@ broker.start().catch((error) => log(`Broker: ${error.message}`));
 
 // The redeliveries' poller on one copy: the one holding its lease (lib/active.mjs). The other
 // takes it once this one stops, or within a lease's life after a crash.
-const poller = activePassive({
+poller = activePassive({
   store,
   name: "edge/redeliveries",
   holder: `edge-${randomUUID()}`,
@@ -233,7 +239,6 @@ const poller = activePassive({
   onPassive: () => redeliveries.stop(),
   log,
 });
-const leases = leaseMetric(metrics.registry, { "edge/redeliveries": () => poller.active() });
 poller.start();
 
 // A rolling update starts the next copy first: this one takes no new connection, lets the

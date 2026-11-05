@@ -10,7 +10,7 @@ import { BlobError, blobCredentials, blobSecrets, startBlobs } from "../lib/blob
 import { DRAIN_MS } from "../lib/drain.mjs";
 import { healthInfo } from "../lib/health.mjs";
 import { createLogger } from "../lib/log.mjs";
-import { leaseMetric, startMetrics } from "../lib/metrics.mjs";
+import { startMetrics } from "../lib/metrics.mjs";
 import { createBrokerCaller } from "../lib/broker-client.mjs";
 import { serviceClient } from "../lib/service-client.mjs";
 import { networkCallers } from "../lib/service-token.mjs";
@@ -25,7 +25,7 @@ import { policyClient } from "../listener/policy-client.mjs";
 import { createPolicies } from "../listener/policies.mjs";
 import { createBackend } from "../listener/runner/index.mjs";
 import { createLogs } from "./logs.mjs";
-import { runnerMetrics } from "./metrics.mjs";
+import { declareMetrics } from "./metrics.mjs";
 import { createRunnerService, loginRefresh } from "./service.mjs";
 
 const env = process.env;
@@ -40,19 +40,20 @@ let bound;
 let brokerCaller;
 let metrics;
 let counted;
+let leases;
 // The service and its lease, once made (below): its sandboxes, for the metrics.
 let service = null;
 let lease = null;
 try {
   config = loadConfig(env, readConfigFile(env), { service: "runner" });
   // Its metrics (../lib/metrics.mjs), on their own port when METRICS_PORT is set; its own
-  // (metrics.mjs) counted from the backend's first call.
+  // (metrics.mjs) counted from the backend's first call, and its lease's.
   metrics = startMetrics({ service: "runner", port: config.metricsPort, log });
-  counted = runnerMetrics(metrics.registry, {
+  ({ counted, leases } = declareMetrics(metrics.registry, {
     runner: config.runner,
     sandboxes: async () => (service ? service.sandboxes() : null),
     active: () => Boolean(lease?.active()),
-  });
+  }));
   credentials = blobCredentials(env);
   // Kubernetes' NetworkPolicies and the pods' own service accounts tell callers apart there
   // (#396): SERVICE_NETWORKS=none says so. Anywhere else, a runner without it takes no call.
@@ -165,7 +166,6 @@ lease = activePassive({
   onPassive: () => service.deactivate(),
   log,
 });
-const leases = leaseMetric(metrics.registry, { runner: () => lease.active() });
 
 // What the operator's policies grant each repository (a container engine, its Dockerfile…),
 // asked of the policy service as the listener asks it: the runner checks every spec and build
