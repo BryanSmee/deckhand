@@ -262,6 +262,7 @@ const MAPS = {
   titles: {},
   closed: {},
   pulls: {},
+  marks: {},
   dismissed: {},
   order: { moved: ranked, replace: true },
   onboarding: {},
@@ -665,6 +666,7 @@ titles.seed(ctx.runs.map((r) => [r.key, r.title]));
 // Each task's pull request: from webhooks, else looked up once (pulls.mjs).
 const pulls = createPulls({
   pulls: maps.maps.pulls,
+  marks: maps.maps.marks,
   log,
   listPulls: (repo) => listPulls(github, repo),
   getPull: (repo, number) => fetchPull(github, repo, number),

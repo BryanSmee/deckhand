@@ -2394,7 +2394,9 @@ client, and no sandbox service, run token or git gateway is on the machine.
   their check. It is recorded as the machine's (`pr.external`, the owner's login), and so is the
   task's open pull request whenever a machine's claim covers it (at the claim, at its end, at a
   release or a lease run out), whether or not `finish` names a branch: the machine may push to it
-  either way. It is shown so on
+  either way. The mark is kept per pull request (the store's `marks`, #947), not only in the
+  task's entry: an older one left open when a newer one became the task's stays the machine's,
+  and never merged by itself. It is shown so on
   the dashboard, and in the policies' input of `deny_review`, `deny_fix`, `deny_merge` and
   `deny_request_review`.
 - **Never merged by itself, by default**: on top of auto-merge's gates ([Auto-merge](#auto-merge):

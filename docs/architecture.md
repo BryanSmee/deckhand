@@ -1119,7 +1119,8 @@ branch, sha, ready }` (or `ask`). Before the run ends, the orchestrator checks i
   with `external: <owner>` (`pulls.mjs`), as is any open pull request of the task a machine's
   claim covers (`claims.mjs` `markPull()`: at the claim and at its end, whatever `finish` names),
   once opened or found, before it is marked ready, kept whatever later deliveries say, for the dashboard
-  and the policies' `pr.external`; the run's record gets the branch, and `lastPushAt` when its
+  and the policies' `pr.external` (`externalOf()`, which reads the store's `marks`, one per pull
+  request: a newer pull request on the task leaves the older one marked, #947); the run's record gets the branch, and `lastPushAt` when its
   head isn't the one the pull request had at the claim (its reviewers asked again), its
   `synchronize` delivery recorded first or not.
 - **Interrupted**: `release`, a lease that runs out (no heartbeat for 2 minutes) or the machine

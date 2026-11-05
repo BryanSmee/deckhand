@@ -9,7 +9,9 @@
 // repo's default branch moved (baseMoved()), which no delivery of the pull request says.
 // `external`: the login whose machine pushed its branch, for one the App opened from a machine's
 // push (machine-pulls.mjs, #598): kept for that pull request whatever later records say, for the
-// dashboard and the policies' input (`pr.external`).
+// dashboard. The policies' input (`pr.external`) reads it from `marks` (externalOf(), #947), one
+// per pull request: the task's entry holds only its latest, and an older one still open mustn't
+// lose its mark when a newer one replaces it there.
 // `pull_request` webhooks keep it current (events.mjs pullRequest()), and the listener's own
 // record of the runs' changes (github-pulls.mjs); tasks older than that are looked up once per
 // listener start, from the repo's recent pull requests. Kept in the store (lib/store-map.mjs:
@@ -36,10 +38,12 @@ const MERGE_AT_ONCE = 4;
 // `listPulls(repo)`: the repo's recent pull requests, as GET /repos/{repo}/pulls has them;
 // `getPull(repo, number)`: one of them, or null.
 // `readCi(repo, sha)`: a commit's CI as GitHub has it now (ci.mjs commitCi()), or null.
-// `pulls`: the Map they are kept in (storeMap()'s). `mergeDelayMs`: baseMoved()'s wait, while
+// `pulls`: the Map they are kept in (storeMap()'s); `marks`: the machines' pull requests, the
+// Map they are kept in (storeMap()'s), "org/repo#12" (lowercase repo) → owner's login. `mergeDelayMs`: baseMoved()'s wait, while
 // GitHub computes the mergeability again (CONFLICT_MERGE_DELAY_MS); `sleep(ms)`, for tests.
 export function createPulls({
   pulls = new Map(),
+  marks = new Map(),
   listPulls,
   getPull = async () => null,
   readCi = async () => null,
@@ -63,6 +67,13 @@ export function createPulls({
   // repo (lowercase) → baseMoved()'s reads under way: the deliveries of one move (the push, the
   // merged pull request's `closed`) share them.
   const moving = new Map();
+  // Marks recorded before `marks` was (#947): in the task's entry alone.
+  for (const [key, pr] of pulls) {
+    const repo = parseKey(key)?.repo;
+    if (pr.external && repo && !marks.has(markKey(repo, pr.number))) {
+      marks.set(markKey(repo, pr.number), pr.external);
+    }
+  }
 
   // Records `pr` on task `key`, the latest event winning: the same pull request leaves the
   // task it was on (its "Closes #n" was edited, or a listener from before #287 kept it under
@@ -86,8 +97,13 @@ export function createPulls({
     // Merged by the listener (reviews.mjs autoMerge()): the `closed` delivery that follows
     // doesn't know it.
     const autoMerged = pr.autoMerged || before?.autoMerged;
-    // A machine's (#598): no delivery says it, the App's record does.
-    const external = pr.external ?? before?.external;
+    // A machine's (#598): no delivery says it, the App's record does. One that was the task's
+    // before another replaced it, and is again, has it from `marks`.
+    const external =
+      pr.external ?? before?.external ?? (repo && marks.get(markKey(repo, pr.number)));
+    if (external && repo && marks.get(markKey(repo, pr.number)) !== external) {
+      marks.set(markKey(repo, pr.number), external);
+    }
     // A pull request object without its size (the listener's own changes may have none): the
     // one known stays.
     const size = before ? knownSize(before) : {};
@@ -464,12 +480,10 @@ export function createPulls({
   }
 
   // The login whose machine pushed pull request `number` of `repo` (record()'s `external`), or
-  // null: what the policies' input says of it (policies.mjs pullInput()).
+  // null: what the policies' input says of it (policies.mjs pullInput()). From `marks`, whether
+  // or not it is still its task's pull request: an older one left open stays a machine's.
   function externalOf(repo, number) {
-    for (const [key, pr] of pulls) {
-      if (pr.number === number && sameRepo(parseKey(key)?.repo, repo)) return pr.external ?? null;
-    }
-    return null;
+    return (typeof repo === "string" && marks.get(markKey(repo, number))) || null;
   }
 
   return {
@@ -488,6 +502,9 @@ export function createPulls({
     respell,
   };
 }
+
+// A pull request's key in `marks`: its repo's spellings are one.
+const markKey = (repo, number) => `${repo.toLowerCase()}#${number}`;
 
 // One task's pull request under two spellings, `kept` the one respellMap() met first under the
 // new key. Which is newer isn't known: the open one of two pull requests, as record() has it;
