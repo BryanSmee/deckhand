@@ -6,3 +6,4 @@ config.yaml
 /server/
 /credentials/
 listener/vendor/graphql.mjs
+test/.compile-cache/
