@@ -17,9 +17,12 @@ type Block =
   | { t: "hr" }
   | { t: "table"; align: Align[]; head: string[]; rows: string[][] };
 
-const FENCE = /^ {0,3}(`{3,}|~{3,})[ \t]*([^\s`]*)/;
+// A backtick fence's info string has no backtick: ```a``` starts a paragraph with a code span.
+const FENCE = /^ {0,3}(`{3,}(?![^`]*`)|~{3,})[ \t]*(\S*)/;
 const HEADING = /^ {0,3}(#{1,6})(?:[ \t]+(.*?))?(?:[ \t]+#+)?[ \t]*$/;
-const SETEXT = /^ {0,3}(=+|-+)[ \t]*$/;
+// Two dashes at least: a lone `-` under a paragraph is a list item still streaming in, not
+// an underline turning it into a heading for a moment.
+const SETEXT = /^ {0,3}(=+|-{2,})[ \t]*$/;
 const HR = /^ {0,3}([-*_])(?:[ \t]*\1){2,}[ \t]*$/;
 const QUOTE = /^ {0,3}> ?(.*)$/;
 const ITEM = /^( *)([-*+]|\d{1,9}[.)])( +|$)(.*)$/;
@@ -36,9 +39,14 @@ const tableAt = (lines: string[], i: number) =>
   lines[i + 1].includes("|") &&
   DELIMITER.test(lines[i + 1]);
 
-// A line that ends a paragraph by starting a block of its own.
+// A line that ends a paragraph by starting a block of its own. An ordered list only from 1, as
+// in CommonMark: "2024. That year…" wrapped onto its own line goes on the paragraph.
 const startsBlock = (line: string) =>
-  FENCE.test(line) || HEADING.test(line) || HR.test(line) || QUOTE.test(line) || ITEM.test(line);
+  FENCE.test(line) ||
+  HEADING.test(line) ||
+  HR.test(line) ||
+  QUOTE.test(line) ||
+  /^ *([-*+]|1[.)])( +|$)/.test(line);
 
 // A table row's cells, without its outer pipes; `\|` is a pipe inside a cell.
 function cells(line: string): string[] {
@@ -192,7 +200,8 @@ function list(lines: string[], i: number, blocks: Block[]): number {
       }
       const ind = indentOf(line);
       if (ind > indent + 1) body.push(line.slice(Math.min(ind, content)));
-      else if (!blank(body.at(-1)!) && !startsBlock(line)) body.push(line.trim());
+      else if (!blank(body.at(-1)!) && !startsBlock(line) && !ITEM.test(line))
+        body.push(line.trim());
       else break;
       i++;
     }
@@ -254,8 +263,9 @@ const anchor = (url: string, children: ComponentChildren, key: number) => (
   </a>
 );
 
-// A closing run of exactly `n` of `c` after `from`, not after a space; code spans skipped.
-function closerAt(s: string, from: number, c: string, n: number): number {
+// A closing run of exactly `n` of `c` after `from`, not after a space; code spans skipped. With
+// `longer`, a longer run's last `n` close too: `**bold *it***` ends both at once.
+function closerAt(s: string, from: number, c: string, n: number, longer = false): number {
   for (let j = from; j < s.length; j++) {
     if (s[j] === "\\") j++;
     else if (s[j] === "`") {
@@ -266,8 +276,9 @@ function closerAt(s: string, from: number, c: string, n: number): number {
       let k = j;
       while (s[k] === c) k++;
       const after = s[k] ?? "";
-      if (k - j === n && !/\s/.test(s[j - 1]) && j > from && !(c === "_" && WORD.test(after)))
-        return j;
+      const fits = k - j === n || (longer && k - j > n);
+      if (fits && !/\s/.test(s[j - 1]) && j > from && !(c === "_" && WORD.test(after)))
+        return k - n;
       j = k - 1;
     }
   }
@@ -284,7 +295,8 @@ const EMPHASIS: Record<number, (c: ComponentChildren, key: number) => JSX.Elemen
   ),
 };
 
-function inline(s: string): ComponentChildren[] {
+// Without `links`, for a link's label: an anchor never holds another.
+function inline(s: string, links = true): ComponentChildren[] {
   const out: ComponentChildren[] = [];
   let text = "";
   const push = (node: ComponentChildren) => {
@@ -328,15 +340,17 @@ function inline(s: string): ComponentChildren[] {
       const link = linkAt(s, image ? i + 1 : i);
       if (link) {
         const raw = s.slice(i, link.end);
+        // In a label (a badge's `[![alt](…)](…)`): its text alone.
+        if (!links) push(image ? link.label : inline(link.label, false));
         // An image is a link to it: the dashboard doesn't load what a reply points at.
-        if (SAFE_URL.test(link.url))
-          push(anchor(link.url, image ? link.label || link.url : inline(link.label), i));
+        else if (SAFE_URL.test(link.url))
+          push(anchor(link.url, image ? link.label || link.url : inline(link.label, false), i));
         else text += raw;
         i = link.end;
         continue;
       }
     }
-    if (c === "<") {
+    if (c === "<" && links) {
       const auto = /^<((?:https?:\/\/|mailto:)[^\s<>]+)>/i.exec(rest);
       if (auto) {
         push(anchor(auto[1], auto[1], i));
@@ -344,7 +358,7 @@ function inline(s: string): ComponentChildren[] {
         continue;
       }
     }
-    if ((c === "h" || c === "H") && !WORD.test(s[i - 1] ?? "")) {
+    if ((c === "h" || c === "H") && links && !WORD.test(s[i - 1] ?? "")) {
       const bare = /^https?:\/\/[^\s<>]+/i.exec(rest);
       if (bare) {
         // Not the sentence's punctuation after it, nor a closing paren it didn't open.
@@ -361,9 +375,11 @@ function inline(s: string): ComponentChildren[] {
       const n = c === "~" ? (run.length === 2 ? 2 : 0) : Math.min(run.length, 3);
       const intraword = c === "_" && WORD.test(s[i - 1] ?? "");
       const opens = n > 0 && run.length === n && !intraword && !/\s/.test(s[i + n] ?? " ");
-      const close = opens ? closerAt(s, i + n, c, n) : -1;
+      // A run of its own length first, so `*a **b** c*` closes at its last `*`.
+      const exact = opens ? closerAt(s, i + n, c, n) : -1;
+      const close = exact > 0 || !opens ? exact : closerAt(s, i + n, c, n, true);
       if (close > 0) {
-        const inner = inline(s.slice(i + n, close));
+        const inner = inline(s.slice(i + n, close), links);
         push(c === "~" ? <del key={i}>{inner}</del> : EMPHASIS[n](inner, i));
         i = close + n;
       } else {

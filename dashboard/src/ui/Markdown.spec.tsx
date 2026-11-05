@@ -133,3 +133,48 @@ test("while it streams in: an unclosed fence, a half table, a dangling mark rend
     expect(() => html(partial)).not.toThrow();
   }
 });
+
+test("a line opening with an inline ```span``` is a paragraph, not a fence", () => {
+  const md = html("```a``` and text\n\nNext paragraph.");
+  expect(md.querySelector("pre")).toBeNull();
+  const [first, second] = md.querySelectorAll("p");
+  expect(first.querySelector("code")!.textContent).toBe("a");
+  expect(first.textContent).toBe("a and text");
+  expect(second.textContent).toBe("Next paragraph.");
+});
+
+test("a link's label holds no other link: a URL, an autolink or a badge's image", () => {
+  let md = html("[https://a.example](https://a.example)");
+  expect(md.querySelectorAll("a").length).toBe(1);
+  md = html("[see <https://b.example>](https://a.example)");
+  expect(md.querySelectorAll("a").length).toBe(1);
+  md = html("[![build](https://img.example/b.svg)](https://ci.example)");
+  const links = md.querySelectorAll("a");
+  expect(links.length).toBe(1);
+  expect(links[0].getAttribute("href")).toBe("https://ci.example");
+  expect(links[0].textContent).toBe("build");
+});
+
+test("a closing *** ends a strong and an em at once", () => {
+  let md = html("**bold *it***");
+  expect(md.querySelector("strong")!.textContent).toBe("bold it");
+  expect(md.querySelector("strong > em")!.textContent).toBe("it");
+  md = html("*it **bold***");
+  expect(md.querySelector("em > strong")!.textContent).toBe("bold");
+  md = html("*a **b** c*");
+  expect(md.querySelector("em")!.textContent).toBe("a b c");
+  expect(md.querySelector("em > strong")!.textContent).toBe("b");
+});
+
+test("only a list from 1 interrupts a paragraph; a lone dash under one isn't an underline", () => {
+  let md = html("It shipped in\n2024. That year it grew.");
+  expect(md.querySelector("ol")).toBeNull();
+  expect(md.querySelector("p")!.textContent).toBe("It shipped in2024. That year it grew.");
+  md = html("Steps:\n1. one\n2. two");
+  expect(md.querySelectorAll("ol > li").length).toBe(2);
+  md = html("Steps:\n-");
+  expect(md.querySelector("h2")).toBeNull();
+  expect(md.querySelector("p")!.textContent).toBe("Steps:");
+  expect(md.querySelector("ul")).toBeTruthy();
+  expect(html("Title\n--").querySelector("h2")!.textContent).toBe("Title");
+});
