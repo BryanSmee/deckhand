@@ -1271,7 +1271,10 @@ test("access: a decision that fails holds nothing and says nothing: the next swe
   const { pickup, p } = setup({ repos: { "org/a": { issues: [issue(1, 1)] } }, permissions });
   assert.deepEqual(await pickup.sweep(), []);
   assert.deepEqual([p.comments, p.removed, p.accepted], [[], [], []]);
-  assert.match(p.logs.join("\n"), /org\/a#1: who may start it can't be decided/);
+  assert.match(
+    p.logs.join("\n"),
+    /org\/a#1: who has runs:start:work on org\/a can't be decided \(the policies can't be read\)/,
+  );
   failing.length = 0;
   assert.deepEqual(await pickup.sweep(), ["org/a#1"]);
   assert.equal(p.accepted[0].author, "alice");

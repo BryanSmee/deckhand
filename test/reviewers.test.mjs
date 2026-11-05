@@ -407,7 +407,7 @@ test("access: a reviewer's decision that fails requests nothing, and is asked ag
   );
   const s = setup(t, { permissions });
   await assert.rejects(s.reviewers.ready("pull_request", delivery("ready_for_review")), {
-    message: /who may see org\/repo's tasks can't be decided/,
+    message: /who has tasks:read on org\/repo can't be decided \(the policies can't be read\)/,
   });
   assert.deepEqual(s.posts(), []);
   failing.length = 0;
