@@ -2,7 +2,7 @@
 // often the run came back to it, each as items (a message, a tool call with its output, an
 // image build step, the cached steps together…), what each item can be searched by, and the
 // log as plain text for Copy and Download.
-import { t } from "./i18n";
+import { locale, t } from "./i18n";
 import type { Plain } from "./locales";
 import { sections as phaseSections } from "./phases";
 import type { Entry, Phase, StepStatus } from "./types";
@@ -59,12 +59,13 @@ export interface Output {
   at?: number;
 }
 
+// `at` on those that can have one: when it came (ms), for the timestamps (itemAt()).
 export type Item = { id: string } & (
-  | { kind: "say"; text: string }
+  | { kind: "say"; text: string; at?: number }
   // A chat owner's message.
-  | { kind: "message"; text: string }
-  | { kind: "note"; text: string }
-  | { kind: "raw"; text: string }
+  | { kind: "message"; text: string; at?: number }
+  | { kind: "note"; text: string; at?: number }
+  | { kind: "raw"; text: string; at?: number }
   // `call`: the agent's id for it, which its outputs have too; `at`: when it came (ms).
   | {
       kind: "tool";
@@ -76,8 +77,14 @@ export type Item = { id: string } & (
       time: Timing | null;
     }
   // An output with no call before it.
-  | { kind: "output"; text: string; error: boolean }
-  | { kind: "result"; status: "ok" | "needs-input" | "error"; text: string; minutes: number }
+  | { kind: "output"; text: string; error: boolean; at?: number }
+  | {
+      kind: "result";
+      status: "ok" | "needs-input" | "error";
+      text: string;
+      minutes: number;
+      at?: number;
+    }
   | { kind: "step"; step: Step }
   | { kind: "cached"; steps: Step[] }
 );
@@ -85,6 +92,8 @@ export type Item = { id: string } & (
 export interface LogSection {
   phase: Phase;
   items: Item[];
+  // When the run first entered it (ms); null for a log without phases.
+  at: number | null;
   // Its time in all (s), each time the run was in it; null for a log without phases.
   seconds: number | null;
   // Its commands and build steps that failed (isFailure()): counted, and opened by the "open
@@ -174,6 +183,12 @@ interface Calls {
   ended: Set<ToolItem>;
 }
 
+// An entry's text, and its time when it has one.
+const timed = (e: { text: string; at?: number }) => ({
+  text: e.text,
+  ...(e.at !== undefined && { at: e.at }),
+});
+
 function itemsOf(phase: Phase, entries: Entry[], calls: Calls): Item[] {
   const out: Item[] = [];
   const steps = new Map<number, Step>();
@@ -197,9 +212,9 @@ function itemsOf(phase: Phase, entries: Entry[], calls: Calls): Item[] {
       if (e.done) calls.ended.add(item);
       calls.byEntry.set(e, item);
       out.push(item);
-    } else if (e.kind === "text") out.push({ id: id(), kind: "say", text: e.text });
-    else if (e.kind === "message") out.push({ id: id(), kind: "message", text: e.text });
-    else if (e.kind === "meta") out.push({ id: id(), kind: "note", text: e.text });
+    } else if (e.kind === "text") out.push({ id: id(), kind: "say", ...timed(e) });
+    else if (e.kind === "message") out.push({ id: id(), kind: "message", ...timed(e) });
+    else if (e.kind === "meta") out.push({ id: id(), kind: "note", ...timed(e) });
     else if (e.kind === "result") {
       for (const call of calls.byEntry.values()) if (!call.outputs.length) calls.ended.add(call);
       out.push({ id: id(), ...e, text: withoutMarker(e.text) });
@@ -219,6 +234,7 @@ function itemsOf(phase: Phase, entries: Entry[], calls: Calls): Item[] {
           id: id(),
           kind: "raw",
           text: e.step === undefined ? e.text : `#${e.step} ${e.text}`,
+          ...(e.at !== undefined && { at: e.at }),
         });
     }
   }
@@ -238,7 +254,7 @@ function itemsOf(phase: Phase, entries: Entry[], calls: Calls): Item[] {
 // now while it runs; `live`: it runs, and its last phase is the current section.
 export function logSections(entries: Entry[], end: number, live: boolean): LogSection[] {
   const parts = phaseSections(entries);
-  const byPhase = new Map<Phase, { entries: Entry[]; seconds: number | null }>();
+  const byPhase = new Map<Phase, { entries: Entry[]; at: number | null; seconds: number | null }>();
   parts.forEach((p, i) => {
     const until = parts[i + 1]?.at ?? end;
     const seconds = p.at === null ? null : Math.max(0, (until - p.at) / 1000);
@@ -246,15 +262,16 @@ export function logSections(entries: Entry[], end: number, live: boolean): LogSe
     if (known) {
       known.entries.push(...p.entries);
       if (known.seconds !== null && seconds !== null) known.seconds += seconds;
-    } else byPhase.set(p.phase, { entries: [...p.entries], seconds });
+    } else byPhase.set(p.phase, { entries: [...p.entries], at: p.at, seconds });
   });
   const lastPhase = parts.at(-1)?.phase;
   const calls: Calls = { byId: new Map(), byEntry: new Map(), ended: new Set() };
-  const list = [...byPhase].map(([phase, { entries: own, seconds }]) => {
+  const list = [...byPhase].map(([phase, { entries: own, at, seconds }]) => {
     const items = itemsOf(phase, own, calls);
     return {
       phase,
       items,
+      at,
       seconds,
       failures: items.filter(isFailure).length,
       failed: items.some((i) => fails(phase, i)),
@@ -382,38 +399,78 @@ export function search(list: LogSection[], query: string, filter: Filter): Searc
   return found;
 }
 
-// The log as text, for Copy and Download: each section under its title.
-export function plainText(list: LogSection[]): string {
+// When an item came (ms), if the log says: a call's, a build step's as it started, the first
+// of cached steps'.
+export function itemAt(item: Item): number | undefined {
+  if (item.kind === "step") return item.step.at;
+  if (item.kind === "cached") return item.steps[0].at;
+  return item.at;
+}
+
+// A timestamp, as the log shows it: the time of day, to the second, on a 24-hour clock
+// ("14:05:12"), as CI and GitHub show theirs.
+export const stampLabel = (at: number) =>
+  new Date(at).toLocaleTimeString(locale(), {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hourCycle: "h23",
+  });
+
+// Its tooltip: the full date and time, and how long after the run's start (`start`, ms).
+export const stampTitle = (at: number, start: number) =>
+  t("log.stampTitle", {
+    date: new Date(at).toLocaleString(locale(), { dateStyle: "medium", timeStyle: "medium" }),
+    elapsed: shortDuration(Math.max(0, (at - start) / 1000)),
+  });
+
+// The log as text, for Copy and Download: each section under its title. `times`: each line
+// with its timestamp first (Preferences' "Show log timestamps"), as the log shows them; the
+// lines with none (a call's output, a log from before them) padded to stay aligned.
+export function plainText(list: LogSection[], times = false): string {
   const lines: string[] = [];
+  const ats = list.flatMap((s) => [s.at ?? undefined, ...s.items.map(itemAt)]);
+  const width = times
+    ? Math.max(0, ...ats.map((at) => (at === undefined ? 0 : stampLabel(at).length)))
+    : 0;
+  // An item's lines: its first after its time, the others (and all of one with none) after
+  // blanks as wide.
+  const add = (text: string, at?: number | null) => {
+    if (!times) return void lines.push(text);
+    const blank = " ".repeat(width + 1);
+    const first = at == null ? blank : `${stampLabel(at).padEnd(width)} `;
+    lines.push(text.replace(/^/gm, (_, i: number) => (i === 0 ? first : blank)));
+  };
   for (const s of list) {
-    lines.push(`== ${t(PHASE_TITLES[s.phase])} ==`);
+    add(`== ${t(PHASE_TITLES[s.phase])} ==`, s.at);
     for (const item of s.items) {
+      const at = itemAt(item);
       switch (item.kind) {
         case "tool":
-          lines.push(`[${item.name}] ${item.text}${item.time ? ` · ${timeLabel(item.time)}` : ""}`);
-          for (const o of item.outputs) lines.push(indent(o.error ? `ERROR: ${o.text}` : o.text));
+          add(`[${item.name}] ${item.text}${item.time ? ` · ${timeLabel(item.time)}` : ""}`, at);
+          for (const o of item.outputs) add(indent(o.error ? `ERROR: ${o.text}` : o.text));
           break;
         case "step": {
           const status = stepStatus(item.step);
           const time = item.step.time ? ` · ${timeLabel(item.step.time)}` : "";
-          lines.push(stepName(item.step) + (status ? ` · ${status}` : "") + time);
-          for (const o of item.step.output) lines.push(indent(o));
+          add(stepName(item.step) + (status ? ` · ${status}` : "") + time, at);
+          for (const o of item.step.output) add(indent(o));
           break;
         }
         case "cached":
-          lines.push(cachedLine(item.steps));
+          add(cachedLine(item.steps), at);
           break;
         case "note":
-          lines.push(`› ${item.text}`);
+          add(`› ${item.text}`, at);
           break;
         case "message":
-          lines.push(t("log.youSaid", { text: item.text }));
+          add(t("log.youSaid", { text: item.text }), at);
           break;
         case "result":
-          lines.push(`${resultTitle(item)}\n${item.text}`);
+          add(`${resultTitle(item)}\n${item.text}`, at);
           break;
         default:
-          lines.push(item.text);
+          add(item.text, at);
       }
     }
     lines.push("");

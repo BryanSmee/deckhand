@@ -42,6 +42,7 @@ export const PREFS = {
   logFollow: flag("log.follow", true),
   logErrors: flag("log.errors", true),
   logWrap: flag("log.wrap", false),
+  logTimes: flag("log.times", false),
   shortcuts: flag("shortcuts", true),
 };
 

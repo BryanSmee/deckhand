@@ -137,7 +137,7 @@ function setup(
 }
 
 // #414: a time before each line with a tool call or output, the agent's lines as it wrote them.
-test("a run's log: when each tool call and output came, before its line", (t) => {
+test("a run's log: when each tool call, output and message came, before its line", (t) => {
   const { runner, logPath } = setup(t);
   const assistant = (content) => JSON.stringify({ type: "assistant", message: { content } });
   const call = assistant([{ type: "tool_use", id: "t1", name: "Bash", input: { command: "ls" } }]);
@@ -146,14 +146,37 @@ test("a run's log: when each tool call and output came, before its line", (t) =>
     message: { content: [{ type: "tool_result", tool_use_id: "t1", content: "a" }] },
   });
   const text = assistant([{ type: "text", text: "Looking." }]);
+  runner.out("npm ci", 500);
+  runner.out("added 1 package", 900);
   runner.out(text, 1000);
   runner.out(call, 2000);
   runner.out(output, 14000);
+  // Setup's output once a second at most (#719): the reader gives the next ones that time.
+  runner.out("warn: deprecated", 14100);
+  runner.out("warn: deprecated", 15000);
   // Without Docker's time (an older engine, say), none.
   runner.out(call, null);
-  const lines = readFileSync(logPath, "utf8").trim().split("\n");
+  // Its phases apart: its first event starts its work.
+  const lines = readFileSync(logPath, "utf8")
+    .trim()
+    .split("\n")
+    .filter((l) => !l.includes('"event":"phase"'));
   const at = (ms) => JSON.stringify({ type: "listener", event: "at", at: ms });
-  assert.deepEqual(lines.slice(-6), [text, at(2000), call, at(14000), output, call]);
+  assert.deepEqual(lines.slice(-13), [
+    at(500),
+    "npm ci",
+    "added 1 package",
+    at(1000),
+    text,
+    at(2000),
+    call,
+    at(14000),
+    output,
+    "warn: deprecated",
+    at(15000),
+    "warn: deprecated",
+    call,
+  ]);
 });
 
 test("a run that answered, its inbox closed, and stays silent: stopped, its answer posted", async (t) => {

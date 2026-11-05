@@ -259,6 +259,8 @@ export const en = {
   "prefs.logErrorsHelp": "A failed command or build step opens by itself.",
   "prefs.logWrap": "Wrap long log lines",
   "prefs.logWrapHelp": "Off: long lines scroll sideways.",
+  "prefs.logTimes": "Show log timestamps",
+  "prefs.logTimesHelp": "Each line's time of day on its left, in copies and downloads too.",
   "prefs.keyboardAndAccount": "Keyboard and account",
   "prefs.shortcuts": "Keyboard shortcuts",
   "prefs.shortcutsHelp":

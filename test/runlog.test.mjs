@@ -11,6 +11,7 @@ import {
   loadRuns,
   minutes,
   moveSummaries,
+  needsStamp,
   openLog,
   outcome,
   phaseOf,
@@ -127,6 +128,10 @@ test("format: the listener's lines", () => {
   assert.deepEqual(format(line({ type: "listener", event: "note", message: "Image x" })), [
     { kind: "meta", text: "Image x" },
   ]);
+  // Its time, for the dashboard's timestamps (#719).
+  assert.deepEqual(format(line({ type: "listener", event: "note", at: 5, message: "Image x" })), [
+    { kind: "meta", text: "Image x", at: 5 },
+  ]);
   assert.deepEqual(
     format(
       line({
@@ -136,12 +141,18 @@ test("format: the listener's lines", () => {
         message: "Hi",
       }),
     ),
-    [{ kind: "meta", text: "New comment delivered to Claude at 09:05:07 UTC: Hi" }],
+    [
+      {
+        kind: "meta",
+        text: "New comment delivered to Claude at 09:05:07 UTC: Hi",
+        at: Date.UTC(2026, 0, 1, 9, 5, 7),
+      },
+    ],
   );
   // A chat's messages (#477): its owner's turns, delivered or starting its run.
   assert.deepEqual(
     format(line({ type: "listener", event: "delivered", at: 0, message: "Hi", chat: true })),
-    [{ kind: "message", text: "Hi" }],
+    [{ kind: "message", text: "Hi", at: 0 }],
   );
   assert.deepEqual(
     format(line({ type: "listener", mode: "start", kind: "chat", message: "What is run()?" })),
@@ -158,7 +169,7 @@ test("format: the listener's lines", () => {
   const delivered = line({ type: "listener", event: "delivered", at: 0, message: "Hi" });
   const chat = reader();
   chat(line({ type: "listener", mode: "start", kind: "chat" }));
-  assert.deepEqual(chat(delivered), [{ kind: "message", text: "Hi" }]);
+  assert.deepEqual(chat(delivered), [{ kind: "message", text: "Hi", at: 0 }]);
   const issue = reader();
   issue(line({ type: "listener", mode: "start", kind: "issue", taskMode: "work" }));
   assert.equal(issue(delivered)[0].kind, "meta");
@@ -250,20 +261,22 @@ test("format: Claude's lines", () => {
   assert.deepEqual(format("42"), []);
 });
 
+// The entries without the times #719 added to them (the listener's lines, setup's output,
+// the agent's messages): what the dashboard showed before them.
+const KINDS_TIMED_SINCE = new Set(["meta", "message", "raw", "text", "result"]);
+const untimed = (entries) =>
+  entries.map(({ at, ...e }) =>
+    at === undefined || KINDS_TIMED_SINCE.has(e.kind) ? e : { ...e, at },
+  );
+
 // A log written before the agent seam, and what the dashboard showed for it then: the
 // same entries now that Claude Code's lines are read through its normalize().
 test("format: a log from before the agent seam renders as it did", () => {
   const fixture = (name) => new URL(`fixtures/${name}`, import.meta.url);
   const lines = readFileSync(fixture("claude-run.log"), "utf8").split("\n");
   const before = JSON.parse(readFileSync(fixture("claude-run.entries.json"), "utf8"));
-  assert.deepEqual(
-    lines.flatMap((l) => format(l)),
-    before,
-  );
-  assert.deepEqual(
-    lines.flatMap((l) => format(l, agentFor("claude"))),
-    before,
-  );
+  assert.deepEqual(untimed(lines.flatMap((l) => format(l))), before);
+  assert.deepEqual(untimed(lines.flatMap((l) => format(l, agentFor("claude")))), before);
 });
 
 test("lastResult: the agent's last result in a log's lines", () => {
@@ -363,7 +376,7 @@ test("log: a cancelled run's log says who", () => {
     at: Date.UTC(2026, 0, 1, 9),
   };
   assert.deepEqual(format(line(cancelled)), [
-    { kind: "meta", text: "Stopped by @alice at 09:00:00 UTC" },
+    { kind: "meta", text: "Stopped by @alice at 09:00:00 UTC", at: cancelled.at },
   ]);
 });
 
@@ -373,6 +386,7 @@ test("log: a run stopped for its silence after its answer says so", () => {
     {
       kind: "meta",
       text: "Stopped at 09:00:00 UTC, silent for 2 min after its answer: the answer is posted",
+      at: ended.at,
     },
   ]);
 });
@@ -708,13 +722,14 @@ test("reader: a log's phases in order, with when they started", () => {
       { kind: "phase", phase: "wrap-up", at: 3000 },
     ],
   );
-  assert.deepEqual(entries[2], { kind: "raw", text: "Cloning into '/workspace'..." });
+  // Setup's output: the time the log last said, its phase's start here.
+  assert.deepEqual(entries[2], { kind: "raw", text: "Cloning into '/workspace'...", at: 1000 });
 });
 
 test("reader: a log from before phases reads as format() did", () => {
   const lines = fixture("claude-run.log").split("\n");
   const before = JSON.parse(fixture("claude-run.entries.json"));
-  assert.deepEqual(lines.flatMap(reader()), before);
+  assert.deepEqual(untimed(lines.flatMap(reader())), before);
   assert.ok(!before.some((e) => e.kind === "phase"));
 });
 
@@ -780,6 +795,7 @@ test("reader: an image build's output comes as its steps", () => {
   assert.deepEqual(entries[1], {
     kind: "raw",
     text: '#0 building with "default" instance using docker driver',
+    at: 1000,
   });
   const rest = entries.filter((e) => e.kind === "raw" && e.step === undefined);
   assert.ok(rest.some((e) => e.text === "Dockerfile:7"));
@@ -827,7 +843,7 @@ test("reader: only the image phase's lines are build steps; a step named again a
   assert.deepEqual(read("#3 [internal] load .dockerignore"), []);
   assert.deepEqual(read("#3 CANCELED")[0].status, "cancelled");
   read(phase("setup", 2));
-  assert.deepEqual(read("#4 DONE 1.0s"), [{ kind: "raw", text: "#4 DONE 1.0s" }]);
+  assert.deepEqual(read("#4 DONE 1.0s"), [{ kind: "raw", text: "#4 DONE 1.0s", at: 2 }]);
   // A second build (a run that falls back, say) numbers its steps afresh.
   read(phase("image", 3));
   assert.equal(read("#3 [b 1/1] RUN true")[0].name, "RUN true");
@@ -909,6 +925,62 @@ test("reader: the time of an `at` line goes on the next line's calls and outputs
       ["done", 7000],
     ],
   );
+});
+
+// #719: the agent's messages and answers take the `at` line before them too; setup's output
+// takes the last time the log said, an `at` line's or one of the listener's, as its `at` lines
+// come once a second at most (needsStamp()); a reader told it skipped lines forgets it.
+test("reader: messages are timed, setup's output keeps the last time said", () => {
+  const at = (ms) => line({ type: "listener", event: "at", at: ms });
+  const text = line({ type: "assistant", message: { content: [{ type: "text", text: "Hm." }] } });
+  const result = line({ type: "result", result: "Done.", duration_ms: 1000 });
+  const note = line({ type: "listener", event: "note", at: 3000, message: "Image x" });
+  const read = reader();
+  const entries = [
+    "before any time",
+    phase("setup", 1000),
+    "npm ci",
+    at(2000),
+    "added 1 package",
+    "added 2 packages",
+    note,
+    "done",
+    at(4000),
+    text,
+    at(5000),
+    result,
+  ].flatMap(read);
+  assert.deepEqual(
+    entries.map((e) => [e.kind, e.at]),
+    [
+      ["raw", undefined],
+      ["phase", 1000],
+      ["raw", 1000],
+      ["raw", 2000],
+      ["raw", 2000],
+      ["meta", 3000],
+      ["raw", 3000],
+      ["text", 4000],
+      ["result", 5000],
+    ],
+  );
+  read.skipped();
+  assert.deepEqual(read("later"), [{ kind: "raw", text: "later" }]);
+});
+
+test("needsStamp: the agent's timed events always, setup's output once a second", () => {
+  const tool = [{ type: "tool", name: "Bash", detail: "ls" }];
+  const text = [{ type: "text", text: "Hm." }];
+  const started = [{ type: "started" }];
+  assert.equal(needsStamp("{}", tool, 1000, 1000), true);
+  assert.equal(needsStamp("{}", text, 1000, 1000), true);
+  // An event of the agent's that shows no time, or a line of its with none.
+  assert.equal(needsStamp("{}", started, 5000, 1000), false);
+  assert.equal(needsStamp('{"type":"system"}', [], 5000, 1000), false);
+  // Setup's output: the first, then only once the second changed.
+  assert.equal(needsStamp("npm ci", [], 1000, null), true);
+  assert.equal(needsStamp("added 1", [], 1999, 1000), false);
+  assert.equal(needsStamp("added 2", [], 2000, 1000), true);
 });
 
 test("buildOutput: whole lines, each step's first after when it came, the rest at the end", () => {

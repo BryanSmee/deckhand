@@ -621,6 +621,7 @@ test("MCP: get_run_log reads a page from the middle as the whole log reads there
       kind: "raw",
       step: 5,
       text: inBuild.entries.find((e) => e.kind === "raw").text,
+      at: 7000,
     },
   );
   assert.match(inBuild.entries.find((e) => e.kind === "raw").text, /^npm output \d+$/);
@@ -647,7 +648,7 @@ test("MCP: get_run_log reads a page from the middle as the whole log reads there
   assert.equal(timed.from, start);
   assert.deepEqual(timed.entries.slice(0, 2), [
     { kind: "tool", name: "Bash", text: "ls", id: "t1", at: 9000 },
-    { kind: "message", text: "Hi" },
+    { kind: "message", text: "Hi", at: 9500 },
   ]);
   // The preparation read, and the line before the page, not the work between them.
   const skipped = [Buffer.byteLength(prepared) + PAGE_BYTES, start - 128];

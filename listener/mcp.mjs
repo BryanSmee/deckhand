@@ -1060,15 +1060,22 @@ export function createMcp({ source, version = "dev", now = Date.now, log = () =>
     if (from === 0) return read;
     const decoder = new StringDecoder("utf8");
     let rest = "";
-    for (let offset = 0, chunk = PRIMING_BYTES; offset < from && !read.settled();) {
+    let offset = 0;
+    let unread = false;
+    for (let chunk = PRIMING_BYTES; offset < from && !read.settled();) {
       const data = await readRange(run.id, offset, Math.min(from, offset + chunk));
       if (!data.length) break;
       offset += data.length;
       chunk = Math.min(2 * chunk, PAGE_BYTES);
       const lines = (rest + decoder.write(data)).split("\n");
       rest = lines.pop();
-      for (const line of lines) if (!read.settled()) read(line);
+      for (const line of lines) {
+        if (read.settled()) unread = true;
+        else read(line);
+      }
     }
+    // Lines left unread: the last time setup's output took doesn't hold past them.
+    if (unread || offset < from) read.skipped();
     // Read again when the priming got there: an `at` line only sets the time of the next one.
     const start = Math.max(0, from - STAMP_BYTES);
     const lines = (await readRange(run.id, start, from)).toString("utf8").split("\n");

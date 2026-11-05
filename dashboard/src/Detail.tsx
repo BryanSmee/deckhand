@@ -45,6 +45,7 @@ import { logSections, plainText } from "./logModel";
 import { CiStatus } from "./CiStatus";
 import { AuthTag, Outcome } from "./Outcome";
 import { heldMerge, PolicyTab } from "./Policies";
+import { getPref } from "./prefs";
 import { Questions } from "./Questions";
 import { ReviewRounds } from "./ReviewLoop";
 import { ReviewTab } from "./ReviewTab";
@@ -170,7 +171,12 @@ export function Detail({
   // A phone's More menu, for a run's log.
   const menu = !!touch && logShown;
   const logText = () =>
-    r ? plainText(logSections(entries, r.finishedAt ?? now, r.status === "running")) : "";
+    r
+      ? plainText(
+          logSections(entries, r.finishedAt ?? now, r.status === "running"),
+          getPref("logTimes"),
+        )
+      : "";
   const copyLog = async () => {
     setMore(false);
     const ok = await copyText(logText());
