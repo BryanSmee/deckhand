@@ -1697,7 +1697,9 @@ gives each login the actions of the `bindings` that match it:
 
 Deckhand's `access.rego` gives every action to every login (`allow_access contains "*"`), as
 before access had rules. The grants folder's `policy/access.rego` replaces it, usually with
-bindings only: each login then has its bindings' actions, and nobody else anything.
+bindings only: each login then has its bindings' actions, and nobody else anything. Bindings
+written in a file of another name leave Deckhand's `access.rego` in effect, and its `*` still
+gives every login every action: the config check warns of it (at start and on the Policies tab).
 
 <!-- access.rego: test/access-rules.test.mjs evaluates this block with the real opa -->
 
