@@ -34,6 +34,28 @@ permissions:
   packages: write
 
 jobs:
+  # The machine driver is one file, attached to each release (docs/setup.md, Your own machine),
+  # its VERSION the tag's so register_machine and heartbeat report the release.
+  machine-driver:
+    if: github.ref_type == 'tag'
+    runs-on: [self-hosted, Linux]
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          line="export const VERSION = \"$version\";"
+          sed -i "s|^export const VERSION = \".*\";\$|$line|" machine/deckhand-machine.mjs
+          # A driver whose VERSION line moved would ship saying 0.1.0: fail rather than that.
+          grep -qxF "$line" machine/deckhand-machine.mjs
+          gh release view "$GITHUB_REF_NAME" > /dev/null 2>&1 ||
+            gh release create "$GITHUB_REF_NAME" --verify-tag --generate-notes
+          gh release upload "$GITHUB_REF_NAME" machine/deckhand-machine.mjs --clobber
+
   images:
     # Checks passed on a push to this repository's main (`branches` alone also matches a fork's
     # pull request from a branch named main, whose code must never be built with this token), on

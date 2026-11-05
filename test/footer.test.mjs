@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { replyFooter } from "../listener/footer.mjs";
+import { replyFooter, setupText } from "../listener/footer.mjs";
 
 const record = { agent: "claude", provider: "anthropic", model: "opus", effort: "high" };
 const result = { ok: true, text: "Done", durationMs: 240000 };
@@ -66,4 +66,22 @@ test("footer: the credential that answered, and the one it fell back from", () =
     replyFooter({ ...record, credential: "key", picked: {} }, result, "", {}),
     "<sub>🤖 Claude (anthropic, API key) opus · high effort · 4 min</sub>",
   );
+});
+
+test("an external run's setup, as its machine reports it (#599): what it said, in order", () => {
+  assert.equal(
+    setupText({ version: "2.1.3", sandbox: true, permissionMode: "dontAsk", suggested: true }),
+    "v2.1.3, sandbox on, `dontAsk`, Deckhand's settings",
+  );
+  assert.equal(
+    setupText({ version: null, sandbox: null, permissionMode: null, suggested: false }),
+    "its own settings",
+  );
+  const footer = replyFooter(
+    { agent: "claude", machine: "Desk", setup: { version: "v2.0.1", sandbox: false } },
+    null,
+    "",
+    {},
+  );
+  assert.equal(footer, "<sub>🤖 Claude · on Desk (v2.0.1, sandbox off, as it reports)</sub>");
 });

@@ -891,6 +891,16 @@ ctx.linkedBranches = createLinkedBranches({
   decided: (key, entry) => ctx.decisions.record(key, entry),
   log,
 });
+// A repository's grant, with what its policies grant it: null when it can't be read. For the
+// reviews (auto-merge) and the hosts a machine's claim suggests (claims.mjs, #599).
+ctx.grantOf = async (repo) => {
+  try {
+    return await grantOf(config, repo, { granted: grantsBy(policies) });
+  } catch (error) {
+    log(`${repo}: its grants: ${error.message}`);
+    return null;
+  }
+};
 ctx.reviews = createReviews({
   reviewed: maps.maps.reviews,
   config,
@@ -906,14 +916,7 @@ ctx.reviews = createReviews({
   // A machine's pull request (#598), for the policies' `pr.external`.
   externalOf: pulls.externalOf,
   metrics: counted,
-  grantOf: async (repo) => {
-    try {
-      return await grantOf(config, repo, { granted: grantsBy(policies) });
-    } catch (error) {
-      log(`${repo}: its grants: ${error.message}`);
-      return null;
-    }
-  },
+  grantOf: ctx.grantOf,
   // The dashboard's "merged by Deckhand", at once; and, merged into the default branch, the
   // repo's other pull requests asked soon whether they still merge (the watcher's, and the
   // dashboard's in every repo): no delivery comes first.

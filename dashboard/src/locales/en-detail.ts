@@ -15,6 +15,15 @@ export const detail = {
   "machine.waitingOne": "waiting for one of them to claim it",
   "machine.offline": "it is offline",
   "machine.noneOnline": "none of them is online",
+  "machine.reported": "As {machine} reports it: {setup}",
+  "machine.reportedHelp":
+    "What the machine says of how its agent runs: Deckhand doesn't check it, nor enforce anything there.",
+  "machine.version": "v{version}",
+  "machine.sandboxOn": "sandbox on",
+  "machine.sandboxOff": "sandbox off",
+  "machine.permissionMode": "{mode} mode",
+  "machine.suggested": "Deckhand's settings",
+  "machine.ownSettings": "its own settings",
   "held.label": "Held comments",
   "held.title": {
     one: "{count} comment held for @{owner}",
