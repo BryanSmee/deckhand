@@ -2639,15 +2639,17 @@ only). It widens nothing, so it needs no grant: a review is a light run with a r
   policies let it: Deckhand's default `policy/review.rego` refuses them (`deny_review`), and
   only a file of that name, the operator's or the repository's maintainers', replaces it. A
   bot that opens a pull request on a branch of the repository was given write access to it.
-- **Only allowed users' comments**: the review reads its thread (the pull request's
-  description, comments and reviews, and the issue it closes) from a file the orchestrator writes
-  (`TASK_DIGEST`), with only what users of `ALLOWED_USERS` and the repo's `users`, and the App
-  itself, wrote. What anyone else wrote, another bot included, is replaced with a line saying
-  it was left out; an allowed user who wants it read quotes it in a comment of their own. It
-  can't read the thread another way: the [GitHub gateway](#the-github-gateway) refuses a
-  review's calls for comments, reviews and review comments, REST and GraphQL alike, and the
-  web host's pages. What an outsider can still put in front of it is the pull request's own
-  description and diff, which it reviews.
+- **Only allowed users' comments**: the review reads its thread (the pull request's description,
+  comments and reviews, and the issue it closes) from a file the orchestrator writes
+  (`TASK_DIGEST`), with only what users of `ALLOWED_USERS` and the repo's `users` whose access
+  decision gives `runs:start:work` there, and the App itself, wrote: its findings can become a fix
+  run's message, so a viewer who may start nothing can't steer one through it. What anyone else
+  wrote, another bot included (or someone whose decision failed), is replaced with a line saying it
+  was left out; an allowed user who wants it read quotes it in a comment of their own. It can't read
+  the thread another way: the [GitHub gateway](#the-github-gateway) refuses a review's calls for
+  comments, reviews and review comments, REST and GraphQL alike, and the web host's pages. What an
+  outsider can still put in front of it is the pull request's own description and diff, which it
+  reviews.
 - **No loops**: each pull request's head commit is reviewed by itself once (the store's `reviews`),
   and the App's review is a bot's `pull_request_review`, which starts nothing. Acting on a
   review is the maintainer's call, with a trigger comment, unless the repo sets `review.fix`
@@ -2679,8 +2681,10 @@ and the thread; text written to steer it (a prompt injection) could turn into a 
 whose fix is what its author wants: a command to run, a workflow or `.deckhand.yaml` change, a
 secret sent somewhere. What limits it:
 
-- **What the review reads**: only allowed users' and the App's comments, as above. An outsider's
-  comment on the pull request or its issue doesn't reach it unless an allowed user quotes it.
+- **What the review reads**: only the App's comments and those of allowed users whose access
+  gives `runs:start:work` on the repository, as the fix run needs of whoever starts one (#782).
+  An outsider's or a viewer's comment on the pull request or its issue doesn't reach it unless
+  such a user quotes it; nor does one whose author's decision failed (fail closed).
 - **Whose pull requests**: only Deckhand's own, whose diff its own work run wrote; never a
   fork's, another bot's or an outsider's.
 - **How the fix run gets them**: its message fences the findings off from its instruction and
