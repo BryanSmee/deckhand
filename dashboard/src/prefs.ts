@@ -2,14 +2,17 @@
 // not on the server. Each is read where it's used through usePref(), which every setter
 // tells: a change from Preferences, the sidebar's theme switch or another tab shows at once.
 // Theme, Density and Motion are classes on the root (public/theme.js sets them before the
-// first paint, applyPrefs() afterwards): .t-light or .t-dark, .d-compact, .m-reduced.
+// first paint, applyPrefs() afterwards): .t-light or .t-dark, .d-compact, .m-reduced; Language
+// is the root's `lang` (i18n.ts writes the page in it).
 import { useEffect, useReducer } from "preact/hooks";
+import { browserLanguages, type Language, LANGUAGES, resolveLanguage } from "./locales";
 
 export type Theme = "system" | "light" | "dark";
 export type Density = "comfortable" | "compact";
 export type Motion = "system" | "full" | "reduced";
 export type OpenOn = "last" | "overview";
 export type PhoneBoard = "lanes" | "graph";
+export type LanguageChoice = "system" | Language;
 
 interface Pref<T> {
   key: string;
@@ -30,6 +33,7 @@ export const PREFS = {
   density: one<Density>("density", ["comfortable", "compact"]),
   motion: one<Motion>("motion", ["system", "full", "reduced"]),
   openOn: one<OpenOn>("openOn", ["last", "overview"]),
+  language: one<LanguageChoice>("language", ["system", ...LANGUAGES]),
   notifyReady: flag("notify.ready", true),
   notifyInput: flag("notify.input", true),
   notifyFailed: flag("notify.failed", false),
@@ -90,7 +94,8 @@ export function setPref<K extends PrefName>(name: K, value: Prefs[K]) {
   } catch {
     unkept.set(key, kept);
   }
-  if (name === "theme" || name === "density" || name === "motion") applyPrefs();
+  if (name === "theme" || name === "density" || name === "motion" || name === "language")
+    applyPrefs();
   tell();
 }
 
@@ -119,15 +124,21 @@ export function applyPrefs(root = document.documentElement) {
   root.classList.add(theme);
   root.classList.toggle("d-compact", getPref("density") === "compact");
   root.classList.toggle("m-reduced", reducedMotion(getPref("motion"), matchMedia(REDUCE).matches));
+  root.lang = resolveLanguage(getPref("language"), browserLanguages()).locale;
 }
 
-// Once, at start: the classes for the kept choices, again when the system's scheme or motion
-// setting changes (it only matters on System), and every choice again when another tab
-// changes one. Returns what stops it (the specs').
+// Once, at start: the classes for the kept choices, again when the system's scheme, motion
+// setting or languages change (it only matters on System: a language change re-renders the
+// page too), and every choice again when another tab changes one. Returns what stops it (the
+// specs').
 export function followPrefs() {
   const dark = matchMedia(DARK);
   const reduce = matchMedia(REDUCE);
   const apply = () => applyPrefs();
+  const languages = () => {
+    applyPrefs();
+    tell();
+  };
   const other = (e: StorageEvent) => {
     if (e.key !== null && !e.key.startsWith("deckhand.")) return;
     applyPrefs();
@@ -137,9 +148,11 @@ export function followPrefs() {
   dark.addEventListener("change", apply);
   reduce.addEventListener("change", apply);
   addEventListener("storage", other);
+  addEventListener("languagechange", languages);
   return () => {
     dark.removeEventListener("change", apply);
     reduce.removeEventListener("change", apply);
     removeEventListener("storage", other);
+    removeEventListener("languagechange", languages);
   };
 }

@@ -1,6 +1,7 @@
 // Stop's question, before a run ends: what is lost (what it did since its last push, which
 // the listener records: listener/git-gateway.mjs) and what stays (its branch, its pull request).
 import { ago } from "./format";
+import { locale } from "./i18n";
 import { Button } from "./ui/Button";
 import { Dialog } from "./ui/Dialog";
 import { Stop } from "./ui/icons";
@@ -17,7 +18,7 @@ interface Props {
 
 // "14:12, 2 min ago".
 const when = (at: number, now: number) =>
-  `${new Date(at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}, ${ago(at, now)}`;
+  `${new Date(at).toLocaleTimeString(locale(), { hour: "2-digit", minute: "2-digit" })}, ${ago(at, now)}`;
 
 export function stopNote(t: Task, run: Run | null, now: number): string {
   const push = run?.lastPushAt;

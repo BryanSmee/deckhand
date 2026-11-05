@@ -31,6 +31,7 @@ import {
   waitingOnYou,
 } from "./overview";
 import { CiStatus } from "./CiStatus";
+import { locale } from "./i18n";
 import { Questions } from "./Questions";
 import { ReviewMarks } from "./ReviewLoop";
 import { RepoBadge } from "./RepoBadge";
@@ -355,7 +356,7 @@ function WaitingOnYou({
                 </span>
                 {row.need === "ready" && <ReviewMarks task={t} class={styles.left} />}
                 <span class={styles.needRepo}>{t.repo}</span>
-                <span class={styles.age} title={new Date(row.at).toLocaleString()}>
+                <span class={styles.age} title={new Date(row.at).toLocaleString(locale())}>
                   {age(row.at, now)}
                 </span>
                 {actions(row)}

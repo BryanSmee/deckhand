@@ -1,5 +1,6 @@
-// What every spec starts from: the page at its root, nothing stored, a wide screen and a log
-// stream that never speaks (jsdom has neither), and nothing seen: api.ts keeps the backlogs
+// What every spec starts from: the page at its root, nothing stored, a browser in American
+// English (the specs read English texts and dates, whatever the machine's language), a wide
+// screen and a log stream that never speaks (jsdom has neither), and nothing seen: api.ts keeps the backlogs
 // for the page's life. A spec stubs more, or other ones, in its own beforeEach.
 import { cleanup } from "@testing-library/preact";
 import { afterAll, afterEach, beforeEach, vi } from "vitest";
@@ -8,6 +9,7 @@ import { forgetBacklogs } from "./api";
 beforeEach(() => {
   history.replaceState(null, "", "/");
   localStorage.clear();
+  vi.spyOn(navigator, "languages", "get").mockReturnValue(["en-US"]);
   vi.stubGlobal("matchMedia", () => ({
     matches: true,
     addEventListener() {},
@@ -27,6 +29,7 @@ afterEach(() => {
   cleanup();
   document.body.replaceChildren();
   vi.unstubAllGlobals();
+  vi.restoreAllMocks();
   forgetBacklogs();
 });
 

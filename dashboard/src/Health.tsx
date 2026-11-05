@@ -9,6 +9,7 @@ import type { Health, ServiceHealth, ServiceName, ServiceState } from "./types";
 import { StatusDot, toneClass } from "./ui/Status";
 import { Card } from "./ui/Surface";
 import styles from "./Health.module.css";
+import { locale } from "./i18n";
 
 export const STATE_TONES: Record<ServiceState, Tone> = {
   up: "done",
@@ -354,7 +355,7 @@ interface Props {
 // warnings and the legend.
 export function Services({ health, error = null, narrow = false }: Props) {
   const checked = health
-    ? new Date(health.checkedAt).toLocaleTimeString([], {
+    ? new Date(health.checkedAt).toLocaleTimeString(locale(), {
         hour: "2-digit",
         minute: "2-digit",
         second: "2-digit",
