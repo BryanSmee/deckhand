@@ -327,6 +327,50 @@ test("cached: a page load doesn't read every config again; deliveries refresh it
   assert.equal(configReads(gh.calls), 5);
 });
 
+test("infoOf: what GitHub said of a repo when last listed, for the access filters (#783)", async () => {
+  const { list, gh, clock } = setup({
+    first: [
+      info("org/app", { default_branch: "trunk", private: false }),
+      info("org/lib"),
+      info("org/odd", { default_branch: null }),
+    ],
+  });
+  const listings = () => gh.calls.filter((c) => c.startsWith("GET /app/installations")).length;
+  assert.equal(list.infoOf("org/app"), null);
+  await list.list();
+  assert.deepEqual(list.infoOf("Org/App"), {
+    full_name: "org/app",
+    private: false,
+    default_branch: "trunk",
+  });
+  assert.equal(list.infoOf("org/lib").private, true);
+  assert.equal(list.infoOf("org/other"), null);
+  // GitHub gave no default branch: none, never guessed (access() reads it then).
+  assert.equal(list.infoOf("org/odd"), null);
+  assert.equal(list.infoOf(null), null);
+  assert.equal(listings(), 1);
+
+  // LIST_MS later, nothing has listed them again (api/state and /status never do): none, until
+  // the listing it starts answers.
+  clock.now += LIST_MS;
+  assert.equal(list.infoOf("org/app"), null);
+  await list.names();
+  assert.equal(listings(), 2);
+  assert.equal(list.infoOf("org/app").default_branch, "trunk");
+
+  // A push to its default branch: that repo's read again by name; an installation's delivery, or
+  // the Refresh button: all of them.
+  list.refresh("Org/App");
+  assert.equal(list.infoOf("org/app"), null);
+  assert.equal(list.infoOf("org/lib").default_branch, "main");
+  list.refresh();
+  assert.equal(list.infoOf("org/lib"), null);
+  await list.names();
+  assert.equal(list.infoOf("org/app").default_branch, "trunk");
+  list.refreshAll();
+  assert.equal(list.infoOf("org/app"), null);
+});
+
 test("which deliveries refresh the list", () => {
   const calls = [];
   const refresh = (repo) => calls.push(repo ?? "*");
@@ -1105,6 +1149,30 @@ test("known() and usersOf(): the repos read, with their inbox issues (the dashbo
   assert.deepEqual(list.usersOf("org/app").inbox, { ideas: 4 });
   // listed() (#732): every repo listed, configured or not, without asking GitHub.
   assert.deepEqual(list.listed(), ["Org/App", "org/lib"]);
+});
+
+test("access (#783): the list asks about each repo as GitHub listed it, not by its name", async () => {
+  let repoList = null;
+  const permissions = permissionsOf(
+    { bob: { "org/app": VIEWER, "org/lib": VIEWER } },
+    { infoOf: (repo) => repoList.infoOf(repo) },
+  );
+  const s = apiSetup({
+    first: [info("org/app", { default_branch: "trunk" }), info("org/lib"), info("org/hidden")],
+    permissions,
+  });
+  repoList = s.list;
+  const list = await call(s.api, "GET", "/api/repos", { user: "bob" });
+  assert.deepEqual(
+    list.body.repos.map((r) => r.repo),
+    ["org/app", "org/lib"],
+  );
+  const repos = permissions.asked.map(([, repo]) => repo).filter((repo) => repo !== null);
+  assert.deepEqual(repos, [
+    { full_name: "org/app", private: true, default_branch: "trunk" },
+    { full_name: "org/hidden", private: true, default_branch: "main" },
+    { full_name: "org/lib", private: true, default_branch: "main" },
+  ]);
 });
 
 test("access: the list keeps the repos with an action, the config needs repo:config:read", async () => {

@@ -723,9 +723,10 @@ export const MEMBER = [...VIEWER, "logs:read", "runs:start:*", "runs:manage"];
 
 // Who may do what where (permissions.mjs) as `rules` say: login → repository (lower case; "" for
 // server-wide) → the actions access() gives there, nobody anything else; `failing`: the logins
-// whose decision fails (a policy error). `usersOf`: the repos' `users`, as createPermissions()
-// takes it. `asked`: the [login, repo] decisions asked.
-export function permissionsOf(rules, { usersOf, failing = [] } = {}) {
+// whose decision fails (a policy error). `usersOf` and `infoOf`: the repos' `users`, and what
+// GitHub said of them as last listed, as createPermissions() takes them. `asked`: the [login,
+// repo] decisions asked, the repo as access() got it (its name, or its info).
+export function permissionsOf(rules, { usersOf, infoOf, failing = [] } = {}) {
   const asked = [];
   const policies = {
     access: async (login, repo) => {
@@ -734,11 +735,12 @@ export function permissionsOf(rules, { usersOf, failing = [] } = {}) {
       if (failing.includes(who)) {
         return { actions: [], denied: [], files: {}, error: "the policies can't be read" };
       }
-      const actions = rules[who]?.[repo?.toLowerCase() ?? ""] ?? [];
+      const name = typeof repo === "string" ? repo : repo?.full_name;
+      const actions = rules[who]?.[name?.toLowerCase() ?? ""] ?? [];
       return { actions, denied: [], files: {}, error: null };
     },
   };
-  return Object.assign(createPermissions({ policies, usersOf }), { asked });
+  return Object.assign(createPermissions({ policies, usersOf, infoOf }), { asked });
 }
 
 // Deckhand's default policies (policy/*.rego, or `builtIn`: name → text) as the operator's layer,

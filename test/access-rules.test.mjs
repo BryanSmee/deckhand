@@ -13,6 +13,7 @@ import {
   REPO_ACTIONS,
   SERVER_ACTIONS,
 } from "../listener/policies.mjs";
+import { createPermissions } from "../listener/permissions.mjs";
 import { validRepo } from "../listener/repo-config.mjs";
 import { builtInPolicies } from "../policy-service/engine.mjs";
 import { opaBinary } from "../policy-service/opa.mjs";
@@ -601,6 +602,86 @@ test(
     assert.equal(calls.filter((p) => p === "/repos/acme/old").length, 3);
   },
 );
+
+test("access over the repositories as listed: no read of each from GitHub, a single decision's read (#783)", async (t) => {
+  const names = Array.from({ length: 50 }, (_, i) => `acme/r${i}`);
+  const repos = Object.fromEntries(names.map((name) => [name, { private: true }]));
+  const { github, calls } = fakeGithub(repos);
+  // Deckhand's own policies: every action, unless a repo's deny takes one away.
+  const engine = policyEngineOf(t, { readOperator: () => new Map() });
+  const policies = createPolicies({ config: {}, github, service: localService(engine) });
+  // As the installations were listed (repos.mjs infoOf()).
+  const listed = (name) =>
+    names.includes(name) ? { full_name: name, private: true, default_branch: "main" } : null;
+  const permissions = createPermissions({ policies, infoOf: listed });
+  const infos = () => calls.filter((p) => /^\/repos\/[^/]+\/[^/]+$/.test(p)).length;
+  const seen = await permissions.which("bob", names, null, { listed: true });
+  assert.equal(seen.size, names.length);
+  const shown = await permissions.dashboard("bob", names);
+  assert.equal(Object.keys(shown.repos).length, names.length);
+  // Their policy folders listed once each, and nothing else.
+  assert.equal(infos(), 0);
+  assert.equal(calls.filter((p) => p.endsWith("/contents/.deckhand/policy")).length, names.length);
+  await permissions.which("bob", names, "runs:manage", { listed: true });
+  assert.equal(infos(), 0);
+  // Without `listed` (a log stream's check): read by name, as a single decision is.
+  assert.equal((await permissions.which("bob", ["acme/r3"], "logs:read")).size, 1);
+  assert.equal(infos(), 1);
+  // A single decision reads the repository by name, fresher than a listing; one not listed
+  // (installed since) is read by name too.
+  assert.equal(await permissions.can("bob", "acme/r2", "runs:manage"), true);
+  assert.equal(infos(), 2);
+  repos["acme/new"] = {};
+  assert.equal((await permissions.which("bob", ["acme/new"], null, { listed: true })).size, 1);
+  assert.equal(infos(), 3);
+});
+
+test(
+  "the real opa: a repository as listed has its deny rules read on the default branch listed",
+  { skip: noOpa },
+  async (t) => {
+    const repos = {
+      "acme/api": { branch: "master", policies: { "deny.rego": denyManage } },
+      "acme/web": {},
+    };
+    const { policies, calls } = realAccess(t, { repos });
+    const listed = (name) =>
+      repos[name] && {
+        full_name: name,
+        private: true,
+        default_branch: repos[name].branch ?? "main",
+      };
+    const permissions = createPermissions({ policies, infoOf: listed });
+    const shown = await permissions.dashboard("bob", ["acme/api", "acme/web"]);
+    assert.ok(!shown.repos["acme/api"].actions.includes("runs:manage"));
+    assert.ok(shown.repos["acme/web"].actions.includes("runs:manage"));
+    const managed = await permissions.which("bob", ["acme/api", "acme/web"], "runs:manage", {
+      listed: true,
+    });
+    assert.deepEqual([...managed], ["acme/web"]);
+    assert.ok(!calls.some((p) => p === "/repos/acme/api" || p === "/repos/acme/web"));
+  },
+);
+
+test("access: a repo's policies kept per default branch, a listed one and a read one not evicting each other", async (t) => {
+  // GitHub says `trunk` now; the listing, from before the move, still says `main`.
+  const repos = { "acme/api": { branch: "trunk" } };
+  const { github, calls } = fakeGithub(repos);
+  const engine = policyEngineOf(t, { readOperator: () => new Map() });
+  const policies = createPolicies({ config: {}, github, service: localService(engine) });
+  const listed = { full_name: "acme/api", private: true, default_branch: "main" };
+  const listings = () => calls.filter((p) => p.endsWith("/contents/.deckhand/policy")).length;
+  for (let i = 0; i < 3; i++) {
+    await policies.access("bob", listed);
+    await policies.access("bob", "acme/api");
+  }
+  assert.equal(listings(), 2);
+  // A push forgets both.
+  policies.forget("acme/api");
+  await policies.access("bob", listed);
+  await policies.access("bob", "acme/api");
+  assert.equal(listings(), 4);
+});
 
 test("access: a repository's name is owner/repo, nothing GitHub's paths would read otherwise", async (t) => {
   const { github, calls } = fakeGithub({ "acme/y": {} });

@@ -100,10 +100,11 @@ export function createHttp(ctx) {
 
   // Which of `repos` (names) `user` may do `action` on (permissions.mjs which(): the access
   // decision, the repos' `users` narrowing it) → a predicate on a repo's name. Tool output in the
-  // logs may hold the repo's secrets; a repo with no action is hidden altogether.
-  async function seeing(user, repos, action = TASKS) {
+  // logs may hold the repo's secrets; a repo with no action is hidden altogether. `listed`: the
+  // repos as last listed (which()'s), for what the dashboard shows of them, never the streams.
+  async function seeing(user, repos, action = TASKS, listed = false) {
     if (!ctx.permissions) return (repo) => sees(user, repo);
-    const seen = await ctx.permissions.which(user, repos, action);
+    const seen = await ctx.permissions.which(user, repos, action, { listed });
     return (repo) => !!repo && seen.has(repo.toLowerCase());
   }
 
@@ -175,7 +176,7 @@ export function createHttp(ctx) {
 
   // What the dashboard shows `user`: the repos they have `tasks:read` on, the totals of all.
   async function state(user) {
-    const shows = await seeing(user, namedRepos());
+    const shows = await seeing(user, namedRepos(), TASKS, true);
     const { shown, queued } = shownTasks(shows);
     // A wait's blockers are of its own repo (waits.mjs): those of the tasks `user` sees are in a
     // repo they see too.
@@ -185,7 +186,7 @@ export function createHttp(ctx) {
     // issue", its title never read for them.
     const parentOf = (key) => ctx.lanes?.parentKeys([key])[0] ?? null;
     const parents = keys.map(parentOf).filter(Boolean);
-    const parentShows = await seeing(user, parents.map(repoOf));
+    const parentShows = await seeing(user, parents.map(repoOf), TASKS, true);
     const hiddenParent = (key) => !!parentOf(key) && !parentShows(repoOf(parentOf(key)));
     const lanes =
       ctx.lanes?.labels(keys, { title: ctx.titles.get, inboxes: ctx.inboxes?.() ?? [] }) ?? {};
@@ -584,7 +585,7 @@ export function createHttp(ctx) {
     if (req.url === "/status") {
       if (!local && !user) return res.writeHead(401).end();
       // A signed-in user's: only the repos they may see, as in api/state.
-      const shows = user ? await seeing(user, namedRepos()) : undefined;
+      const shows = user ? await seeing(user, namedRepos(), TASKS, true) : undefined;
       return sendJson(res, ctx.status(shows));
     }
     if (req.url.startsWith("/api/sync")) {

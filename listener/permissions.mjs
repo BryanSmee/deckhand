@@ -99,8 +99,11 @@ function reported(answer, outside = false) {
 
 // `policies`: policies.mjs createPolicies()'s (access()); none (some tests): every action, as
 // run-policy.mjs asks nothing without them. `usersOf(repo)`: the repository's `users` as last
-// read, or null when not known (ALLOWED_USERS alone then).
-export function createPermissions({ policies = null, usersOf = () => null }) {
+// read, or null when not known (ALLOWED_USERS alone then). `infoOf(repo)`: what GitHub said of
+// the repository when it was last listed (repos.mjs infoOf(): its name, visibility and default
+// branch), or null: the filters over many repositories (which(), dashboard()) give it to
+// access() rather than the name, which would read each from GitHub (#783).
+export function createPermissions({ policies = null, usersOf = () => null, infoOf = () => null }) {
   // Outside the repository's `users`, as last read: nothing there.
   const outside = (login, repo) => {
     const users = usersOf(repo);
@@ -108,17 +111,24 @@ export function createPermissions({ policies = null, usersOf = () => null }) {
   };
 
   // access()'s answer for `login` on `repo` (null: server-wide), or null for none at all.
-  async function answerOf(login, repo) {
+  // `listed`: access() is given the repository as last listed (infoOf()) when it was, its name
+  // otherwise. Only for the filters: a single decision reads it (kept ACCESS_MS), fresher than
+  // a listing (LIST_MS).
+  async function answerOf(login, repo, listed = false) {
     if (typeof login !== "string" || !login) return null;
     if (repo != null && outside(login, repo)) return null;
     if (!policies) return { actions: ["*"], denied: [], files: {}, error: null };
+    // A repo renamed since its listing isn't listed under the name asked: read by it. One still
+    // listed under an old name keeps what access() kept under it (a push's forget() goes by the
+    // current one) until the next listing, as what the dashboard shows of it.
+    const asked = (listed && repo != null && infoOf(repo)) || repo;
     // access() says its own failures; one it didn't foresee gives nothing too.
-    return policies.access(login, repo).catch(() => null);
+    return policies.access(login, asked).catch(() => null);
   }
 
   // Whether `login` may do `action` on `repo`, or server-wide when `repo` is null.
-  async function can(login, repo, action) {
-    return allows(await answerOf(login, repo), action, repo != null);
+  async function can(login, repo, action, listed = false) {
+    return allows(await answerOf(login, repo, listed), action, repo != null);
   }
 
   // can()'s answer, telling a refusal from a decision that failed: { ok, error }, `error` why
@@ -136,20 +146,24 @@ export function createPermissions({ policies = null, usersOf = () => null }) {
   }
 
   // Whether `login` sees `repo` at all: some action there.
-  async function visible(login, repo) {
+  async function visible(login, repo, listed = false) {
     if (repo == null) return false;
-    return anyAction(await answerOf(login, repo));
+    return anyAction(await answerOf(login, repo, listed));
   }
 
   // The repositories among `repos` (names) where `login` may do `action` (null: visible()), by
   // their names in lower case: one decision each, asked together, for a filter that can't wait
-  // (http.mjs state()).
-  async function which(login, repos, action = null) {
+  // (http.mjs state()). `listed`: each repository as last listed (answerOf()'s), for a filter
+  // over what the dashboard shows; never for a check that guards something on its own (a log
+  // stream), which reads it as a single decision does.
+  async function which(login, repos, action = null, { listed = false } = {}) {
     const names = new Map();
     for (const repo of repos) if (repo) names.set(repo.toLowerCase(), repo);
     const said = await Promise.all(
       [...names].map(async ([key, repo]) => {
-        const ok = action ? await can(login, repo, action) : await visible(login, repo);
+        const ok = action
+          ? await can(login, repo, action, listed)
+          : await visible(login, repo, listed);
         return ok && key;
       }),
     );
@@ -169,13 +183,15 @@ export function createPermissions({ policies = null, usersOf = () => null }) {
 
   // What the dashboard shows `login` (api/state's `access`, #732): their server-wide actions,
   // and on each of `repos` (names) they see, the repo's actions and starts (repoActions()), by
-  // the repo's name in lower case. The repos they don't see aren't named.
+  // the repo's name in lower case, each as last listed (answerOf()'s `listed`, always: it only
+  // decides which controls are shown, never an action, which its route decides on its own). The
+  // repos they don't see aren't named.
   async function dashboard(login, repos) {
     const names = new Map();
     for (const repo of repos) if (repo) names.set(repo.toLowerCase(), repo);
     const [server, ...said] = await Promise.all([
       answerOf(login, null),
-      ...[...names.values()].map((repo) => answerOf(login, repo)),
+      ...[...names.values()].map((repo) => answerOf(login, repo, true)),
     ]);
     const shown = {};
     [...names.keys()].forEach((key, i) => {
