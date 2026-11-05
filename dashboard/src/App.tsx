@@ -141,8 +141,6 @@ export function Dashboard({ state, error, repos, refresh, onOverview }: Props) {
   const [phoneView, setPhoneView] = usePref("phoneBoard");
   // The last repo open here, which All doesn't clear: the phone's Tasks and Board go there.
   const [lastRepo, setLastRepo] = useState(() => stored("repo") || null);
-  // The repo shown before Chats or Settings, null for All: the Chats list's Tasks go back there.
-  const [origin, setOrigin] = useState(() => stored("tab") || null);
   // New request's dialog, and the kind it opened on: an idea or a bug report for a repo's
   // inbox, or a run that reviews a repo's recent runs; Ctrl K's may have its title typed.
   const [request, setRequest] = useState<{ kind: Request; title?: string } | null>(null);
@@ -180,9 +178,6 @@ export function Dashboard({ state, error, repos, refresh, onOverview }: Props) {
   // The user's chats: polled often on their page, else now and then for the sidebar's count,
   // or read once for a user who may start none (api.ts useChats()).
   const chats = useChats(onChats, canFrom(state?.access).anywhere("chat"));
-  // The open chat's repository: the header's, as on that repository's own pages.
-  const chatRepo =
-    (onChats && route.chat && chats.data?.chats.find((c) => c.id === route.chat)?.repo) || null;
   const overview = isOverview(route);
   useEffect(() => onOverview?.(overview), [overview]);
   // The address takes the sidebar's spelling, so links copied from it are the canonical ones.
@@ -195,15 +190,12 @@ export function Dashboard({ state, error, repos, refresh, onOverview }: Props) {
   }, [wide, overview, route.page, route.task, first?.key]);
   // The repo shown is the one to come back to (Tasks and Board on a phone, an empty address).
   useEffect(() => {
-    if (!onSettings && !onChats) {
-      store("tab", route.repo ?? "");
-      setOrigin(route.repo);
-    }
+    if (!onSettings) store("tab", route.repo ?? "");
     if (route.repo) {
       store("repo", route.repo);
       setLastRepo(route.repo);
     }
-  }, [onSettings, onChats, route.repo]);
+  }, [onSettings, route.repo]);
 
   const selectChip = (next: ChipId) => {
     store("chip", next);
@@ -233,8 +225,7 @@ export function Dashboard({ state, error, repos, refresh, onOverview }: Props) {
   };
   const railed = onBoard ? boardRail : rail;
   const onTasks = !overview && !onBoard && !onSettings && !onChats;
-  // On Chats: the open chat's repository, else the one the list was opened from.
-  const shownRepo = onSettings ? null : onChats ? (chatRepo ?? origin) : route.repo;
+  const shownRepo = onSettings ? null : route.repo;
   const page = (next: Partial<Route>) => go({ repo: null, task: null, run: null, ...next });
 
   // The lane Ctrl K picked, once the board shows it: the one with any of its issues (a pending
@@ -288,7 +279,7 @@ export function Dashboard({ state, error, repos, refresh, onOverview }: Props) {
     back: () => {
       if (task && !wide) return go({ ...route, task: null, run: null }, true);
       if (onSettings && route.config) return page({ page: "settings" });
-      if (onChats && route.chat && !wide) return page({ page: "chats" });
+      if (onChats && route.chat && !wide) return page({ repo: route.repo, page: "chats" });
       return false;
     },
   });
@@ -318,11 +309,7 @@ export function Dashboard({ state, error, repos, refresh, onOverview }: Props) {
         {wide ? (
           <Sidebar {...shell} repos={repos} rail={railed} onRail={selectRail} notify={notify} />
         ) : (
-          <TopBar
-            {...shell}
-            chatRepo={chatRepo}
-            onSearch={onTasks && !task ? toggleSearch : undefined}
-          />
+          <TopBar {...shell} onSearch={onTasks && !task ? toggleSearch : undefined} />
         )}
         <div class={styles.content}>
           {/* A repository's config has its own header, its way back included. */}
@@ -333,8 +320,6 @@ export function Dashboard({ state, error, repos, refresh, onOverview }: Props) {
               needs={needingYou(repos?.repos ?? null, tasks)}
               state={state}
               chats={chats.data}
-              chatRepo={chatRepo}
-              origin={origin}
             />
           )}
           {overview ? (
@@ -369,8 +354,9 @@ export function Dashboard({ state, error, repos, refresh, onOverview }: Props) {
             <div class={styles.page}>
               <Chats
                 polled={chats}
+                repo={route.repo}
                 open={route.chat ?? null}
-                onOpen={(id) => page({ page: "chats", chat: id })}
+                onOpen={(id, repo) => page({ repo, page: "chats", chat: id })}
                 now={now}
                 touch={!wide}
               />

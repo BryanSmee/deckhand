@@ -2,8 +2,9 @@
 // sidebar (Deckhand, New request, the repositories, Settings, the run slots and the user), or
 // its 64 px rail, and a page header (the repository, its GitHub link, Tasks | Board; Overview |
 // Tasks on All). On a phone, a top bar (the repository switcher, New request) and a tab bar
-// (Overview, Tasks, Board, Settings). Links keep the view: a repository's link from its board
-// opens the other's, and All's from a board opens the Overview (the board is one repo's).
+// (Overview, Tasks, Board, Chats, Settings). Links keep the view: a repository's link from its
+// board or its chats opens the other's, All's from a board opens the Overview (the board is one
+// repo's), and from chats every repo's chats.
 import type { ComponentChildren } from "preact";
 import { useEffect, useRef, useState } from "preact/hooks";
 import { type Can, useCan } from "./access";
@@ -57,11 +58,14 @@ const tasksOf = (repo: string | null) => formatRoute({ repo, task: null, run: nu
 const boardOf = (repo: string | null) =>
   formatRoute({ repo, task: null, run: null, page: "board" });
 const allTasks = formatRoute({ repo: null, task: null, run: null, page: "tasks" });
+const chatsOf = (repo: string | null) =>
+  formatRoute({ repo, task: null, run: null, page: "chats" });
 const onTasks = (route: Route) => route.page === "tasks" || (!route.page && !!route.repo);
 
-// A repository's link: its board from a board, else its tasks. All's: its tasks from All's
-// tasks, else the Overview.
+// A repository's link: its board from a board, its chats from chats, else its tasks. All's:
+// every repository's chats from chats, its tasks from All's tasks, else the Overview.
 const repoHref = (route: Route, repo: string | null) => {
+  if (route.page === "chats") return chatsOf(repo);
   if (!repo) return route.page === "tasks" && !route.repo ? allTasks : tasksOf(null);
   return route.page === "board" ? boardOf(repo) : tasksOf(repo);
 };
@@ -88,7 +92,6 @@ interface SidebarProps extends Common {
 // Chats: shown to a user who may start one somewhere (access.ts), or who keeps some.
 const chatsShown = (can: Can, chats: Chats | null | undefined) =>
   !!chats && (can.anywhere("chat") || chats.chats.length > 0);
-const chatsHref = formatRoute({ repo: null, task: null, run: null, page: "chats" });
 
 export function Sidebar(props: SidebarProps) {
   const { state, route, repos, rail, onRail, onRequest, notify, health = null } = props;
@@ -171,7 +174,7 @@ function RepoLinks({
   rail?: boolean;
   touch?: boolean;
 }) {
-  const shown = route.page !== "settings" && route.page !== "chats";
+  const shown = route.page !== "settings";
   const dot = (c: RepoCounts) => (
     <span class={styles.dot}>
       <StatusDot tone={c.live ? "run" : "idle"} pulse={c.moving} />
@@ -402,8 +405,6 @@ export function PageHeader({
   needs = 0,
   state = null,
   chats = null,
-  chatRepo = null,
-  origin = null,
   children,
 }: {
   route: Route;
@@ -412,17 +413,12 @@ export function PageHeader({
   state?: State | null;
   // api/chats: Chats among the views, with how many the user keeps of the most they may.
   chats?: Chats | null;
-  // On Chats: the open chat's repository, the title and views'; else the repository shown
-  // before Chats (null: All), where the list's Tasks go back.
-  chatRepo?: string | null;
-  origin?: string | null;
   children?: ComponentChildren;
 }) {
   const can = useCan();
   const settings = route.page === "settings";
   const chatting = route.page === "chats";
-  const repo = settings ? null : chatting ? chatRepo : route.repo;
-  const back = chatting && !repo ? origin : null;
+  const repo = settings ? null : route.repo;
   // The board is one repository's: All has the Overview instead.
   const views: Segment<"overview" | "tasks" | "board" | "chats">[] = repo
     ? [
@@ -453,17 +449,18 @@ export function PageHeader({
           value: "tasks",
           label: "Tasks",
           icon: <Icon.Tasks size={14} />,
-          href: back ? tasksOf(back) : allTasks,
-          title: withKey(back ? `Tasks of ${back}` : "Tasks", "tasks"),
+          href: allTasks,
+          title: withKey("Tasks", "tasks"),
         },
       ];
-  // Chats are the user's own, on every repository: the same link from any of them.
+  // The user's chats on the repository shown, every repository's on All. How many they keep
+  // counts them all: the limit is theirs, not a repository's.
   if (chatsShown(can, chats)) {
     views.push({
       value: "chats",
       label: "Chats",
       icon: <Icon.Talk size={14} />,
-      href: chatsHref,
+      href: chatsOf(repo),
       extra: (
         <span class={styles.kept} title="The chats you keep, of the most you may">
           {chats!.chats.length} of {chats!.limit}
@@ -514,19 +511,17 @@ interface TopBarProps extends Common {
   onRequest: (request: Request) => void;
   // The Tasks page's: opens or closes the list's search box.
   onSearch?: () => void;
-  // On Chats, the open chat's repository (App.tsx): the label shown, as on its own pages.
-  chatRepo?: string | null;
 }
 
 // The phone's top bar: the repository switcher, whose sheet lists the sidebar's repositories,
 // then the run slots and the user; Search on the Tasks page, and New request. Under it, the
 // listener's error, if any: the sidebar's run slots say it on a wide screen.
 export function TopBar(props: TopBarProps) {
-  const { state, route, error, onRequest, onSearch, health = null, chatRepo = null } = props;
+  const { state, route, error, onRequest, onSearch, health = null } = props;
   const requests = menuRequests(useCan());
   const [sheet, setSheet] = useState(false);
   const settings = route.page === "settings";
-  const shown = settings ? null : route.page === "chats" ? chatRepo : route.repo;
+  const shown = settings ? null : route.repo;
   const counts = repoCounts(state?.tasks ?? [], shown);
   const current = shown ? counts.repos.find((c) => sameRepo(c.repo, shown)) : null;
   const label = settings ? "Settings" : (current?.repo ?? "All repositories");
@@ -575,14 +570,15 @@ export function TopBar(props: TopBarProps) {
   );
 }
 
-// The phone's tab bar. Tasks and Board are the repository shown, else the one last open
-// here. Else Tasks are All's (and stay All's on them), and Board the most recently active
-// repository's: the board is one repository's.
+// The phone's tab bar. Tasks, Board and Chats are the repository shown, else the one last open
+// here. Else Tasks and Chats are All's (and stay All's on them), and Board the most recently
+// active repository's: the board is one repository's.
 export function TabBar({ state, route, lastRepo, chats }: Common & { lastRepo: string | null }) {
   const can = useCan();
   const counts = repoCounts(state?.tasks ?? [], route.repo);
   const onAllTasks = route.page === "tasks" && !route.repo;
   const tasksRepo = route.repo ?? (onAllTasks ? null : lastRepo);
+  const chatsRepo = route.repo ?? (route.page === "chats" ? null : lastRepo);
   const repo = route.repo ?? lastRepo ?? counts.repos[0]?.repo ?? null;
   const tabs = [
     {
@@ -609,7 +605,7 @@ export function TabBar({ state, route, lastRepo, chats }: Common & { lastRepo: s
           {
             label: "Chats",
             icon: <Icon.Talk size={22} />,
-            href: chatsHref,
+            href: chatsOf(chatsRepo),
             current: route.page === "chats",
           },
         ]

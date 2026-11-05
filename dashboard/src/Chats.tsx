@@ -3,13 +3,14 @@
 // open chat's conversation (Conversation.tsx), its state and its menu (Reset, Delete, each
 // asked first). On a phone the list and the conversation are separate screens, as a task's
 // list and its detail are. What it reads is the chat's status and its runs' logs, nothing of its
-// sandbox: a chat whose agent runs elsewhere shows the same way.
+// sandbox: a chat whose agent runs elsewhere shows the same way. On a repository's page
+// (#/org/repo/chats) the list is that repository's chats, as its tasks are; on All, every one.
 import { useEffect, useRef, useState } from "preact/hooks";
 import { type NewChat, type Polled, createChat, deleteChat, resetChat } from "./api";
 import { CHAT_STATES, chatState } from "./chatModel";
 import { ChatPermissions } from "./ChatPermissions";
 import { Conversation } from "./Conversation";
-import { ago } from "./format";
+import { ago, sameRepo } from "./format";
 import { formatRoute } from "./route";
 import type { Chat, Chats as ChatList } from "./types";
 import { Button, IconButton } from "./ui/Button";
@@ -23,15 +24,18 @@ import styles from "./Chats.module.css";
 interface Props {
   // api/chats, which App reads (api.ts useChats()): the sidebar counts them too.
   polled: Polled<ChatList>;
+  // The repository shown (null: All), whose chats are listed.
+  repo: string | null;
   // The chat open, from the address (route.ts #/chats/<id>).
   open: string | null;
-  onOpen: (id: string | null) => void;
+  // Opens a chat (null: the list) on that repository's page (null: All's).
+  onOpen: (id: string | null, repo: string | null) => void;
   now: number;
   touch?: boolean;
 }
 
-const chatHref = (id: string | null) =>
-  formatRoute({ repo: null, task: null, run: null, page: "chats", chat: id });
+const chatHref = (repo: string | null, id: string | null) =>
+  formatRoute({ repo, task: null, run: null, page: "chats", chat: id });
 
 // "3 of 4": the chats kept against CHATS_PER_USER.
 export const keptText = (list: ChatList) => `${list.chats.length} of ${list.limit}`;
@@ -47,10 +51,11 @@ export function newChatProblem(list: ChatList | null): string | null {
   return null;
 }
 
-export function Chats({ polled, open, onOpen, now, touch }: Props) {
+export function Chats({ polled, repo, open, onOpen, now, touch }: Props) {
   const list = polled.data;
   const [creating, setCreating] = useState(false);
-  const chat = (open && list?.chats.find((c) => c.id === open)) || null;
+  const listed = (repo ? list?.chats.filter((c) => sameRepo(c.repo, repo)) : list?.chats) ?? [];
+  const chat = (open && listed.find((c) => c.id === open)) || null;
   // A chat just made or changed: shown as it answered, until the next poll.
   const shown = (next: Chat) =>
     polled.show((last) => {
@@ -66,6 +71,8 @@ export function Chats({ polled, open, onOpen, now, touch }: Props) {
       <aside class={styles.side} aria-label="Your chats">
         <ChatsList
           list={list}
+          listed={listed}
+          repo={repo}
           error={polled.error}
           open={open}
           now={now}
@@ -80,17 +87,19 @@ export function Chats({ polled, open, onOpen, now, touch }: Props) {
             now={now}
             touch={touch}
             onChat={shown}
-            onBack={() => onOpen(null)}
+            onBack={() => onOpen(null, repo)}
             onDeleted={() => {
               removed(chat.id);
-              onOpen(null);
+              onOpen(null, repo);
             }}
           />
         ) : (
           <p class={styles.empty}>
             {open && list
-              ? "No such chat: it was deleted, or it isn't yours."
-              : list?.chats.length
+              ? repo
+                ? `No such chat on ${repo}: it was deleted, or it isn't yours.`
+                : "No such chat: it was deleted, or it isn't yours."
+              : listed.length
                 ? "Pick a chat, or start a new one."
                 : "Start a chat to ask the agent about a repository, or to try things in a sandbox of its own. It can read the repository's issues and pull requests, but writes nothing on GitHub."}
           </p>
@@ -99,11 +108,13 @@ export function Chats({ polled, open, onOpen, now, touch }: Props) {
       {creating && list && (
         <NewChatDialog
           list={list}
+          repo={repo}
           onClose={() => setCreating(false)}
           onCreated={(next) => {
             setCreating(false);
             shown(next);
-            onOpen(next.id);
+            // On a repository's page, the new chat's: it may be another's.
+            onOpen(next.id, repo && next.repo);
           }}
         />
       )}
@@ -111,14 +122,20 @@ export function Chats({ polled, open, onOpen, now, touch }: Props) {
   );
 }
 
+// The chats listed (`listed`: the repository's, or all of them), under how many the user keeps
+// of the most they may: all of them, the limit being theirs.
 function ChatsList({
   list,
+  listed,
+  repo,
   error,
   open,
   now,
   onNew,
 }: {
   list: ChatList | null;
+  listed: Chat[];
+  repo: string | null;
   error: string | null;
   open: string | null;
   now: number;
@@ -154,21 +171,23 @@ function ChatsList({
         </p>
       )}
       {!list && !error && <p class={styles.limit}>Loading…</p>}
-      {list && !list.chats.length && <p class={styles.limit}>No chats yet.</p>}
+      {list && !listed.length && (
+        <p class={styles.limit}>{repo ? `No chats on ${repo} yet.` : "No chats yet."}</p>
+      )}
       <ul class={styles.items}>
-        {list?.chats.map((c) => {
+        {listed.map((c) => {
           const state = CHAT_STATES[chatState(c)];
           return (
             <li key={c.id}>
               <a
                 class={styles.item}
-                href={chatHref(c.id)}
+                href={chatHref(repo, c.id)}
                 aria-current={c.id === open ? "page" : undefined}
               >
                 <StatusDot tone={state.tone} pulse={state.tone === "run"} label={state.label} />
                 <span class={styles.itemTitle}>{c.title ?? "New chat"}</span>
                 <span class={styles.itemMeta}>
-                  {c.repo} · {ago(c.lastActiveAt, now)}
+                  {repo ? ago(c.lastActiveAt, now) : `${c.repo} · ${ago(c.lastActiveAt, now)}`}
                 </span>
               </a>
             </li>
@@ -414,20 +433,22 @@ function ConfirmDialog({
   );
 }
 
-// New chat: the repository (those whose `users` include you, with `runs:start:chat`), then
-// the agent, model and effort (the repository's by default), and a first message, which starts
-// its sandbox (none: the chat waits for one).
+// New chat: the repository (those whose `users` include you, with `runs:start:chat`; the one
+// shown first, if one of them), then the agent, model and effort (the repository's by
+// default), and a first message, which starts its sandbox (none: the chat waits for one).
 function NewChatDialog({
   list,
+  repo,
   onClose,
   onCreated,
 }: {
   list: ChatList;
+  repo: string | null;
   onClose: () => void;
   onCreated: (chat: Chat) => void;
 }) {
   const [form, setForm] = useState<NewChat>({
-    repo: list.repos[0] ?? "",
+    repo: (repo && list.repos.find((r) => sameRepo(r, repo))) || list.repos[0] || "",
     agent: null,
     model: null,
     effort: null,

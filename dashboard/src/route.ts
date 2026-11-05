@@ -9,8 +9,9 @@
 //   #/settings/repositories/org/repo     with one's config open
 //   #/settings/repositories/org/repo/policies   its Policies tab (/capabilities: Capabilities)
 //   #/settings/preferences, #/settings/server, #/settings/access   Settings' other tabs
-//   #/chats                              the user's chats (Chats.tsx)
+//   #/chats                              the user's chats, on every repo (Chats.tsx)
 //   #/chats/<id>                         with one's conversation open
+//   #/org/repo/chats[/<id>]              the user's chats on one repo, as its tasks and board
 // Older addresses still parse, and the dashboard rewrites them to these (App.tsx useRoute()):
 // #/all, #/?task=… (All's tasks), #/repositories[/org/repo], #/graph/org/repo (the board),
 // #/board and #/graph (every repo's graph, now the Overview), and links from before the tabs
@@ -62,8 +63,10 @@ export function parseRoute(hash: string): Route {
       ...(repos[2] ? { configTab: repos[2] as ConfigTab } : {}),
     };
   }
-  const chats = /^chats(?:\/([0-9a-f]{16}))?$/.exec(path);
-  if (chats) return { ...tasks(null), page: "chats", ...(chats[1] ? { chat: chats[1] } : {}) };
+  const chats = /^(?:([\w.-]+\/[\w.-]+)\/)?chats(?:\/([0-9a-f]{16}))?$/.exec(path);
+  if (chats) {
+    return { ...tasks(chats[1] ?? null), page: "chats", ...(chats[2] ? { chat: chats[2] } : {}) };
+  }
   const section = /^settings\/(preferences|clients|server|access)$/.exec(path);
   if (section) return { ...tasks(null), page: "settings", section: section[1] as Section };
   if (/^settings(?:\/[\w-]+)?$/.test(path)) return { ...tasks(null), page: "settings" };
@@ -93,7 +96,7 @@ export function formatRoute({
   section,
   chat,
 }: Route): string {
-  if (page === "chats") return `#/chats${chat ? `/${chat}` : ""}`;
+  if (page === "chats") return `#/${repo ? `${repo}/` : ""}chats${chat ? `/${chat}` : ""}`;
   if (page === "settings" && section) return `#/settings/${section}`;
   if (page === "settings") {
     const tab = config && configTab ? `/${configTab}` : "";
