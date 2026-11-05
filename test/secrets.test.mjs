@@ -2,7 +2,6 @@
 // message), and GitHub tokens of any origin, out of what a run publishes (#242).
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { partEnd } from "../lib/redact.mjs";
 import { redact } from "../listener/secrets.mjs";
 import { signToken, TOKEN_VERSION } from "../lib/tokens.mjs";
 import { testKey } from "./helpers.mjs";
@@ -141,23 +140,4 @@ test("redact() finds every part 16 characters long or more, wherever it starts",
       JSON.stringify({ text, secrets }),
     );
   }
-});
-
-test("partEnd: after the last newline, else after the last byte no token holds, else nowhere", () => {
-  const token = `ghs_${"d".repeat(36)}`;
-  const run = "eyJ2ZXIiOjEsInN1YiI6InJ1biJ9.";
-  assert.equal(partEnd(Buffer.from(`one\ntwo ${token}`)), 4);
-  // No newline: a token isn't cut, nor an escape from the token after it, nor a run token at
-  // its dot.
-  assert.equal(partEnd(Buffer.from(`a ${token}`)), 2);
-  assert.equal(partEnd(Buffer.from(`"a \\n${token}`)), 3);
-  assert.equal(partEnd(Buffer.from(`{"t":"${run}${"x".repeat(40)}`)), 6);
-  assert.equal(partEnd(Buffer.from(token)), 0);
-  // Each part redacted on its own finds what the whole does.
-  const text = Buffer.from(`x ${token} "${run}${"y".repeat(40)}" ${token}`);
-  const end = partEnd(text.subarray(0, 50));
-  assert.equal(
-    redact(text.toString("latin1", 0, end), []) + redact(text.toString("latin1", end), []),
-    redact(text.toString("latin1"), []),
-  );
 });

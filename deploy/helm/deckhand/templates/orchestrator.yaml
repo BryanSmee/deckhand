@@ -54,10 +54,10 @@ spec:
           {{- include "deckhand.probes" (list "services" "/health" "/health") | nindent 10 }}
           {{- include "deckhand.containerSecurityContext" . | nindent 10 }}
           volumeMounts:
+            {{- if not $redis }}
             - name: data
               mountPath: /data
-            - name: screenshots
-              mountPath: /data/shots
+            {{- end }}
             - name: server
               mountPath: /etc/deckhand
               readOnly: true
@@ -65,18 +65,18 @@ spec:
               mountPath: /var/run/secrets/deckhand
               readOnly: true
       volumes:
+        {{- if not $redis }}
+        # Its store's folder (/data/store) and nothing else: with Redis, no volume at all (#619).
         - name: data
           persistentVolumeClaim:
             claimName: orchestrator-data
-        - name: screenshots
-          persistentVolumeClaim:
-            claimName: orchestrator-screenshots
+        {{- end }}
         {{- include "deckhand.serverVolume" (list . true) | nindent 8 }}
         {{- include "deckhand.brokerTokenVolume" . | nindent 8 }}
+{{- if not $redis }}
 ---
-{{ include "deckhand.claim" (list . "orchestrator-data" ($redis | ternary "ReadWriteMany" "ReadWriteOnce")) }}
----
-{{ include "deckhand.claim" (list . "orchestrator-screenshots" ($redis | ternary "ReadWriteMany" "ReadWriteOnce")) }}
+{{ include "deckhand.claim" (list . "orchestrator-data" "ReadWriteOnce") }}
+{{- end }}
 ---
 apiVersion: v1
 kind: Service

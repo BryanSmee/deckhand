@@ -1,14 +1,6 @@
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
-import {
-  existsSync,
-  mkdirSync,
-  readdirSync,
-  readFileSync,
-  rmSync,
-  utimesSync,
-  writeFileSync,
-} from "node:fs";
+import { existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import {
@@ -18,18 +10,14 @@ import {
   lastResult,
   loadRuns,
   minutes,
-  moveLogs,
   moveSummaries,
   openLog,
   outcome,
   phaseOf,
-  publicRun,
   buildOutput,
   reader,
   saveSummary,
-  sessionEventOf,
   summaryKey,
-  sessionModeOf,
   stream,
   summaryOf,
   writeEvent,
@@ -39,31 +27,6 @@ import { openStore } from "../lib/store.mjs";
 import { tempDir } from "./helpers.mjs";
 
 const line = (event) => JSON.stringify(event);
-// A run's state as a release before #617 kept it (logs/<run>.live.json).
-const runState = (id) => JSON.stringify({ id, task: { repo: "org/repo" }, record: { id } });
-
-// The runner's logs (runner/client.mjs logs), as moveLogs() sends them: each upload's id, and
-// its text then, by id. `refuse`: ids it doesn't take.
-function fakeRunner(refuse = []) {
-  const logs = new Map();
-  return {
-    logs,
-    upload: async (id, path) => {
-      if (refuse.includes(id)) throw new Error("the runner service didn't answer");
-      logs.set(id, readFileSync(path, "utf8"));
-    },
-  };
-}
-
-// The redacted copies moveLogs() left in `dir` (runlog.mjs redactedCopy()).
-const redactedCopies = (dir) => readdirSync(dir).filter((f) => f.endsWith(".redacted"));
-
-// A start: the logs a listener kept itself go to the runner, the summaries in `dir` to the
-// store, then the runs are listed from it.
-async function started(dir, options) {
-  await moveLogs(dir, options?.runner ?? fakeRunner(), options).done;
-  return listed(dir, options);
-}
 
 // The runs a start lists: the summaries in `dir` moved to `store` first, by default the one
 // `dir`'s earlier starts had, as the orchestrator's store outlives it.
@@ -295,95 +258,6 @@ test("lastResult: the agent's last result in a log's lines", () => {
   );
 });
 
-test("runs: logs kept here are summarized, sent to the runner, then listed newest first", async (t) => {
-  const dir = tempDir(t);
-  const meta = {
-    type: "listener",
-    key: "org/repo#1",
-    kind: "issue",
-    title: "One",
-    repo: "org/repo",
-  };
-  writeFileSync(
-    join(dir, "deckhand-org-repo-1-1000.log"),
-    [
-      line({
-        ...meta,
-        startedAt: 1000,
-        provider: "anthropic",
-        auth: "plan",
-        speed: "fast",
-        speedNote: "fast mode runs on opus, not sonnet",
-      }),
-      line({ type: "result", result: "Done." }),
-    ].join("\n"),
-  );
-  // No listener line and no result: an old log, interrupted.
-  writeFileSync(join(dir, "deckhand-org-repo-2-2000.log"), "Cloning\n");
-  writeFileSync(
-    join(dir, "deckhand-org-repo-1-1000.live.json"),
-    runState("deckhand-org-repo-1-1000"),
-  );
-  // Stopped to ask: its questions, for the task rather than the run.
-  const asked = "<!-- needs-input -->\n## Needs your input\n\n1. **Name**: which one?";
-  writeFileSync(
-    join(dir, "deckhand-org-repo-3-500.log"),
-    [
-      line({ ...meta, key: "org/repo#3", startedAt: 500 }),
-      line({ type: "result", result: asked }),
-    ].join("\n"),
-  );
-  const runner = fakeRunner();
-  const all = await started(dir, { runner });
-  // Every log at the runner, as it was, and none left here.
-  assert.deepEqual([...runner.logs.keys()].sort(), [
-    "deckhand-org-repo-1-1000",
-    "deckhand-org-repo-2-2000",
-    "deckhand-org-repo-3-500",
-  ]);
-  assert.equal(runner.logs.get("deckhand-org-repo-2-2000"), "Cloning\n");
-  assert.equal(existsSync(join(dir, "deckhand-org-repo-2-2000.log")), false);
-  // The live run's is listed once restoreRuns() restores it, and summarized when it ends.
-  assert.deepEqual(
-    all.map((r) => r.id),
-    ["deckhand-org-repo-2-2000", "deckhand-org-repo-3-500"],
-  );
-  // Its state gone without a summary (a listener from before summaries): its log, read.
-  rmSync(join(dir, "deckhand-org-repo-1-1000.live.json"));
-  writeFileSync(
-    join(dir, "deckhand-org-repo-1-1000.log"),
-    runner.logs.get("deckhand-org-repo-1-1000"),
-  );
-  const listed = await started(dir);
-  const runs = listed.filter((r) => r.key !== "org/repo#3");
-  const stopped = listed.find((r) => r.key === "org/repo#3");
-  assert.equal(stopped.status, "needs-input");
-  assert.deepEqual(stopped.questions, {
-    items: [{ title: "Name", text: "which one?", options: [] }],
-    raw: "1. **Name**: which one?",
-  });
-  assert.equal("questions" in publicRun(stopped), false);
-  assert.equal(runs[1].questions, null);
-  assert.deepEqual(
-    runs.map((r) => [r.id, r.key, r.status, r.summary, r.title]),
-    [
-      ["deckhand-org-repo-2-2000", "deckhand-org-repo-2", "interrupted", null, null],
-      ["deckhand-org-repo-1-1000", "org/repo#1", "ok", "Done.", "One"],
-    ],
-  );
-  // Logs from before agents had names are Claude Code's; from before speeds, no speed.
-  assert.equal(runs[1].agent, "claude");
-  assert.deepEqual(
-    [runs[1].speed, runs[1].speedNote],
-    ["fast", "fast mode runs on opus, not sonnet"],
-  );
-  assert.deepEqual([runs[0].speed, runs[0].speedNote], [null, null]);
-  // The credential it ran on survives the restart; none known from before it.
-  assert.deepEqual([runs[1].auth, runs[0].auth], ["plan", null]);
-  // Where a summary from before #503 said its log was: not for the dashboard.
-  assert.equal("logPath" in publicRun({ ...runs[1], logPath: "/data/logs/x.log" }), false);
-});
-
 // A sign-out, or a repo's users narrowed, while the stream is open: it ends within a second.
 test(
   "stream: a running run's log stops once the viewer may no longer see it",
@@ -457,26 +331,13 @@ test("stream: an error reading the log ends that stream only", { timeout: 5000 }
   assert.equal(errors.length, 1);
 });
 
-test("runs: a cancelled run is cancelled after a restart, whatever its last result; its log says who", async (t) => {
-  const dir = tempDir(t);
-  const result = { type: "result", result: "Half done.", duration_ms: 1000 };
+test("log: a cancelled run's log says who", () => {
   const cancelled = {
     type: "listener",
     event: "cancelled",
     by: "alice",
     at: Date.UTC(2026, 0, 1, 9),
   };
-  writeFileSync(
-    join(dir, "deckhand-org-repo-4-1000.log"),
-    [
-      line({ type: "listener", key: "org/repo#4", startedAt: 1000 }),
-      line(result),
-      line(cancelled),
-    ].join("\n"),
-  );
-  const [run] = await started(dir);
-  assert.equal(run.status, "cancelled");
-  assert.equal(run.summary, "Stopped by @alice");
   assert.deepEqual(format(line(cancelled)), [
     { kind: "meta", text: "Stopped by @alice at 09:00:00 UTC" },
   ]);
@@ -490,286 +351,6 @@ test("log: a run stopped for its silence after its answer says so", () => {
       text: "Stopped at 09:00:00 UTC, silent for 2 min after its answer: the answer is posted",
     },
   ]);
-});
-
-test("runs: the comments a run ran on come back from its log, for a rerun, not for the dashboard", async (t) => {
-  const dir = tempDir(t);
-  const items = [
-    { id: "4", kind: "issue", number: 4, trigger: "work", modeLine: null, text: "Fix it" },
-  ];
-  writeFileSync(
-    join(dir, "deckhand-org-repo-4-1000.log"),
-    line({ type: "listener", key: "org/repo#4", repo: "org/repo", startedAt: 1000, items }),
-  );
-  writeFileSync(
-    join(dir, "deckhand-org-repo-5-900.log"),
-    line({ type: "listener", key: "org/repo#5", repo: "org/repo", startedAt: 900 }),
-  );
-  const [run, old] = await started(dir);
-  assert.equal(run.status, "interrupted");
-  assert.deepEqual(run.items, items);
-  assert.equal(old.items, null);
-  assert.equal("items" in publicRun(run), false);
-});
-
-test("runs: an older log without a summary is read, then its summary stands", async (t) => {
-  const dir = tempDir(t);
-  const logPath = join(dir, "deckhand-org-repo-6-1000.log");
-  const meta = { type: "listener", key: "org/repo#6", repo: "org/repo", startedAt: 1000 };
-  writeFileSync(logPath, [line(meta), line({ type: "result", result: "Done." })].join("\n"));
-  const [first] = await started(dir);
-  assert.equal(first.summary, "Done.");
-  const saved = await storeOf(dir).get(summaryKey("deckhand-org-repo-6-1000"));
-  assert.equal(saved.status, "ok");
-  assert.equal("logPath" in saved, false);
-  // A log left here again (a start whose upload failed): its summary stands.
-  writeFileSync(logPath, [line(meta), line({ type: "result", result: "Changed." })].join("\n"));
-  const [again] = await started(dir);
-  assert.deepEqual(again, first);
-});
-
-test("runs: a log the runner doesn't take stays here, summarized, and goes at the next start", async (t) => {
-  const dir = tempDir(t);
-  const id = "deckhand-org-repo-11-1000";
-  const meta = { type: "listener", key: "org/repo#11", repo: "org/repo", startedAt: 1000 };
-  writeFileSync(
-    join(dir, `${id}.log`),
-    [line(meta), line({ type: "result", result: "Ok." })].join("\n"),
-  );
-  const logs = [];
-  const [run] = await started(dir, { runner: fakeRunner([id]), log: (l) => logs.push(l) });
-  assert.equal(run.summary, "Ok.");
-  assert.equal(existsSync(join(dir, `${id}.log`)), true);
-  assert.match(logs.join("\n"), /not sent to the runner \(the runner service didn't answer\)/);
-  const runner = fakeRunner();
-  await started(dir, { runner });
-  assert.deepEqual([...runner.logs.keys()], [id]);
-  assert.equal(existsSync(join(dir, `${id}.log`)), false);
-});
-
-// moveSummaries() removed its summary from logs/ (#697): the store's key says it has one, and
-// the log isn't read again for a summary setIfAbsent() would discard.
-test("runs: a log the runner doesn't take, its run summarized in the store, isn't read again", async (t) => {
-  const dir = tempDir(t);
-  const id = "deckhand-org-repo-15-1000";
-  const meta = { type: "listener", key: "org/repo#15", repo: "org/repo", startedAt: 1000 };
-  writeFileSync(
-    join(dir, `${id}.log`),
-    [line(meta), line({ type: "result", result: "Ok." })].join("\n"),
-  );
-  const [first] = await started(dir, { runner: fakeRunner([id]), log: () => {} });
-  assert.equal(existsSync(join(dir, `${id}.json`)), false);
-  const summarized = new Set([id]);
-  await moveLogs(dir, fakeRunner([id]), { log: () => {}, summarized }).done;
-  assert.equal(existsSync(join(dir, `${id}.json`)), false);
-  assert.equal(existsSync(join(dir, `${id}.log`)), true);
-  // Without the store's say, it is summarized again, as before.
-  await moveLogs(dir, fakeRunner([id]), { log: () => {} }).done;
-  assert.equal(existsSync(join(dir, `${id}.json`)), true);
-  assert.deepEqual(await listed(dir), [first]);
-});
-
-test("runs: a log whose summary can't be written stays here, unsent: its run is never lost", async (t) => {
-  const dir = tempDir(t);
-  const id = "deckhand-org-repo-12-1000";
-  const meta = { type: "listener", key: "org/repo#12", repo: "org/repo", startedAt: 1000 };
-  writeFileSync(join(dir, `${id}.log`), line(meta));
-  // Where its summary goes, a folder that isn't empty: no write replaces it.
-  mkdirSync(join(dir, `${id}.json`));
-  writeFileSync(join(dir, `${id}.json`, "x"), "");
-  const runner = fakeRunner();
-  const logs = [];
-  await moveLogs(dir, runner, { log: (l) => logs.push(l) }).done;
-  assert.equal(runner.logs.size, 0);
-  assert.equal(existsSync(join(dir, `${id}.log`)), true);
-  assert.match(logs.join("\n"), new RegExp(`${id}\\.log not sent to the runner`));
-});
-
-test("runs: a log holding a token goes redacted, whole, its bytes otherwise as they were", async (t) => {
-  const dir = tempDir(t);
-  const [dirty, clean] = ["deckhand-org-repo-13-1000", "deckhand-org-repo-14-1000"];
-  const meta = (id) => line({ type: "listener", key: id, repo: "org/repo", startedAt: 1000 });
-  const token = `ghs_${"a1".repeat(18)}`;
-  const runToken = `eyJ2ZXIiOjEsInN1YiI6InJ1biJ9.${"x".repeat(43)}`;
-  // A byte that isn't UTF-8 stays that byte; a line with no newline at the end is read too.
-  const tail = Buffer.from([0xff, 0x0a]);
-  writeFileSync(
-    join(dir, `${dirty}.log`),
-    Buffer.concat([
-      Buffer.from(`${meta(dirty)}\n{"text":"token ${token} here"}\n`),
-      tail,
-      Buffer.from(`{"text":"${runToken}"}`),
-    ]),
-  );
-  writeFileSync(join(dir, `${clean}.log`), `${meta(clean)}\n`);
-  const calls = [];
-  const runner = {
-    // A part a try before sent of the file as it was.
-    logs: new Map([[dirty, Buffer.from(meta(dirty))]]),
-    remove: async (id) => {
-      calls.push(`remove ${id}`);
-      runner.logs.delete(id);
-    },
-    upload: async (id, path) => {
-      calls.push(`upload ${id}`);
-      runner.logs.set(id, readFileSync(path));
-    },
-  };
-  await moveLogs(dir, runner, { log: () => {} }).done;
-  // Removed before it is sent, not after: the runner's log would be gone. The two logs' order is
-  // the folder's.
-  assert.deepEqual(
-    calls.filter((c) => c.endsWith(dirty)),
-    [`remove ${dirty}`, `upload ${dirty}`],
-  );
-  assert.deepEqual(
-    calls.filter((c) => c.endsWith(clean)),
-    [`upload ${clean}`],
-  );
-  assert.deepEqual(
-    runner.logs.get(dirty),
-    Buffer.concat([
-      Buffer.from(`${meta(dirty)}\n{"text":"token [redacted] here"}\n`),
-      tail,
-      Buffer.from(`{"text":"[redacted]"}`),
-    ]),
-  );
-  assert.equal(runner.logs.get(clean).toString(), `${meta(clean)}\n`);
-  for (const id of [dirty, clean]) assert.equal(existsSync(join(dir, `${id}.log`)), false);
-  assert.deepEqual(redactedCopies(dir), []);
-});
-
-test("runs: a redacted copy a stopped start left goes once an hour old, a newer one stays", async (t) => {
-  const dir = tempDir(t);
-  const [old, recent] = ["a.log.1.redacted", "b.log.2.redacted"];
-  for (const f of [old, recent]) writeFileSync(join(dir, f), "x");
-  const hours = (n) => new Date(Date.now() - n * 60 * 60_000);
-  utimesSync(join(dir, old), hours(2), hours(2));
-  await moveLogs(dir, fakeRunner(), { log: () => {} }).done;
-  assert.deepEqual(redactedCopies(dir), [recent]);
-});
-
-test("runs: a log longer than a read, a token across two of them and in a long line, goes redacted", async (t) => {
-  const dir = tempDir(t);
-  const id = "deckhand-org-repo-16-1000";
-  const first = `${line({ type: "listener", key: id, startedAt: 1000 })}\n`;
-  const token = `ghs_${"c".repeat(36)}`;
-  const read = 4 * 1024 * 1024; // runlog.mjs REDACT_READ
-  // A line of words longer than a read, the token across the end of the first read; then one
-  // more past a read's length, with no newline at the end and a token near its own end.
-  const words = (n) => "word ".repeat(Math.ceil(n / 5)).slice(0, n);
-  const before = words(read - first.length - 10);
-  const long = `${before}${token} ${words(read)}\n`;
-  const last = `${words(read + 100)}${token}`;
-  writeFileSync(join(dir, `${id}.log`), first + long + last);
-  const runner = fakeRunner();
-  runner.remove = async () => {};
-  await moveLogs(dir, runner, { log: () => {} }).done;
-  assert.equal(
-    runner.logs.get(id),
-    `${first}${before}[redacted] ${words(read)}\n${words(read + 100)}[redacted]`,
-  );
-});
-
-test("runs: a log to redact whose runner copy can't be removed stays as it was, for the next start", async (t) => {
-  const dir = tempDir(t);
-  const id = "deckhand-org-repo-15-1000";
-  const text = `${line({ type: "listener", key: id, startedAt: 1000 })}\nghp_${"b".repeat(36)}\n`;
-  writeFileSync(join(dir, `${id}.log`), text);
-  const runner = {
-    remove: async () => {
-      throw new Error("the runner service didn't answer");
-    },
-    upload: async () => assert.fail("not sent before its runner copy is removed"),
-  };
-  const logs = [];
-  await moveLogs(dir, runner, { log: (l) => logs.push(l) }).done;
-  assert.equal(readFileSync(join(dir, `${id}.log`), "utf8"), text);
-  assert.deepEqual(redactedCopies(dir), []);
-  assert.match(logs.join("\n"), /not sent to the runner \(the runner service didn't answer\)/);
-});
-
-test("runs: live runs' logs move first, on their own; a failed try is tried again, never left halfway", async (t) => {
-  const dir = tempDir(t);
-  const ids = ["deckhand-org-repo-1-1000", "deckhand-org-repo-2-1000", "deckhand-org-repo-3-1000"];
-  for (const id of ids) {
-    writeFileSync(join(dir, `${id}.log`), line({ type: "listener", key: id, startedAt: 1000 }));
-  }
-  // The last one is live.
-  const live = ids[2];
-  writeFileSync(join(dir, `${live}.live.json`), runState(live));
-  const order = [];
-  let failures = 2;
-  let release;
-  const held = new Promise((resolve) => (release = resolve));
-  const closed = new Map();
-  const runner = {
-    upload: async (id, _, { close }) => {
-      order.push(id);
-      closed.set(id, close);
-      if (id === live && failures-- > 0) throw new Error("the runner service didn't answer");
-      // The history's first log is slow: the live one doesn't wait for it.
-      if (id === ids[0]) await held;
-    },
-  };
-  const waits = [];
-  const moved = moveLogs(dir, runner, {
-    log: () => {},
-    sleep: async (ms) => waits.push(ms),
-    retryMs: 5000,
-  });
-  assert.equal(await moved.moving.get(live), true);
-  assert.deepEqual(waits, [5000, 10000]);
-  assert.equal(existsSync(join(dir, `${live}.log`)), false);
-  assert.ok(!order.includes(ids[1]), "the live log waited for no other");
-  release();
-  assert.equal(await moved.done, 3);
-  // An ended run's log has its last segment closed at the runner; a live one's is written on.
-  assert.deepEqual(Object.fromEntries(closed), { [ids[0]]: true, [ids[1]]: true, [live]: false });
-});
-
-// #695: restart.mjs leaves a .live.json that isn't a run's state where it is: its log isn't
-// held as a live run's forever, it is summarized and sent as an ended one's.
-test("runs: a .live.json that isn't a run's state leaves its log an ended run's", async (t) => {
-  const dir = tempDir(t);
-  const ids = ["deckhand-org-repo-1-1000", "deckhand-org-repo-2-1000", "deckhand-org-repo-3-1000"];
-  for (const [i, id] of ids.entries()) {
-    writeFileSync(
-      join(dir, `${id}.log`),
-      line({ type: "listener", key: `org/repo#${i + 1}`, startedAt: 1000 }),
-    );
-  }
-  writeFileSync(join(dir, `${ids[0]}.live.json`), "{}");
-  writeFileSync(join(dir, `${ids[1]}.live.json`), "not json");
-  writeFileSync(join(dir, `${ids[2]}.live.json`), JSON.stringify({ id: ids[2], task: {} }));
-  const closed = new Map();
-  const runner = { upload: async (id, _, { close }) => closed.set(id, close) };
-  const moved = moveLogs(dir, runner, { log: () => {}, sleep: async () => {} });
-  assert.equal(await moved.done, 3);
-  // Each closed at the runner, as an ended run's, and listed from its summary.
-  assert.deepEqual(Object.fromEntries(closed), Object.fromEntries(ids.map((id) => [id, true])));
-  const runs = await listed(dir, { log: () => {} });
-  assert.deepEqual(runs.map((r) => r.id).sort(), ids);
-  // The files themselves stay, for the operator (docs/setup.md).
-  for (const id of ids) assert.equal(existsSync(join(dir, `${id}.live.json`)), true);
-});
-
-test("runs: a live run's log the runner holds more of is given up, not tried forever", async (t) => {
-  const dir = tempDir(t);
-  const id = "deckhand-org-repo-9-1000";
-  writeFileSync(join(dir, `${id}.log`), line({ type: "listener", key: id, startedAt: 1000 }));
-  writeFileSync(join(dir, `${id}.live.json`), runState(id));
-  let tries = 0;
-  const runner = {
-    upload: async () => {
-      tries++;
-      throw Object.assign(new Error("longer"), { code: "LOG_LONGER" });
-    },
-  };
-  const moved = moveLogs(dir, runner, { log: () => {}, sleep: async () => {} });
-  assert.equal(await moved.moving.get(id), false);
-  assert.equal(tries, 1);
-  assert.equal(await moved.done, 0);
 });
 
 test("runs: the run states and queues kept beside the summaries aren't moved, listed, nor logged", async (t) => {
@@ -837,39 +418,37 @@ test("moveSummaries: one the store refuses stays in logs/, for the next start", 
   );
 });
 
-test("saveSummary: one the store doesn't take is kept in logs/, moved over the store's at the next start", async (t) => {
+test("saveSummary: one the store doesn't take is logged, false; one a release before kept in logs/ goes over the store's", async (t) => {
   const dir = tempDir(t);
   const store = openStore("memory:");
   const id = "deckhand-org-repo-7-1000";
   const record = { id, key: "org/repo#7", startedAt: 1, finishedAt: 2, status: "ok" };
-  assert.equal(await saveSummary(store, record, { logDir: dir }), true);
-  // Its exit code, said later, while the store is away: kept here.
-  let away = true;
-  const flaky = {
+  assert.equal(await saveSummary(store, record), true);
+  // Its exit code, said later, while the store is away: nothing kept anywhere else (#619), the
+  // caller tries again (runs.mjs summarySaved()).
+  const away = {
     ...store,
-    set: async (...args) => {
-      if (away) throw new Error("the store is away");
-      return store.set(...args);
+    set: async () => {
+      throw new Error("the store is away");
     },
   };
   const logs = [];
   const log = (l) => logs.push(l);
   record.exitCode = 137;
-  assert.equal(await saveSummary(flaky, record, { log, logDir: dir }), false);
-  assert.deepEqual(readdirSync(dir), [`${id}.summary.json`]);
-  assert.match(logs.join("\n"), /kept in .*, for the next start/);
-  // The next start: it goes over the store's older one, and the file goes.
-  away = false;
-  assert.equal(await moveSummaries(dir, flaky, { log }), 1);
+  assert.equal(await saveSummary(away, record, { log }), false);
+  assert.deepEqual(readdirSync(dir), []);
+  assert.match(
+    logs.join("\n"),
+    /saving the summary of deckhand-org-repo-7-1000: the store is away/,
+  );
+  // One a release before #619 kept in logs/ then: the next start moves it over the store's
+  // older one, and the file goes.
+  writeFileSync(join(dir, `${id}.summary.json`), JSON.stringify(record));
+  assert.equal(await moveSummaries(dir, store, { log }), 1);
   assert.deepEqual(readdirSync(dir), []);
   assert.equal((await loadRuns(store))[0].exitCode, 137);
-  // A save the store took removes what one before kept here.
-  away = true;
-  await saveSummary(flaky, record, { log, logDir: dir });
-  away = false;
-  await saveSummary(flaky, { ...record, status: "error" }, { log, logDir: dir });
-  assert.deepEqual(readdirSync(dir), []);
-  assert.equal((await loadRuns(store))[0].status, "error");
+  // No logs/ at all: an orchestrator with no volume.
+  assert.equal(await moveSummaries(join(dir, "logs"), store, { log }), 0);
 });
 
 test("loadRuns: a key that isn't a run's summary is left out, logged", async () => {
@@ -908,28 +487,6 @@ test("saveSummary: a GitHub token or a secret in its text is redacted, not the s
   assert.deepEqual(logs, [`org/repo#6: saving the summary of ${id}: away`]);
 });
 
-test("runs: a live run gets no summary from its log, the one written when it ends wins", async (t) => {
-  const dir = tempDir(t);
-  const id = "deckhand-org-repo-7-1000";
-  const logPath = join(dir, `${id}.log`);
-  writeFileSync(logPath, line({ type: "listener", key: "org/repo#7", startedAt: 1000 }));
-  writeFileSync(join(dir, `${id}.live.json`), runState(id));
-  // restoreRuns() lists it.
-  const store = openStore("memory:");
-  assert.deepEqual(await started(dir, { store }), []);
-  assert.equal(existsSync(join(dir, `${id}.json`)), false);
-  // Its state in the store (#617), no file: the same.
-  rmSync(join(dir, `${id}.live.json`));
-  writeFileSync(logPath, line({ type: "listener", key: "org/repo#7", startedAt: 1000 }));
-  assert.deepEqual(await started(dir, { live: new Set([id]) }), []);
-  assert.equal(existsSync(join(dir, `${id}.json`)), false);
-  const record = { id, key: "org/repo#7", startedAt: 1000, finishedAt: 5000 };
-  await saveSummary(store, { ...record, status: "ok", summary: "Done.", shots: "a".repeat(24) });
-  const [run] = await loadRuns(store);
-  assert.deepEqual([run.status, run.summary, run.finishedAt], ["ok", "Done.", 5000]);
-  assert.equal("shots" in publicRun(run), false);
-});
-
 // Thousands of runs whose logs are never opened: their summaries alone.
 test("runs: a few thousand runs with summaries load fast", async () => {
   const store = openStore("memory:");
@@ -947,27 +504,6 @@ test("runs: a few thousand runs with summaries load fast", async () => {
   assert.ok(ms < 3000, `${count} runs took ${Math.round(ms)} ms`);
 });
 
-// #241: a log too big to read whole (a string can't hold over about 512 MB) doesn't stop the
-// start. Here with a small cap.
-test("runs: an oversized log is read by its first line and its end, and logged", async (t) => {
-  const dir = tempDir(t);
-  const meta = { type: "listener", key: "org/repo#8", repo: "org/repo", startedAt: 1000 };
-  writeFileSync(
-    join(dir, "deckhand-org-repo-8-1000.log"),
-    [line(meta), "x".repeat(5000), line({ type: "result", result: "Done." })].join("\n"),
-  );
-  const logs = [];
-  const [run] = await started(dir, { max: 1000, log: (l) => logs.push(l) });
-  assert.deepEqual(
-    [run.key, run.repo, run.status, run.summary],
-    ["org/repo#8", "org/repo", "ok", "Done."],
-  );
-  assert.match(
-    logs.join("\n"),
-    /deckhand-org-repo-8-1000\.log: 0 MB, only its first line and its end read/,
-  );
-});
-
 test("openLog: its size, from what the file had when opened", (t) => {
   const path = join(tempDir(t), "run.log");
   const file = openLog(path);
@@ -975,27 +511,6 @@ test("openLog: its size, from what the file had when opened", (t) => {
   file.write("héllo\n");
   assert.equal(file.size, 7);
   assert.equal(openLog(path).size, 7);
-});
-
-test("runs: a log that can't be read is left out, logged, and the others listed", async (t) => {
-  const dir = tempDir(t);
-  mkdirSync(join(dir, "deckhand-org-repo-9-1000.log"));
-  writeFileSync(
-    join(dir, "deckhand-org-repo-10-1000.log"),
-    line({ type: "listener", key: "org/repo#10", startedAt: 1000 }),
-  );
-  const logs = [];
-  const runs = await started(dir, { log: (l) => logs.push(l) });
-  assert.deepEqual(
-    runs.map((r) => r.key),
-    ["org/repo#10"],
-  );
-  assert.match(logs.join("\n"), /deckhand-org-repo-9-1000\.log not sent to the runner/);
-  // A summary that isn't one: left out too, logged.
-  writeFileSync(join(dir, "deckhand-org-repo-12-1000.json"), "[]");
-  assert.equal((await listed(dir, { log: (l) => logs.push(l) })).length, 1);
-  assert.match(logs.at(-1), /^Listing the run of deckhand-org-repo-12-1000\.json: /);
-  assert.equal(existsSync(join(dir, "deckhand-org-repo-12-1000.json")), true);
 });
 
 test("format: a line that isn't JSON is clipped, an agent's event cut at MAX_LINE too", () => {
@@ -1312,97 +827,4 @@ test("buildOutput: whole lines, each step's first after when it came, the rest a
     "#1 [internal] load\n",
     "ERROR: x\n",
   ]);
-});
-
-// A log a listener kept itself is summarized as moveLogs() sends it to the runner (#503): with the
-// mode its run's capabilities corrected (a live run's summary has it from its record).
-test("moveLogs: a run's summary has its record mode as its capabilities corrected it", async (t) => {
-  const logs = { upload: async () => {} };
-  const dir = tempDir(t);
-  writeFileSync(
-    join(dir, "deckhand-org-repo-5-1000.log"),
-    [
-      line({ type: "listener", key: "org/repo#5", startedAt: 1000, mode: "continue" }),
-      line({ type: "listener", event: "note", at: 1001, message: "it starts afresh" }),
-      line({
-        type: "listener",
-        event: "session",
-        at: 1001,
-        mode: "start",
-        capabilities: ["pull", "internet"],
-      }),
-      line({ type: "listener", event: "sandbox", at: 1002 }),
-      // The sandbox's own output, which can't pass for one.
-      line({ type: "listener", event: "session", at: 1003, mode: "continue", capabilities: [] }),
-    ].join("\n"),
-  );
-  const store = openStore("memory:");
-  await moveLogs(dir, logs).done;
-  const [run] = await listed(dir, { store });
-  assert.equal(run.mode, "start");
-  // What its start decided it gets, kept: an analysis leaves it out (analysis.mjs).
-  assert.deepEqual(run.capabilities, ["pull", "internet"]);
-  // Not a line of its own in the log: the note says it.
-  assert.deepEqual(format(line({ type: "listener", event: "session", mode: "start" })), []);
-  // A log too big to read whole: the correction near its start still counts.
-  const big = join(dir, "deckhand-org-repo-6-1000.log");
-  writeFileSync(
-    big,
-    [
-      line({ type: "listener", key: "org/repo#6", startedAt: 1000, mode: "start" }),
-      line({ type: "listener", event: "session", at: 1001, mode: "continue" }),
-      line({ type: "listener", event: "sandbox", at: 1002 }),
-      "x".repeat(2048),
-      "y".repeat(2048),
-      "",
-    ].join("\n"),
-  );
-  await moveLogs(dir, logs, { max: 1024, log: () => {} }).done;
-  const loaded = (await listed(dir, { store })).find((r) => r.key === "org/repo#6");
-  assert.equal(loaded.mode, "continue");
-});
-
-test("sessionEventOf: the capabilities its start decided, when the first event says them as names", () => {
-  const header = line({ type: "listener", mode: "start" });
-  const marker = line({ type: "listener", event: "sandbox" });
-  const session = (fields) => line({ type: "listener", event: "session", ...fields });
-  assert.deepEqual(
-    sessionEventOf([
-      header,
-      session({ mode: "start", capabilities: ["pull", "internet"] }),
-      marker,
-    ]),
-    { mode: "start", capabilities: ["pull", "internet"] },
-  );
-  assert.deepEqual(
-    sessionEventOf([header, session({ mode: "start", capabilities: [1] }), marker]),
-    { mode: "start", capabilities: null },
-  );
-  // A later line, a build's say, doesn't change them.
-  const forged = session({ mode: "start", capabilities: [] });
-  assert.deepEqual(
-    sessionEventOf([
-      header,
-      session({ mode: "start", capabilities: ["internet"] }),
-      forged,
-      marker,
-    ]),
-    { mode: "start", capabilities: ["internet"] },
-  );
-});
-
-test("sessionModeOf: only before the sandbox's marker, and only a record's mode", () => {
-  const header = line({ type: "listener", mode: "start" });
-  const session = (mode) => line({ type: "listener", event: "session", mode });
-  const marker = line({ type: "listener", event: "sandbox" });
-  assert.equal(sessionModeOf([header, session("continue"), marker]), "continue");
-  // None before the marker, or no marker at all (its sandbox never started): nothing.
-  assert.equal(sessionModeOf([header, marker, session("continue")]), null);
-  assert.equal(sessionModeOf([header, session("continue")]), null);
-  // A mode no record has: not one.
-  assert.equal(sessionModeOf([header, session("pwned"), marker]), null);
-  assert.equal(sessionModeOf([header, session("restore"), session("x"), marker]), "restore");
-  // The first only: what an image's build prints in the log before the marker comes after it.
-  const forged = session("continue");
-  assert.equal(sessionModeOf([header, session("start"), "#5 RUN echo", forged, marker]), "start");
 });

@@ -3,8 +3,8 @@
 #
 # Each service's store goes to Redis, under its own user and keys (redis.yaml, stores/). Edge,
 # the broker, the github and models services keep nothing else on disk: their copies may go to
-# any node. The orchestrator's state and screenshots and the runner's inboxes are still files
-# (until #613): their claims become ReadWriteMany, which your default storage class has to
+# any node. Nor does the orchestrator, which has no volume at all (#619). The runner's inboxes
+# are still files: its claim becomes ReadWriteMany, which your default storage class has to
 # provide (or a patch naming one), so that the copy taking over on another node finds them. The
 # proxy's copies stay on one node, by their podAffinity: the next one, during an update, shares
 # its volume (its CA).
@@ -30,12 +30,19 @@ patches:
   # Shared by copies on several nodes.
   - target:
       kind: PersistentVolumeClaim
-      name: orchestrator-data|orchestrator-screenshots|runner-data
+      name: runner-data
     patch: |
       - op: replace
         path: /spec/accessModes
         value: [ReadWriteMany]
   # Their stores' volumes, no longer used.
+  - patch: |
+      $patch: delete
+      apiVersion: v1
+      kind: PersistentVolumeClaim
+      metadata:
+        name: orchestrator-data
+        namespace: deckhand
   - patch: |
       $patch: delete
       apiVersion: v1

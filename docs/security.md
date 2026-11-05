@@ -587,12 +587,13 @@ tasks, the queue, the runs' lives (started through the runner, their replies, re
 through the github service), what it starts by itself (reviews, fixes, auto-merge…), the
 dashboard's data, and the egress policy the proxy asks. It **holds no secret**: none of its
 settings is one (`test/networks.test.mjs` reads `compose.yaml`'s environments), and no secret's
-volume is mounted in it; its `data` volume holds its state. It **has no way
+volume is mounted in it; its `data` volume holds its store's folder alone, and with Redis as
+its store it has no volume (#619). It **has no way
 out**: every network it is on is internal ([The services' networks](#the-services-networks)).
 Its ports: the services port (8083: the runner's `POST /runs/:run/tokens`, edge's `/edge/*`)
 and the egress policy's (8082, the egress proxy's). None is published. It runs as `node`
-(uid 1000, #536), on a read-only root filesystem, without capabilities: it writes its volumes
-alone, and reads the server folder and the mount roots you grant as that user.
+(uid 1000, #536), on a read-only root filesystem, without capabilities: it writes its store's
+folder alone (nothing with Redis), and reads the server folder and the mount roots you grant as that user.
 
 - **One copy acts.** Two may run: the acting one holds the store's lease `orchestrator`
   (`lib/active.mjs`, 15 seconds, `LEASE_SECONDS`, renewed every third of its life); the other
@@ -1047,7 +1048,8 @@ to GitHub: the proxy never tunnels those hosts for it, and its plain HTTP to the
     created, its 100 newest): the App's bot also adds the orchestrator's reactions, which a run
     never removes, on any comment, even where the run's same reaction came first (GitHub keeps
     one per user and content): the orchestrator notes each one before it asks GitHub
-    (`PUT /reactions`, in the github service's store; `reactions.json` before, issue #458). Whatever a policy says, no run writes the repository's
+    (`PUT /reactions`, in the github service's store; `reactions.json` before, issue #458, no
+    longer read since #619). Whatever a policy says, no run writes the repository's
     contents (pushes go through the git gateway) or settings, reviews, or a comment it didn't
     post;
   - an item added to a project (v2) (`addProjectV2ItemById`, issue #454) is a `project` on
@@ -2261,15 +2263,20 @@ service's). The files holding secrets are the owner's only (`0600`):
 | `session.key` | signs dashboard sessions                                                                                                                                                                                                           |
 | `store/`      | its store: the delivery ids taken, each login's session epoch, MCP clients' registrations and their tokens' hashes, the redeliveries' state and their poller's lease, the `deliveries` stream (what people wrote, without secrets) |
 
-**The orchestrator's volume** (`data`) holds nothing that signs deliveries or sessions, nor any
-run's token (the broker answers those, #617); whoever reads it reads the queue and what the runs
-did. The files holding what people wrote are the owner's only (`0600`):
+**The orchestrator's volume** (`data`) holds its store's folder alone (#619), and with Redis as
+its store there is none. It holds nothing that signs deliveries or sessions, nor any run's token
+(the broker answers those, #617); whoever reads it reads the queue and what the runs did. The
+files holding what people wrote are the owner's only (`0600`):
 
-| File                      | What                                                                                                                                                                           |
-| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `store/state.json`        | the store's keys: the queued comments, with their authors; each running run's state (`runs/<id>`, gone once it's over); its lease and fencing epoch; the deliveries it handled |
-| `store/keys/`             | the runs' summaries and the items of its maps (a file each): their comments' text, the comments waiting for other issues (`/after`) and their authors, issue titles            |
-| `logs/<run>.summary.json` | a run's summary, kept while the store refused it                                                                                                                               |
+| File               | What                                                                                                                                                                           |
+| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `store/state.json` | the store's keys: the queued comments, with their authors; each running run's state (`runs/<id>`, gone once it's over); its lease and fencing epoch; the deliveries it handled |
+| `store/keys/`      | the runs' summaries and the items of its maps (a file each): their comments' text, the comments waiting for other issues (`/after`) and their authors, issue titles            |
+
+What the orchestrator kept in files of its own before (the waits' comments, the queue, the live
+runs' states, the runs' summaries with the text of the comments a run acted on, #615–#619) is in
+the store now: whoever reads the store reads it (its folder, or Redis's user and network), never
+with a secret (`storable()`).
 
 **The store** (`STORE_URL`: a folder by default, Redis #509) never holds a secret. Each
 service's refuses a value or an event holding one it knows, a GitHub token or a private key
@@ -2522,9 +2529,6 @@ A run's output can't stop the orchestrator, nor fill a data volume:
   run fails, with a note in its log and a reply saying why. The orchestrator's own lines (a few
   notes) are still written. A restarted orchestrator counts what the log already holds, and
   stops the sandbox again if it still runs.
-- At start, a log left in the orchestrator's volume without its summary is read whole up to 64 MB, else
-  only its first line and its last 4 MB. One that can't be read is left out of the run list,
-  and logged: no log keeps the orchestrator from starting.
 
 The cap is per run: the logs together can take up to that much for each run kept, until
 `LOG_RETENTION_DAYS`.

@@ -10,16 +10,16 @@ Each run's sandbox is a pod
 many run at once. [setup.md](setup.md) has the rest (the GitHub App's permissions, the settings,
 the agents): this page is what differs on a cluster.
 
-| Service      | Copies                           | Readiness | Grace (s) | Volumes                                         | Secrets                                                              |
-| ------------ | -------------------------------- | --------- | --------- | ----------------------------------------------- | -------------------------------------------------------------------- |
-| edge         | 2, both active                   | `/ready`  | 40        | `edge-data` (its store)                         | `deckhand-edge`                                                      |
-| orchestrator | 2, active/passive                | `/health` | 300       | `orchestrator-data`, `orchestrator-screenshots` | none                                                                 |
-| runner       | 2, active/passive                | `/health` | 300       | `runner-data` (its store, the runs' inboxes)    | none (its ServiceAccount's API token); `deckhand-blobs` with `blobs` |
-| broker       | 2, both active                   | `/ready`  | 45        | `broker-store`                                  | `deckhand-broker-key`; `deckhand-blobs` with `blobs`                 |
-| github       | 2, both active                   | `/ready`  | 300       | `github-data` (its store, the git mirrors)      | `deckhand-github`                                                    |
-| models       | 2, both active                   | `/ready`  | 630       | `models-store`                                  | `deckhand-models`, `-models-key`, `-credentials`                     |
-| policy       | 2, both active                   | `/ready`  | 40        | none                                            | none                                                                 |
-| egress proxy | 1, and a second during an update | `/ready`  | 630       | `egress-cache` (its cache, its CA)              | none                                                                 |
+| Service      | Copies                           | Readiness | Grace (s) | Volumes                                            | Secrets                                                              |
+| ------------ | -------------------------------- | --------- | --------- | -------------------------------------------------- | -------------------------------------------------------------------- |
+| edge         | 2, both active                   | `/ready`  | 40        | `edge-data` (its store)                            | `deckhand-edge`                                                      |
+| orchestrator | 2, active/passive                | `/health` | 300       | `orchestrator-data` (its store; none with `redis`) | none                                                                 |
+| runner       | 2, active/passive                | `/health` | 300       | `runner-data` (its store, the runs' inboxes)       | none (its ServiceAccount's API token); `deckhand-blobs` with `blobs` |
+| broker       | 2, both active                   | `/ready`  | 45        | `broker-store`                                     | `deckhand-broker-key`; `deckhand-blobs` with `blobs`                 |
+| github       | 2, both active                   | `/ready`  | 300       | `github-data` (its store, the git mirrors)         | `deckhand-github`                                                    |
+| models       | 2, both active                   | `/ready`  | 630       | `models-store`                                     | `deckhand-models`, `-models-key`, `-credentials`                     |
+| policy       | 2, both active                   | `/ready`  | 40        | none                                               | none                                                                 |
+| egress proxy | 1, and a second during an update | `/ready`  | 630       | `egress-cache` (its cache, its CA)                 | none                                                                 |
 
 ## Requirements
 
@@ -288,7 +288,9 @@ Change the tag in `images:` and `SANDBOX_IMAGE`, then `kubectl apply -k .`. Ever
 without stopping ([services.md](services.md#upgrades-without-downtime)): a rolling update starts
 the next copy before the old one stops (`maxUnavailable: 0`, `maxSurge: 1`), which drains within
 its grace period. The orchestrator's and the runner's copies hand their lease over: the old one
-releases it on SIGTERM and the new one takes it at once. Running sandboxes go on.
+releases it on SIGTERM and the new one takes it at once. Running sandboxes go on. An update may
+have a step of its own ([setup.md](setup.md#updating), its "Upgrading:" sections): the
+orchestrator's volumes, for example ([#619](setup.md#upgrading-the-orchestrator-without-a-volume-619)).
 
 Every service has a liveness probe on `/health`: a process that stops answering is restarted
 after a minute. Edge, the github and models services and the egress proxy answer `/ready` only
@@ -377,11 +379,14 @@ kubectl -n deckhand create secret generic deckhand-redis $(for s in edge orchest
   broker github models; do printf -- '--from-literal=%s=%s ' "$s" "$(openssl rand -hex 24)"; done)
 ```
 
-Then edge, the broker, the github and models services keep nothing on disk, and their copies go
-to any node. The orchestrator's state (and the screenshots it kept before #609) and the runner's inboxes are still files
-(until #613 moves them to the store): their claims become `ReadWriteMany`, which your default
-storage class has to provide (or a patch giving them a `storageClassName`), so a copy taking over
-on another node finds them. The proxy's copies stay on one node (their CA). Redis's own update is
+Then edge, the orchestrator, the broker, the github and models services keep nothing on disk,
+and their copies go to any node: the orchestrator has no volume at all (#619), its
+`orchestrator-data` claim gone. The runner's inboxes are still files: its claim becomes
+`ReadWriteMany`, which your default storage class has to provide (or a patch giving it a
+`storageClassName`), so a copy taking over on another node finds them. Coming from a release
+before #619, the orchestrator's first start on this one needs its old claim, which the
+component no longer mounts, and the claims stay until you delete them:
+[setup.md](setup.md#upgrading-the-orchestrator-without-a-volume-619). The proxy's copies stay on one node (their CA). Redis's own update is
 a restart of a few seconds, which the services wait through.
 
 ## Blob storage

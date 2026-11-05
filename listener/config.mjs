@@ -2,7 +2,9 @@
 // networks come from here so nothing in the listener is tied to one deployment. What the
 // operator grants one repo (hosts, mounts, limits) is in its grants folder instead (grants.mjs).
 import { accessSync, constants, existsSync, readdirSync } from "node:fs";
-import { join } from "node:path";
+import { isAbsolute, join, relative, resolve, sep } from "node:path";
+import { fileURLToPath } from "node:url";
+import { listDir } from "../lib/files.mjs";
 import {
   AGENT_SECRETS,
   AGENTS,
@@ -303,6 +305,52 @@ export function readConfigFile(env, read) {
   });
 }
 
+// Where `storeUrl` (STORE_URL) is in the data volume `dir` (#619): the name of its folder there
+// (`store` by default, file://<dir>/store), "" when it is the volume itself, null when it is
+// elsewhere or Redis, which need no volume.
+export function storeFolder(storeUrl, dir) {
+  if (!String(storeUrl).startsWith("file:")) return null;
+  const path = relative(resolve(dir), fileURLToPath(storeUrl));
+  if (path === ".." || path.startsWith(`..${sep}`) || isAbsolute(path)) return null;
+  return path.split(sep)[0];
+}
+
+// What the volume's own filesystem keeps at its root, no release's: ext4's lost+found, on the
+// block storage a claim may be (Longhorn, EBS, Ceph RBD: runner/kubernetes.mjs says the same of
+// the sessions' claims). Never left by a release before, never written, never to remove.
+const FILESYSTEM = new Set(["lost+found"]);
+
+// The folder #536's write check covers (unwritableData()), or null: the whole volume while a
+// release before left something there beside the store (its moves remove it), or while the
+// store's folder isn't made yet (the volume must take it: an empty one root's gets the chown
+// hint); else the store's folder alone, the rest never written (#619). None when the store is
+// elsewhere and nothing is left: an empty folder of a read-only image.
+export function dataToCheck(dir, folder, { list = listDir, exists = existsSync } = {}) {
+  if (folder === "") return dir;
+  const left = list(dir).some((name) => name !== folder && !FILESYSTEM.has(name));
+  if (left) return dir;
+  if (folder === null) return null;
+  const store = join(dir, folder);
+  return exists(store) ? store : dir;
+}
+
+// What a release before left in the data volume that nothing reads any more, once its moves are
+// done (#619): its entries but the store's folder and what the moves still take (`moving`: logs/,
+// shots/, the maps' files, for a later start), and in logs/ what no move reads (a run log from
+// before the runner service, logs/<run>.log, say), as `logs/<name>`. None with the store at the
+// volume's root: every entry is the store's then.
+export function leftInData(dir, folder, moving, { list = listDir } = {}) {
+  if (folder === "") return [];
+  const left = list(dir).filter(
+    (name) => name !== folder && !moving.has(name) && !FILESYSTEM.has(name),
+  );
+  const logs = folder === "logs" ? [] : list(join(dir, "logs"));
+  // The moves still read its .json files: the summaries and those kept (`.summary.json`,
+  // runlog.mjs moveSummaries()), the states and queues (`.live.json`, `.queued.json`, restart.mjs).
+  const stale = logs.filter((name) => !name.endsWith(".json"));
+  return [...left, ...stale.map((name) => `logs/${name}`)];
+}
+
 // The screenshots' folder of the data volume: one folder per run, which the orchestrator makes
 // and deletes whole, the screenshots in them only read. Its first level is checked, not the
 // screenshots: 90 days of them, read at every start, would delay each one, and each handover
@@ -343,6 +391,7 @@ export function unwritableData(dir, { access = accessSync, list = readdirSync, s
       return;
     }
     for (const entry of entries) {
+      if (path === dir && FILESYSTEM.has(entry.name)) continue;
       const child = join(path, entry.name);
       if (!entry.isDirectory()) {
         if (!entry.isSymbolicLink()) writable(child, false);

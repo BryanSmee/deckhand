@@ -336,10 +336,7 @@ export function createHttp(ctx) {
     // The log is the runner's: read from it as edge (../runner/client.mjs readLog()).
     if (run && (await visible()))
       return stream(req, res, run, {
-        read: async (offset) => {
-          await ctx.logMoved?.(run.id);
-          return ctx.runLogs.read(run.id, { offset });
-        },
+        read: (offset) => ctx.runLogs.read(run.id, { offset }),
         allowed: visible,
         onError: (error) => log(`${match[1]}: its log stream failed: ${error.stack ?? error}`),
       });
