@@ -13,6 +13,7 @@ import { lstat, readdir } from "node:fs/promises";
 import { join } from "node:path";
 import { performance } from "node:perf_hooks";
 import { STATUS_LABELS, statusLabel } from "../lib/metrics.mjs";
+import { keepLast } from "../lib/capped.mjs";
 
 export const CALLERS = ["orchestrator", "edge", "runner", "proxy", "github"];
 // The rate limits watched: GitHub has a few more (code_search, actions_runner_registration…)
@@ -210,10 +211,8 @@ export function githubMetrics(
     if (!authorization) return;
     if (!keys || !Number.isFinite(remaining) || !Number.isFinite(reset)) return;
     const key = limitKey(authorization);
-    keys.delete(key);
-    keys.set(key, { remaining, limit, reset });
     // The oldest dropped past the cap: a key not heard of since is the least likely the lowest.
-    if (keys.size > MAX_LIMITS) keys.delete(keys.keys().next().value);
+    keepLast(keys, key, { remaining, limit, reset }, MAX_LIMITS);
   }
 
   // A call to GitHub's API answered (`status` null: no answer) after `seconds`, with `headers`

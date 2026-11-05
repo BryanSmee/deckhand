@@ -14,6 +14,7 @@
 // and fallbacks); the calls refused it go on the `models` stream, for its log.
 import { isToken, TokenError, verifyToken, AGENT_AUDIENCE } from "../lib/tokens.mjs";
 import { SANDBOX_HEADER } from "../lib/broker-client.mjs";
+import { keepLast } from "../lib/capped.mjs";
 
 // What a run's token sent from elsewhere than its sandbox gets.
 export const NOT_ITS_SANDBOX = "this run's token only works from its own sandbox";
@@ -53,9 +54,7 @@ export function createRuns({
     if (cached && now() - cached.at < RECORD_MS) return cached.value;
     try {
       const value = await record(id);
-      records.delete(id);
-      if (records.size >= MAX_VIEWS) records.delete(records.keys().next().value);
-      records.set(id, { at: now(), value });
+      keepLast(records, id, { at: now(), value }, MAX_VIEWS);
       return value;
     } catch (error) {
       if (cached && now() - cached.at < RECORD_STALE_MS) return cached.value;
@@ -122,9 +121,7 @@ export function createRuns({
         },
       });
     }
-    views.delete(id);
-    if (views.size >= MAX_VIEWS) views.delete(views.keys().next().value);
-    views.set(id, run);
+    keepLast(views, id, run, MAX_VIEWS);
     return run;
   }
 
