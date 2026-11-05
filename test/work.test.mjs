@@ -2938,3 +2938,108 @@ test("access: a comment queued while moving a task is decided is decided in turn
   assert.deepEqual([w.unqueued, w.comments], [[], []]);
   assert.equal(w.waits.get("org/app#5"), undefined);
 });
+
+// --- The MCP tools' way in (mcp.mjs, #483) -----------------------------------------------
+
+test("MCP: schedule starts, queues, plans, dequeues and cancels as the dashboard does, logged as MCP", async () => {
+  const w = setup({
+    issues: { ...epic(), 5: open("Five"), 6: open("Six"), 7: open("Seven") },
+    cancels: { "org/app#5": "running" },
+  });
+  const { schedule } = w.api.mcp;
+  assert.equal(await schedule("alice", "org/app", { action: "start", number: 5 }), "#5 started.");
+  assert.deepEqual(w.comments.at(-1), [5, "Started from the dashboard by @alice."]);
+  assert.equal(w.accepted.at(-1).number, 5);
+  assert.ok(w.logs.includes("Work area: alice asks start org/app#5 (MCP)"));
+  assert.equal(
+    await schedule("alice", "org/app", { action: "queue", number: 6, after: 7 }),
+    "#6 waits for #7.",
+  );
+  assert.deepEqual(w.waits.get("org/app#6").blockers, [7]);
+  assert.ok(w.logs.includes("Work area: alice asks queue org/app#6 after #7 (MCP)"));
+  assert.equal(
+    await schedule("alice", "org/app", { action: "dequeue", number: 6 }),
+    "#6 no longer waits.",
+  );
+  assert.equal(w.waits.get("org/app#6"), undefined);
+  assert.match(w.comments.at(-1)[1], /^No longer waiting for #7: cancelled from the dashboard/);
+  assert.match(
+    await schedule("alice", "org/app", { action: "plan", number: 10 }),
+    /^#10 laid out: #12 and #13 start/,
+  );
+  assert.equal(await schedule("alice", "org/app", { action: "cancel", number: 5 }), "#5 stops.");
+  assert.deepEqual(w.cancelled, [["org/app#5", "alice"]]);
+  assert.deepEqual(w.comments.at(-1), [5, "Stopped from the dashboard by @alice."]);
+});
+
+test("MCP: schedule refused as the dashboard's route: hidden repos, actions, its body's checks", async () => {
+  const permissions = permissionsOf({
+    alice: { "org/app": MEMBER },
+    bob: { "org/app": VIEWER },
+  });
+  const w = setup({
+    env: { ALLOWED_REPOS: "org/app" },
+    issues: { 5: open("Five") },
+    permissions,
+  });
+  const { schedule } = w.api.mcp;
+  const start = { action: "start", number: 5 };
+  // Outside ALLOWED_REPOS, or where the login has no action: the same answer.
+  await assert.rejects(schedule("alice", "org/other", start), {
+    status: 404,
+    message: "org/other isn't one of this dashboard's repositories.",
+  });
+  await assert.rejects(schedule("carol", "org/app", start), {
+    status: 404,
+    message: "org/app isn't one of this dashboard's repositories.",
+  });
+  await assert.rejects(schedule("bob", "org/app", start), {
+    status: 403,
+    message: /`runs:start:work`/,
+  });
+  await assert.rejects(schedule("bob", "org/app", { action: "cancel", number: 5 }), {
+    status: 403,
+    message: /`runs:manage`/,
+  });
+  await assert.rejects(schedule("alice", "org/app", { action: "queue", number: 5 }), {
+    status: 400,
+  });
+  await assert.rejects(schedule("alice", "org/app", { action: "start", number: 404 }), {
+    status: 404,
+  });
+  assert.deepEqual([w.comments, w.accepted], [[], []]);
+});
+
+test("MCP: rerun by a run's id alone, refused as the dashboard's; a run the login can't see is none", async () => {
+  const permissions = permissionsOf({
+    alice: { "org/app": MEMBER },
+    bob: { "org/app": VIEWER },
+  });
+  const w = setup({ issues: { 5: open("Five") }, ...failed("org/app#5"), permissions });
+  const { rerun: again } = w.api.mcp;
+  const none = (id) => ({ status: 404, message: `No run ${id} among those you see.` });
+  await assert.rejects(again("alice", "run-6"), none("run-6"));
+  // carol sees nothing of org/app: its run is no run of hers.
+  await assert.rejects(again("carol", "run-5"), none("run-5"));
+  await assert.rejects(again("bob", "run-5"), { status: 403, message: /`runs:manage`/ });
+  // A chat's run is its owner's alone.
+  w.runs["run-5"].owner = "bob";
+  await assert.rejects(again("alice", "run-5"), none("run-5"));
+  delete w.runs["run-5"].owner;
+  assert.deepEqual([w.comments, w.accepted], [[], []]);
+  assert.equal(await again("alice", "run-5"), "Rerun of #5 queued.");
+  assert.deepEqual(w.comments, [[5, "Rerun from the dashboard by @alice: its last run failed."]]);
+  assert.ok(w.logs.includes("Work area: alice reruns org/app run-5 (MCP)"));
+  // Not rerunnable (it ran again: something is queued now).
+  const busy = setup({ issues: { 5: open("Five") }, ...failed("org/app#5"), busy: ["org/app#5"] });
+  await assert.rejects(busy.api.mcp.rerun("alice", "run-5"), {
+    status: 409,
+    message: /running or queued/,
+  });
+  const done = setup({ issues: { 5: open("Five") }, ...failed("org/app#5", { status: "ok" }) });
+  done.tasks["org/app#5"].rerunnable = false;
+  await assert.rejects(done.api.mcp.rerun("alice", "run-5"), {
+    status: 409,
+    message: /doesn't run again/,
+  });
+});

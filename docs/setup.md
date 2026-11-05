@@ -480,7 +480,7 @@ with **Revoke**; signing out of the dashboard signs them out too. Behind a rever
 public URL (`PUBLIC_URL`) must be the address clients connect to: the sign-in's metadata names
 it, and a browser page from another origin is refused.
 
-Its tools only read (they need the `deckhand:read` scope, which a client gets by default):
+Its read tools need the `deckhand:read` scope:
 
 | Tool           | What it gives                                                                                                                              |
 | -------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
@@ -489,6 +489,21 @@ Its tools only read (they need the `deckhand:read` scope, which a client gets by
 | `list_runs`    | A task's runs (`task`: `owner/repo#12`, `owner/repo#pr-12`), the newest first: id, mode, agent and model, start, duration, outcome         |
 | `get_run_log`  | A run's log as text, a page at a time (64 KB of the log by default, `limit` up to 1 MB; `from` for another page): the newest page first    |
 | `get_schedule` | The runs going, the queue in its run order, what waits for which issues, the lanes, and the backlog (`repo`: its open issues; else counts) |
+
+Its write tools need the `deckhand:work` scope, and act as you would on the dashboard: the same
+checks (your access on the repository, its `users`, the issue's state, its open questions), and
+the same App comment on the issue, in your name. Clients mark them as tools that change things,
+so they ask before calling them:
+
+| Tool       | What it does                                                                                                                                                                                                                                                                                                                      |
+| ---------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `rerun`    | A task's last run again (`runId`), when it failed, was interrupted or stopped: the dashboard's **Rerun**                                                                                                                                                                                                                          |
+| `schedule` | An issue of `repo` (`number`) as dragging it on the graph does, or the task page's **Stop**: `action` `start`, `queue` (waits for issue `after`), `plan` (a parent issue and its sub-issues, after `after` if given), `dequeue` (stops waiting) or `cancel` (stops its run or drops its queued comments; `pr` for a pull request) |
+
+A client gets both scopes by default; the sign-in page lists them, and a client asking for
+`deckhand:read` alone gets the read tools only. What the dashboard refuses (an issue running
+already, a run that didn't fail, an action your access lacks) is the tool's error, with the
+dashboard's message.
 
 Each shows what your access shows you on the dashboard, nothing of the repositories you don't
 see. A run's log can hold what its agent read (issues, command output, web pages): your

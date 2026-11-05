@@ -70,6 +70,7 @@ export function apiRoute({
   publicUrl = () => null,
   log = () => {},
 }) {
+  const check = routeChecks({ name, allowed, permissions, named, log });
   return function handle(req, res, user) {
     const { pathname } = new URL(req.url, "http://localhost");
     const found = route(pathname);
@@ -93,25 +94,9 @@ export function apiRoute({
         log(`${name}: refused for ${user}: Origin ${req.headers.origin ?? "missing"}`);
         return send(res, 403, { error: "Not from this dashboard." });
       }
-      if (repo && !allowed(repo)) return send(res, 404, hidden(repo));
-      if (permissions) {
-        if (repo) {
-          const sees = await permissions.decide(user, repo, null);
-          if (!sees.ok) {
-            if (sees.error) log(`${name}: ${repo}: hidden: ${refusal(sees, user, null)}`);
-            return send(res, 404, hidden(repo));
-          }
-        }
-        const needed = action(found);
-        const said = needed && (await permissions.decide(user, repo, needed));
-        if (said && !said.ok) {
-          log(`${name}: ${repo ?? pathname}: refused: ${refusal(said, user, needed)}`);
-          if (said.error) return send(res, 503, undecided(needed));
-          return send(res, 403, needs(needed, repo));
-        }
-      }
-      const spelled = repo && (await named(repo));
-      return handlers[req.method](req, res, user, spelled, found);
+      const checked = await check(user, repo, action(found), pathname);
+      if (checked.status) return send(res, checked.status, { error: checked.error });
+      return handlers[req.method](req, res, user, checked.repo, found);
     };
     run().catch((error) => {
       if (error instanceof Refused) {
@@ -125,5 +110,38 @@ export function apiRoute({
       }
     });
     return true;
+  };
+}
+
+// apiRoute()'s checks once its user is known, for its routes and for what calls their handlers'
+// bodies without a request (the MCP tools, mcp.mjs): `repo` (null: none) in ALLOWED_REPOS and
+// visible to `user`, then `needed` (null: nothing more). → { repo }, GitHub's spelling of it, or
+// { status, error }, the route's refusal: 404 hidden(), 403 needs(), 503 undecided().
+// `where`: the log's name for what was asked, the repo by default.
+export function routeChecks({
+  name,
+  allowed = () => true,
+  permissions = null,
+  named = async (repo) => repo,
+  log = () => {},
+}) {
+  return async function check(user, repo, needed = null, where = repo) {
+    if (repo && !allowed(repo)) return { status: 404, ...hidden(repo) };
+    if (permissions) {
+      if (repo) {
+        const sees = await permissions.decide(user, repo, null);
+        if (!sees.ok) {
+          if (sees.error) log(`${name}: ${repo}: hidden: ${refusal(sees, user, null)}`);
+          return { status: 404, ...hidden(repo) };
+        }
+      }
+      const said = needed && (await permissions.decide(user, repo, needed));
+      if (said && !said.ok) {
+        log(`${name}: ${repo ?? where}: refused: ${refusal(said, user, needed)}`);
+        if (said.error) return { status: 503, ...undecided(needed) };
+        return { status: 403, ...needs(needed, repo) };
+      }
+    }
+    return { repo: repo && (await named(repo)) };
   };
 }
