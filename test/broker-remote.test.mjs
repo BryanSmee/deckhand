@@ -25,7 +25,7 @@ import { createInbox } from "../listener/runner/inbox.mjs";
 import { createBrokerCaller } from "../lib/broker-client.mjs";
 import { openStore } from "../lib/store.mjs";
 import { signToken, TOKEN_VERSION } from "../lib/tokens.mjs";
-import { listenToRestart, needsBash, tempDir, testKey } from "./helpers.mjs";
+import { closedPort, listenToRestart, needsBash, tempDir, testKey } from "./helpers.mjs";
 
 const FOLDER = "0123456789abcdef01234567";
 const PNG = Buffer.from("89504e470d0a1a0a", "hex");
@@ -120,6 +120,28 @@ test("ready: not before the broker answered, its keys read and its service token
   broker = await service(t, { store, key, port });
   await until(() => listener.ready());
   assert.equal(listener.keys().has(key.kid), true);
+});
+
+test("stop() ends the asking for service tokens while the broker is away, and a later start() doesn't begin it again (#770)", async () => {
+  const url = `http://127.0.0.1:${await closedPort()}`;
+  let asked = 0;
+  const caller = createBrokerCaller({ url, observe: () => asked++ });
+  const asking = caller.start();
+  await until(() => asked > 0);
+  // Stopped while it waits to ask again: the wait cut short, nothing asked after.
+  caller.stop();
+  await asking;
+  const after = asked;
+  await caller.start();
+  assert.equal(asked, after);
+  assert.equal(caller.ready(), false);
+
+  // Stopped before it started: start() asks nothing.
+  let early = 0;
+  const stopped = createBrokerCaller({ url, observe: () => early++ });
+  stopped.stop();
+  await stopped.start();
+  assert.equal(early, 0);
 });
 
 test("the stream: a screenshot said, left at the broker, acknowledged", async (t) => {
