@@ -2,13 +2,16 @@
 // machinery (runs.mjs and tasks.mjs, whose part runs.test.mjs and orchestrator-server.test.mjs
 // cover), and the dashboard's real checks (repo-check.mjs) over a fake GitHub.
 import assert from "node:assert/strict";
+import { mkdirSync, realpathSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { test } from "node:test";
 import { chatKey, createChats } from "../listener/chats.mjs";
+import { DEFAULT_PROFILE } from "../listener/profiles.mjs";
 import { createRepoCheck } from "../listener/repo-check.mjs";
 import { parseRepoConfig } from "../listener/repo-config.mjs";
 import { summaryKey } from "../listener/runlog.mjs";
 import { openStore } from "../lib/store.mjs";
-import { serve, testConfig } from "./helpers.mjs";
+import { capabilityPolicies, serve, tempDir, testConfig } from "./helpers.mjs";
 
 // A clock and timers the test moves (`advance(ms)`).
 function fakeClock(start = 1_000_000) {
@@ -43,6 +46,8 @@ async function setup(
     users,
     store = openStore("memory:"),
     permissions = null,
+    // What decides a chat's capabilities (helpers.mjs capabilityPolicies()), for its profile.
+    policies = null,
     // A promise GitHub's answers wait for, while set (`hold.until`).
     hold = {},
   } = {},
@@ -100,6 +105,7 @@ async function setup(
     runLogs: { remove: async (id) => calls.logs.push(id) },
     removeShots: async (folder) => calls.shots.push(folder),
     permissions,
+    policies,
   };
   const github = async (_repo, _method, path) => {
     await hold.until;
@@ -586,4 +592,136 @@ test("a chat its owner can no longer reach: listed, so they can delete it, witho
   assert.deepEqual([listed.reachable, listed.runs], [false, []]);
   await chats.remove("alice", chat.id);
   assert.deepEqual(await chats.list("alice"), []);
+});
+
+// A grants folder giving org/repo `hosts`: its path, for GRANTS_DIR.
+function grantsFolder(t, text) {
+  const dir = realpathSync(tempDir(t));
+  mkdirSync(join(dir, "org"));
+  writeFileSync(join(dir, "org", "repo.yaml"), text);
+  return dir;
+}
+
+test("permissions: the ceiling a chat's run gets, a profile saved within it, what would widen it refused (#478)", async (t) => {
+  const policies = capabilityPolicies();
+  const { chats, store } = await setup(t, {
+    env: { GRANTS_DIR: grantsFolder(t, "hosts: [registry.npmjs.org, pypi.org]\n") },
+    policies,
+    yaml: "setup: npm ci\n",
+  });
+  const chat = await chats.create("alice", { repo: "org/repo" });
+  const view = await chats.permissions("alice", chat.id);
+  // What a chat's run is decided with: a `chat` one started from the dashboard, no issue.
+  assert.deepEqual(policies.inputs.at(-1), {
+    repo: { name: "org/repo", private: true },
+    mode: "chat",
+    custom_mode: false,
+    issue: null,
+    reason: null,
+    fork: false,
+    trigger: "dashboard",
+    command: null,
+  });
+  assert.deepEqual(view.profile, DEFAULT_PROFILE);
+  assert.deepEqual(view.ceiling.hosts, ["registry.npmjs.org", "pypi.org"]);
+  assert.deepEqual(
+    view.ceiling.capabilities.filter((c) => c.allowed).map((c) => c.name),
+    ["pull", "setup", "read:issues", "read:pulls", "read:actions"],
+  );
+  assert.equal(view.effective.hosts.length, 2);
+  assert.equal(view.running, false);
+  assert.deepEqual(view.errors, []);
+
+  // Beyond the ceiling: refused, each said, nothing saved.
+  const widened = await chats.setPermissions("alice", chat.id, {
+    profile: { hosts: ["evil.example"], capabilities: ["pull", "docker"], github: "push" },
+  });
+  assert.equal(widened.refused.length, 3);
+  assert.match(widened.refused[0], /^GitHub: `push`/);
+  assert.equal((await store.get("chats"))[chat.id].profile, null);
+
+  // Within it: saved with the chat, in the store, for its next start.
+  const saved = await chats.setPermissions("alice", chat.id, {
+    profile: { capabilities: ["pull", "setup"], hosts: ["pypi.org"] },
+  });
+  const profile = {
+    github: "read",
+    capabilities: ["pull", "setup"],
+    hosts: ["pypi.org"],
+    mounts: null,
+  };
+  assert.deepEqual(saved.profile, profile);
+  assert.deepEqual(saved.effective.capabilities, ["pull", "setup"]);
+  assert.deepEqual((await store.get("chats"))[chat.id].profile, profile);
+  assert.deepEqual(chats.profileOf({ id: `chat-${chat.id}` }), profile);
+  // Someone else's: no such chat.
+  assert.equal((await refusal(chats.permissions("bob", chat.id))).status, 404);
+  assert.equal((await refusal(chats.setPermissions("bob", chat.id, { profile: {} }))).status, 404);
+});
+
+test("permissions: a chat whose capabilities can't be decided answers a 503, saving nothing", async (t) => {
+  const { chats } = await setup(t, {
+    env: { GRANTS_DIR: grantsFolder(t, "hosts: []\n") },
+    policies: { capabilityRules: async () => ({ error: "opa is away" }), grants: async () => ({}) },
+  });
+  const chat = await chats.create("alice", { repo: "org/repo" });
+  assert.deepEqual(await refusal(chats.setPermissions("alice", chat.id, { profile: {} })), {
+    status: 503,
+    message: "What org/repo's chats get can't be decided now: opa is away",
+  });
+});
+
+test("restart: the chat's sandbox rests (its session kept), so its next message starts with the new profile", async (t) => {
+  const { chats, ctx, calls } = await setup(t);
+  const chat = await chats.create("alice", { repo: "org/repo", message: "hi" });
+  // No sandbox going yet: nothing to stop.
+  assert.equal(chats.restart("alice", chat.id), null);
+  const task = ctx.tasks.get(chatKey(chat));
+  task.live = { open: true };
+  assert.equal(chats.restart("alice", chat.id), "rested");
+  assert.deepEqual(calls.rested, [task.name]);
+  // Nothing removed: the session stays.
+  assert.deepEqual(calls.removed, []);
+  assert.throws(() => chats.restart("bob", chat.id), { status: 404 });
+  // One that answered already and lingers: on its way out, nothing rested again.
+  task.live = { answered: true };
+  assert.equal(chats.restart("alice", chat.id), "stopping");
+  assert.deepEqual(calls.rested, [task.name]);
+});
+
+test("the API: GET and POST /api/chats/<id>/permissions, a 422 listing what would widen it, POST restart", async (t) => {
+  const { chats } = await setup(t, {
+    env: { GRANTS_DIR: grantsFolder(t, "hosts: [pypi.org]\n") },
+    policies: capabilityPolicies(),
+  });
+  const { url } = await serve(t, (req, res) => {
+    if (!chats.handle(req, res, req.headers["x-user"] ?? null)) res.writeHead(404).end();
+  });
+  const call = async (method, path, body) => {
+    const res = await fetch(url + path, {
+      method,
+      headers: { "x-user": "alice", origin: url, "content-type": "application/json" },
+      body: body && JSON.stringify(body),
+    });
+    return { status: res.status, body: await res.json() };
+  };
+  const { id } = (await call("POST", "/api/chats", { repo: "org/repo" })).body.chat;
+  const got = await call("GET", `/api/chats/${id}/permissions`);
+  assert.equal(got.status, 200);
+  assert.deepEqual(got.body.ceiling.hosts, ["pypi.org"]);
+  const refused = await call("POST", `/api/chats/${id}/permissions`, {
+    profile: { hosts: ["evil.example"] },
+  });
+  assert.equal(refused.status, 422);
+  assert.deepEqual(refused.body.errors, [
+    "`evil.example`: not among the hosts the operator grants this repository",
+  ]);
+  assert.match(refused.body.error, /^This profile goes beyond what the chat may get: /);
+  const saved = await call("POST", `/api/chats/${id}/permissions`, { profile: { hosts: [] } });
+  assert.equal(saved.status, 200);
+  assert.deepEqual(saved.body.effective.hosts, []);
+  const restarted = await call("POST", `/api/chats/${id}/restart`);
+  assert.equal(restarted.status, 200);
+  assert.match(restarted.body.message, /^No sandbox is going/);
+  assert.equal((await call("DELETE", `/api/chats/${id}/permissions`)).status, 405);
 });

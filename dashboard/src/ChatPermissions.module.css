@@ -1,0 +1,122 @@
+/* A chat's permissions panel: the GitHub level, then a group of toggles each. */
+.panel {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 16px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+  max-width: 720px;
+  box-sizing: border-box;
+}
+
+.panel code {
+  font-family: var(--mono);
+  font-size: 0.92em;
+  color: var(--text-3);
+  overflow-wrap: anywhere;
+}
+
+.head {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.head h2 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 22px;
+}
+
+.note {
+  margin: 0;
+  color: var(--text-3);
+  font-size: 12.5px;
+}
+
+.group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+  margin: 0;
+  padding: 12px 0 0;
+  border: 0;
+  border-top: 1px solid var(--border);
+}
+
+.group legend {
+  padding: 0 0 8px;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.levels {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.rows {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* A switch's label over two lines: its name, then what it gives or why it is greyed out. */
+.label {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  color: var(--text);
+}
+
+.help {
+  color: var(--text-3);
+  font-size: 12px;
+}
+
+.alert {
+  display: flex;
+  gap: 10px;
+  margin: 0;
+  padding: 10px 12px;
+  background: var(--err-bg);
+  border: 1px solid var(--err-solid);
+  border-radius: var(--radius-card);
+  color: var(--text);
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.alert > svg {
+  flex: none;
+  margin-top: 2px;
+  color: var(--err);
+}
+
+.alert ul {
+  margin: 4px 0 0;
+  padding-left: 18px;
+}
+
+.saved {
+  margin: 0;
+  color: var(--done);
+  font-size: 13px;
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
