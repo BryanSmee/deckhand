@@ -168,6 +168,18 @@ test("another repository's chat under a repository's chats: opened on its own re
   expect(screen.getByRole("heading", { name: "acme/api", level: 1 })).toBeTruthy();
 });
 
+test("the same, followed from Chats under a repository spelled otherwise: its own repository's all the same", async () => {
+  show(makeChats([makeChat({ id: "fedcba9876543210", repo: "acme/api", title: "Elsewhere" })]));
+  const list = await screen.findByRole("complementary", { name: "Your chats" });
+  await within(list).findByRole("link", { name: /Elsewhere/ });
+  // The sidebar spells it acme/app: its rewrite mustn't win over the chat's repository.
+  history.replaceState(null, "", "#/Acme/App/chats/fedcba9876543210");
+  window.dispatchEvent(new HashChangeEvent("hashchange"));
+  await waitFor(() => expect(location.hash).toBe("#/acme/api/chats/fedcba9876543210"));
+  expect(await screen.findByRole("region", { name: "Elsewhere" })).toBeTruthy();
+  expect(screen.queryByText(/^No such chat/)).toBeNull();
+});
+
 test("a chat that isn't there, under a repository's chats: no such chat on it", async () => {
   history.replaceState(null, "", "#/acme/app/chats/fedcba9876543210");
   show(makeChats([makeChat()]));

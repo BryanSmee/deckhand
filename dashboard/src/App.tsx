@@ -187,12 +187,13 @@ export function Dashboard({ state, error, repos, refresh, onOverview }: Props) {
     null;
   useEffect(() => {
     if (elsewhere) go({ ...route, repo: elsewhere.repo }, true);
-  }, [elsewhere?.repo]);
+  }, [elsewhere?.repo, route.repo, route.chat]);
   const overview = isOverview(route);
   useEffect(() => onOverview?.(overview), [overview]);
   // The address takes the sidebar's spelling, so links copied from it are the canonical ones.
+  // Not while another repository's chat moves it there: the two would race, and this one win.
   useEffect(() => {
-    if (tabRepo !== route.repo) go({ ...route, repo: tabRepo }, true);
+    if (!elsewhere && tabRepo !== route.repo) go({ ...route, repo: tabRepo }, true);
   }, [tabRepo, route.repo]);
   useEffect(() => {
     if (wide && !overview && (!route.page || route.page === "tasks") && !route.task && first)

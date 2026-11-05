@@ -93,7 +93,9 @@ export function Chats({ polled, repo, open, onOpen, now, touch }: Props) {
               onOpen(null, repo);
             }}
           />
-        ) : (
+        ) : open && list?.chats.some((c) => c.id === open) ? null : (
+          // (Another repository's chat: App moves the address to its repository's, no "No such
+          // chat" meanwhile.)
           <p class={styles.empty}>
             {open && list
               ? repo
