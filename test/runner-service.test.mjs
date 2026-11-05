@@ -978,7 +978,9 @@ test("the egress policy's questions fall back on the runner's last answer while 
   const store = fileStore();
   const backend = host();
   const a = await copy(t, { store, backend });
-  const { runner } = client(a.url, { policyWaitMs: 30 });
+  // Long enough for a call to the runner while it is there (it bounds each call as a whole), on
+  // a busy machine too: the pauses while it is away are 20 ms each (client()).
+  const { runner } = client(a.url, { policyWaitMs: 1000 });
   await runner.start(SPEC);
   const at = await runner.locate("10.1.0.2");
   assert.deepEqual(at, { sandbox: "id-dh-o-a-1-1", name: "dh-o-a-1" });
