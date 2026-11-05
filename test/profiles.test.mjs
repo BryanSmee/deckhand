@@ -36,8 +36,8 @@ const MOUNTS = [
   { source: "/srv/rw", target: "/srv/rw", readOnly: false },
 ];
 
-const ceiling = (names = CHAT, settings, grant = GRANT) =>
-  ceilingOf({ outcome: outcome(names, settings, grant), grant, mounts: MOUNTS });
+const ceiling = (names = CHAT, settings, grant = GRANT, engine = true) =>
+  ceilingOf({ outcome: outcome(names, settings, grant), grant, mounts: MOUNTS, engine });
 
 test("the ceiling: what a chat run gets, `pull` required, `push` never, the reasons for the rest", () => {
   const c = ceiling([...CHAT, "push", "docker"], { setup: "npm ci" });
@@ -278,9 +278,43 @@ test("the engine: refused without the policies' and the operator's grant, asked 
     "given",
   );
   // Granted, but no SANDBOX_ENGINE: no start gives it, so nobody is asked.
-  const none = verdict({ kind: "engine" }, { c, profile: off, live: { ...LIVE, engines: false } });
-  assert.equal(none.verdict, "beyond");
-  assert.match(none.message, /the operator hasn't set SANDBOX_ENGINE, so no run gets one/);
+  const none = ceiling(
+    [...CHAT, "docker"],
+    { setup: "npm ci", docker: true },
+    { ...GRANT, allowDocker: true },
+    false,
+  );
+  const refused = verdict({ kind: "engine" }, { c: none, profile: off });
+  assert.equal(refused.verdict, "beyond");
+  assert.match(
+    refused.message,
+    /^Refused: the container engine: the operator hasn't set SANDBOX_ENGINE, so no run gets one\./,
+  );
+});
+
+test("without SANDBOX_ENGINE, the engine isn't offered: greyed out with its reason, refused in a profile, left out at a start", () => {
+  const c = ceiling(
+    [...CHAT, "docker"],
+    { setup: "npm ci", docker: true },
+    { ...GRANT, allowDocker: true },
+    false,
+  );
+  const row = c.capabilities.find((r) => r.name === "docker");
+  assert.deepEqual(
+    { allowed: row.allowed, required: row.required, reason: row.reason },
+    {
+      allowed: false,
+      required: false,
+      reason: "the operator hasn't set SANDBOX_ENGINE, so no run gets one",
+    },
+  );
+  assert.match(
+    checkProfile({ capabilities: ["pull", "docker"] }, c).errors[0],
+    /^`docker`: the operator hasn't set SANDBOX_ENGINE/,
+  );
+  assert.ok(!narrowProfile(null, c).capabilities.includes("docker"));
+  // Nothing to leave out: it was never offered.
+  assert.equal(leftOut(narrowProfile(null, c), c), null);
 });
 
 test("a mount: only the repository's granted ones, read-only, for the next start", () => {

@@ -182,7 +182,12 @@ export function createPreparation(ctx) {
     let used = outcome.used;
     let profile = null;
     if (isChat(task)) {
-      const ceiling = ceilingOf({ outcome, grant: check.grant, mounts: check.mounts.mounts });
+      const ceiling = ceilingOf({
+        outcome,
+        grant: check.grant,
+        mounts: check.mounts.mounts,
+        engine: !!config.engine,
+      });
       // Its saved profile, with what its owner approved once for this start (#479).
       profile = narrowProfile(ctx.chats?.startProfile(task) ?? null, ceiling);
       used = used.filter((name) => profile.capabilities.includes(name));
