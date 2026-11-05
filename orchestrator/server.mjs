@@ -1048,6 +1048,29 @@ ctx.chats = createChats(ctx, { checks: discussionChecks });
 // From the store, before the spellings and the requests that read them.
 await ctx.chats.load();
 
+// The operator's credentials' fingerprints, which the github service redacts the runs' GitHub
+// writes by without holding them: the models service's sets, as it gave them (lib/redact.mjs,
+// #504), and lib/fingerprints.mjs's of any still in the listener's environment. Sent at start,
+// and again once they change (a plan's login refreshed).
+let printed = null;
+function sendFingerprints() {
+  const secrets = operatorSecrets(ctx).filter((s) => typeof s === "string" && s);
+  const sets = models.prints();
+  const digest = createHash("sha256")
+    .update(JSON.stringify([secrets, sets]))
+    .digest("hex");
+  if (digest === printed) return Promise.resolve();
+  return githubService
+    .fingerprints({ ...fingerprint(secrets), sets })
+    .then(() => (printed = digest));
+}
+githubService.persist("the operator's credentials' fingerprints", sendFingerprints);
+const printing = setInterval(
+  () => sendFingerprints().catch((error) => log(`GitHub service: fingerprints (${error.message})`)),
+  FINGERPRINTS_MS,
+);
+printing.unref();
+
 // --- Servers -------------------------------------------------------------------------------
 
 // The App as edge has it, before what needs it at start. Edge away a while: the start goes on
@@ -1202,28 +1225,6 @@ const unnamed = (folder, at) =>
 const shotsMoved = brokerService.persist("the screenshots kept here", () =>
   brokerService.moveShots(shotsDir, { drop: forgotten, moved: unnamed }),
 );
-// The operator's credentials' fingerprints, which the github service redacts the runs' GitHub
-// writes by without holding them: the models service's sets, as it gave them (lib/redact.mjs,
-// #504), and lib/fingerprints.mjs's of any still in the listener's environment. Sent at start,
-// and again once they change (a plan's login refreshed).
-let printed = null;
-function sendFingerprints() {
-  const secrets = operatorSecrets(ctx).filter((s) => typeof s === "string" && s);
-  const sets = models.prints();
-  const digest = createHash("sha256")
-    .update(JSON.stringify([secrets, sets]))
-    .digest("hex");
-  if (digest === printed) return Promise.resolve();
-  return githubService
-    .fingerprints({ ...fingerprint(secrets), sets })
-    .then(() => (printed = digest));
-}
-githubService.persist("the operator's credentials' fingerprints", sendFingerprints);
-const printing = setInterval(
-  () => sendFingerprints().catch((error) => log(`GitHub service: fingerprints (${error.message})`)),
-  FINGERPRINTS_MS,
-);
-printing.unref();
 // The github service's: the pushes GitHub took (the run's record, restart.mjs watchPushes()),
 // the lines its gateways add to a run's log, the pull requests runs changed (the dashboard has
 // them at once, whether their delivery comes or not).

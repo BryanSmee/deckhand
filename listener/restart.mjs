@@ -632,9 +632,8 @@ export function createRestart(ctx) {
       key,
       record,
       result: savedResult(saved.result),
-      // Its log at the runner, written on from its end (asked first), once the log this
-      // listener kept of it, if any, moved there (runlog.mjs moveLogs()).
-      logFile: ctx.runLogs.open(saved.id, { size: null, after: ctx.logsMoving?.get(saved.id) }),
+      // Its log at the runner, written on from its end (asked first).
+      logFile: ctx.runLogs.open(saved.id, { size: null }),
       // A cancelled or overflowed run takes no more comments: they wait for the next one; nor
       // one whose inbox is closed (restoreRuns()).
       open: !saved.cancelled && !saved.overflow,

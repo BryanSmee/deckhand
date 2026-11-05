@@ -914,42 +914,47 @@ test(
   },
 );
 
-// Past the maps (edge has no App yet): a title's write (seeded from a run's summary; the maps'
-// read, a SCAN of `titles/*`, goes through) and the operator's credentials' fingerprints, sent to
-// the github service, tried again (a 500: a 503, the service's client asks again on its own,
-// lib/service-client.mjs). The stop gives both up: a map's write carries no epoch, and would land
-// over what the next copy wrote.
-test("a stop gives up the maps' writes and the github service's calls", stopsEarly, async (t) => {
-  const stopped = await stoppedEarly(t, {
-    refuses: (args) => (args.some((arg) => /:k:titles\/[^*]/.test(arg)) ? "a title" : null),
-    expect: ["a title", "the fingerprints"],
-    env: async ({ fail, store }) => {
-      await store.set("summaries/org-repo-5-1", {
-        id: "org-repo-5-1",
-        key: "org/repo#5",
-        repo: "org/repo",
-        title: "Five",
-        startedAt: 1,
-      });
-      const github = createServer((req, res) => {
-        if (req.method === "PUT" && req.url === "/fingerprints") fail("the fingerprints");
-        res.writeHead(500).end("{}");
-      });
-      const edge = createServer((req, res) => res.end(JSON.stringify({ configured: false })));
-      for (const server of [github, edge]) {
-        await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
-        t.after(() => (server.closeAllConnections(), server.close()));
-      }
-      return {
-        GITHUB_SERVICE_URL: `http://127.0.0.1:${github.address().port}`,
-        EDGE_URL: `http://127.0.0.1:${edge.address().port}`,
-      };
-    },
-  });
-  assert.equal(stopped.code, 0, stopped.output);
-  assert.deepEqual(stopped.late, []);
-  assert.ok(stopped.leaseFree, stopped.output);
-});
+// Past the maps, before it is up (edge, which it asks about the App, doesn't answer): a title's
+// write (seeded from a run's summary; the maps' read, a SCAN of `titles/*`, goes through) and the
+// operator's credentials' fingerprints, sent to the github service, tried again (a 500: a 503,
+// the service's client asks again on its own, lib/service-client.mjs). The stop gives both up: a
+// map's write carries no epoch, and would land over what the next copy wrote.
+test(
+  "a stop before the orchestrator is up gives up the maps' writes and the github service's calls",
+  stopsEarly,
+  async (t) => {
+    const stopped = await stoppedEarly(t, {
+      refuses: (args) => (args.some((arg) => /:k:titles\/[^*]/.test(arg)) ? "a title" : null),
+      expect: ["a title", "the fingerprints"],
+      env: async ({ fail, store }) => {
+        await store.set("summaries/org-repo-5-1", {
+          id: "org-repo-5-1",
+          key: "org/repo#5",
+          repo: "org/repo",
+          title: "Five",
+          startedAt: 1,
+        });
+        const github = createServer((req, res) => {
+          if (req.method === "PUT" && req.url === "/fingerprints") fail("the fingerprints");
+          res.writeHead(500).end("{}");
+        });
+        // Never answers: the orchestrator waits for it, 15 s at most, before it goes on.
+        const edge = createServer(() => {});
+        for (const server of [github, edge]) {
+          await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+          t.after(() => (server.closeAllConnections(), server.close()));
+        }
+        return {
+          GITHUB_SERVICE_URL: `http://127.0.0.1:${github.address().port}`,
+          EDGE_URL: `http://127.0.0.1:${edge.address().port}`,
+        };
+      },
+    });
+    assert.equal(stopped.code, 0, stopped.output);
+    assert.deepEqual(stopped.late, []);
+    assert.ok(stopped.leaseFree, stopped.output);
+  },
+);
 
 // Each test runs its own listener, fake GitHub and fake Docker in its own temp dir, on ports
 // the OS picks, and mostly waits on them: they run side by side, two per core (eight at most).
