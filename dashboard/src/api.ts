@@ -1,7 +1,7 @@
 // The listener's API: api/state polled, a run's log streamed (server-sent events), the
 // repositories listed, onboarded and their config read, the graph's backlog and its actions,
 // answers to open questions, a failed run again or a run stopped, feedback and discussions,
-// run analyses.
+// run analyses, a pull request's last review (its Review tab).
 // Relative URLs, like the assets: the page works under any path.
 import { useEffect, useRef, useState } from "preact/hooks";
 import type {
@@ -33,6 +33,7 @@ import type {
   Repo,
   RepoConfig,
   Repos,
+  ReviewFindings,
   State,
   Thread,
   WorkAction,
@@ -536,6 +537,40 @@ export const startAnalysis = (repo: string, selection: AnalysisSelection) =>
 // discussion it became and its task, or why it was refused.
 export const startDiscussion = (repo: string, start: DiscussionStart) =>
   postJson<DiscussionResult>(`api/repos/${repo}/discussions`, start);
+
+export interface ReviewView {
+  review: ReviewFindings | null;
+  error: string | null;
+  loading: boolean;
+  reload: () => void;
+}
+
+// The last review Deckhand posted on pull request `number` (GET /api/review), read when the
+// Review tab opens and again whenever `version` changes (a new round, the pull request merged).
+export function useReview(repo: string, number: number, version: string): ReviewView {
+  const [view, setView] = useState<Omit<ReviewView, "reload">>({
+    review: null,
+    error: null,
+    loading: true,
+  });
+  const [asked, setAsked] = useState(0);
+  useEffect(() => {
+    let live = true;
+    setView((v) => ({ ...v, loading: true }));
+    const query = new URLSearchParams({ repo, number: String(number) });
+    void getJson<ReviewFindings>(`api/review?${query}`).then((got) => {
+      if (!live) return;
+      const { error, ...review } = got;
+      setView(
+        error ? { review: null, error, loading: false } : { review, error: null, loading: false },
+      );
+    });
+    return () => {
+      live = false;
+    };
+  }, [repo, number, version, asked]);
+  return { ...view, reload: () => setAsked((n) => n + 1) };
+}
 
 // A comment in discussion `number`, in a thread when `replyTo` says which.
 export const sendDiscussionComment = (repo: string, number: number, comment: DiscussionComment) =>

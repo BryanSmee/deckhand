@@ -318,6 +318,43 @@ export interface ReviewRound {
 
 export type Severity = "critical" | "high" | "medium" | "low";
 
+// GET /api/review (listener/reviews.mjs findings()): the last review Deckhand posted on a pull
+// request, read from GitHub when the task page's Review tab opens, never in api/state. Its text
+// is a model's, which read untrusted diffs: shown as text, never as HTML or markdown.
+export interface ReviewFindings {
+  url: string | null;
+  at: number | null;
+  verdict: "approve" | "comment" | "request-changes";
+  rating: number;
+  // The commit it reviewed, and its round (ReviewRound.round) as recorded, null if none was.
+  head: string | null;
+  round: number | null;
+  manual: boolean;
+  // The repo's tree at `head` ("https://github.com/o/r/blob/<sha>"), for the items' places.
+  blob: string | null;
+  // The most severe finding that doesn't block (`review.max_allowed_severity`).
+  allowed: Severity;
+  // Must fix: `tolerated` when `allowed` lets it through.
+  findings: (ReviewItem & { severity: Severity; tolerated: boolean })[];
+  followUps: (ReviewItem & {
+    title: string;
+    // issue: filed (or found) as `issue`; failed: GitHub refused it; left: past the cap per
+    // pull request; off: `review.follow_ups: false`; after-merge: not yet; unknown: filed before
+    // the listener kept which issue each became.
+    filing: "issue" | "failed" | "left" | "off" | "after-merge" | "unknown";
+    issue?: { number: number; state: "open" | "closed" | null; url: string | null };
+  })[];
+  comments: (ReviewItem & { blocking: boolean })[];
+  // The pull request merged: when, by whom (its login), and whether that was Deckhand.
+  merged: { at: number; by: string | null; deckhand: boolean } | null;
+}
+
+export interface ReviewItem {
+  path: string | null;
+  line: number | null;
+  text: string;
+}
+
 // An option of a question; one at most is `recommended` (the agent's pick). One option per
 // question, plus a free-text answer. `checked`: its box is ticked where it was asked ("[x]"):
 // in an issue, the maintainer's answer; in a run's reply, the agent's own (no answer). Absent
