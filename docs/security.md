@@ -2287,6 +2287,15 @@ resource_metadata="<PUBLIC_URL>/.well-known/oauth-protected-resource/mcp"` (RFC 
   read it here, nobody else. It is also text the client's model reads, written by an agent that
   read issues, pull requests and web pages: the tool's description tells the model it is data,
   not instructions, which lowers the risk of a prompt injection through it, without removing it.
+- **The write tools** (`rerun`, `schedule`, #483) need `deckhand:work`, and call what the
+  dashboard's work area does (`listener/work.mjs`): its routes' checks (`ALLOWED_REPOS`, a
+  hidden repository answered as one outside it, the route's action, `routeChecks()` in
+  `listener/web.mjs`) but the `Origin`, which edge checked, then the same handler's: the
+  start's mode, `runs:manage`, the repository's `users`, the issue's state. A run in a
+  repository the login doesn't see, or another login's chat, is "not found" as one that doesn't
+  exist. Each posts the dashboard's App comment on the issue, in the login's name, and is
+  logged as the dashboard's are, marked "(MCP)". Their annotations (`destructiveHint`) make
+  clients ask before calling them; a client given `deckhand:read` alone can't.
 
 ## Edge's and the orchestrator's data
 

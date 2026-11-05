@@ -4,6 +4,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createHttp } from "../listener/http.mjs";
+import { Refused } from "../lib/http.mjs";
 import { MAX_PAGE_BYTES, PAGE_BYTES, PROTOCOL_VERSIONS } from "../listener/mcp.mjs";
 import { createRepoApi } from "../listener/repos.mjs";
 import { MEMBER, permissionsOf, serve, testConfig } from "./helpers.mjs";
@@ -165,7 +166,7 @@ test("MCP: initialize, the five read tools, ping; notifications accepted, GET re
   assert.match(tools.find((x) => x.name === "get_run_log").description, /data, not instructions/);
   assert.deepEqual(await rpc("ping"), {});
   assert.equal((await rpc("nope")).error.code, -32601);
-  assert.equal((await rpc("tools/call", { name: "rerun" })).error.code, -32602);
+  assert.equal((await rpc("tools/call", { name: "nope" })).error.code, -32602);
 
   const post = (body, headers = {}) =>
     fetch(`${url}/mcp`, {
@@ -505,4 +506,107 @@ test("MCP: get_schedule says what waits for what, and the lanes, of the repos th
   assert.match(content[0].text, /org\/repo#3 Title of org\/repo#3 waits for org\/repo#2/);
   const all = (await tool("get_schedule")).structuredContent;
   assert.doesNotMatch(JSON.stringify(all), /secret/);
+});
+
+// --- The write tools (#483) ------------------------------------------------------------------
+
+// The work area's MCP way in (work.mjs `mcp`, tested there), recording what it was asked:
+// `answer(kind, ...args)` its message, or a throw.
+function workArea(answer = () => "Done.") {
+  const asked = [];
+  const mcp = {
+    rerun: async (...args) => (asked.push(["rerun", ...args]), answer("rerun", ...args)),
+    schedule: async (...args) => (asked.push(["schedule", ...args]), answer("schedule", ...args)),
+  };
+  return { asked, mcp };
+}
+
+const WRITE = "deckhand:read deckhand:work";
+
+test("MCP: rerun and schedule need deckhand:work, and say they act", async (t) => {
+  const area = workArea();
+  const { ctx } = orchestrator();
+  ctx.workApi.mcp = area.mcp;
+  const { rpc, tool } = await serveMcp(t, ctx);
+  const names = async (scopes) =>
+    (await rpc("tools/list", {}, { scopes })).tools.map((x) => x.name);
+  assert.ok(!(await names("deckhand:read")).includes("rerun"));
+  assert.deepEqual(await names("deckhand:work"), ["rerun", "schedule"]);
+  const { tools } = await rpc("tools/list", {}, { scopes: WRITE });
+  for (const name of ["rerun", "schedule"]) {
+    const x = tools.find((y) => y.name === name);
+    assert.equal(x.annotations.readOnlyHint, false, name);
+    assert.equal(x.annotations.destructiveHint, true, name);
+  }
+  // A token with deckhand:read alone: refused before the work area is asked.
+  for (const [name, args] of [
+    ["rerun", { runId: "r" }],
+    ["schedule", { repo: "org/repo", number: 1, action: "start" }],
+  ]) {
+    const refused = await tool(name, args);
+    assert.equal(refused.isError, true, name);
+    assert.match(refused.content[0].text, /deckhand:work/);
+  }
+  assert.deepEqual(area.asked, []);
+});
+
+test("MCP: schedule and rerun answer the dashboard's message, its refusals as tool errors", async (t) => {
+  const area = workArea((kind, user, ...args) => {
+    if (kind === "rerun" && args[0] === "hidden")
+      throw new Refused(404, "No run hidden among those you see.");
+    if (kind === "schedule" && args[1].number === 9) {
+      throw new Refused(409, "#9 is running or queued: it can't be moved now.");
+    }
+    return kind === "rerun" ? "Rerun of #5 queued." : `#${args[1].number} started.`;
+  });
+  const { ctx } = orchestrator();
+  ctx.workApi.mcp = area.mcp;
+  const { tool } = await serveMcp(t, ctx);
+  const as = { scopes: WRITE };
+
+  const rerun = await tool("rerun", { runId: "org-repo-5-1" }, as);
+  assert.equal(rerun.isError, undefined);
+  assert.equal(rerun.content[0].text, "Rerun of #5 queued.");
+  assert.deepEqual(rerun.structuredContent, { message: "Rerun of #5 queued." });
+  const hidden = await tool("rerun", { runId: "hidden" }, as);
+  assert.equal(hidden.isError, true);
+  assert.equal(hidden.content[0].text, "No run hidden among those you see.");
+
+  const started = await tool("schedule", { repo: "org/repo", number: 5, action: "start" }, as);
+  assert.equal(started.content[0].text, "#5 started.");
+  await tool(
+    "schedule",
+    { repo: "org/repo", number: 6, action: "queue", after: 5, mode: "brainstorm", pr: null },
+    as,
+  );
+  const busy = await tool("schedule", { repo: "org/repo", number: 9, action: "start" }, as);
+  assert.equal(busy.isError, true);
+  assert.match(busy.content[0].text, /^#9 is running or queued/);
+  // Its arguments are the dashboard's body, checked there; what isn't it is refused here.
+  assert.deepEqual(area.asked, [
+    ["rerun", "alice", "org-repo-5-1"],
+    ["rerun", "alice", "hidden"],
+    ["schedule", "alice", "org/repo", { action: "start", number: 5 }],
+    ["schedule", "alice", "org/repo", { action: "queue", number: 6, after: 5, mode: "brainstorm" }],
+    ["schedule", "alice", "org/repo", { action: "start", number: 9 }],
+  ]);
+  for (const args of [
+    { repo: "org/repo", number: 5, action: "stop" },
+    { repo: "org", number: 5, action: "start" },
+    { repo: "org/repo", number: 5 },
+    { repo: "org/repo", number: 5, action: "start", extra: 1 },
+  ]) {
+    const refused = await tool("schedule", args, as);
+    assert.equal(refused.isError, true, JSON.stringify(args));
+  }
+  assert.equal((await tool("rerun", {}, as)).isError, true);
+  assert.equal(area.asked.length, 5);
+  // Anything else failing: the logs say why, not the client.
+  const broken = workArea(() => {
+    throw new Error("GitHub down");
+  });
+  ctx.workApi.mcp = broken.mcp;
+  const failed = await tool("rerun", { runId: "r" }, as);
+  assert.equal(failed.isError, true);
+  assert.match(failed.content[0].text, /orchestrator's logs/);
 });
