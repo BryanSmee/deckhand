@@ -7,6 +7,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from "preact/hooks";
 import { previewAnalysis, startAnalysis } from "./api";
 import { plural, repoTabs, runKindName, uniqueRepos } from "./format";
 import { useSubmit } from "./hooks";
+import { number } from "./i18n";
 import type { Action } from "./NewRequest";
 import { formatRoute } from "./route";
 import type { AnalysisPreview, AnalysisResult, AnalysisSelection, Outcome, Task } from "./types";
@@ -164,7 +165,7 @@ export function AnalyzeForm({
             : !seen || kinds === null
               ? "Counting the runs…"
               : matching
-                ? `${plural(matching, "run")} match, about ${(seen.tokens ?? 0).toLocaleString("en")} tokens to read.` +
+                ? `${plural(matching, "run")} match, about ${number(seen.tokens ?? 0)} tokens to read.` +
                   (seen.left
                     ? ` ${plural(seen.left, "older run")} left out: over the digest's cap.`
                     : "")

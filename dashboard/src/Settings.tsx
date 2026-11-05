@@ -7,6 +7,8 @@ import { Access } from "./Access";
 import { useCan } from "./access";
 import type { RepoList } from "./api";
 import { Clients } from "./Clients";
+import { t } from "./i18n";
+import type { Plain } from "./locales";
 import type { Notify } from "./notify";
 import { Preferences } from "./Preferences";
 import { needingYou, Repos } from "./Repos";
@@ -17,12 +19,12 @@ import { Count } from "./ui/Count";
 import tabs from "./ui/Tabs.module.css";
 import styles from "./Settings.module.css";
 
-const TABS: { id: Section | null; label: string; server?: boolean }[] = [
-  { id: null, label: "Repositories" },
-  { id: "preferences", label: "Preferences" },
-  { id: "clients", label: "MCP clients" },
-  { id: "server", label: "Server", server: true },
-  { id: "access", label: "Access", server: true },
+const TABS: { id: Section | null; label: Plain; server?: boolean }[] = [
+  { id: null, label: "settings.repositories" },
+  { id: "preferences", label: "settings.preferences" },
+  { id: "clients", label: "settings.clients" },
+  { id: "server", label: "settings.server", server: true },
+  { id: "access", label: "settings.access", server: true },
 ];
 
 // Repositories' count: those that need you (Repos.tsx needsYou()).
@@ -38,22 +40,22 @@ export function SettingsTabs({
   const current = route.section ?? null;
   const reads = useCan().server("server:read");
   return (
-    <nav class={[tabs.tabs, extra].filter(Boolean).join(" ")} aria-label="Settings">
-      {TABS.filter((t) => reads || !t.server).map((t) => (
+    <nav class={[tabs.tabs, extra].filter(Boolean).join(" ")} aria-label={t("shell.settings")}>
+      {TABS.filter((tab) => reads || !tab.server).map((tab) => (
         <a
-          key={t.label}
+          key={tab.label}
           class={tabs.tab}
           href={formatRoute({
             repo: null,
             task: null,
             run: null,
             page: "settings",
-            ...(t.id ? { section: t.id } : {}),
+            ...(tab.id ? { section: tab.id } : {}),
           })}
-          aria-current={t.id === current ? "page" : undefined}
+          aria-current={tab.id === current ? "page" : undefined}
         >
-          {t.label}
-          {!t.id && count > 0 && <Count n={count} hot />}
+          {t(tab.label)}
+          {!tab.id && count > 0 && <Count n={count} hot />}
         </a>
       ))}
     </nav>

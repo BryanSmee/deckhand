@@ -12,6 +12,7 @@ import type { RepoList } from "./api";
 import { ConfigPanel } from "./ConfigPanel";
 import { ago, isLive, plural, uptime, versionUrl } from "./format";
 import { useNow } from "./hooks";
+import { locale } from "./i18n";
 import { RepoBadge } from "./RepoBadge";
 import { type ConfigTab, formatRoute } from "./route";
 import type { AppLinks, Repo, RepoStatus, ServerInfo, Task } from "./types";
@@ -95,7 +96,7 @@ function Version({ server, now }: { server: ServerInfo; now: number }) {
         server.version
       )}
       {" · "}
-      <span title={`Since ${new Date(server.startedAt).toLocaleString()}`}>
+      <span title={`Since ${new Date(server.startedAt).toLocaleString(locale())}`}>
         up {uptime(server.startedAt, now)}
       </span>
       {` · Node ${server.node.replace(/^v/, "")}`}
