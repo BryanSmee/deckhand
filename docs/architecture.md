@@ -836,7 +836,9 @@ or the pull request's own. Each pull request's reviewed head commit is kept in
 the store's `reviews`, so a redelivery, a restart or the same commit again starts none. Its thread
 is a file in the run's inbox (`TASK_DIGEST`, `reviewThread()`, written by `preparation.mjs`):
 the pull request's and its issue's, with what users outside the allowlist wrote left out. The run's
-final message follows `prompts/review.md`'s format; `runs.mjs` hands it to `postReview()`,
+final message follows `prompts/review.md`'s format, its markdown then the same review as a
+`json deckhand-review` block that `parseReview()` reads first (`readBlock()`; without one, or
+one that doesn't validate, logged, the markdown, `readMarkdown()`); `runs.mjs` hands it to `postReview()`,
 which posts one GitHub review as the App (its installation token, through the github service): findings grouped by severity, the
 rating (capped by the most severe finding, `parseReview()`), `REQUEST_CHANGES` and a
 "request changes" verdict on a critical, high or medium finding and `COMMENT` otherwise (never
