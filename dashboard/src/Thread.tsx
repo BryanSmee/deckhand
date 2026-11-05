@@ -6,9 +6,9 @@
 import { useState } from "preact/hooks";
 import { useCan } from "./access";
 import { sendDiscussionComment, useThread } from "./api";
-import { ago, plural } from "./format";
+import { ago } from "./format";
 import { useSubmit } from "./hooks";
-import { locale } from "./i18n";
+import { locale, t } from "./i18n";
 import type { DiscussionComment, Post, Task, WorkResult } from "./types";
 import styles from "./Thread.module.css";
 
@@ -38,12 +38,12 @@ export function Thread({ task, now, refresh }: Props) {
   if (!thread) {
     return (
       <p class={error ? styles.failed : styles.placeholder} role={error ? "alert" : undefined}>
-        {error ?? "Reading the discussion…"}
+        {error ?? t("thread.reading")}
       </p>
     );
   }
   return (
-    <section class={styles.thread} aria-label="Discussion">
+    <section class={styles.thread} aria-label={t("thread.label")}>
       {error && (
         <p class={styles.failed} role="alert">
           {error}
@@ -52,10 +52,10 @@ export function Thread({ task, now, refresh }: Props) {
       <Message post={thread.post} now={now} opening />
       {thread.more > 0 && (
         <p class={styles.more}>
-          {plural(thread.more, "earlier comment")}{" "}
+          {t("thread.earlierComments", { count: thread.more })}{" "}
           {thread.url && (
             <a href={thread.url} target="_blank" rel="noreferrer">
-              on GitHub
+              {t("thread.onGithub")}
             </a>
           )}
         </p>
@@ -67,10 +67,10 @@ export function Thread({ task, now, refresh }: Props) {
             <div class={styles.replies}>
               {c.more > 0 && (
                 <p class={styles.more}>
-                  {plural(c.more, "earlier reply", "earlier replies")}{" "}
+                  {t("thread.earlierReplies", { count: c.more })}{" "}
                   {c.url && (
                     <a href={c.url} target="_blank" rel="noreferrer">
-                      on GitHub
+                      {t("thread.onGithub")}
                     </a>
                   )}
                 </p>
@@ -80,7 +80,7 @@ export function Thread({ task, now, refresh }: Props) {
               ))}
               {replying === c.id && (
                 <Compose
-                  label="Reply"
+                  kind="reply"
                   onSend={(text) => sent({ text, replyTo: c.id })}
                   onCancel={() => setReplying(null)}
                 />
@@ -89,12 +89,12 @@ export function Thread({ task, now, refresh }: Props) {
           )}
           {writes && replying !== c.id && (
             <button type="button" class={styles.reply} onClick={() => setReplying(c.id)}>
-              Reply
+              {t("thread.reply")}
             </button>
           )}
         </div>
       ))}
-      {writes && <Compose label="Comment" onSend={(text) => sent({ text })} />}
+      {writes && <Compose kind="comment" onSend={(text) => sent({ text })} />}
     </section>
   );
 }
@@ -114,7 +114,7 @@ function Message({ post, now, opening = false }: { post: Post; now: number; open
         )}
         {post.url && (
           <a href={post.url} target="_blank" rel="noreferrer">
-            on GitHub
+            {t("thread.onGithub")}
           </a>
         )}
       </header>
@@ -125,16 +125,18 @@ function Message({ post, now, opening = false }: { post: Post; now: number; open
 
 // A text box and Send: the comment's, or a thread's reply. Keeps the text on a refusal.
 function Compose({
-  label,
+  kind,
   onSend,
   onCancel,
 }: {
-  label: string;
+  kind: "reply" | "comment";
   onSend: (text: string) => Promise<WorkResult>;
   onCancel?: () => void;
 }) {
   const [text, setText] = useState("");
   const { sending, error, run } = useSubmit(onSend);
+  const reply = kind === "reply";
+  const label = t(reply ? "thread.reply" : "thread.comment");
   const submit = async (e: Event) => {
     e.preventDefault();
     if (!text.trim() || sending) return;
@@ -145,9 +147,9 @@ function Compose({
     <form class={styles.compose} aria-label={label} onSubmit={submit}>
       <textarea
         class={styles.text}
-        rows={label === "Reply" ? 3 : 4}
-        aria-label={label === "Reply" ? "Your reply" : "Your comment"}
-        placeholder={label === "Reply" ? "Reply in this thread" : "Add a comment to the discussion"}
+        rows={reply ? 3 : 4}
+        aria-label={t(reply ? "thread.yourReply" : "thread.yourComment")}
+        placeholder={t(reply ? "thread.replyPlaceholder" : "thread.commentPlaceholder")}
         value={text}
         disabled={sending}
         onInput={(e) => setText(e.currentTarget.value)}
@@ -160,11 +162,11 @@ function Compose({
       <div class={styles.actions}>
         {onCancel && (
           <button type="button" class={styles.cancel} onClick={onCancel}>
-            Cancel
+            {t("thread.cancel")}
           </button>
         )}
         <button type="submit" class={styles.send} disabled={!text.trim() || sending}>
-          {sending ? "Sending…" : label}
+          {sending ? t("thread.sending") : label}
         </button>
       </div>
     </form>

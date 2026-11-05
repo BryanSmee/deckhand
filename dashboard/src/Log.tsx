@@ -11,7 +11,7 @@
 import type { ComponentChildren } from "preact";
 import { createContext } from "preact";
 import { useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "preact/hooks";
-import { plural } from "./format";
+import { number, t, tx } from "./i18n";
 import { useShortcuts, withKey } from "./keys";
 import { copyText, downloadText } from "./logExport";
 import {
@@ -36,6 +36,7 @@ import {
   timeLabel,
   toolLabel,
 } from "./logModel";
+import type { Plain } from "./locales";
 import { getPref, usePref } from "./prefs";
 import type { Entry, Run } from "./types";
 import { Button, IconButton } from "./ui/Button";
@@ -58,11 +59,11 @@ interface Props {
   onSearching?: (on: boolean) => void;
 }
 
-const FILTERS: { value: Filter; label: string; phone: string }[] = [
-  { value: "all", label: "All", phone: "Everything" },
-  { value: "messages", label: "Messages", phone: "Messages" },
-  { value: "tools", label: "Tools", phone: "Tool output" },
-  { value: "errors", label: "Errors", phone: "Errors" },
+const FILTERS: { value: Filter; label: Plain; phone: Plain }[] = [
+  { value: "all", label: "log.filterAll", phone: "log.filterAllPhone" },
+  { value: "messages", label: "log.filterMessages", phone: "log.filterMessages" },
+  { value: "tools", label: "log.filterTools", phone: "log.filterToolsPhone" },
+  { value: "errors", label: "log.filterErrors", phone: "log.filterErrors" },
 ];
 
 // What the highlighting reads: the query, where each field's matches start, the current one.
@@ -216,9 +217,9 @@ export function Log({ run, entries, now, touch, searching, onSearching }: Props)
   const searchBox = (
     <div class={styles.searchBox}>
       <Field
-        label="Search this log"
+        label={t("log.search")}
         hideLabel
-        placeholder="Search this log"
+        placeholder={t("log.search")}
         type="search"
         size={touch ? "touch" : "small"}
         lead={<Icon.Search size={touch ? 18 : 14} />}
@@ -237,7 +238,7 @@ export function Log({ run, entries, now, touch, searching, onSearching }: Props)
             <IconButton
               variant="ghost"
               size="small"
-              label="Clear the search"
+              label={t("log.clearSearch")}
               icon={<Icon.Close size={16} />}
               onClick={() => find("")}
             />
@@ -251,8 +252,8 @@ export function Log({ run, entries, now, touch, searching, onSearching }: Props)
               variant="ghost"
               size="small"
               class={styles.tiny}
-              label="Previous match"
-              title={withKey("Previous match", "match", 1)}
+              label={t("log.previousMatch")}
+              title={withKey(t("log.previousMatch"), "match", 1)}
               icon={<Icon.ChevronUp size={14} />}
               disabled={!total}
               onClick={() => step(-1)}
@@ -261,8 +262,8 @@ export function Log({ run, entries, now, touch, searching, onSearching }: Props)
               variant="ghost"
               size="small"
               class={styles.tiny}
-              label="Next match"
-              title={withKey("Next match", "match", 0)}
+              label={t("log.nextMatch")}
+              title={withKey(t("log.nextMatch"), "match", 0)}
               icon={<Icon.ChevronDown size={14} />}
               disabled={!total}
               onClick={() => step(1)}
@@ -280,10 +281,10 @@ export function Log({ run, entries, now, touch, searching, onSearching }: Props)
           <div class={styles.phoneSearchRow}>
             {searchBox}
             <Button variant="ghost" size="touch" onClick={endSearch}>
-              Done
+              {t("log.done")}
             </Button>
           </div>
-          <div class={styles.chips} role="group" aria-label="Search in">
+          <div class={styles.chips} role="group" aria-label={t("log.searchIn")}>
             {FILTERS.map((f) => (
               <FilterChip
                 key={f.value}
@@ -291,7 +292,7 @@ export function Log({ run, entries, now, touch, searching, onSearching }: Props)
                 count={f.value === "errors" ? errors.length : undefined}
                 onClick={() => setFilter(f.value)}
               >
-                {f.phone}
+                {t(f.phone)}
               </FilterChip>
             ))}
           </div>
@@ -301,12 +302,12 @@ export function Log({ run, entries, now, touch, searching, onSearching }: Props)
           <div class={styles.toolbar}>
             {searchBox}
             <Segmented
-              label="Show"
+              label={t("log.show")}
               value={filter}
               onChange={setFilter}
               options={FILTERS.map((f) => ({
                 value: f.value,
-                label: f.label,
+                label: t(f.label),
                 extra:
                   f.value === "errors" && errors.length ? (
                     <>
@@ -318,7 +319,7 @@ export function Log({ run, entries, now, touch, searching, onSearching }: Props)
             />
             <span class={styles.tools}>
               <Button variant="ghost" size="small" shortcut="expand" onClick={() => foldAll(true)}>
-                Expand all
+                {t("log.expandAll")}
               </Button>
               <Button
                 variant="ghost"
@@ -326,19 +327,19 @@ export function Log({ run, entries, now, touch, searching, onSearching }: Props)
                 shortcut="collapse"
                 onClick={() => foldAll(false)}
               >
-                Collapse all
+                {t("log.collapseAll")}
               </Button>
               <IconButton
                 variant="ghost"
                 size="small"
                 label={
                   copied === "ok"
-                    ? "Copied"
+                    ? t("log.copied")
                     : copied === "failed"
-                      ? "Couldn't copy: download it instead"
-                      : "Copy the log"
+                      ? t("log.copyFailed")
+                      : t("log.copy")
                 }
-                title={copied ? undefined : withKey("Copy the log", "copy")}
+                title={copied ? undefined : withKey(t("log.copy"), "copy")}
                 class={copied === "failed" ? styles.copyFailed : undefined}
                 icon={
                   copied === "ok" ? (
@@ -354,7 +355,7 @@ export function Log({ run, entries, now, touch, searching, onSearching }: Props)
               <IconButton
                 variant="ghost"
                 size="small"
-                label="Download the log as text"
+                label={t("log.download")}
                 icon={<Icon.Download size={15} />}
                 onClick={download}
               />
@@ -367,7 +368,7 @@ export function Log({ run, entries, now, touch, searching, onSearching }: Props)
         <div
           class={styles.log}
           role="log"
-          aria-label={query ? `Run log, searched for “${query}”` : "Run log"}
+          aria-label={query ? t("log.labelSearched", { query }) : t("log.label")}
           data-testid="log"
         >
           {visible.map((s) => (
@@ -382,13 +383,11 @@ export function Log({ run, entries, now, touch, searching, onSearching }: Props)
               toggle={toggle}
             />
           ))}
-          {!list.length && (
-            <p class={styles.empty}>{live ? "Starting…" : "Nothing in this log."}</p>
-          )}
+          {!list.length && <p class={styles.empty}>{live ? t("log.starting") : t("log.empty")}</p>}
           {live && (
             <p class={styles.live}>
               <StatusDot state="running" />
-              {following ? "Working… following the log live" : "Working…"}
+              {following ? t("log.workingFollowing") : t("log.working")}
             </p>
           )}
         </div>
@@ -402,46 +401,44 @@ export function Log({ run, entries, now, touch, searching, onSearching }: Props)
           shortcut="follow"
           onClick={latest}
         >
-          Latest
+          {t("log.latest")}
         </Button>
       )}
 
       {touch &&
         (searching ? (
-          <nav class={styles.bar} aria-label="Matches">
+          <nav class={styles.bar} aria-label={t("log.matchesBar")}>
             <IconButton
               size="touch"
-              label="Previous match"
+              label={t("log.previousMatch")}
               icon={<Icon.ChevronUp size={20} />}
               disabled={!total}
               onClick={() => step(-1)}
             />
             <span class={styles.where} role="status">
-              {query ? (
-                total ? (
-                  <>
-                    <b>{at + 1}</b> of {total} · in {PHASE_TITLES[match.section]}
-                  </>
-                ) : (
-                  "No match"
-                )
-              ) : (
-                "Search this log"
-              )}
+              {query
+                ? total
+                  ? tx("log.matchOf", {
+                      at: <b>{number(at + 1)}</b>,
+                      total,
+                      section: t(PHASE_TITLES[match.section]),
+                    })
+                  : t("log.noMatchBar")
+                : t("log.search")}
             </span>
             <IconButton
               size="touch"
-              label="Next match"
+              label={t("log.nextMatch")}
               icon={<Icon.ChevronDown size={20} />}
               disabled={!total}
               onClick={() => step(1)}
             />
           </nav>
         ) : (
-          <nav class={`${styles.bar} ${styles.actions}`} aria-label="Log">
+          <nav class={`${styles.bar} ${styles.actions}`} aria-label={t("log.actionsBar")}>
             <button type="button" onClick={() => onSearching?.(true)}>
               <Icon.Search size={20} />
-              Search
+              {t("log.searchButton")}
             </button>
             <button
               type="button"
@@ -450,15 +447,15 @@ export function Log({ run, entries, now, touch, searching, onSearching }: Props)
               onClick={() => nextError()}
             >
               <Icon.Alert size={20} />
-              Next error
+              {t("log.nextError")}
             </button>
             <button type="button" onClick={() => foldAll(false)}>
               <Icon.Expand size={20} />
-              Fold all
+              {t("log.foldAll")}
             </button>
             <button type="button" onClick={latest}>
               <Icon.ArrowDown size={20} />
-              Latest
+              {t("log.latest")}
             </button>
           </nav>
         ))}
@@ -485,7 +482,7 @@ function SectionView({ section: s, filter, open, onToggle, hits, isOpen, toggle 
   const searchBadge = hits !== null ? styles.searchBadge : "";
   return (
     <Fold
-      title={PHASE_TITLES[s.phase]}
+      title={t(PHASE_TITLES[s.phase])}
       tone={tone}
       pulse={s.current}
       open={open}
@@ -495,7 +492,7 @@ function SectionView({ section: s, filter, open, onToggle, hits, isOpen, toggle 
         <>
           {hits !== null ? (
             <span class={hits ? styles.hits : undefined}>
-              {hits ? plural(hits, "match", "matches") : "no match"}
+              {hits ? t("log.matches", { count: hits }) : t("log.noMatch")}
             </span>
           ) : (
             <span class={styles.counts}>{counts(s)}</span>
@@ -507,7 +504,7 @@ function SectionView({ section: s, filter, open, onToggle, hits, isOpen, toggle 
           {(flagged || s.failed) && (
             <StatusBadge
               tone="err"
-              label={flagged ? failed(s) : "Ended in error"}
+              label={flagged ? failed(s) : t("log.endedInError")}
               class={`${styles.badge} ${searchBadge}`}
             />
           )}
@@ -531,20 +528,26 @@ function counts(s: LogSection): string {
       i.kind === "step" ? [i.step] : i.kind === "cached" ? i.steps : [],
     );
     const cached = steps.filter((x) => x.status === "cached").length;
-    return [plural(steps.length, "step"), cached ? `${cached} cached` : ""]
+    return [
+      t("log.steps", { count: steps.length }),
+      cached ? t("log.cached", { count: cached }) : "",
+    ]
       .filter(Boolean)
       .join(" · ");
   }
   const said = s.items.filter((i) => i.kind === "say").length;
   const tools = s.items.filter((i) => i.kind === "tool").length;
-  const parts = [said ? plural(said, "message") : "", tools ? plural(tools, "tool call") : ""];
-  if (!said && !tools) parts.push(plural(s.items.length, "line"));
+  const parts = [
+    said ? t("log.messages", { count: said }) : "",
+    tools ? t("log.toolCalls", { count: tools }) : "",
+  ];
+  if (!said && !tools) parts.push(t("log.lines", { count: s.items.length }));
   return parts.filter(Boolean).join(" · ");
 }
 
 function failed(s: LogSection): string {
-  if (s.phase === "image") return plural(s.failures, "failed step");
-  return plural(s.failures, "failed command");
+  if (s.phase === "image") return t("log.failedSteps", { count: s.failures });
+  return t("log.failedCommands", { count: s.failures });
 }
 
 // A field's text with its matches marked; the current one stands out.
@@ -591,7 +594,7 @@ export function ItemView({ item, isOpen, toggle }: ItemProps) {
     case "message":
       return (
         <div class={`${styles.line} ${styles.note}`} data-item={item.id}>
-          <span class={styles.tag}>you</span>
+          <span class={styles.tag}>{t("log.tagYou")}</span>
           <span class={styles.text}>
             <Hl text={item.text} field={f(0)} />
           </span>
@@ -618,7 +621,7 @@ export function ItemView({ item, isOpen, toggle }: ItemProps) {
     case "output":
       return (
         <pre class={`${styles.out} ${item.error ? styles.error : ""}`} data-item={item.id}>
-          <Hl text={item.text || "(no output)"} field={f(0)} />
+          <Hl text={item.text || t("log.noOutput")} field={f(0)} />
         </pre>
       );
     case "result":
@@ -631,7 +634,7 @@ export function ItemView({ item, isOpen, toggle }: ItemProps) {
     case "cached":
       return (
         <div class={`${styles.line} ${styles.muted}`} data-item={item.id}>
-          <span class={styles.tag}>build</span>
+          <span class={styles.tag}>{t("log.tagBuild")}</span>
           <span class={styles.text}>
             <Hl text={cachedLine(item.steps)} field={f(0)} />
           </span>
@@ -668,14 +671,14 @@ export function ItemView({ item, isOpen, toggle }: ItemProps) {
           }
           meta={
             <>
-              {error ? "failed" : plural(lines, "line")}
+              {error ? t("log.failed") : t("log.lines", { count: lines })}
               {item.time && <Time time={item.time} />}
             </>
           }
         >
           {item.outputs.map((o, i) => (
             <pre key={i} class={`${styles.out} ${o.error ? styles.error : ""}`}>
-              <Hl text={o.text || "(no output)"} field={f(i + 1)} />
+              <Hl text={o.text || t("log.noOutput")} field={f(i + 1)} />
             </pre>
           ))}
         </Sub>
@@ -702,8 +705,11 @@ function StepView({
       </TimedLine>
     );
   const meta = error
-    ? "failed"
-    : [plural(s.output.length, "line"), s.seconds !== null ? `${s.seconds}s` : ""]
+    ? t("log.failed")
+    : [
+        t("log.lines", { count: s.output.length }),
+        s.seconds !== null ? t("log.seconds", { s: s.seconds }) : "",
+      ]
         .filter(Boolean)
         .join(" · ");
   const fallback = (error && getPref("logErrors")) || s.status === "running";
@@ -761,16 +767,16 @@ function TimedLine({
   );
 }
 
-const TIME_TITLES: Record<Timing["state"], string> = {
-  done: "How long it took",
-  running: "Running for",
-  unfinished: "Still running when the run ended",
+const TIME_TITLES: Record<Timing["state"], Plain> = {
+  done: "log.timeDone",
+  running: "log.timeRunning",
+  unfinished: "log.timeUnfinished",
 };
 
 // "12s", "⏱ 0:42" while it runs, "4m 05s, unfinished".
 function Time({ time }: { time: Timing }) {
   return (
-    <span class={`${styles.time} ${styles[time.state] ?? ""}`} title={TIME_TITLES[time.state]}>
+    <span class={`${styles.time} ${styles[time.state] ?? ""}`} title={t(TIME_TITLES[time.state])}>
       {timeLabel(time)}
     </span>
   );

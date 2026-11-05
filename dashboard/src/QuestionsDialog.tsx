@@ -3,8 +3,8 @@
 // answers go), or on their own from a click on its node (Board.tsx).
 import { useId, useState } from "preact/hooks";
 import type { Asking } from "./graphHooks";
+import { t, tx } from "./i18n";
 import { nodeRef } from "./GraphDrawing";
-import { plural } from "./format";
 import { useAnswers } from "./Questions";
 import { formatRoute } from "./route";
 import type { Answers, Questions as Asked, WorkResult } from "./types";
@@ -46,12 +46,12 @@ export function QuestionsDialog({
   return (
     <Dialog
       wide
-      title={items ? plural(items.length, "open question") : "Open questions"}
+      title={items ? t("questions.count", { count: items.length }) : t("questions.title")}
       sub={
         <>
           <span class="mono">{nodeRef(task, !repo, 60)}</span> {task.title} ·{" "}
           <a href={formatRoute({ repo, task: task.key, run: null })} onClick={onClose}>
-            Open details
+            {t("questions.openDetails")}
           </a>
         </>
       }
@@ -66,10 +66,10 @@ export function QuestionsDialog({
             label={
               after ? (
                 <span>
-                  Then queue it after <span class="mono">#{after}</span>
+                  {tx("questions.thenQueue", { issue: <span class="mono">#{after}</span> })}
                 </span>
               ) : (
-                "Then start it"
+                t("questions.thenStart")
               )
             }
           />
@@ -78,7 +78,7 @@ export function QuestionsDialog({
       actions={
         <>
           <Button variant="ghost" disabled={form.sending} onClick={onClose}>
-            Cancel
+            {t("questions.cancel")}
           </Button>
           <Button
             type="submit"
@@ -86,9 +86,9 @@ export function QuestionsDialog({
             variant="primary"
             disabled={form.unsendable}
             pending={form.sending}
-            pendingLabel="Sending…"
+            pendingLabel={t("questions.sending")}
           >
-            Send answers
+            {t("questions.send")}
           </Button>
         </>
       }
@@ -96,7 +96,7 @@ export function QuestionsDialog({
       <form
         id={formId}
         class={styles.dialogForm}
-        aria-label="Open questions"
+        aria-label={t("questions.title")}
         onSubmit={(e) => {
           e.preventDefault();
           void form.send();

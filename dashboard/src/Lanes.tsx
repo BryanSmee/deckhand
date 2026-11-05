@@ -18,6 +18,7 @@ import {
   QuestionBadge,
 } from "./GraphDrawing";
 import { moving, TONES, type GraphNode } from "./graphModel";
+import { t } from "./i18n";
 import { laneName, lanesOf } from "./lanes";
 import type { Edge, LaneLabel, Task } from "./types";
 import { Button, IconButton } from "./ui/Button";
@@ -52,7 +53,7 @@ export function Lanes({ repo, nodes, edges, labels, github, narrow, onAsk, refre
         data-card
         data-number={n.number ?? undefined}
         aria-label={nodeLabel(n, waits(n))}
-        title={`${n.title ?? nodeRef(n, false, 0)} (${n.status})`}
+        title={t("graph.nodeTitle", { title: n.title ?? nodeRef(n, false, 0), status: n.status })}
         aria-haspopup={asks(n) && onAsk ? "dialog" : undefined}
         onClick={nodeClick(asks(n) && onAsk ? () => onAsk(n.task!) : undefined)}
         {...(n.task ? {} : { target: "_blank", rel: "noreferrer" })}
@@ -70,7 +71,7 @@ export function Lanes({ repo, nodes, edges, labels, github, narrow, onAsk, refre
       {!narrow && !last && <Icon.ChevronRight class={styles.arrow} size={14} />}
     </li>
   );
-  if (!nodes.length) return <p class={styles.empty}>No issues here yet.</p>;
+  if (!nodes.length) return <p class={styles.empty}>{t("lanes.empty")}</p>;
   return (
     <div class={`${styles.lanes} ${narrow ? styles.narrow : ""}`}>
       {lanes.map((lane) => (
@@ -86,9 +87,9 @@ export function Lanes({ repo, nodes, edges, labels, github, narrow, onAsk, refre
         </Lane>
       ))}
       {alone.length > 0 && (
-        <section class={styles.lane} aria-label="On their own">
+        <section class={styles.lane} aria-label={t("lanes.alone")}>
           <div class={styles.head}>
-            <h2 class={styles.title}>On their own</h2>
+            <h2 class={styles.title}>{t("lanes.alone")}</h2>
           </div>
           <ol class={`${styles.steps} ${styles.loose}`}>{alone.map((n) => step(n, true))}</ol>
         </section>
@@ -142,18 +143,18 @@ function Lane({ repo, lane, labels, narrow, refresh, children }: LaneProps) {
   return (
     <section
       class={styles.lane}
-      aria-label={`Lane ${name}`}
+      aria-label={t("lanes.lane", { name })}
       data-lane={lane.map((n) => n.key).join(" ")}
     >
       {editing ? (
         <form class={styles.rename} onSubmit={save}>
           <Field
-            label="Lane name"
+            label={t("lanes.name")}
             hideLabel
             size={size}
             value={text}
             maxLength={60}
-            placeholder={known.source === "fallback" ? known.name : "Empty: its name goes"}
+            placeholder={known.source === "fallback" ? known.name : t("lanes.namePlaceholder")}
             error={error ?? undefined}
             onInput={(e) => setText(e.currentTarget.value)}
             onKeyDown={(e) => {
@@ -167,12 +168,12 @@ function Lane({ repo, lane, labels, narrow, refresh, children }: LaneProps) {
             size={size}
             variant="primary"
             pending={saving}
-            pendingLabel="Saving…"
+            pendingLabel={t("lanes.saving")}
           >
-            Save
+            {t("lanes.save")}
           </Button>
           <Button size={size} variant="ghost" onClick={() => setEditing(false)}>
-            Cancel
+            {t("lanes.cancel")}
           </Button>
         </form>
       ) : (
@@ -182,7 +183,7 @@ function Lane({ repo, lane, labels, narrow, refresh, children }: LaneProps) {
             <IconButton
               variant="ghost"
               size={narrow ? "touch" : "small"}
-              label={`Rename the lane ${name}`}
+              label={t("lanes.rename", { name })}
               icon={<Icon.Pencil size={14} />}
               disabled={!keys.length}
               onClick={() => {

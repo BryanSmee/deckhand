@@ -110,7 +110,7 @@ export function useNotifications(state: State | null) {
         show(
           text("app.notifyFailed", { title: titleOf(t) }),
           {
-            body: text("app.notifyFailedBody", { repo: t.repo, state: STATE_NAMES[t.state] }),
+            body: text("app.notifyFailedBody", { repo: t.repo, state: text(STATE_NAMES[t.state]) }),
             tag: id,
           },
           openTask(t),

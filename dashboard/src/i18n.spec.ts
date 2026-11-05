@@ -7,6 +7,7 @@ import { expect, test, vi } from "vitest";
 import { and, locale, number, pick, t, tx } from "./i18n";
 import { type Catalog, CATALOGS, resolveLanguage } from "./locales";
 import { en } from "./locales/en";
+import source from "./locales/en.ts?raw";
 import { setPref } from "./prefs";
 
 test("placeholders filled, numbers written in the locale", () => {
@@ -120,4 +121,20 @@ test("the catalogs' and t()'s types", () => {
     t("shell.settings", { count: 1 });
   };
   expect(types).toBeTypeOf("function");
+});
+
+// The English catalog is en.ts's own texts and its files' (en-<area>.ts), spread in: a spread
+// takes a key defined twice without a word, the later text winning, so none may be.
+test("no key in two of the English catalog's files", () => {
+  const files = import.meta.glob<Record<string, Record<string, unknown>>>("./locales/en-*.ts", {
+    eager: true,
+  });
+  const own = [...source.matchAll(/^ {2}"([\w.]+)":/gm)].map((m) => m[1]);
+  const keys = [
+    own,
+    ...Object.values(files).flatMap((file) => Object.values(file).map(Object.keys)),
+  ];
+  const all = keys.flat();
+  expect(all.filter((key, i) => all.indexOf(key) !== i)).toEqual([]);
+  expect(new Set(all)).toEqual(new Set(Object.keys(en)));
 });

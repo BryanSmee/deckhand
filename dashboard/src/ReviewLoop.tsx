@@ -13,6 +13,8 @@ import {
   roundCounts,
   shortSha,
 } from "./format";
+import { t, tx } from "./i18n";
+import type { Plain } from "./locales";
 import type { Task } from "./types";
 import * as Icon from "./ui/icons";
 import { usePopup } from "./ui/popup";
@@ -39,33 +41,37 @@ export function ReviewMarks({ task, class: className }: { task: Task; class?: st
       <FindingsLeft task={task} />
       <span
         class={styles.left}
-        title={`Reviewed ${shortSha(outdated.reviewed)}, head is now ${shortSha(outdated.head)}`}
+        title={t("reviewLoop.outdatedTitle", {
+          reviewed: shortSha(outdated.reviewed),
+          head: shortSha(outdated.head),
+        })}
       >
         <Icon.Warning size={13} class={styles.mark} />
-        Review outdated
+        {t("reviewLoop.outdated")}
       </span>
     </span>
   );
 }
 
-const ENDS: Record<string, string> = {
-  reviewing: "Reviewing",
-  fixing: "Fixing",
-  checks: "Waiting for checks",
-  ci: "Waiting for CI",
-  "ci-fix": "Fixing CI",
-  "ci-failed": "CI failed, not reviewed",
-  clean: "Nothing blocking",
-  "rounds-out": "Fix rounds ran out",
-  fixed: "Fixed, not reviewed again",
-  stopped: "Stopped",
+// Keys, read at render: the language may change meanwhile.
+const ENDS: Record<string, Plain> = {
+  reviewing: "reviewLoop.reviewing",
+  fixing: "reviewLoop.fixing",
+  checks: "reviewLoop.checks",
+  ci: "reviewLoop.ci",
+  "ci-fix": "reviewLoop.ciFix",
+  "ci-failed": "reviewLoop.ciFailed",
+  clean: "reviewLoop.clean",
+  "rounds-out": "reviewLoop.roundsOut",
+  fixed: "reviewLoop.fixed",
+  stopped: "reviewLoop.stopped",
 };
 
 // Only maintainers' reviews, no loop: no fix round ran out, nothing stopped.
-const MANUAL_ENDS: Record<string, string> = {
-  clean: "Nothing blocking",
-  "rounds-out": "Blocking findings",
-  stopped: "Blocking findings",
+const MANUAL_ENDS: Record<string, Plain> = {
+  clean: "reviewLoop.clean",
+  "rounds-out": "reviewLoop.blocking",
+  stopped: "reviewLoop.blocking",
 };
 
 // "Review loop · Fix rounds ran out", then "Last review: 2 high ↓" (LastReview);
@@ -76,8 +82,10 @@ const MANUAL_ENDS: Record<string, string> = {
 export function ReviewRounds({ task, actions }: { task: Task; actions?: ComponentChildren }) {
   const r = task.review;
   if (!r || (!r.history.length && !actions)) return null;
-  const name = r.manual ? "Reviews" : "Review loop";
-  const end = (r.manual && MANUAL_ENDS[r.loop]) || ENDS[r.loop] || r.loop;
+  const name = t(r.manual ? "reviewLoop.reviews" : "reviewLoop.loop");
+  // An end this dashboard doesn't know yet: the listener's own word.
+  const key = (r.manual && MANUAL_ENDS[r.loop]) || ENDS[r.loop];
+  const end = key ? t(key) : r.loop;
   const outdated = reviewOutdated(task);
   return (
     <section class={styles.rounds} aria-label={name}>
@@ -91,16 +99,19 @@ export function ReviewRounds({ task, actions }: { task: Task; actions?: Componen
           {outdated && (
             <span class={styles.outdated}>
               <Icon.Warning size={13} class={styles.mark} />
-              Outdated: reviewed{" "}
-              <a
-                class={styles.sha}
-                href={`${task.pr!.url}/commits/${outdated.reviewed}`}
-                target="_blank"
-                rel="noreferrer"
-              >
-                {shortSha(outdated.reviewed)}
-              </a>
-              , head is now <span class={styles.sha}>{shortSha(outdated.head)}</span>
+              {tx("reviewLoop.outdatedLine", {
+                reviewed: (
+                  <a
+                    class={styles.sha}
+                    href={`${task.pr!.url}/commits/${outdated.reviewed}`}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    {shortSha(outdated.reviewed)}
+                  </a>
+                ),
+                head: <span class={styles.sha}>{shortSha(outdated.head)}</span>,
+              })}
             </span>
           )}
         </div>
@@ -111,9 +122,9 @@ export function ReviewRounds({ task, actions }: { task: Task; actions?: Componen
 }
 
 const TREND = {
-  better: { Arrow: Icon.ArrowDown, words: "better than the review before" },
-  worse: { Arrow: Icon.ArrowUp, words: "worse than the review before" },
-};
+  better: { Arrow: Icon.ArrowDown, words: "reviewLoop.better" },
+  worse: { Arrow: Icon.ArrowUp, words: "reviewLoop.worse" },
+} as const;
 
 // "Last review: 2 high · 1 low ↓": the last review's counts, and whether it weighs less (a
 // green arrow down) or more (a red one up) than the one before it (reviewTrend(); the points
@@ -153,8 +164,17 @@ function LastReview({ task }: { task: Task }) {
   const away = useRef(false);
   const last = r.history.length - 1;
   const trend = reviewTrend(r.history);
-  const of = r.rounds ? ` of ${r.rounds}` : "";
-  const t = trend && TREND[trend];
+  const arrow = trend && TREND[trend];
+  const words = arrow && t(arrow.words);
+  // An entry's title: who reviewed it, after which fix round.
+  const entryTitle = (h: (typeof r.history)[number]) => {
+    const blocking = h.blocking;
+    if (h.manual) return t("reviewLoop.maintainer", { blocking });
+    if (!h.round) return t("reviewLoop.first", { blocking });
+    return r.rounds
+      ? t("reviewLoop.afterRoundOf", { round: h.round, rounds: r.rounds, blocking })
+      : t("reviewLoop.afterRound", { round: h.round, blocking });
+  };
   return (
     <div
       ref={box}
@@ -183,11 +203,11 @@ function LastReview({ task }: { task: Task }) {
           setPinned(true);
         }}
       >
-        <span class={styles.label}>Last review:</span> {roundCounts(r.history[last])}
-        {t && " "}
-        {t && (
-          <span role="img" aria-label={t.words} class={styles[trend]} title={t.words}>
-            <t.Arrow size={14} />
+        <span class={styles.label}>{t("reviewLoop.last")}</span> {roundCounts(r.history[last])}
+        {arrow && " "}
+        {arrow && (
+          <span role="img" aria-label={words!} class={styles[trend]} title={words!}>
+            <arrow.Arrow size={14} />
           </span>
         )}
       </button>
@@ -195,20 +215,19 @@ function LastReview({ task }: { task: Task }) {
         <ol
           id={id}
           class={styles.list}
-          aria-label="Every review, oldest first"
+          aria-label={t("reviewLoop.every")}
           data-popup={pinned || undefined}
         >
           {r.history.map((h, i) => (
-            <li
-              key={`${h.round}-${h.at}`}
-              title={`${h.manual ? "A maintainer's review" : h.round ? `Review after fix round ${h.round}${of}` : "First review"}: ${h.blocking} blocking`}
-            >
+            <li key={`${h.round}-${h.at}`} title={entryTitle(h)}>
               {/* Without a loop, no fix round between them: numbered in turn, never stuck. */}
-              <span class={styles.round}>{r.manual ? `#${i + 1}` : `R${h.round}`}</span>{" "}
+              <span class={styles.round}>
+                {r.manual ? `#${i + 1}` : t("reviewLoop.round", { round: h.round })}
+              </span>{" "}
               <span class={styles.counts}>
                 {roundCounts(h)}
                 {!r.manual && noProgress(r.history, i) && (
-                  <span class={styles.stuck}>no progress</span>
+                  <span class={styles.stuck}>{t("reviewLoop.noProgress")}</span>
                 )}
               </span>{" "}
               <span class={styles.head}>{h.head ? shortSha(h.head) : ""}</span>
