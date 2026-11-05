@@ -1046,3 +1046,52 @@ export interface Health {
   checkedAt: number;
   services: ServiceHealth[];
 }
+
+// GET and POST api/chats/<id>/permissions (listener/chats.mjs, listener/profiles.mjs): a chat's
+// permissions profile, what it may hold (its `ceiling`: what a chat run of its repository gets
+// from the policies, the config and the operator's grant) and what its next run gets of it
+// (`effective`). A profile's null field means everything the ceiling allows. `errors`: what
+// would stop its next run whatever the profile; `running`: a sandbox is going, which keeps the
+// permissions it started with. A POST beyond the ceiling answers 422 with `errors`, one per
+// refusal.
+export type GithubLevel = "read" | "comment" | "push";
+
+export interface ProfileMount {
+  target: string;
+  readOnly: boolean;
+}
+
+export interface ChatProfile {
+  github: GithubLevel;
+  capabilities: string[] | null;
+  hosts: string[] | null;
+  mounts: ProfileMount[] | null;
+}
+
+export interface ChatCeiling {
+  capabilities: {
+    name: string;
+    what: string;
+    needs: string[];
+    allowed: boolean;
+    // On whatever the profile says: `reason` says why.
+    required: boolean;
+    reason: string | null;
+  }[];
+  hosts: string[];
+  mounts: { target: string; writable: boolean; reason: string | null }[];
+  github: { level: GithubLevel; allowed: boolean; reason: string | null }[];
+}
+
+export interface ChatPermissions {
+  profile: ChatProfile;
+  ceiling: ChatCeiling;
+  effective: {
+    github: GithubLevel;
+    capabilities: string[];
+    hosts: string[];
+    mounts: ProfileMount[];
+  };
+  errors: string[];
+  running: boolean;
+}

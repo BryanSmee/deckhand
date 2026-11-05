@@ -10,6 +10,7 @@ import { createPreparation } from "../listener/preparation.mjs";
 import { parseRepoConfig } from "../listener/repo-config.mjs";
 import { customMode, isApart } from "../listener/modes.mjs";
 import { sandboxArgs } from "../listener/runner/docker.mjs";
+import { egressPolicy } from "../listener/egress.mjs";
 import { sandboxEnv, sandboxSpec, sessionOf } from "../listener/sandbox-spec.mjs";
 import { capabilityPolicies, grantedOf, needsPosixPaths, tempDir, testConfig } from "./helpers.mjs";
 
@@ -199,6 +200,8 @@ async function workRun(
     reopen,
     items = [{ replyTo: 7 }],
     light = false,
+    // A chat's run (#478): its saved permissions profile (null: the default).
+    chat,
   } = {},
 ) {
   const dir = realpathSync(tempDir(t));
@@ -227,6 +230,7 @@ async function workRun(
     },
     egressCa: async () => ca,
     linkedBranches,
+    chats: { profileOf: () => chat ?? null },
     policies: { ...policies, grants: grantedOf(grants) },
     broker: {
       allow: (id, branches, fork) =>
@@ -245,8 +249,8 @@ async function workRun(
   const task = {
     repo: "org/repo",
     base: "main",
-    kind: "issue",
-    number: 12,
+    kind: chat === undefined ? "issue" : "chat",
+    number: chat === undefined ? 12 : null,
     name: "deckhand-org-repo-12",
     live: {
       id: "deckhand-org-repo-12-1",
@@ -893,5 +897,90 @@ test(
     const writable = (spec) => new Set(spec.volumes.filter((v) => !v.readOnly).map((v) => v.name));
     const shared = [...writable(work.spec)].filter((name) => writable(light.spec).has(name));
     assert.deepEqual(shared, []);
+  },
+);
+
+test(
+  "a chat's permissions profile narrows its run: its capabilities in its tokens, its hosts at the proxy, its mounts and engine in its spec (#478)",
+  { skip: needsPosixPaths },
+  async (t) => {
+    const nfs = join(realpathSync(tempDir(t)), "nfs");
+    mkdirSync(join(nfs, "data"), { recursive: true });
+    mkdirSync(join(nfs, "cache"), { recursive: true });
+    const grant = `hosts: [registry.npmjs.org, pypi.org]\nmounts: [${nfs}]\n`;
+    const yaml = `setup: npm ci\ndocker: {}\nmounts:\n  - ${nfs}/data\n  - ${nfs}/cache\n`;
+    // The operator gives chats an engine too, and grants it.
+    const policies = capabilityPolicies({
+      operator: () => ["pull", "setup", "docker", "read:issues", "read:pulls"],
+    });
+    const chatRun = (profile) =>
+      workRun(t, "org/repo", {
+        grant,
+        grants: ["docker"],
+        yaml,
+        policies,
+        mode: "chat",
+        light: true,
+        items: [{}],
+        chat: profile,
+        env: { SANDBOX_ENGINE: "sysbox" },
+      });
+    // The default: everything the ceiling gives.
+    const all = await chatRun(null);
+    assert.deepEqual(all.task.live.capabilities, [
+      "pull",
+      "setup",
+      "docker",
+      "read:issues",
+      "read:pulls",
+    ]);
+    assert.ok(all.parts.engine);
+    assert.equal(all.parts.access.mounts.length, 2);
+    assert.ok(all.task.live.hosts.includes("pypi.org"));
+
+    const { parts, task, calls, notes } = await chatRun({
+      github: "read",
+      capabilities: ["pull", "setup", "read:pulls"],
+      hosts: ["registry.npmjs.org"],
+      mounts: [{ target: `${nfs}/data`, readOnly: true }],
+    });
+    // The GitHub gateway reads its token's capabilities: no `read:issues`, no engine.
+    const used = ["pull", "setup", "read:pulls"];
+    assert.deepEqual(task.live.capabilities, used);
+    assert.ok(calls.includes(`grant ${used.join(" ")}`));
+    assert.ok(
+      notes.includes(
+        `Permissions profile: leaves out docker, read:issues; hosts: pypi.org; mounts: ${nfs}/cache`,
+      ),
+    );
+    assert.equal(parts.engine, null);
+    // The egress proxy answers from its hosts: the one turned off refused, those every run
+    // needs still there.
+    assert.ok(!task.live.hosts.includes("pypi.org"));
+    assert.ok(task.live.hosts.includes("registry.npmjs.org"));
+    assert.ok(task.live.hosts.includes("api.github.com"));
+    const ask = (host) =>
+      egressPolicy(host, task.live.hosts, task.live.trusted, task.live.cached, task.live.uncached);
+    assert.equal(ask("pypi.org").allowed, false);
+    assert.equal(ask("registry.npmjs.org").allowed, true);
+    // The runner runs its spec: the mount kept, read-only, the other gone, no engine.
+    const spec = sandboxSpec(
+      {
+        config: testConfig(),
+        task,
+        agent: agentFor("claude"),
+        bot: { name: "deckhand[bot]", email: "bot@example" },
+        publicUrl: "https://deckhand.example",
+      },
+      "p",
+      "m",
+      { ...parts.prepared, ...parts.access, engine: parts.engine, ca: parts.ca },
+    );
+    assert.deepEqual(
+      parts.access.mounts.map((m) => [m.target, m.readOnly]),
+      [[`${nfs}/data`, true]],
+    );
+    assert.equal(spec.engine, undefined);
+    assert.ok(!JSON.stringify(spec).includes(`${nfs}/cache`));
   },
 );

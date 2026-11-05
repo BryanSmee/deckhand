@@ -19,13 +19,19 @@
 //   repositories;
 // - its reset (its volumes and session dropped, the chat kept) and its deletion.
 //
-// What its runs may do is the policies' (../policy/mode-chat.rego): no GitHub write, no push.
+// What its runs may do is the policies' (../policy/mode-chat.rego): no GitHub write, no push. Its
+// owner narrows that with its permissions profile (#478, profiles.mjs), kept with the chat and
+// checked against what the policies and the grants give on every save and at every start
+// (preparation.mjs).
 import { randomBytes } from "node:crypto";
+import { capabilitiesInput, outcomeOf } from "./capabilities.mjs";
 import { repoAllowed } from "./config.mjs";
 import { EFFORTS, MODEL_NAME, taskKey } from "./events.mjs";
+import { grantCheck, grantsBy } from "./grants.mjs";
 import { removeRun } from "./history.mjs";
 import { refusal as accessRefusal, startAction } from "./permissions.mjs";
 import { pickProblem } from "./agents/select.mjs";
+import { ceilingOf, checkProfile, DEFAULT_PROFILE, narrowProfile } from "./profiles.mjs";
 import { sandboxName } from "./repo-config.mjs";
 import { queueId } from "./restart.mjs";
 import { publicRun } from "./runlog.mjs";
@@ -78,7 +84,8 @@ export function createChats(
 ) {
   const { config, log } = ctx;
   // id → { id, owner, repo, base, agent, model, effort, title, createdAt, lastActiveAt,
-  // resetAt }: the owner's login in lower case, as edge signs users in.
+  // resetAt, profile }: the owner's login in lower case, as edge signs users in; `profile`, its
+  // permissions profile (profiles.mjs), null for the default (everything its ceiling allows).
   const chats = new Map();
   // id → its idle timer, and when its run last answered (in memory: after a restart, its idle
   // time counts from its last message); the chats being reset or deleted, which take no message
@@ -265,6 +272,7 @@ export function createChats(
       createdAt: at,
       lastActiveAt: at,
       resetAt: null,
+      profile: null,
     };
     chats.set(id, chat);
     await save();
@@ -484,6 +492,81 @@ export function createChats(
     }
   }
 
+  // What `chat`'s profile may hold (profiles.mjs ceilingOf()): what a `chat` run of its
+  // repository gets now, from its policies on its default branch, its config and the operator's
+  // grant, as its next run would start with them (preparation.mjs capabilitiesOf()), after the
+  // checks of a message (checked()). → { ceiling, errors }: `errors`, what would stop its next
+  // run whatever its profile.
+  async function ceiling(chat, user) {
+    const { settings, base, isPrivate } = await checked(chat.repo, user);
+    if (!ctx.policies) refuse(503, "No policies to decide what a chat gets.");
+    const repo = { name: chat.repo, private: isPrivate };
+    const input = capabilitiesInput({ repo, mode: "chat", fork: false, trigger: "dashboard" });
+    const said = await ctx.policies.capabilityRules(chat.repo, base, { chat: input });
+    if (said.error) {
+      refuse(503, `What ${chat.repo}'s chats get can't be decided now: ${said.error}`);
+    }
+    const check = await grantCheck(config, chat.repo, settings, {
+      granted: grantsBy(ctx.policies),
+    });
+    if (check.error) {
+      log(`Chats: ${chat.repo}: ${check.error.message}`);
+      refuse(503, "The operator's grants folder has errors: no chat starts until they are fixed.");
+    }
+    const outcome = outcomeOf({
+      rules: said.results.chat,
+      custom: false,
+      settings,
+      grant: check.grant,
+      repo,
+      mode: "chat",
+    });
+    const limit = ceilingOf({ outcome, grant: check.grant, mounts: check.mounts.mounts });
+    return { ceiling: limit, errors: outcome.errors.map((e) => e.replaceAll("`", "")) };
+  }
+
+  // The chat's permissions as its panel shows them: its saved profile, the ceiling, what its
+  // next run gets of it (narrowProfile()), and whether a sandbox is going (it keeps the
+  // permissions it started with).
+  async function permissions(user, id) {
+    const chat = mine(user, id);
+    const { ceiling: limit, errors } = await ceiling(chat, user);
+    return {
+      profile: { ...DEFAULT_PROFILE, ...chat.profile },
+      ceiling: limit,
+      effective: narrowProfile(chat.profile, limit),
+      errors,
+      running: statusOf(chat) !== "stopped",
+    };
+  }
+
+  // A new profile for the chat, saved only within its ceiling: what goes beyond it is refused
+  // (a 422 listing each), never dropped quietly. It applies at its sandbox's next start.
+  // → permissions()'s, or { refused: [what goes beyond it] }.
+  async function setPermissions(user, id, body) {
+    const chat = mine(user, id);
+    open(chat);
+    const { ceiling: limit } = await ceiling(chat, user);
+    const { profile, errors } = checkProfile(body?.profile, limit);
+    if (errors.length) return { refused: errors };
+    open(chat);
+    chat.profile = profile;
+    await save();
+    log(`${chatKey(chat)}: permissions profile changed by ${user}`);
+    return permissions(user, id);
+  }
+
+  // Its sandbox stopped once its agent has answered (runs.mjs rest()), its session kept: the
+  // next message starts it again, with the permissions saved now. → whether one was going.
+  function restart(user, id) {
+    const chat = mine(user, id);
+    open(chat);
+    const task = taskOf(chat);
+    if (!task?.live || !ctx.rest(task)) return false;
+    log(`${chatKey(chat)}: restarted by its owner, for its permissions`);
+    return true;
+  }
+
   // The chats going whose owner may no longer run the agent on their repository: stopped. Every
   // CHECK_MS, from what the orchestrator read of the repos' `users` last (ctx.usersOf()) and the
   // access decision (a decision that failed stops nothing, as runs.mjs keeps a queued comment
@@ -541,18 +624,20 @@ export function createChats(
   }
 
   // The API: GET /api/chats (the caller's), POST /api/chats (a new one), POST
-  // /api/chats/<id>/messages, POST /api/chats/<id>/reset, DELETE /api/chats/<id>.
+  // /api/chats/<id>/messages, POST /api/chats/<id>/reset, DELETE /api/chats/<id>; GET and POST
+  // /api/chats/<id>/permissions (its profile), POST /api/chats/<id>/restart.
   const handle = apiRoute({
     name: "Chats",
     route: (pathname) => {
       if (pathname === "/api/chats") return { what: "chats" };
-      const m = /^\/api\/chats\/([^/]+)(?:\/(messages|reset))?$/.exec(pathname);
+      const m = /^\/api\/chats\/([^/]+)(?:\/(messages|reset|permissions|restart))?$/.exec(pathname);
       return m && { what: m[2] ?? "chat", id: m[1] };
     },
     gets: {
       chats: async (req, res, user) => send(res, 200, { chats: await list(user) }),
       chat: async (req, res, user, _, { id }) =>
         send(res, 200, { chat: await view(mine(user, id)) }),
+      permissions: async (req, res, user, _, { id }) => send(res, 200, await permissions(user, id)),
     },
     posts: {
       chats: async (req, res, user) => {
@@ -564,6 +649,25 @@ export function createChats(
         send(res, 202, { chat: await message(user, id, body?.text) });
       },
       reset: async (req, res, user, _, { id }) => send(res, 200, { chat: await reset(user, id) }),
+      permissions: async (req, res, user, _, { id }) => {
+        const said = await setPermissions(user, id, await readJsonBody(req, MAX_BODY));
+        if (said.refused) {
+          return send(res, 422, {
+            error: `This profile goes beyond what the chat may get: ${said.refused.join("; ")}.`,
+            errors: said.refused,
+          });
+        }
+        send(res, 200, said);
+      },
+      restart: async (req, res, user, _, { id }) => {
+        const going = restart(user, id);
+        send(res, 200, {
+          chat: await view(mine(user, id)),
+          message: going
+            ? "Its sandbox stops once its agent has answered: your next message starts it again with these permissions, in the same session."
+            : "No sandbox is going: your next message starts one with these permissions.",
+        });
+      },
     },
     deletes: {
       chat: async (req, res, user, _, { id }) => {
@@ -583,11 +687,15 @@ export function createChats(
     keys: () => [...chats.values()].map(chatKey),
     respell,
     options,
+    profileOf: (task) => chats.get(task.id.slice("chat-".length))?.profile ?? null,
     list,
     create,
     message,
     reset,
     remove,
+    permissions,
+    setPermissions,
+    restart,
     sweep,
     start,
     stop: stopAll,

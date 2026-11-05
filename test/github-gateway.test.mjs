@@ -1606,6 +1606,32 @@ test("without read:issues: its own issue over REST, with a token that reads issu
   assert.equal(gw.minted.at(-1)[1].issues, "read");
 });
 
+test("a chat whose permissions profile turned off read:issues: no issue at all, its pull requests still (#478)", async (t) => {
+  const gw = await gateway(t);
+  // What preparation.mjs grants a chat its profile narrowed: `pull` and `read:pulls` only.
+  const { secret, notes } = gw.register({
+    mode: "chat",
+    issue: null,
+    caps: ["pull", "read:pulls"],
+  });
+  const get = (path) => gw.call(`/api/v3/${path}`, { secret });
+  const sent = gw.calls.length;
+  for (const path of ["repos/org/repo/issues?state=open", "repos/org/repo/issues/1"]) {
+    const res = await get(path);
+    assert.equal(res.status, 403, path);
+    assert.equal(
+      (await res.json()).message,
+      "Deckhand: this run's capabilities don't give `read:issues`: it reads no issue",
+      path,
+    );
+  }
+  assert.equal(gw.calls.length, sent);
+  assert.match(notes.at(-1), /read:issues/);
+  assert.equal((await get("repos/org/repo/pulls")).status, 200);
+  assert.equal(gw.minted.at(-1)[1].pull_requests, "read");
+  assert.equal(gw.minted.at(-1)[1].issues, undefined);
+});
+
 test("without read:issues: its own issue over GraphQL, anything else of issues refused", async (t) => {
   const checks = createGraphqlChecks({ nodes: async () => [], checkWrite: async () => null });
   const gw = await gateway(t, { checkGraphql: checks.check });

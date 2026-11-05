@@ -16,13 +16,14 @@ import {
 } from "./access.mjs";
 import { agentFor } from "./agents/index.mjs";
 import { capabilitiesInput, listed, outcomeOf } from "./capabilities.mjs";
-import { mandatoryHosts } from "./egress.mjs";
+import { mandatoryHosts, operatorHosts } from "./egress.mjs";
 import { headInRepo } from "./events.mjs";
 import { getJson, paginate } from "./github.mjs";
 import { grantCheck, grantsBy } from "./grants.mjs";
 import { imageRef } from "./images.mjs";
 import { handoffMessage } from "./prompts.mjs";
 import { reviewThread } from "./reviews.mjs";
+import { ceilingOf, leftOut, narrowProfile } from "./profiles.mjs";
 import { personStarted, runTrigger } from "./run-policy.mjs";
 import { buildOutput, enterPhase } from "./runlog.mjs";
 import { operatorSecrets, redact } from "./secrets.mjs";
@@ -52,7 +53,7 @@ export function createPreparation(ctx) {
     const { pulls, unread } = await pullRequests(task, items);
     // One that couldn't be looked up may be a fork's: counted as one.
     const fork = !!unread || [...pulls.values()].some((pr) => !headInRepo(pr, task.repo));
-    const caps = await capabilitiesOf(task, items, settings, fork, note, unread);
+    const { caps, profile } = await capabilitiesOf(task, items, settings, fork, note, unread);
     // Its volume (sandbox-spec.mjs sessionOf()) depends on whether it is a fork's: known before
     // reopen() looks in it. A run without `pull` isn't one (prepareBare()).
     live.fork = caps.has("pull") && fork;
@@ -79,6 +80,7 @@ export function createPreparation(ctx) {
       log,
       granted: grantsBy(ctx.policies),
     });
+    if (profile) narrowAccess(access, profile, agent);
     // The open internet: any public host, private addresses only for those every run needs
     // (access.mjs bareAccess() says why).
     if (caps.has("internet")) {
@@ -138,6 +140,9 @@ export function createPreparation(ctx) {
   // `unread`: the error of a pull request that couldn't be looked up, which `fork` counts as a
   // fork's: the run is refused with it when, not a fork's, it would push (a policy that denies
   // forks `push` would otherwise turn a maintainer's run into a read-only one, unsaid).
+  // A chat's permissions profile (profiles.mjs) narrows them, within what they give now: a grant
+  // or a policy gone since it was saved narrows it silently. → { caps: the names, a Set;
+  // profile: a chat's, as narrowProfile() makes it, null for any other run }.
   async function capabilitiesOf(task, items, settings, fork, note, unread = null) {
     const { live } = task;
     const agent = agentOf(task);
@@ -188,12 +193,35 @@ export function createPreparation(ctx) {
         `${cantRun(agent)}: the capabilities its policies give a \`${live.mode}\` run don't hold.\n\n${outcome.errors.map((e) => `- ${e}`).join("\n")}\n\nThe repository's config page on the dashboard shows what each mode gets, and the file that decided it (see Deckhand's docs/repo-config.md#capabilities).`,
       );
     }
-    live.capabilities = outcome.used;
+    let used = outcome.used;
+    let profile = null;
+    if (isChat(task)) {
+      const ceiling = ceilingOf({ outcome, grant: check.grant, mounts: check.mounts.mounts });
+      profile = narrowProfile(ctx.chats?.profileOf(task) ?? null, ceiling);
+      used = used.filter((name) => profile.capabilities.includes(name));
+      const out = leftOut(profile, ceiling);
+      if (out) note(`Permissions profile: leaves out ${out}`);
+    }
+    live.capabilities = used;
     // On its record too: saved with its summary, so an analysis knows it had the open internet.
-    if (live.record) live.record.capabilities = outcome.used;
-    ctx.broker.grant(live.id, outcome.used);
-    note(`Capabilities: ${listed(outcome.used)}`);
-    return new Set(outcome.used);
+    if (live.record) live.record.capabilities = used;
+    ctx.broker.grant(live.id, used);
+    note(`Capabilities: ${listed(used)}`);
+    return { caps: new Set(used), profile };
+  }
+
+  // A chat's hosts and mounts, as its profile keeps them (narrowProfile()): the granted hosts it
+  // turned off are no longer reachable (the egress proxy reads `live.hosts`), but the ones every
+  // run needs; the mounts it turned off aren't in its spec, the others read-only unless it keeps
+  // them read-write. `access`: grantedAccess()'s, changed in place.
+  function narrowAccess(access, profile, agent) {
+    const hosts = access.grant.hosts.filter((h) => profile.hosts.includes(h.toLowerCase()));
+    access.hosts = operatorHosts(config, { ...access.grant, hosts }, agent);
+    access.trusted = operatorHosts(config, { ...access.grant, hosts }, agent);
+    access.mounts = access.mounts.flatMap((m) => {
+      const kept = profile.mounts.find((p) => p.target === m.target);
+      return kept ? [{ ...m, readOnly: m.readOnly || kept.readOnly }] : [];
+    });
   }
 
   // Whether GitHub says `repo` is private: null when it can't say, which the risky combinations

@@ -299,6 +299,9 @@ export function outcomeOf({ rules, custom, settings, grant, repo, mode = null })
 const NEED_PULL = {
   review: "it reviews the pull request's code, and its verdict decides fixes and merges",
   discussion: "it reads the discussion with its token",
+  // Its input is its messages, never an issue's thread (preparation.mjs prepareBare()), and its
+  // permissions profile can't turn `pull` off (profiles.mjs).
+  chat: "it works in a clone of the repository",
 };
 
 // A deny narrows: a capability that needs one denied (or not asked for, or not granted) isn't

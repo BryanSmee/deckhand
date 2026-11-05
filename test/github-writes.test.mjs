@@ -2777,6 +2777,45 @@ test(
 );
 
 test(
+  "the real opa: deny_github sees a chat's mode, so a repository refuses the writes an operator allows chats (#478)",
+  withOpa,
+  async (t) => {
+    // An operator's mode-chat.rego that lets chats comment on the repository's issues.
+    const builtIn = builtInPolicies();
+    builtIn.set(
+      "mode-chat.rego",
+      `${builtIn.get("mode-chat.rego")}
+allow_github if {
+  input.mode == "chat"
+  input.action == "comment"
+  input.target.kind == "other_issue"
+}
+`,
+    );
+    const comment = () => writeInput("chat", {}, ["comment"], "other_issue");
+    const allowed = defaultPolicies(t, { builtIn });
+    assert.deepEqual(await allowed.deny("deny_github", "org/repo", "main", comment), []);
+    // A work run's comment is no chat's: the repository's rule leaves it alone.
+    const repo = {
+      "chats.rego": `package deckhand
+
+deny_github contains "chats don't comment on this repository's issues" if input.mode == "chat"
+`,
+    };
+    const narrowed = defaultPolicies(t, { builtIn, repo });
+    assert.deepEqual(await narrowed.deny("deny_github", "org/repo", "main", comment), [
+      "chats don't comment on this repository's issues",
+    ]);
+    assert.deepEqual(
+      await narrowed.deny("deny_github", "org/repo", "main", () =>
+        writeInput("work", { push: true }, ["comment"], "own_issue"),
+      ),
+      [],
+    );
+  },
+);
+
+test(
   "the real opa: mode-work.rego allows a first rerun of a work run's own pull request, and the modes a repository allows",
   withOpa,
   async (t) => {

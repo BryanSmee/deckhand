@@ -2084,6 +2084,11 @@ chats:
 It counts a user's chats on every repository, when they create one here: with `per_user: 1`, a
 user who has a chat elsewhere already can't create one here. Chats already created stay.
 
+Each chat's owner may narrow what its sandbox gets from the dashboard, with its permissions
+profile ([security.md](security.md#chats)): never beyond what `policy/mode-chat.rego` (and this
+repository's `.deckhand/policy/`), this file and the operator's grants give a chat. A
+`deny_github` or `deny_capabilities` rule sees a chat's runs with `mode: "chat"`.
+
 ## Auto-pickup
 
 `auto_pickup: true` opts the repository in to the operator's auto-pickup

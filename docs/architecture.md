@@ -167,7 +167,14 @@ sandbox, tokens, capabilities, inbox, log and restarts. What differs:
 - every minute (`sweep()`), and at each message, a chat whose owner left `ALLOWED_USERS` or the
   repository's `users` (as last read), or lost `runs:start:chat` there (`permissions.mjs`), is
   stopped; its messages are refused, its volumes stay
-  until it is deleted.
+  until it is deleted;
+- its permissions profile (`listener/profiles.mjs`, #478), kept with it in the store, narrows
+  what its runs get: `GET /api/chats/<id>/permissions` answers the profile, its ceiling (what a
+  `chat` run of its repository gets now from the policies, the config and the operator's grant)
+  and what its next run gets of it; `POST` saves one only within that ceiling (a `422` lists
+  what goes beyond it); `POST /api/chats/<id>/restart` rests its sandbox, its session kept, so
+  the next message starts with it. Each start narrows it again (`preparation.mjs`): see
+  [security.md](security.md#chats).
 
 ### Modes
 

@@ -5,6 +5,8 @@
 // Relative URLs, like the assets: the page works under any path.
 import { useEffect, useRef, useState } from "preact/hooks";
 import type {
+  ChatPermissions,
+  ChatProfile,
   AnalysisPreview,
   AnalysisResult,
   AnalysisSelection,
@@ -500,3 +502,16 @@ export function useThread(repo: string, number: number): ThreadView {
   );
   return { thread: data, error, reload };
 }
+
+// A chat's permissions (listener/chats.mjs): its profile, the ceiling it is held to, what its
+// next run gets of it.
+export const getChatPermissions = (id: string) =>
+  getJson<ChatPermissions>(`api/chats/${id}/permissions`);
+
+// A new profile, saved only within the ceiling: beyond it, `errors` says each refusal.
+export const saveChatPermissions = (id: string, profile: ChatProfile) =>
+  postJson<ChatPermissions & { errors?: string[] }>(`api/chats/${id}/permissions`, { profile });
+
+// The chat's sandbox stopped once its agent has answered, its session kept: the next message
+// starts it with the profile saved.
+export const restartChat = (id: string) => postJson<{ message: string }>(`api/chats/${id}/restart`);
