@@ -2524,8 +2524,9 @@ App's comments are ignored as triggers, so the orchestrator queues or holds the 
 rather than through a webhook. The backlog (`GET /api/repos/<owner>/<repo>/issues`) lists a
 repository's open issues to signed-in users in its `users` with `tasks:read` (every signed-in user
 with `tasks:read` while its config has errors), from GitHub at most once every 30 seconds per repository, or after an `issues`
-delivery for it, one read at a time; the dashboard keeps the last one in memory only, not in
-the browser's storage. The repository list's backlog counts (`GET /api/repos?backlog=1`, the
+delivery for it, one read at a time (each issue's labels, and the parent of a sub-issue whose
+parent is listed, read with it: one call per listed issue with open sub-issues); the dashboard keeps the last one in memory only, not in
+the browser's storage, but for the names of the labels its Backlog filter has ticked. The repository list's backlog counts (`GET /api/repos?backlog=1`, the
 Overview) come from the same reads under the same `users` rule and the same `tasks:read`
 (a repository whose `users` leaves the user out, or that the user sees through another action
 only, has none, and isn't read for them). While the list is asked for them, each configured repository

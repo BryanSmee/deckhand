@@ -14,6 +14,7 @@ import type { ComponentChildren } from "preact";
 import { useEffect, useState } from "preact/hooks";
 import { useCan } from "./access";
 import type { WorkAreaState } from "./api";
+import { BacklogFilter, matchesText, narrowBacklog, Swatch } from "./BacklogFilter";
 import { Chooser, type Target } from "./Chooser";
 import {
   BRAINSTORM_TYPE,
@@ -38,10 +39,10 @@ import { typesOf, useDropZone } from "./hooks";
 // `tr`: t() where a task is called `t`.
 import { locale, t as tr } from "./i18n";
 import type { Plain } from "./locales";
-import type { OrderMove, Task, WorkAction } from "./types";
+import { useBacklogLabels, usePref } from "./prefs";
+import type { BacklogLabel, OrderMove, Task, WorkAction } from "./types";
 import { AutoMark } from "./ui/AutoMark";
 import { Button, IconButton } from "./ui/Button";
-import { Field } from "./ui/Field";
 import * as Icon from "./ui/icons";
 import { Sheet } from "./ui/Sheet";
 import { Notice } from "./ui/Surface";
@@ -81,6 +82,8 @@ interface Row {
   meta: string;
   // Picked by auto-pickup: its mark leads the meta line.
   auto?: boolean;
+  // A backlog issue's labels: a line of their own under the meta line, on a wide screen.
+  labels?: BacklogLabel[];
   // Its drag, if it has one: the card's payload.
   drag?: (e: DragEvent) => void;
   // A Queued card: dropped above or below another, it moves there in the run order.
@@ -167,7 +170,11 @@ export function WorkQueue({
   const [dragging, setDragging] = useState<string | null>(null);
   // A Queued card dragged over another: where it would go, above or below it.
   const [dropAt, setDropAt] = useState<{ key: string; above: boolean } | null>(null);
+  // The Backlog's filters (BacklogFilter.tsx): its text, then its labels (this repo's) and
+  // "Hide sub-issues" (every repo's), kept in this browser.
   const [filter, setFilter] = useState("");
+  const [ticked, setTicked] = useBacklogLabels(repo);
+  const [hideSubIssues, setHideSubIssues] = usePref("hideSubIssues");
   // A phone's sheet: open, or its tabs alone.
   const [open, setOpen] = useState(true);
   useEffect(() => {
@@ -193,10 +200,9 @@ export function WorkQueue({
   // Those an action on its way takes: they come back if it fails.
   const sent = new Set(work.pending.map((p) => p.number));
   const issues = backlog?.issues.filter((i) => !sent.has(i.number)) ?? [];
-  const words = filter.trim().toLowerCase();
-  const shown = issues.filter(
-    (i) => !words || `#${i.number} ${i.title ?? ""}`.toLowerCase().includes(words),
-  );
+  // What the labels and the toggle leave (the tab's count), then the text.
+  const narrowed = narrowBacklog(issues, ticked, hideSubIssues);
+  const shown = narrowed.filter((i) => matchesText(i, filter));
 
   // A brainstorm's card let go on Backlog: it stops. A Queued card: it leaves the queue.
   const stopZone = useDropZone(
@@ -355,6 +361,7 @@ export function WorkQueue({
         title: i.title,
         href: i.url,
         meta: i.subIssues ? tr("queue.subIssues", { count: i.subIssues }) : "",
+        labels: i.labels,
         drag:
           starts(picked.mode) || (brainstorms && starts("brainstorm"))
             ? dragOf(ISSUE_TYPE, i.number, i.url, {
@@ -521,7 +528,8 @@ export function WorkQueue({
   const LISTS: Record<QueueTab, { label: Plain; empty: Plain }> = {
     backlog: {
       label: "queue.backlogList",
-      empty: filter ? "queue.backlogNoMatch" : "queue.backlogEmpty",
+      // Its filters left nothing out of open issues.
+      empty: issues.length ? "queue.backlogNoMatch" : "queue.backlogEmpty",
     },
     brainstorm: { label: "queue.brainstormList", empty: "queue.brainstormEmpty" },
     waiting: { label: "queue.waitingList", empty: "queue.waitingEmpty" },
@@ -618,6 +626,16 @@ export function WorkQueue({
             {row.meta}
           </span>
         )}
+        {!touch && !!row.labels?.length && (
+          <span class={styles.labels}>
+            {row.labels.map((l) => (
+              <span key={l.name} class={styles.label}>
+                <Swatch color={l.color} />
+                {l.name}
+              </span>
+            ))}
+          </span>
+        )}
       </div>
     );
     if (touch) {
@@ -684,7 +702,7 @@ export function WorkQueue({
   };
 
   const counts: Record<QueueTab, number> = {
-    backlog: issues.length,
+    backlog: narrowed.length,
     brainstorm: cards.length,
     waiting: waiting.length,
     answers: answering.length,
@@ -772,16 +790,17 @@ export function WorkQueue({
             {tr("queue.unreadable", { error: work.error })}
           </Notice>
         )}
-        {tab === "backlog" && !touch && backlog && issues.length > 0 && (
-          <Field
-            class={styles.filter}
-            label={tr("queue.filter")}
-            hideLabel
-            size="small"
-            lead={<Icon.Search size={14} />}
-            placeholder={tr("queue.filterPlaceholder", { count: issues.length })}
-            value={filter}
-            onInput={(e) => setFilter(e.currentTarget.value)}
+        {tab === "backlog" && backlog && issues.length > 0 && (
+          <BacklogFilter
+            issues={issues}
+            count={narrowed.length}
+            text={filter}
+            onText={setFilter}
+            ticked={ticked}
+            onTicked={setTicked}
+            hideSubIssues={hideSubIssues}
+            onHideSubIssues={setHideSubIssues}
+            touch={touch}
           />
         )}
         {tab === "backlog" && !backlog && !work.error ? (

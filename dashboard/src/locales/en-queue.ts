@@ -30,6 +30,12 @@ export const queue = {
     one: "Filter {count} open issue",
     other: "Filter {count} open issues",
   },
+  "queue.labels": "Labels",
+  "queue.labelsAria": "Filter the backlog by label",
+  "queue.labelsList": "Labels to show",
+  "queue.noLabel": "No label",
+  "queue.clearLabels": "Clear",
+  "queue.hideSubIssues": "Hide sub-issues",
 
   // A tab's hint: what its cards' drags do.
   "queue.hintBacklog":
