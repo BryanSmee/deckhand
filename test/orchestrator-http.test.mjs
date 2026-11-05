@@ -347,3 +347,56 @@ test("access (#731): a login with no action: its totals only, 403 server-wide, n
   assert.equal(all.startedAt, 500);
   assert.equal((await get("/status")).status, 401);
 });
+
+test("api/state: a task's pull request in its fix loop has its review from the store, its place in the queue", async (t) => {
+  // #12's fix run is over; its pull request #13 waits for checks (the store's pulls and
+  // reviews); a maintainer's comment on #12 is queued, the first in the run order.
+  const ctx = oneRun({
+    permissions: permissionsOf({ alice: { "org/repo": ["*"] } }),
+    pulls: {
+      get: (key) => (key === "org/repo#12" ? { number: 13, state: "ready", readyAt: 1 } : null),
+      fill: () => {},
+    },
+    reviews: {
+      entry: (repo, number) =>
+        repo === "org/repo" && number === 13
+          ? {
+              head: "sha-1",
+              at: 2000,
+              fixes: 1,
+              reviewedFixes: 1,
+              fixRounds: 3,
+              rounds: [{ round: 0, at: 2000, head: "sha-0", blocking: 1 }],
+              waiting: { sha: "sha-1", since: 2000 },
+            }
+          : null,
+    },
+    queueOrder: () => [ctx.tasks.get("org/repo#12")],
+    deliverable: () => 0,
+  });
+  ctx.runs.push({
+    id: "org-repo-12-1000",
+    key: "org/repo#12",
+    repo: "org/repo",
+    kind: "issue",
+    mode: "start",
+    taskMode: "work",
+    reason: "review-fix",
+    startedAt: 1000,
+    status: "ok",
+  });
+  ctx.tasks.set("org/repo#12", {
+    repo: "org/repo",
+    id: 12,
+    kind: "issue",
+    running: false,
+    pending: [{ mode: "work", replyTo: 99, text: "Also the docs." }],
+  });
+  const url = await serveHttp(t, ctx);
+  const state = await (await fetch(`${url}/api/state`, { headers: { "x-user": "alice" } })).json();
+  const task = state.tasks.find((x) => x.key === "org/repo#12");
+  assert.deepEqual(
+    [task.state, task.review?.loop, task.review?.rounds, task.position],
+    ["queued", "checks", 3, 1],
+  );
+});

@@ -6,9 +6,10 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { RunError } from "../listener/access.mjs";
 import { agentFor } from "../listener/agents/index.mjs";
-import { customMode } from "../listener/modes.mjs";
 import { createPreparation } from "../listener/preparation.mjs";
 import { parseRepoConfig } from "../listener/repo-config.mjs";
+import { customMode, isApart } from "../listener/modes.mjs";
+import { sandboxArgs } from "../listener/runner/docker.mjs";
 import { sandboxEnv, sandboxSpec, sessionOf } from "../listener/sandbox-spec.mjs";
 import { capabilityPolicies, grantedOf, needsPosixPaths, tempDir, testConfig } from "./helpers.mjs";
 
@@ -175,7 +176,7 @@ test("a research run without the `research` grant stops before anything but its 
 // cancelled while its image is looked up; `env`: more of the operator's settings; `policies`:
 // what decides its capabilities (helpers.mjs capabilityPolicies()), Deckhand's defaults by
 // default; `grants`: what they grant the repo; `mode`: its mode; `pullFails`: GitHub fails to
-// give #7.
+// give #7; `light`: the run's (runs.mjs: isApart() of its mode).
 async function workRun(
   t,
   head,
@@ -197,6 +198,7 @@ async function workRun(
     pullFails = false,
     reopen,
     items = [{ replyTo: 7 }],
+    light = false,
   } = {},
 ) {
   const dir = realpathSync(tempDir(t));
@@ -250,7 +252,7 @@ async function workRun(
       id: "deckhand-org-repo-12-1",
       key: "org/repo#12",
       mode,
-      light: false,
+      light,
       secret: "s".repeat(32),
       record: { agent: "claude", model: "opus", effort: "high" },
       logFile: { write: (text) => written.push(text) },
@@ -827,3 +829,69 @@ test("a mode whose instructions file is missing: the run stops, its reply naming
   const found = audit(async () => ({ text: "Read the diff and list the risks." }));
   assert.equal((await found.run()).instructions, "Read the diff and list the risks.");
 });
+
+// A brainstorm on an issue, then its work, from comments on the issue itself, prepared with the
+// capabilities Deckhand's default policies give each mode, down to their sandboxes' `docker run`
+// options: nothing the brainstorm could write reaches the work.
+test(
+  "a brainstorm and the issue's work share no writable volume: no caches or screenshots for the brainstorm",
+  { skip: needsPosixPaths },
+  async (t) => {
+    // A read-write mount needs every directory from / to its parent out of the sandbox's
+    // user's reach, which a temp dir isn't: /usr is root's everywhere. Nothing is mounted here.
+    const api = "/usr";
+    const grant = `mounts:\n  - root: ${api}\n    read_only: false\n`;
+    const yaml = `setup: npm ci\ncaches: [/home/node/.npm]\nmounts:\n  - path: ${api}\n    read_only: false\n`;
+    const specOf = async (mode) => {
+      const { parts, task, calls } = await workRun(t, "org/repo", {
+        mode,
+        light: isApart(mode),
+        grant,
+        yaml,
+        items: [{ replyTo: 12 }],
+      });
+      const run = { config: testConfig(), task, agent: agentFor("claude"), bot: {} };
+      const spec = sandboxSpec(run, "p", "m", {
+        ...parts.prepared,
+        ...parts.access,
+        engine: parts.engine,
+        ca: parts.ca,
+      });
+      return { spec, task, calls, args: sandboxArgs(spec) };
+    };
+    const light = await specOf("brainstorm");
+    const work = await specOf("work");
+    // The brainstorm's capabilities have no `setup`: no caches asked for, none mounted.
+    assert.ok(!light.task.live.capabilities.includes("setup"));
+    assert.ok(!light.calls.some((c) => c.startsWith("caches")));
+    assert.deepEqual(
+      light.spec.volumes.filter((v) => v.kind === "cache"),
+      [],
+    );
+    assert.ok(work.task.live.capabilities.includes("setup"));
+    assert.deepEqual(
+      work.spec.volumes.filter((v) => v.kind === "cache").map((v) => v.name),
+      ["cache-npm"],
+    );
+    const named = (spec, kind) => spec.volumes.filter((v) => v.kind === kind).map((v) => v.name);
+    assert.deepEqual(named(light.spec, "session"), [
+      "deckhand-org-repo-12-light-workspace",
+      "deckhand-org-repo-12-light-claude",
+    ]);
+    assert.deepEqual(named(work.spec, "session"), [
+      "deckhand-org-repo-12-workspace",
+      "deckhand-org-repo-12-claude",
+    ]);
+    // The granted host path: read-only for the brainstorm (no `push`), writable for the work.
+    assert.ok(light.args.includes(`type=bind,src=${api},dst=${api},readonly`));
+    assert.ok(work.args.includes(`type=bind,src=${api},dst=${api}`));
+    // Screenshots go through the broker: no runs' volume, nor a folder of one, in a sandbox.
+    for (const { args } of [light, work]) {
+      assert.ok(!args.some((a) => /deckhand-runs|volume-subpath|shots/.test(a)), args.join(" "));
+    }
+    // Nothing the brainstorm could write is mounted by the work.
+    const writable = (spec) => new Set(spec.volumes.filter((v) => !v.readOnly).map((v) => v.name));
+    const shared = [...writable(work.spec)].filter((name) => writable(light.spec).has(name));
+    assert.deepEqual(shared, []);
+  },
+);

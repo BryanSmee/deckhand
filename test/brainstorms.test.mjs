@@ -1,10 +1,7 @@
 import assert from "node:assert/strict";
 import { mock, test } from "node:test";
 import { createBrainstorms, createIssueModes, REPLY_GRACE_MS } from "../listener/brainstorms.mjs";
-import { AGENTS } from "../listener/agents/index.mjs";
-import { isApart } from "../listener/modes.mjs";
 import { promptFor } from "../listener/prompts.mjs";
-import { sandboxSpec } from "../listener/sandbox-spec.mjs";
 import { mapStore } from "./helpers.mjs";
 
 test("brainstorms: active, idle once the deadline passes, restored, stopped, ended", async (t) => {
@@ -143,54 +140,9 @@ test("respell: brainstorms and modes saved under another spelling move, timers a
   assert.deepEqual(Object.fromEntries(await maps.again("modes")), { "Org/repo#3": "audit" });
 });
 
-// A brainstorm's sandbox and the issue's work's (sandbox-spec.mjs), as preparation.mjs leaves
-// their parts: the brainstorm gets no caches (no `setup` to fill them).
-test("a brainstorm and the issue's work share no writable volume; work reads what was settled from the issue", () => {
-  const config = { claudeCodeVolume: "deckhand-claude-code", claudeCodeVersion: "2.0.0" };
-  const specOf = (mode, capabilities, caches) => {
-    const live = {
-      id: `deckhand-org-repo-12-${mode}`,
-      key: "org/repo#12",
-      mode,
-      light: isApart(mode),
-      capabilities,
-      fork: false,
-      handoff: false,
-      record: { provider: null, model: "opus", effort: "high" },
-    };
-    const task = { repo: "org/repo", base: "main", kind: "issue", number: 12, live };
-    task.name = "deckhand-org-repo-12";
-    const run = { config, task, agent: AGENTS.claude, bot: { name: "b", email: "b@x" } };
-    return sandboxSpec(run, "p", "m", {
-      image: "deckhand-sandbox",
-      caches,
-      settings: { setup: "npm ci" },
-      mounts: [{ source: "/srv/api", target: "/srv/api", readOnly: false }],
-    });
-  };
-  const light = specOf("brainstorm", ["pull", "image:repo", "read:issues", "read:pulls"], []);
-  const work = specOf(
-    "work",
-    ["pull", "push", "setup", "image:repo", "read:issues"],
-    [{ name: "deckhand-cache-org-repo-npm", path: "/home/node/.npm" }],
-  );
-  const named = (spec, kind) => spec.volumes.filter((v) => v.kind === kind).map((v) => v.name);
-  assert.deepEqual(named(light, "session"), [
-    "deckhand-org-repo-12-light-workspace",
-    "deckhand-org-repo-12-light-claude",
-  ]);
-  assert.deepEqual(named(work, "session"), [
-    "deckhand-org-repo-12-workspace",
-    "deckhand-org-repo-12-claude",
-  ]);
-  // The granted host path: read-only for the brainstorm, writable for the work.
-  const mount = (spec) => spec.volumes.find((v) => v.kind === "mount").readOnly;
-  assert.deepEqual([mount(light), mount(work)], [true, false]);
-  // Nothing the brainstorm could write is mounted by the work.
-  const writable = (spec) => new Set(spec.volumes.filter((v) => !v.readOnly).map((v) => v.name));
-  const shared = [...writable(work)].filter((name) => writable(light).has(name));
-  assert.deepEqual(shared, []);
-  // A fresh session, from the issue: it reads what the brainstorm settled there.
+// The issue's work after a brainstorm: a fresh session, from the issue (its volumes apart from
+// the brainstorm's: preparation.test.mjs). It reads what the brainstorm settled there.
+test("work after a brainstorm reads what was settled from the issue", () => {
   const prompt = promptFor(
     { repo: "org/repo", kind: "issue", number: 12, base: "main", settings: {} },
     { mode: "work", text: "", settings: {}, config: { users: [], hosts: [] }, grant: {} },

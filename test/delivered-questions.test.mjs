@@ -7,7 +7,7 @@ import { test } from "node:test";
 import { createDismissals } from "../listener/dismissals.mjs";
 import { createHttp } from "../listener/http.mjs";
 import { createPicks } from "../listener/picks.mjs";
-import { testConfig } from "./helpers.mjs";
+import { httpCtx, testConfig } from "./helpers.mjs";
 
 const repository = { full_name: "org/repo", default_branch: "main" };
 const installation = { id: 7 };
@@ -35,17 +35,13 @@ function setup(runs, answers = {}) {
   const record =
     (name, value) =>
     (...args) => (calls.push([name, ...args]), value);
-  const ctx = {
+  const ctx = httpCtx({
     config: testConfig({ ALLOWED_USERS: "bob", ALLOWED_REPOS: "org/repo" }),
     log: (line) => logs.push(String(line)),
     skip: (why) => (logs.push(`skip: ${why}`), null),
-    tasks: new Map(),
     runs,
     dismissals: createDismissals({ now: () => ASKED_AT + 3_600_000 }),
     picks: createPicks(),
-    app: { remember: () => {}, identity: () => ({ name: "deckhand[bot]" }) },
-    repoList: { refresh: () => {} },
-    pulls: { record: () => false, ciChanged: async () => {} },
     titles: { set: () => {}, setClosed: record("closed") },
     waits: {
       closed: async () => {},
@@ -58,13 +54,6 @@ function setup(runs, answers = {}) {
     repoSettings: async () => ({ settings: { users: ["bob"] }, errors: [] }),
     workApi: { stale: () => {} },
     autoPickup: { soon: () => {} },
-    reviews: {
-      consider: async () => {},
-      pushed: async () => {},
-      closed: async () => {},
-      checksDone: async () => {},
-    },
-    admit: async () => {},
     github: async (repo, method, path) => {
       calls.push(["github", method, path]);
       const answer = answers[path];
@@ -72,7 +61,7 @@ function setup(runs, answers = {}) {
       if (typeof answer === "number") return new Response("", { status: answer });
       return Response.json(answer);
     },
-  };
+  });
   const http = createHttp(ctx);
   const deliver = (event, payload, redelivered = false) =>
     http.deliver({ event, payload: { installation, repository, sender, ...payload }, redelivered });

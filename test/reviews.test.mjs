@@ -43,6 +43,7 @@ import {
   hasOpa,
   fileMap,
   mapStore,
+  until,
 } from "./helpers.mjs";
 
 const config = { ...testConfig(), bot: "deckhand-app[bot]" };
@@ -2493,9 +2494,11 @@ test("review.ci: each step logged: waiting, a busy task, the CI fix run, no revi
   );
   assert.deepEqual([s.accepted, s.replies], [[], []]);
   going = false;
+  // runEnded() alone decides it again (not waited for: its log line is), no tick().
   s.reviews.runEnded("org/repo");
-  await s.reviews.tick();
-  has("org/repo#pr-5: CI failed on sha-1, starting a CI fix run (1 of 1)");
+  const started = "org/repo#pr-5: CI failed on sha-1, starting a CI fix run (1 of 1)";
+  await until(() => logged.includes(started), { what: started });
+  assert.equal(s.of("ci-fix").length, 1);
   const [item] = s.of("ci-fix");
   assert.deepEqual([item.trigger, item.id, item.replyTo], ["work", "12", 5]);
   assert.match(item.text, /^CI failed on pull request #5 at sha-1/);

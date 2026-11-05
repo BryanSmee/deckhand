@@ -920,3 +920,76 @@ test("prompts: a review is told who files its follow-ups, Deckhand unless review
   assert.match(off, /it is listed there for the maintainer already\./);
   assert.doesNotMatch(off, /<filed|Deckhand files each one/);
 });
+
+test("openingMessages: another agent taking over is handed who stopped, why, what it left and the task", () => {
+  // A fallback: switched names the entry that failed, the failed run's last message rides on
+  // the next entry (runs.mjs).
+  const fell = openingMessages(
+    "work",
+    "Fix the login",
+    {
+      entry: { agent: "codex", provider: "openai", result: "API Error: 529 Overloaded" },
+      switched: { from: "claude@anthropic", reason: "overloaded (529)" },
+      takeOver: true,
+    },
+    { started: true },
+  );
+  // The first message is the task alone, no retry note: the hand-off says it.
+  assert.doesNotMatch(fell.message, /Your provider failed/);
+  assert.deepEqual(
+    { ...fell.handoff, body: undefined },
+    {
+      from: "Claude (anthropic)",
+      reason: "overloaded (529)",
+      result: "API Error: 529 Overloaded",
+      body: undefined,
+    },
+  );
+  const text = handoffMessage(fell.handoff);
+  assert.match(
+    text,
+    /^Claude \(anthropic\) was working on this and stopped, as its provider failed/,
+  );
+  assert.match(text, /Its last message:\n\n> API Error: 529 Overloaded/);
+  assert.match(text, /What it was asked:\n\n[^]*Fix the login/);
+  // A new session: the task is handed as a run that hasn't started.
+  assert.equal(
+    fell.handoff.body,
+    firstMessage({ mode: "work", text: "Fix the login", started: false }),
+  );
+  // /agent: the issue's previous run, its summary as what it left; nothing failed.
+  const picked = openingMessages(
+    "work",
+    "Go on",
+    {
+      entry: { agent: "codex", provider: "openai", result: "not this" },
+      handedBy: "agent",
+      takeOver: true,
+    },
+    {
+      started: true,
+      previous: { agent: "claude", provider: "anthropic", credential: "key", summary: "All done." },
+    },
+  );
+  assert.equal(picked.handoff.from, "Claude (anthropic, API key)");
+  assert.equal(picked.handoff.reason, null);
+  assert.equal(picked.handoff.result, "All done.");
+  const asked = handoffMessage(picked.handoff);
+  assert.match(
+    asked,
+    /^Claude \(anthropic, API key\) was working on this before; this comment asked/,
+  );
+  assert.match(asked, /Its last message:\n\n> All done\./);
+  // The same agent on another provider hands nothing over.
+  const retry = openingMessages(
+    "work",
+    "Fix it",
+    {
+      entry: { agent: "claude", provider: "openrouter" },
+      switched: { reason: "x" },
+      takeOver: false,
+    },
+    { started: true },
+  );
+  assert.equal(retry.handoff, false);
+});

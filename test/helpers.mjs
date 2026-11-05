@@ -450,6 +450,31 @@ export function testConfig(overrides = {}) {
   return loadConfig({ ALLOWED_USERS: "alice", ...overrides });
 }
 
+// What createHttp() (listener/http.mjs) needs to take a delivery on org/repo, every service a
+// no-op: `overrides` replace whole entries (a test's own reviews, waits, GitHub…).
+export function httpCtx(overrides = {}) {
+  return {
+    config: testConfig({ ALLOWED_REPOS: "org/repo" }),
+    log: () => {},
+    skip: () => null,
+    tasks: new Map(),
+    runs: [],
+    app: { remember: () => {}, identity: () => ({ name: "deckhand[bot]" }) },
+    repoList: { refresh: () => {} },
+    pulls: { record: () => false, ciChanged: async () => {} },
+    titles: { setClosed: () => {} },
+    waits: { recheck: async () => null, closed: async () => {}, merged: async () => null },
+    reviews: {
+      consider: async () => {},
+      pushed: async () => {},
+      closed: async () => {},
+      checksDone: async () => {},
+    },
+    admit: async () => {},
+    ...overrides,
+  };
+}
+
 // A fake GitHub's fetch: each call ({ method, path, auth, body }, `path` with its query) goes
 // to `calls`, and `answer(call)` answers it: a Response, a value sent as JSON, or nothing for
 // a 404.

@@ -60,6 +60,8 @@ function setup(
   const logs = [];
   const done = [];
   const settled = [];
+  const store = openStore("memory:");
+  t.after(() => store.close());
   const ctx = {
     config: { ...testConfig(), ...config },
     log: (line) => logs.push(line),
@@ -72,7 +74,7 @@ function setup(
     runs: [],
     tasks: new Map(),
     // The runs' summaries (runlog.mjs saveSummary()).
-    store: openStore("memory:"),
+    store,
     broker: {
       runOf: () => ({ tokens: new Set(tokens), scrubs }),
       secretsOf: () => [],
@@ -190,6 +192,34 @@ test("a CI fix run that is over: the reviews get its outcome and the reruns it m
       status: "ok",
       reruns: [{ run_id: 7, sha: "sha-1", at: 1 }],
     },
+  ]);
+});
+
+// A run's end (cleanUp()), the reviews recording what they hear: `handled`, what it answered.
+async function endRun(t, handled) {
+  const { ctx, runner, task, following } = setup(t, { mode: "work" });
+  const heard = [];
+  ctx.reviews = {
+    runEnded: (repo) => heard.push(["runEnded", repo]),
+    fixed: async (run) => heard.push(["fixed", run]),
+    ciFixed: async (run) => heard.push(["ciFixed", run]),
+  };
+  task.base = "trunk";
+  task.live.light = false;
+  task.live.handled = handled;
+  runner.out(result("Done."));
+  await runner.kill();
+  await following;
+  return heard;
+}
+
+test("a run's end: the CI step told of any run, a review's fix run's outcome to fixed()", async (t) => {
+  // An ordinary run: its repo's CI waits decided again (a CI fix run may wait for the task).
+  assert.deepEqual(await endRun(t, []), [["runEnded", "org/repo"]]);
+  // A review's fix run, replying on #13: its outcome, for the review of what it pushed.
+  assert.deepEqual(await endRun(t, [{ reason: "review-fix", replyTo: 13 }]), [
+    ["fixed", { repo: "org/repo", number: 13, base: "trunk", status: "ok" }],
+    ["runEnded", "org/repo"],
   ]);
 });
 
@@ -941,6 +971,8 @@ async function starting(t, { env = {}, items, yaml = "", previous = null }) {
   const answers = [];
   const provided = [];
   const moved = [];
+  const store = openStore("memory:");
+  t.after(() => store.close());
   const ctx = {
     config,
     log: (line) => logs.push(line),
@@ -950,7 +982,7 @@ async function starting(t, { env = {}, items, yaml = "", previous = null }) {
     runs: previous ? [previous] : [],
     runsById: new Map(),
     tasks: new Map(),
-    store: openStore("memory:"),
+    store,
     titles: { get: () => null },
     broker: {
       register: () => {},

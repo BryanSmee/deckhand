@@ -1,11 +1,13 @@
-// What the orchestrator's deliveries (http.mjs deliver()) pass on to the waits (waits.mjs),
-// the conflicts' watcher (conflicts.mjs) and the dashboard's pull requests (pulls.mjs): an issue
-// closed, a pull request merged. The waits are waits.mjs's own, with a fake GitHub.
+// What the orchestrator's deliveries (http.mjs deliver()) pass on: to the waits (waits.mjs),
+// the conflicts' watcher (conflicts.mjs) and the dashboard's pull requests (pulls.mjs), an issue
+// closed, a pull request merged; to the reviews and reviewers, a pull request's and a workflow
+// run's (#808). The waits are waits.mjs's own, with a fake GitHub; the reviews record what they
+// were asked, their decisions being reviews.test.mjs's.
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createHttp } from "../listener/http.mjs";
 import { createWaits } from "../listener/waits.mjs";
-import { testConfig } from "./helpers.mjs";
+import { httpCtx } from "./helpers.mjs";
 
 const repository = { full_name: "org/repo", default_branch: "trunk" };
 
@@ -44,30 +46,15 @@ function setup() {
     resume: async (item) => (s.resumed.push(item), true),
     later: () => {},
   });
-  const ctx = {
-    config: testConfig({ ALLOWED_REPOS: "org/repo" }),
-    log: () => {},
-    skip: () => null,
-    tasks: new Map(),
-    runs: [],
-    app: { remember: () => {}, identity: () => ({ name: "deckhand[bot]" }) },
-    repoList: { refresh: () => {} },
+  const ctx = httpCtx({
     pulls: {
       record: () => false,
       ciChanged: async () => {},
       baseMoved: (repo) => s.moved.push(repo),
     },
     conflicts: { soon: async (repo) => s.soon.push(repo) },
-    titles: { setClosed: () => {} },
-    reviews: {
-      consider: async () => {},
-      pushed: async () => {},
-      closed: async () => {},
-      checksDone: async () => {},
-    },
     waits: s.waits,
-    admit: async () => {},
-  };
+  });
   s.http = createHttp(ctx);
   return s;
 }
@@ -144,4 +131,76 @@ test("conflicts: a merge into the default branch checks its pull requests soon, 
   // Into another branch: the default branch didn't move.
   await s.http.deliver(merged("release"));
   assert.deepEqual([s.soon, s.moved], [["org/repo"], ["org/repo"]]);
+});
+
+// The orchestrator's deliveries, with fake reviews and reviewers recording their calls.
+function deliveries() {
+  const calls = [];
+  const logged = [];
+  const record = (name) => async (event, payload) => calls.push([name, event, payload]);
+  const ctx = httpCtx({
+    log: (line) => logged.push(line),
+    reviews: {
+      consider: record("consider"),
+      pushed: record("pushed"),
+      closed: record("closed"),
+      checksDone: record("checksDone"),
+    },
+    reviewers: { ready: record("reviewers.ready") },
+  });
+  return { http: createHttp(ctx), calls, logged };
+}
+
+const base = {
+  installation: { id: 1 },
+  repository: { full_name: "org/repo", default_branch: "trunk" },
+  sender: { login: "deckhand[bot]", type: "Bot" },
+};
+const pull = {
+  number: 13,
+  body: "Closes #12",
+  state: "open",
+  draft: false,
+  user: { login: "deckhand[bot]", type: "Bot" },
+  head: { sha: "head-1", ref: "issue-12-fix", repo: { full_name: "org/repo" } },
+};
+
+test("a pull_request delivery goes to the reviews (ready, pushed, closed) and the reviewers", async () => {
+  const { http, calls, logged } = deliveries();
+  const ready = { ...base, action: "ready_for_review", pull_request: pull };
+  await http.deliver({ event: "pull_request", payload: ready });
+  assert.deepEqual(
+    calls.map(([name, event, payload]) => [name, event, payload === ready]),
+    [
+      ["consider", "pull_request", true],
+      ["reviewers.ready", "pull_request", true],
+      ["pushed", "pull_request", true],
+      ["closed", "pull_request", true],
+    ],
+  );
+  // Merged: the follow-ups' closed() has it too.
+  calls.length = 0;
+  const merged = {
+    ...base,
+    action: "closed",
+    pull_request: { ...pull, state: "closed", merged_at: "2026-11-02T10:00:00Z" },
+  };
+  await http.deliver({ event: "pull_request", payload: merged });
+  assert.ok(calls.some(([name, , payload]) => name === "closed" && payload === merged));
+  assert.doesNotMatch(logged.join("\n"), /failed/);
+});
+
+test("a workflow_run delivery goes to the reviews' checksDone() alone", async () => {
+  const { http, calls } = deliveries();
+  const done = {
+    ...base,
+    sender: { login: "github-actions[bot]", type: "Bot" },
+    action: "completed",
+    workflow_run: { id: 5, head_sha: "head-1", status: "completed", conclusion: "failure" },
+  };
+  await http.deliver({ event: "workflow_run", payload: done });
+  assert.deepEqual(
+    calls.map(([name, event, payload]) => [name, event, payload === done]),
+    [["checksDone", "workflow_run", true]],
+  );
 });
