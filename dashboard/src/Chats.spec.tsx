@@ -60,6 +60,8 @@ test("the list: the chats with how many the user keeps, Chats among the views, a
   const chat = await screen.findByRole("region", { name: "Try the build" });
   expect(within(chat).getByText("acme/app")).toBeTruthy();
   expect(within(chat).getByText("Stopped")).toBeTruthy();
+  // Opened from All's list, as a task from All's tasks: the header stays All's.
+  expect(screen.getByRole("heading", { name: "All repositories", level: 1 })).toBeTruthy();
 });
 
 test("the header: All's on every repository's chats, no GitHub link", async () => {
@@ -137,16 +139,37 @@ test("Chats from a repository's tasks: that repository's; Tasks and g t go back 
   await waitFor(() => expect(location.hash).toMatch(/^#\/acme\/api(\?|$)/));
 });
 
-test("New chat on a repository's page: that repository first", async () => {
+test("New chat on a repository's page: that repository first; one on another opens on its page", async () => {
   history.replaceState(null, "", "#/acme/app/chats");
-  show(makeChats());
+  const list = makeChats();
+  const made = makeChat({ id: "aaaaaaaaaaaaaaaa", repo: "acme/api", title: "Hi" });
+  show(list, {
+    "POST api/chats": () => {
+      list.chats = [made];
+      return { chat: made };
+    },
+  });
   await newChat();
   const dialog = screen.getByRole("dialog", { name: "New chat" });
   const repo = within(dialog).getByRole("combobox", { name: "Repository" }) as HTMLSelectElement;
   expect(repo.value).toBe("acme/app");
+  fireEvent.change(repo, { target: { value: "acme/api" } });
+  fireEvent.click(within(dialog).getByRole("button", { name: "Start the chat" }));
+  await waitFor(() => expect(location.hash).toBe("#/acme/api/chats/aaaaaaaaaaaaaaaa"));
+  expect(await screen.findByRole("heading", { name: "Hi", level: 2 })).toBeTruthy();
+  expect(screen.getByRole("heading", { name: "acme/api", level: 1 })).toBeTruthy();
 });
 
-test("a phone: the top bar names the repository, its Chats tab stays on it", async () => {
+test("another repository's chat under a repository's chats: no such chat there", async () => {
+  history.replaceState(null, "", "#/acme/app/chats/fedcba9876543210");
+  show(makeChats([makeChat({ id: "fedcba9876543210", repo: "acme/api", title: "Elsewhere" })]));
+  expect(
+    await screen.findByText("No such chat on acme/app: it was deleted, or it isn't yours."),
+  ).toBeTruthy();
+  expect(screen.queryByRole("region", { name: "Elsewhere" })).toBeNull();
+});
+
+test("a phone: the top bar names the repository, its Chats tab stays on it; All's on All's tasks", async () => {
   vi.stubGlobal("matchMedia", () => ({
     matches: false,
     addEventListener() {},
@@ -159,6 +182,12 @@ test("a phone: the top bar names the repository, its Chats tab stays on it", asy
   const chats = await tabs.findByRole("link", { name: "Chats" });
   expect(chats.getAttribute("href")).toBe("#/acme/app/chats");
   expect(chats.getAttribute("aria-current")).toBe("page");
+  // From All's tasks, as their Tasks tab: every repository's chats, not the last one's.
+  history.replaceState(null, "", "#/tasks");
+  window.dispatchEvent(new HashChangeEvent("hashchange"));
+  await waitFor(() =>
+    expect(tabs.getByRole("link", { name: "Chats" }).getAttribute("href")).toBe("#/chats"),
+  );
 });
 
 test("the limit: New chat disabled past it, with the reason", async () => {

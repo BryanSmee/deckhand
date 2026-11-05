@@ -571,14 +571,14 @@ export function TopBar(props: TopBarProps) {
 }
 
 // The phone's tab bar. Tasks, Board and Chats are the repository shown, else the one last open
-// here. Else Tasks and Chats are All's (and stay All's on them), and Board the most recently
+// here. Else Tasks and Chats are All's (and stay All's on either), and Board the most recently
 // active repository's: the board is one repository's.
 export function TabBar({ state, route, lastRepo, chats }: Common & { lastRepo: string | null }) {
   const can = useCan();
   const counts = repoCounts(state?.tasks ?? [], route.repo);
   const onAllTasks = route.page === "tasks" && !route.repo;
   const tasksRepo = route.repo ?? (onAllTasks ? null : lastRepo);
-  const chatsRepo = route.repo ?? (route.page === "chats" ? null : lastRepo);
+  const chatsRepo = route.repo ?? (route.page === "chats" || onAllTasks ? null : lastRepo);
   const repo = route.repo ?? lastRepo ?? counts.repos[0]?.repo ?? null;
   const tabs = [
     {
