@@ -29,6 +29,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { performance } from "node:perf_hooks";
 import { fileURLToPath } from "node:url";
+import { keepLast } from "../lib/capped.mjs";
 import {
   BY_FILE_NAME,
   byFile,
@@ -384,8 +385,7 @@ export function createEngine({
       if (check.timedOut) return { error: "the policies' check took too long", errorLayer: null };
       // A compile error stays one until the files change: remembered.
       const failed = { error: check.errors.text, errorLayer: check.errors.list[0].layer };
-      if (failedChecks.size >= MAX_CHECKED) failedChecks.delete(failedChecks.keys().next().value);
-      failedChecks.set(digest, failed);
+      keepLast(failedChecks, digest, failed, MAX_CHECKED);
       return failed;
     }
     try {

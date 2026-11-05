@@ -27,6 +27,7 @@
 // What GitHub answers for the lookups is kept a while: whether a pull request or repository is
 // a fork's doesn't change, and a commit stays on a branch it was found on.
 import { gunzipSync } from "node:zlib";
+import { keepLast } from "../lib/capped.mjs";
 import { headInRepo } from "./events.mjs";
 import { pktLines, pktReader } from "./pkt-line.mjs";
 
@@ -365,8 +366,7 @@ function kept(ms, max, now) {
       return entry.value;
     },
     set(key, value) {
-      if (map.size >= max) map.delete(map.keys().next().value);
-      map.set(key, { value, at: now() });
+      keepLast(map, key, { value, at: now() }, max);
     },
   };
 }

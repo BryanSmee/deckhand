@@ -39,6 +39,7 @@ import {
   rulesOf,
   SET_FAMILIES,
 } from "../lib/policy-files.mjs";
+import { keepLast } from "../lib/capped.mjs";
 import { redact } from "../lib/redact.mjs";
 import { BUILT_IN } from "./modes.mjs";
 import { validRepo } from "./repo-config.mjs";
@@ -551,9 +552,7 @@ export function createPolicies({
         // The branches too old even for `stale` go first, so a repo keeps a few at most.
         for (const [r, entry] of refs) if (now() - entry.at > STALE_LISTING_MS) refs.delete(r);
         // Moved last, so that the oldest listing is first to go.
-        listings.delete(key);
-        if (listings.size >= MAX_ACCESS) listings.delete(listings.keys().next().value);
-        listings.set(key, refs.set(ref, { at: now(), listed }));
+        keepLast(listings, key, refs.set(ref, { at: now(), listed }), MAX_ACCESS);
       }
       return listed;
     } finally {
@@ -571,8 +570,8 @@ export function createPolicies({
       if (entry.type !== "file" || !FILE.test(entry.name)) continue;
       if (!blobs.has(entry.sha)) {
         const blob = await getJson(github, repo, `/repos/${repo}/git/blobs/${entry.sha}`);
-        if (blobs.size >= MAX_BLOBS) blobs.delete(blobs.keys().next().value);
-        blobs.set(entry.sha, Buffer.from(blob.content ?? "", blob.encoding ?? "base64").toString());
+        const text = Buffer.from(blob.content ?? "", blob.encoding ?? "base64").toString();
+        keepLast(blobs, entry.sha, text, MAX_BLOBS);
       }
       files.push({ name: entry.name, url: entry.html_url ?? null, text: blobs.get(entry.sha) });
     }
@@ -953,9 +952,7 @@ export function createPolicies({
         }
       }
       // Moved last, as listings are, so that the answer given longest ago is first to go.
-      actionsKept.delete(key);
-      if (actionsKept.size >= MAX_ACCESS) actionsKept.delete(actionsKept.keys().next().value);
-      actionsKept.set(key, { at: now(), said: [...warnings] });
+      keepLast(actionsKept, key, { at: now(), said: [...warnings] }, MAX_ACCESS);
       return [...warnings];
     }
   }
@@ -1047,8 +1044,7 @@ export function createPolicies({
         log(`${repo}: the grant ${grant} refused: ${reasons.join("; ")}`);
       }
       const answer = { granted: given, files, denied };
-      if (granted.size >= MAX_GRANTS) granted.delete(granted.keys().next().value);
-      granted.set(key, { at: now(), said: answer });
+      keepLast(granted, key, { at: now(), said: answer }, MAX_GRANTS);
       return answer;
     }
   }
@@ -1124,18 +1120,14 @@ export function createPolicies({
           if (current !== key) {
             const names = new Set([...(renamed.get(current) ?? []), key]);
             // Moved last, as listing() moves its listings, so that the oldest is first to go.
-            renamed.delete(current);
-            if (renamed.size >= MAX_ACCESS) renamed.delete(renamed.keys().next().value);
-            renamed.set(current, names);
+            keepLast(renamed, current, names, MAX_ACCESS);
             info = { ...info, full_name: name };
           }
           // Forgotten while it was read (a privatization, a push): given to this caller alone, as
           // listing() does, so that a `private: false` read before it isn't kept ACCESS_MS after.
           // Otherwise moved last too, a fresh read.
           if (!read.forgotten) {
-            repoInfos.delete(key);
-            if (repoInfos.size >= MAX_ACCESS) repoInfos.delete(repoInfos.keys().next().value);
-            repoInfos.set(key, { at: now(), info });
+            keepLast(repoInfos, key, { at: now(), info }, MAX_ACCESS);
           }
         } finally {
           done(key, read);
@@ -1260,11 +1252,9 @@ export function createPolicies({
           error: null,
         };
       }
-      // Moved last too: an expired entry asked again isn't the first to go.
-      accessKept.delete(key);
-      if (accessKept.size >= MAX_ACCESS) accessKept.delete(accessKept.keys().next().value);
       answer = frozen(answer);
-      accessKept.set(key, { at: now(), said: answer });
+      // Moved last too: an expired entry asked again isn't the first to go.
+      keepLast(accessKept, key, { at: now(), said: answer }, MAX_ACCESS);
       return answer;
     }
   }
