@@ -172,8 +172,9 @@ export function createPermissions({ policies = null, usersOf = () => null, infoO
 
   // What the dashboard shows `login` (api/state's `access`, #732): their server-wide actions,
   // and on each of `repos` (names) they see, the repo's actions and starts (repoActions()), by
-  // the repo's name in lower case, each as last listed (answerOf()'s `listed`). The repos they
-  // don't see aren't named.
+  // the repo's name in lower case, each as last listed (answerOf()'s `listed`, always: it only
+  // decides which controls are shown, never an action, which its route decides on its own). The
+  // repos they don't see aren't named.
   async function dashboard(login, repos) {
     const names = new Map();
     for (const repo of repos) if (repo) names.set(repo.toLowerCase(), repo);

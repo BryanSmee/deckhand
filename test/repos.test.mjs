@@ -328,13 +328,14 @@ test("cached: a page load doesn't read every config again; deliveries refresh it
 });
 
 test("infoOf: what GitHub said of a repo when last listed, for the access filters (#783)", async () => {
-  const { list } = setup({
+  const { list, gh, clock } = setup({
     first: [
       info("org/app", { default_branch: "trunk", private: false }),
       info("org/lib"),
       info("org/odd", { default_branch: null }),
     ],
   });
+  const listings = () => gh.calls.filter((c) => c.startsWith("GET /app/installations")).length;
   assert.equal(list.infoOf("org/app"), null);
   await list.list();
   assert.deepEqual(list.infoOf("Org/App"), {
@@ -347,6 +348,27 @@ test("infoOf: what GitHub said of a repo when last listed, for the access filter
   // GitHub gave no default branch: none, never guessed (access() reads it then).
   assert.equal(list.infoOf("org/odd"), null);
   assert.equal(list.infoOf(null), null);
+  assert.equal(listings(), 1);
+
+  // LIST_MS later, nothing has listed them again (api/state and /status never do): none, until
+  // the listing it starts answers.
+  clock.now += LIST_MS;
+  assert.equal(list.infoOf("org/app"), null);
+  await list.names();
+  assert.equal(listings(), 2);
+  assert.equal(list.infoOf("org/app").default_branch, "trunk");
+
+  // A push to its default branch: that repo's read again by name; an installation's delivery, or
+  // the Refresh button: all of them.
+  list.refresh("Org/App");
+  assert.equal(list.infoOf("org/app"), null);
+  assert.equal(list.infoOf("org/lib").default_branch, "main");
+  list.refresh();
+  assert.equal(list.infoOf("org/lib"), null);
+  await list.names();
+  assert.equal(list.infoOf("org/app").default_branch, "trunk");
+  list.refreshAll();
+  assert.equal(list.infoOf("org/app"), null);
 });
 
 test("which deliveries refresh the list", () => {
