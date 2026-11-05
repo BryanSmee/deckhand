@@ -184,14 +184,22 @@ test("components/redis and setup.md: each user's ACL allows every command the st
     service,
     line.replace("$scan", SCANS.includes(service) ? " +scan" : ""),
   ]);
-  acls.push([
-    "setup.md",
-    /^(user deckhand on .*)$/m.exec(
-      readFileSync(join(import.meta.dirname, "..", "docs", "setup.md"), "utf8"),
-    )[1],
-  ]);
+  // setup.md's users, one per service as here, each on its own prefix (#777).
+  const setup = [
+    ...readFileSync(join(import.meta.dirname, "..", "docs", "setup.md"), "utf8").matchAll(
+      /^(user ([a-z]+) on .*)$/gm,
+    ),
+  ].map(([, acl, service]) => [service, acl]);
+  assert.deepEqual(
+    setup.map(([service]) => service),
+    services,
+  );
+  for (const [service, acl] of setup) {
+    assert.ok(acl.includes(` ~deckhand:${service}:* `), `setup.md: ${service}'s keys`);
+    acls.push([`setup.md: ${service}`, acl]);
+  }
   for (const [who, acl] of acls) {
-    const scan = who === "setup.md" || SCANS.includes(who);
+    const scan = SCANS.includes(who.replace("setup.md: ", ""));
     assert.deepEqual(
       commands.filter((c) => (scan || c !== "scan") && !allows(`${acl} `, c)),
       [],
