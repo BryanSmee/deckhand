@@ -13,13 +13,13 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 import { test } from "node:test";
 import { pathToFileURL } from "node:url";
 import { randomBytes } from "node:crypto";
 import { sealWith } from "../lib/seal.mjs";
 import { countKeys, nextEpoch, openStore, storable, values } from "../lib/store.mjs";
-import { fileStore } from "../lib/store-file.mjs";
+import { fileName, fileStore } from "../lib/store-file.mjs";
 import { writeJsonAtomic } from "../lib/files.mjs";
 import { isRoot, needsModes, needsPosixRename, tempDir } from "./helpers.mjs";
 import { storeContract } from "./store-contract.mjs";
@@ -161,7 +161,7 @@ test("file: keys under `apart` are a file each, out of state.json, seen by anoth
   await one.set("queue", [1]);
   const state = JSON.parse(readFileSync(join(dir, "state.json"), "utf8"));
   assert.deepEqual(Object.keys(state.keys), ["queue"]);
-  assert.equal(readdirSync(join(dir, "keys")).length, 2);
+  assert.equal(readdirSync(join(dir, "keys", "summaries%2F")).length, 2);
   // Another copy on the folder: what this one wrote, at once.
   assert.deepEqual(await other.get("summaries/a"), { id: "a" });
   assert.deepEqual((await other.keys("summaries/")).keys.sort(), [long, "summaries/a"].sort());
@@ -171,13 +171,13 @@ test("file: keys under `apart` are a file each, out of state.json, seen by anoth
   assert.equal(await one.get("summaries/a"), null);
   assert.deepEqual((await one.keys("summaries/")).keys, [long]);
   // Listed from their files' names: a file's content isn't read but for a name cut and hashed.
-  writeFileSync(join(dir, "keys", "summaries%2Fb"), "not read");
+  writeFileSync(join(dir, "keys", "summaries%2F", "summaries%2Fb"), "not read");
   assert.deepEqual((await other.keys("summaries/")).keys.sort(), [long, "summaries/b"].sort());
   await other.delete("summaries/b");
   // With a TTL: in state.json, out of its file, as long as it lasts.
   await one.set("summaries/c", 1);
   await one.set("summaries/c", 2, { ttlMs: 60_000 });
-  assert.equal(readdirSync(join(dir, "keys")).length, 1);
+  assert.equal(readdirSync(join(dir, "keys", "summaries%2F")).length, 1);
   assert.deepEqual(await other.get("summaries/c"), 2);
   assert.deepEqual((await other.keys("summaries/c")).keys, ["summaries/c"]);
   await other.set("summaries/c", 3);
@@ -189,13 +189,15 @@ test("file: keys under `apart` are a file each, out of state.json, seen by anoth
   await one.delete("summaries/c");
   assert.equal(await other.get("summaries/c"), null);
   // A lease renewed: state.json only, the keys' files untouched.
-  const before = readdirSync(join(dir, "keys")).map((f) =>
-    readFileSync(join(dir, "keys", f), "utf8"),
+  const before = readdirSync(join(dir, "keys", "summaries%2F")).map((f) =>
+    readFileSync(join(dir, "keys", "summaries%2F", f), "utf8"),
   );
   const lease = await one.acquire("orchestrator", "me", { ttlMs: 5000 });
   await one.renew("orchestrator", "me", lease.epoch, { ttlMs: 5000 });
   assert.deepEqual(
-    readdirSync(join(dir, "keys")).map((f) => readFileSync(join(dir, "keys", f), "utf8")),
+    readdirSync(join(dir, "keys", "summaries%2F")).map((f) =>
+      readFileSync(join(dir, "keys", "summaries%2F", f), "utf8"),
+    ),
     before,
   );
 });
@@ -245,12 +247,12 @@ test("file: keys newly under `apart` move out of state.json on moveApart(), only
   assert.equal(await old.delete("titles/c"), true);
   assert.equal(await store.get("titles/c"), null);
   assert.deepEqual(saved().sort(), ["queue", "titles/a", "titles/b"]);
-  assert.equal(existsSync(join(dir, "keys", "titles%2Fa")), false);
+  assert.equal(existsSync(join(dir, "keys", "titles%2F", "titles%2Fa")), false);
   // A key's file that can't be written: the call fails, nothing moved, read and listed once.
-  mkdirSync(join(dir, "keys", "titles%2Fa"));
-  writeFileSync(join(dir, "keys", "titles%2Fa", "x"), "");
+  mkdirSync(join(dir, "keys", "titles%2F", "titles%2Fa"), { recursive: true });
+  writeFileSync(join(dir, "keys", "titles%2F", "titles%2Fa", "x"), "");
   await assert.rejects(store.moveApart());
-  rmSync(join(dir, "keys", "titles%2Fa"), { recursive: true });
+  rmSync(join(dir, "keys", "titles%2F", "titles%2Fa"), { recursive: true });
   // state.json that can't be written: the same, its file written, the key still in state.json.
   fail = true;
   await assert.rejects(store.moveApart(), { code: "ENOSPC" });
@@ -262,10 +264,102 @@ test("file: keys newly under `apart` move out of state.json on moveApart(), only
   assert.equal(await store.moveApart(), 1);
   assert.equal(await store.moveApart(), 0);
   assert.deepEqual(saved().sort(), ["queue", "titles/b"]);
-  assert.deepEqual(readdirSync(join(dir, "keys")), ["titles%2Fa"]);
+  assert.deepEqual(readdirSync(join(dir, "keys", "titles%2F")), ["titles%2Fa"]);
   assert.equal(await store.get("titles/a"), "A");
   assert.equal(await store.get("titles/b"), "B");
   assert.deepEqual((await store.keys("titles/")).keys, ["titles/a", "titles/b"]);
+});
+
+// #773: a folder per prefix of `apart`, so listing one map reads the names of its own items
+// alone, not the thousands of summaries beside them.
+test("file: each prefix of `apart` a folder of its own, a listing reading only its prefix's", async (t) => {
+  const dir = tempDir(t);
+  const read = [];
+  const readdir = (path, ...rest) => {
+    read.push(relative(join(dir, "keys"), path));
+    return readdirSync(path, ...rest);
+  };
+  const apart = ["summaries/", "titles/", "titles/acme/"];
+  const store = fileStore({ dir, readdir, apart });
+  t.after(() => store.close());
+  // No folder until a write in it: a copy of a release before #773, still acting while this one
+  // waits for its lease, lists keys/ whole, and would take a folder for a key's file.
+  assert.equal(await store.get("titles/x#1"), null);
+  assert.deepEqual((await store.keys("")).keys, []);
+  assert.equal(await store.moveApart(), 0);
+  assert.deepEqual(readdirSync(join(dir, "keys")), []);
+  await store.set("summaries/a", 1);
+  assert.deepEqual(readdirSync(join(dir, "keys")), ["summaries%2F"]);
+  await store.set("titles/x#1", "X");
+  await store.set("titles/acme/y#1", "Y");
+  await store.set("queue", [1]);
+  // Each key in the folder of the longest prefix it starts with.
+  assert.deepEqual(readdirSync(join(dir, "keys")).sort(), [
+    "summaries%2F",
+    "titles%2F",
+    "titles%2Facme%2F",
+  ]);
+  assert.deepEqual(readdirSync(join(dir, "keys", "titles%2F")), ["titles%2Fx%231"]);
+  assert.deepEqual(readdirSync(join(dir, "keys", "titles%2Facme%2F")), ["titles%2Facme%2Fy%231"]);
+  const listed = async (prefix) => {
+    read.length = 0;
+    const { keys } = await store.keys(prefix);
+    return [keys, [...read].sort()];
+  };
+  assert.deepEqual(await listed("summaries/"), [["summaries/a"], ["summaries%2F"]]);
+  assert.deepEqual(await listed("titles/"), [
+    ["titles/acme/y#1", "titles/x#1"],
+    ["titles%2F", "titles%2Facme%2F"],
+  ]);
+  assert.deepEqual(await listed("titles/acme/"), [["titles/acme/y#1"], ["titles%2Facme%2F"]]);
+  assert.deepEqual(await listed("titles/x"), [["titles/x#1"], ["titles%2F"]]);
+  assert.deepEqual(await listed("queue"), [["queue"], []]);
+  assert.deepEqual((await listed(""))[0], [
+    "queue",
+    "summaries/a",
+    "titles/acme/y#1",
+    "titles/x#1",
+  ]);
+  // A file in the wrong prefix's folder isn't listed: its key is in the other folder, or nowhere.
+  writeFileSync(join(dir, "keys", "titles%2F", "titles%2Facme%2Fz"), "{}");
+  assert.deepEqual((await listed("titles/"))[0], ["titles/acme/y#1", "titles/x#1"]);
+  // Another process, with the same prefixes, reads them the same.
+  assert.equal(await fileStore({ dir, apart }).get("titles/acme/y#1"), "Y");
+});
+
+// #773: the files a release before kept right in keys/ go to their prefix's folder on
+// moveApart(), with the keys still in state.json; a key written since in its folder wins.
+test("file: keys right in keys/ move to their prefix's folder on moveApart()", async (t) => {
+  const dir = tempDir(t);
+  const flat = (key, value) =>
+    writeFileSync(join(dir, "keys", fileName(key)), JSON.stringify({ key, value }));
+  const old = fileStore({ dir });
+  await old.set("titles/c", "C");
+  await old.close();
+  mkdirSync(join(dir, "keys"));
+  flat("summaries/a", 1);
+  flat(`summaries/${"x".repeat(400)}`, 2);
+  flat("titles/b", "old");
+  flat("other/z", "stray");
+  writeFileSync(join(dir, "keys", "summaries%2Fa.tmp"), "");
+  const store = fileStore({ dir, apart: ["summaries/", "titles/"] });
+  t.after(() => store.close());
+  await store.set("titles/b", "new");
+  assert.equal(await store.moveApart(), 4);
+  assert.equal(await store.moveApart(), 0);
+  assert.deepEqual(readdirSync(join(dir, "keys")).sort(), [
+    "other%2Fz",
+    "summaries%2F",
+    "summaries%2Fa.tmp",
+    "titles%2F",
+  ]);
+  assert.equal(readdirSync(join(dir, "keys", "summaries%2F")).length, 2);
+  assert.deepEqual((await store.keys("summaries/")).keys.length, 2);
+  assert.equal(await store.get("summaries/a"), 1);
+  assert.equal(await store.get(`summaries/${"x".repeat(400)}`), 2);
+  assert.equal(await store.get("titles/b"), "new");
+  assert.equal(await store.get("titles/c"), "C");
+  assert.deepEqual((await store.keys("titles/")).keys, ["titles/b", "titles/c"]);
 });
 
 test("file: a state file taken back to an older one still gives a new, higher epoch", async (t) => {
