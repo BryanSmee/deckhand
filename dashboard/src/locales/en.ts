@@ -1,8 +1,10 @@
 // The English catalog: the source the others are checked against (locales/index.ts). A key is
 // where its text shows, then what it says. `{name}` is a placeholder t() fills; a plural is one
 // text per form Intl.PluralRules gives (`one`, `other`, and `zero`, `two`, `few`, `many` where a
-// language has them), its count in `{count}`. A page's texts may sit in a file of their own
-// (en-<area>.ts), spread in below.
+// language has them), its count in `{count}`. A number is written as the locale groups digits
+// ("1,234"), but not right after a `#`: keep `#{number}` together in a translation, so an issue's
+// or pull request's reads as GitHub writes it ("#1234"). A page's texts may sit in a file of
+// their own (en-<area>.ts), spread in below.
 import { app } from "./en-app";
 import { chats } from "./en-chats";
 import { config } from "./en-config";

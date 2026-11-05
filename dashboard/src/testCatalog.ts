@@ -61,8 +61,9 @@ function texts(root: Element): { text: string; on: Element }[] {
   return found;
 }
 
-// Identifiers (rule names, files, paths, addresses), in the data as in the page.
-const verbatim = (text: string) => text.replace(/[\w.:-]*(?:[_/]|\.\w)[\w.:/-]*/g, " ");
+// Identifiers (rule names, files, paths, addresses, scopes and actions like `read:issues`), in the
+// data as in the page.
+const verbatim = (text: string) => text.replace(/[\w.:-]*(?:[_/]|[.:]\w)[\w.:/-]*/g, " ");
 
 // A text's parts between the marks and the punctuation that joins what the page shows ("acme/app ·
 // #12", "(Ctrl Shift C)"): each is the dashboard's own unless it is data as a whole.

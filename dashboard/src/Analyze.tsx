@@ -108,8 +108,7 @@ export function AnalyzeForm({
   };
 
   const task = (sent?.task && tasks.find((t) => t.key === sent.task)) || null;
-  // A string: an issue's number isn't written as the locale groups digits ("#1,234").
-  const issue = t("request.issue", { number: String(sent?.number) });
+  const issue = sent ? t("request.issue", { number: sent.number ?? "" }) : "";
 
   return (
     <form id={id} class={styles.form} aria-label={t("request.analysis")} onSubmit={send}>

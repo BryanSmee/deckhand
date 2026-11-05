@@ -129,7 +129,7 @@ const CONFIG: RepoConfig = {
     editUrl: "https://github.com/acme/app/edit/main/.deckhand.yaml",
   },
   errors: [{ key: "effort", message: "expected one of low, medium, high", line: 2, fix: null }],
-  warnings: [{ key: "colour", message: "unknown, ignored", line: null, fix: null }],
+  warnings: [{ key: "colour", message: "Xyzzy colour", line: null, fix: null }],
   grantsError: null,
   effective: {
     settings: [
@@ -353,8 +353,8 @@ const show = (hash: string) => {
   return render(<Dashboard state={state} error={null} repos={list()} />).container;
 };
 
-// The English catalog's texts, in parts: never the fixture's data, so one written inline again
-// isn't taken for some.
+// The English catalog's texts, in parts: never data, whether the routes' or the fixture's, so
+// one written inline again isn't taken for some.
 const english = () =>
   new Set<string>(
     Object.values(CATALOGS.en)
@@ -363,18 +363,16 @@ const english = () =>
   );
 
 // A task's state and its pull request's, as format.ts names them on a badge and in the
-// palette, are the run pages' to move (#722). A key shown as it is fails first: unmarked() would take it for an identifier.
+// palette, are the run pages' to move (#722). A key shown as it is fails first: unmarked() would
+// take it for an identifier.
 const left = (root: Element = document.body, more: readonly string[] = []) => {
   const keys = keysShown(root, Object.keys(CATALOGS.en));
   if (keys.length) return keys;
   const own = english();
   return unmarked(root, {
-    data: [
-      ...strings(given),
-      ...strings(prose)
-        .flatMap(parts)
-        .filter((part) => !own.has(part)),
-    ],
+    data: strings([...given, ...prose])
+      .flatMap(parts)
+      .filter((part) => !own.has(part)),
     names: [...NAMES, ...more],
     within: {
       [`.${statusStyles.badge}, .${statusStyles.dot}, .${paletteStyles.state}`]: [
@@ -400,10 +398,12 @@ test.each([
     "size.rego",
     ["allow", "deny", "run", "fix", "link", "branch", "request"],
   ],
-  ["its capabilities", "#/settings/repositories/acme/app/capabilities", "work"],
+  // A capability's name.
+  ["its capabilities", "#/settings/repositories/acme/app/capabilities", "work", ["setup"]],
   ["Settings › Preferences", "#/settings/preferences", null],
   ["Settings › MCP clients", "#/settings/clients", "laptop"],
-  ["Settings › Server", "#/settings/server", /alice/],
+  // The GitHub permissions the App lacks, by GitHub's names.
+  ["Settings › Server", "#/settings/server", /alice/, ["actions", "checks", "read"]],
   ["Settings › Access", "#/settings/access", "@carol"],
   ["Chats", "#/chats", null],
 ] as [string, string, string | RegExp | null, string[]?][])("%s", async (_, hash, shown, more) => {
