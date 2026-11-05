@@ -11,7 +11,8 @@
 // machine never has more rights than its owner has on the dashboard.
 //
 // Deckhand enforces nothing on the machine itself: an agent runs there on its own, with the
-// owner's files, credentials and network (WARNING). Claims, runs and their pool are #596's.
+// owner's files, credentials and network (WARNING). The tasks routed to a machine, its claims
+// and their leases are claims.mjs's (#596).
 //
 // Kept in the orchestrator's store, one key per machine (`machines/<id>`, lib/store-map.mjs),
 // which its two copies share.
@@ -43,6 +44,25 @@ export const WARNING =
   "An agent will run on this machine on its own, with your files, credentials and network. Deckhand suggests settings for it and enforces none: what it may do there is up to you.";
 
 export const isMachineId = (id) => typeof id === "string" && ID.test(id);
+
+// The issue labels that route an issue to its labeller's machines (claims.mjs): `runs-on:<label>`.
+export const RUNS_ON = "runs-on:";
+
+// The machine label a `runs-on:<label>` label of `labels` (GitHub's objects or names) asks for,
+// the first in name order, with that label's own name: { label, name }, or null.
+export function runsOn(labels = []) {
+  const found = labels
+    .map((l) => (typeof l === "string" ? l : l?.name))
+    .filter((name) => typeof name === "string" && name.toLowerCase().startsWith(RUNS_ON))
+    .map((name) => ({ name, label: machineLabel(name.slice(RUNS_ON.length)) }))
+    .filter(({ label }) => label !== null)
+    .sort((a, b) => a.label.localeCompare(b.label));
+  return found[0] ?? null;
+}
+
+// Whether `issue` (as GitHub lists it) has a `runs-on` label: the auto-pickup sweep leaves it
+// alone (auto-pickup.mjs), a machine task's.
+export const hasRunsOn = (issue) => runsOn(issue?.labels ?? []) !== null;
 
 // A label as kept, or null when it isn't one.
 export function machineLabel(value) {
@@ -124,6 +144,7 @@ function driverVersion(version) {
 //   granted(repo)        whether the operator's policies grant it `machines`
 //   settings(repo)       its .deckhand.yaml from its default branch: { settings, errors }
 //   mayRun(owner, repo)  whether `owner` may start work runs there (the access decision)
+// `removed(machine)`: once a machine is removed, so that its claims end (claims.mjs).
 export function createMachines({
   machines = new Map(),
   config,
@@ -131,6 +152,7 @@ export function createMachines({
   granted = async () => false,
   settings = async () => ({ settings: null, errors: ["unknown"] }),
   mayRun = async () => false,
+  removed = () => {},
   now = Date.now,
   newId = () => randomBytes(8).toString("hex"),
   log = () => {},
@@ -198,12 +220,13 @@ export function createMachines({
     return view(next);
   }
 
-  // Unregistered by its driver, or removed from the dashboard: its entry deleted. Its claims will
-  // end with it, once machines claim tasks (#596).
+  // Unregistered by its driver, or removed from the dashboard: its entry deleted, its claims
+  // ended (`removed`), their tasks waiting again.
   function remove(owner, id) {
     const m = mine(owner, id);
     machines.delete(id);
     log(`Machines: ${owner} removed ${m.name} (${m.id})`);
+    removed(m);
     return view(m);
   }
 
@@ -214,29 +237,49 @@ export function createMachines({
           .map(view)
       : [];
 
+  // The labels machine `m` takes `repo`'s tasks with now, or null when it isn't offered them: a
+  // repository whose grant, config or access can't be read isn't (fail closed), the log saying
+  // why.
+  async function offered(m, repo) {
+    try {
+      if (!(await granted(repo))) return null;
+      const read = await settings(repo);
+      if (read.errors?.length) return null;
+      const labels = offeredLabels({ granted: true, settings: read.settings, machine: m });
+      if (!labels || !(await mayRun(m.owner, repo))) return null;
+      return labels;
+    } catch (error) {
+      log(`Machines: ${m.name} (${m.id}): ${repo} not offered: ${error.message ?? error}`);
+      return null;
+    }
+  }
+
   // The repositories offered to the owner's machine `id` now, each with the labels it takes
-  // their tasks with: [{ repo, labels }], by name. A repository whose grant, config or access
-  // can't be read isn't offered (fail closed), the log saying why.
+  // their tasks with: [{ repo, labels }], by name.
   async function offers(owner, id) {
     const m = mine(owner, id);
     const names = (await repoNames()).filter((repo) => repoMatches(m.repos, repo));
-    const offered = await Promise.all(
+    const found = await Promise.all(
       names.map(async (repo) => {
-        try {
-          if (!(await granted(repo))) return null;
-          const read = await settings(repo);
-          if (read.errors?.length) return null;
-          const labels = offeredLabels({ granted: true, settings: read.settings, machine: m });
-          if (!labels || !(await mayRun(owner, repo))) return null;
-          return { repo, labels };
-        } catch (error) {
-          log(`Machines: ${m.name} (${m.id}): ${repo} not offered: ${error.message ?? error}`);
-          return null;
-        }
+        const labels = await offered(m, repo);
+        return labels && { repo, labels };
       }),
     );
-    return offered.filter(Boolean).toSorted((a, b) => a.repo.localeCompare(b.repo));
+    return found.filter(Boolean).toSorted((a, b) => a.repo.localeCompare(b.repo));
   }
 
-  return { register, heartbeat, remove, list, offers };
+  // The labels the owner's machine `id` takes `repo`'s tasks with now (offers()'s for that
+  // repository alone), or null: what a claim asks of each task it may take (claims.mjs).
+  async function takes(owner, id, repo) {
+    const m = mine(owner, id);
+    return repoMatches(m.repos, repo) ? offered(m, repo) : null;
+  }
+
+  // The owner's machine `id` as kept, or Refused (404).
+  const get = (owner, id) => ({ ...mine(owner, id) });
+
+  // The owner's machines online now, as kept: those that may claim a task of theirs.
+  const onlineOf = (owner) => (allowed(owner) ? owned(owner).filter(online) : []);
+
+  return { register, heartbeat, remove, list, offers, takes, get, onlineOf };
 }

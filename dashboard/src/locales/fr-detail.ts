@@ -6,6 +6,30 @@ import type { detail as en } from "./en-detail";
 export const detail = {
   // Detail.tsx: the task page's header, actions, facts and tabs.
   "detail.pick": "Choisissez une issue ou une pull request",
+  // MachineTask.tsx: a machine task's route, and the comments held for its owner.
+  "machine.byLabel": "Son label runs-on:{want}",
+  "machine.byComment": "Un commentaire /machine",
+  "machine.claimedBy": "Prise par {machine} de @{owner}",
+  "machine.runsOn": "Tourne sur {asked} : {now}",
+  "machine.one": "{machine} de @{owner}",
+  "machine.labelled": "les machines de @{owner} labellisées {want}",
+  "machine.named": "les machines de @{owner} ({want})",
+  "machine.waitingIt": "en attente qu’elle la prenne",
+  "machine.waitingOne": "en attente que l’une d’elles la prenne",
+  "machine.offline": "elle est hors ligne",
+  "machine.noneOnline": "aucune n’est en ligne",
+  "held.label": "Commentaires retenus",
+  "held.title": {
+    one: "{count} commentaire retenu pour @{owner}",
+    other: "{count} commentaires retenus pour @{owner}",
+  },
+  "held.note":
+    "Cette tâche tourne sur les machines de @{owner} : les commentaires des autres atteignent ses runs une fois que @{owner} les transmet.",
+  "held.someone": "quelqu’un",
+  "held.deliver": "Transmettre",
+  "held.delivering": "Transmission…",
+  "held.drop": "Écarter",
+  "held.dropping": "Suppression…",
   "detail.logCopied": "Journal copié.",
   "detail.copyFailed": "Impossible de copier le journal : téléchargez-le plutôt.",
   "detail.stoppingSent": "Arrêt en cours.",

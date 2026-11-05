@@ -35,6 +35,8 @@ export const fr = {
   "state.working": "En cours",
   "state.stopping": "Arrêt en cours",
   "state.queued": "En file",
+  "state.waitingFor": "En attente de {machine}",
+  "state.onMachine": "Sur {machine}",
   "state.inReview": "En revue",
   "state.waiting": "En attente",
   "state.brainstorm": "Brainstorm",

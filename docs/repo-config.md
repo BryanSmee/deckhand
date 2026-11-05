@@ -2183,6 +2183,17 @@ runs here (`runs:start:work`, and `users`): never more than its owner may do on 
 An agent runs on that machine on its own, with its owner's files, credentials and network:
 Deckhand suggests settings and enforces none there ([security.md](security.md#machines)).
 
+### Routing an issue to a machine
+
+With the block, an issue runs on its owner's machines instead of a sandbox when it has a
+`runs-on:<label>` label (the machines with that label of whoever last added it, an allowed user
+who may start work runs, as auto-pickup checks its labeller), or after a `/machine <name or
+label>` line (its author's; alone, it starts nothing). `/machine none` sends it back to
+sandboxes, until a `/machine <label>` routes it again (a label added later doesn't); only its owner moves it. A machine claims it within its own capacity, never a
+`MAX_PARALLEL` or auto-pickup slot (the sweep skips `runs-on` issues), and keeps it: the next
+runs go there, in the same session. Other users' comments wait on the task's page until its
+owner delivers them; Deckhand's own (a review's fix round, a CI fix) don't.
+
 ## Auto-pickup
 
 `auto_pickup: true` opts the repository in to the operator's auto-pickup
@@ -2195,7 +2206,7 @@ still caps the repository's runs, auto-picked ones included.
 
 An issue is skipped, and the next one picked, while it has something live on the dashboard,
 the needs-input label (see Open questions), an open issue it is "blocked by", or an open pull
-request of Deckhand's. The run is for the person who last added the label: one who isn't in
+request of Deckhand's, and any issue with a `runs-on:<label>` label, `machines:` or not. The run is for the person who last added the label: one who isn't in
 `users` (or `ALLOWED_USERS`), or a bot, starts nothing. Nor does an issue whose title or
 description anyone but an allowed user changed at any point after the label went on. Such an
 issue keeps the label, and the App comments once to say why; an allowed user adds the label

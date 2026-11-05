@@ -4361,13 +4361,13 @@ allow_capabilities contains "read:pulls"
     assert.match(readFileSync(join(dir, "run-env"), "utf8"), /^TASK_ISSUE=12$/m);
   });
 
-  test("machines (#595): a machine registered through edge is offered the repositories that opt in", async (t) => {
+  test("machines (#595, #596): a machine registered through edge is offered the repositories that opt in, and claims the issue routed to it", async (t) => {
     const repos = ["org/repo", "org/other", "org/plain"].map((full_name) => ({
       full_name,
       html_url: `https://github.com/${full_name}`,
       default_branch: "trunk",
     }));
-    const { port } = await listen(
+    const { port, dir, send, listener } = await listen(
       t,
       {
         installed: JSON.stringify({ repositories: repos }),
@@ -4385,7 +4385,7 @@ allow_capabilities contains "read:pulls"
     const { tools } = await rpc("tools/list", {});
     assert.deepEqual(
       tools.map((x) => x.name),
-      ["register_machine", "heartbeat", "unregister_machine"],
+      ["register_machine", "heartbeat", "claim", "release", "unregister_machine"],
     );
     const call = (name, args) => rpc("tools/call", { name, arguments: args });
     assert.equal((await call("list_repos", {})).isError, true);
@@ -4399,6 +4399,22 @@ allow_capabilities contains "read:pulls"
     assert.deepEqual(offered, [{ repo: "org/repo", labels: ["unreal"] }]);
     const beat = await call("heartbeat", { machine: machine.id });
     assert.equal(beat.structuredContent.machine.online, true);
+    // Alice routes #12 to it: no sandbox starts, the machine's claim takes it, then gives it back.
+    await send(comment("alice", "Deckhand\n/machine studio\nBuild it."));
+    await listener.until("org/repo#12: queued");
+    const claimed = await call("claim", { machine: machine.id });
+    assert.equal(claimed.isError, undefined, claimed.content[0].text);
+    const { work } = claimed.structuredContent;
+    assert.deepEqual([work.repository, work.issue, work.mode], ["org/repo", 12, "work"]);
+    assert.equal(work.message, "Build it.");
+    assert.equal(exists(join(dir, "run-env")), null);
+    const renewed = await call("heartbeat", { machine: machine.id, runs: [work.run] });
+    assert.deepEqual(
+      renewed.structuredContent.claims.map((c) => [c.run, c.key]),
+      [[work.run, "org/repo#12"]],
+    );
+    const released = await call("release", { machine: machine.id, run: work.run });
+    assert.equal(released.structuredContent.key, "org/repo#12");
     const gone = await call("unregister_machine", { machine: machine.id });
     assert.equal(gone.isError, undefined);
     assert.equal((await call("heartbeat", { machine: machine.id })).isError, true);

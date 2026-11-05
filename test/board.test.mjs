@@ -760,3 +760,35 @@ test("in review: a maintainer's comment queued meanwhile makes it queued, the lo
   ]);
   assert.deepEqual([queued.state, queued.review.loop, queued.position], ["queued", "checks", 1]);
 });
+
+test("a machine task: queued while it waits for its machine, at work once one claimed it, its route shown", () => {
+  const machine = (key, claimed) => ({
+    key,
+    repo: "acme/game",
+    owner: "alice",
+    want: "unreal",
+    via: "label",
+    machine: claimed ? "Desk" : null,
+    claimed,
+    available: true,
+  });
+  const tasks = board({
+    runs: [run("acme/game#2", 10)],
+    queued: [{ key: "acme/game#1", kind: "issue", repo: "acme/game", replyTo: 1 }],
+    brainstorms: [],
+    machines: [machine("acme/game#1", false), machine("acme/game#2", true)],
+  });
+  const byKey = Object.fromEntries(tasks.map((t) => [t.key, t]));
+  assert.equal(byKey["acme/game#1"].state, "queued");
+  assert.deepEqual(byKey["acme/game#1"].machine, {
+    owner: "alice",
+    want: "unreal",
+    via: "label",
+    machine: null,
+    claimed: false,
+    available: true,
+  });
+  // Its run's own record is #597's: claimed, it is at work whatever its last run said.
+  assert.equal(byKey["acme/game#2"].state, "working");
+  assert.equal(byKey["acme/game#2"].machine.machine, "Desk");
+});

@@ -16,6 +16,7 @@ import type {
   ServerInfo,
   State,
   Task,
+  TaskMachine,
   TaskState,
 } from "./types";
 
@@ -310,12 +311,12 @@ export function toneOf(state: TaskState | RunStatus): Tone {
 // unless a run is queued or waits to start, its pull request's: merged, green; ready for review and clean (cleanReady()), purple; ready
 // but not clean, amber with why (notClean()); still in its review loop or waiting for CI, the
 // running tone.
-export function taskStatus(t: Pick<Task, "state" | "pr" | "review">): {
+export function taskStatus(t: Pick<Task, "state" | "pr" | "review" | "machine">): {
   tone: Tone;
   label: string;
 } {
   const tone = toneOf(t.state);
-  const label = tr(STATE_NAMES[t.state]);
+  const label = machineLabel(t) ?? tr(STATE_NAMES[t.state]);
   // Queued or waiting: a run is on its way to its pull request, which says nothing yet.
   if (tone !== "idle" || t.state === "queued" || t.state === "waiting") return { tone, label };
   if (t.pr?.state === "merged") return { tone: "done", label };
@@ -323,7 +324,23 @@ export function taskStatus(t: Pick<Task, "state" | "pr" | "review">): {
   return readyStatus(t) ?? { tone: "run", label: tr(STATE_NAMES["in-review"]) };
 }
 
-export const taskTone = (t: Pick<Task, "state" | "pr" | "review">) => taskStatus(t).tone;
+export const taskTone = (t: Pick<Task, "state" | "pr" | "review" | "machine">) =>
+  taskStatus(t).tone;
+
+// The machine a machine task waits for or runs on (listener/claims.mjs): the one it sticks to,
+// else the name or label asked for.
+export const machineName = (m: TaskMachine) => m.machine ?? m.want;
+
+// A machine task's state in words: "Waiting for desk" while queued and no machine holds it,
+// "On desk" once one does; null for any other task, or state.
+function machineLabel(t: Pick<Task, "state" | "machine">): string | null {
+  const m = t.machine;
+  if (!m) return null;
+  if (t.state === "queued" && !m.claimed)
+    return tr("state.waitingFor", { machine: machineName(m) });
+  if (t.state === "working" && m.claimed) return tr("state.onMachine", { machine: machineName(m) });
+  return null;
+}
 
 // A pull request ready for review whose loop is over (isReady()): its tone and word, as the
 // task's (taskStatus()) and the Overview's rows have them; null otherwise.

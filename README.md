@@ -35,6 +35,10 @@ operator, across as many repositories as the App is installed on.
     comment back until those issues are closed as completed, or those pull requests merged,
     then runs it as if just posted. A new trigger comment starts now instead; `/after none`
     cancels.
+  - `/machine <name or label>` (on the trigger line or its own) runs the issue on one of your
+    own machines instead of a sandbox, as a `runs-on:<label>` label does for whoever added it
+    (in a repository that opts in: `machines:` in its `.deckhand.yaml`); `/machine none` goes
+    back to sandboxes. Other people's comments on it wait for you to deliver them.
   - `/cancel` alone on its first line stops the issue's run now (a stuck one, say): the reply
     says who stopped it, and the next comment resumes its session. The task's page on the
     dashboard has the same **Stop** button.

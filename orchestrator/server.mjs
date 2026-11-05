@@ -82,6 +82,7 @@ import { createHistory, forgottenShots, noteUnnamedShots } from "../listener/his
 import { createInputs } from "../listener/inputs.mjs";
 import { createOnboarding, createOnboardingStore } from "../listener/onboarding.mjs";
 import { createLinkedBranches } from "../listener/linked-branch.mjs";
+import { createClaims } from "../listener/claims.mjs";
 import { createMachines } from "../listener/machines.mjs";
 import { createPermissions } from "../listener/permissions.mjs";
 import { createPolicies } from "../listener/policies.mjs";
@@ -276,6 +277,7 @@ const MAPS = {
   decisions: {},
   picks: {},
   machines: {},
+  routes: {},
 };
 const store = openStore(storeUrl, {
   password: env.REDIS_PASSWORD,
@@ -1039,8 +1041,12 @@ ctx.machines = createMachines({
   },
   settings: (repo) => repoSettings(repo, repoList.infoOf(repo)?.default_branch),
   mayRun: async (owner, repo) => (await permissions.decide(owner, repo, "runs:start:work")).ok,
+  // Its claims end, their tasks wait again.
+  removed: (m) => ctx.claims.machineGone(m),
   log,
 });
+// The tasks routed to them (`runs-on` labels, `/machine` comments) and their claims (#596).
+ctx.claims = createClaims(ctx, { routes: maps.maps.routes });
 
 // The issues labelled AUTO_PICKUP_LABEL, started by the listener itself in AUTO_PICKUP_SLOTS.
 ctx.autoPickup = createAutoPickup({
@@ -1184,7 +1190,12 @@ await ctx.loadQueue();
 ctx.waits.dedupe(
   new Set(
     [...ctx.tasks.values()]
-      .flatMap((t) => [...t.pending, ...(t.live?.handled ?? [])])
+      .flatMap((t) => [
+        ...t.pending,
+        ...(t.live?.handled ?? []),
+        ...t.held,
+        ...(t.claim?.items ?? []),
+      ])
       .map((item) => item.queueId)
       .filter(Boolean),
   ),
@@ -1296,6 +1307,8 @@ ctx.conflicts.start();
 ctx.waits.start();
 ctx.reviews.start();
 ctx.autoPickup.start();
+// The machines' leases, looked at from here on.
+ctx.claims.start();
 // After restoreRuns() and loadQueue(): what they bring back is kept.
 const history = createHistory(ctx);
 // Once the screenshots kept here are at the broker: one removed before it arrives would arrive
@@ -1381,6 +1394,8 @@ sigterm = () => {
   ctx.waits.stop();
   ctx.reviews.stop();
   ctx.autoPickup.stop();
+  ctx.claims.stop();
+  ctx.stopRetries();
   ctx.chats.stop();
   ctx.requests.stop();
   history.stop();
