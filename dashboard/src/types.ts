@@ -84,6 +84,9 @@ export interface Run {
   // The name of the user's machine an external run ran on (listener/runs.mjs startExternal(),
   // #597); absent for a sandbox's. Sent, not shown: the task's machine is.
   machine?: string | null;
+  // How an external run's agent ran, as its machine reported it at its claim (listener/mcp.mjs
+  // setupOf(), #599): never checked by Deckhand. Absent for a sandbox's.
+  setup?: RunSetup | null;
   phase?: string | null;
   startedAt: number;
   finishedAt: number | null;
@@ -98,6 +101,18 @@ export interface Run {
   lastPushAt?: number | null;
   // How its sandbox exited, once the runner said (listener/run-events.mjs). Sent, not shown.
   exitCode?: number | null;
+}
+
+// What a machine reports of how its agent runs (Run.setup): each null when it didn't say.
+export interface RunSetup {
+  // The agent's version (Claude Code's).
+  version: string | null;
+  // Whether the agent's own sandbox is on.
+  sandbox: boolean | null;
+  // Its permission mode (acceptEdits, dontAsk…).
+  permissionMode: string | null;
+  // Whether it runs with the driver's suggested settings, or its owner's own alone.
+  suggested: boolean | null;
 }
 
 // draft, ready for review, merged, or closed without merging.

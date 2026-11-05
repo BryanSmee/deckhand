@@ -39,7 +39,7 @@ import { type Handlers, useShortcuts, withKey } from "./keys";
 // `tr`: t() where the task is called `t`.
 import { and, locale, t as tr, tx } from "./i18n";
 import { Log } from "./Log";
-import { HeldComments, MachineFact, ToolRequests } from "./MachineTask";
+import { HeldComments, MachineFact, MachineSetup, ToolRequests } from "./MachineTask";
 import { copyText, downloadText } from "./logExport";
 import { logSections, plainText } from "./logModel";
 import { CiStatus } from "./CiStatus";
@@ -480,6 +480,7 @@ export function Detail({
             {loopLine(t) && <span>{loopLine(t)}</span>}
             {held && <StatusBadge tone="input" label={tr("detail.held")} />}
             <MachineFact task={t} />
+            {r && <MachineSetup run={r} />}
             {r && (
               <span>
                 {tx("detail.started", {

@@ -4,9 +4,9 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/preact";
 import { expect, test } from "vitest";
 import { taskStatus } from "./format";
-import { HeldComments, MachineFact, ToolRequests } from "./MachineTask";
-import { makeTask, mockApi } from "./testUtils";
-import type { TaskMachine, ToolRequest } from "./types";
+import { HeldComments, MachineFact, MachineSetup, ToolRequests } from "./MachineTask";
+import { makeRuns, makeTask, mockApi } from "./testUtils";
+import type { Run, TaskMachine, ToolRequest } from "./types";
 
 const NOW = 1_700_000_000_000;
 const route = (over: Partial<TaskMachine> = {}): TaskMachine => ({
@@ -107,4 +107,20 @@ test("a machine run's tool request: its input as text, never markup; Allow and D
   fireEvent.click(screen.getByRole("button", { name: "Allow for this run" }));
   await waitFor(() => expect(refreshed).toBe(1));
   expect(api.posted.map((p) => p.url)).toEqual([url]);
+});
+
+const makeRun = (over: Partial<Run>): Run => ({ ...makeRuns("acme/game#12", 1)[0], ...over });
+
+test("how a machine's run runs, as it reports it (#599): what it said, never a sandbox run's", () => {
+  const run = makeRun({
+    machine: "Desk",
+    setup: { version: "2.1.3", sandbox: false, permissionMode: "acceptEdits", suggested: true },
+  });
+  render(<MachineSetup run={run} />);
+  const fact = screen.getByText(
+    "As Desk reports it: v2.1.3 · sandbox off · acceptEdits mode · Deckhand's settings",
+  );
+  expect(fact.getAttribute("title")).toMatch(/Deckhand doesn't check it/);
+  const { container } = render(<MachineSetup run={makeRun({ setup: null })} />);
+  expect(container.textContent).toBe("");
 });
