@@ -513,7 +513,17 @@ export function createRestart(ctx) {
       // here, its comments queued again.
       // Its items aren't checked again here: given back (claims.mjs giveBack()), they are when a
       // machine claims them again (claims.mjs refusals()).
-      if (t.claim && ctx.claims) {
+      // A claim without its external run (a copy stopped before the run's state was written,
+      // or a release before #597, whose claims had none): over, its comments queued again. A run
+      // that ended writes the queue without its claim before its state goes (runs.mjs
+      // teardown()).
+      const runless = t.claim && ctx.startExternal && task.live?.id !== t.claim.id;
+      if (runless) {
+        log(`${key}: ${t.claim.name}'s claim ${t.claim.id} has no run: its comments queued again`);
+        // Those its run was taking are in the queue still (take()): once each.
+        const queued = new Set(t.pending.map((item) => item.queueId).filter(Boolean));
+        t.pending.unshift(...t.claim.items.filter((item) => !queued.has(item.queueId)));
+      } else if (t.claim && ctx.claims) {
         ctx.claims.restore(task, { ...t.claim, items: t.claim.items.map(revive) });
         log(`${key}: claimed by ${t.claim.name} (${t.claim.machine}) before the restart`);
       } else if (t.claim) t.pending.unshift(...t.claim.items);
@@ -582,6 +592,9 @@ export function createRestart(ctx) {
             .concat(["capabilities", "engine", "mounts", "once"])
             // A review's commit (runs.mjs launch()): its review is posted there.
             .concat(["reviewFrom"])
+            // An external run's machine, its inbox and whether it is open (runs.mjs
+            // startExternal()): no runner to ask after a restart.
+            .concat(["external", "outbox", "open"])
             .map((k) => [k, live[k]]),
         ),
         record,
@@ -698,7 +711,8 @@ export function createRestart(ctx) {
     const asked = Promise.all(
       restored.map(async (task) => {
         const run = task.live;
-        if (!run.open) return;
+        // An external run's inbox is its own, as saved.
+        if (run.external || !run.open) return;
         run.open = false;
         let closed;
         try {
@@ -771,6 +785,15 @@ export function createRestart(ctx) {
     delete task.live.task;
     task.running = true;
     countRun(ctx, task, 1);
+    // An external run (#597): its machine's to report on, no tokens, sandbox nor files. Its claim
+    // comes back with the queue (loadQueue()), its inbox as it was saved.
+    if (saved.external) {
+      Object.assign(task.live, {
+        open: saved.open === true && !saved.cancelled && !saved.overflow,
+        outbox: Array.isArray(saved.outbox) ? saved.outbox : [],
+      });
+      return task;
+    }
     ctx.broker.register(task.repo, {
       // Fail closed: a run saved with its capabilities pushes only with `push` (its `light` says
       // only whether its mode has volumes of its own, #498); one saved before them, only when it
@@ -849,6 +872,18 @@ export function createRestart(ctx) {
     await Promise.race([told, late]).finally(() => clearTimeout(timer));
     for (const task of restored) {
       const live = task.live;
+      if (live.external) {
+        // Its machine reports on from this copy. One whose end the copy before began (replied,
+        // cancelled, overflowed) ends now, its reply posted once; one whose claim didn't come
+        // back with the queue ends as interrupted, its comments queued again.
+        newLogContext(runLogContext(task), () => {
+          if (live.replied || live.cancelled || live.overflow) ctx.endExternal(task);
+          else if (task.claim?.id !== live.id) {
+            ctx.track(ctx.interruptExternal(task, "its claim was lost with a restart"));
+          } else log(`${live.key}: ${live.external.name}'s run goes on from here`);
+        });
+        continue;
+      }
       const sandbox = sandboxes.find((s) => s.run === live.id);
       if (live.replied || live.cancelled || live.overflow || sandbox) {
         // Where its log goes on from: its size at the runner.

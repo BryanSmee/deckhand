@@ -620,7 +620,9 @@ export function createTasks(ctx) {
       taken(task, items);
       return false;
     }
-    ctx.runner.send(live.id, liveMessage(live.mode, text), agentFor(live.record.agent));
+    // An external run's machine reads it from its outbox (runs.mjs sendExternal()).
+    if (live.external) ctx.sendExternal(task, liveMessage(live.mode, text));
+    else ctx.runner.send(live.id, liveMessage(live.mode, text), agentFor(live.record.agent));
     // A chat's: its owner's message, which the conversation shows as theirs (runlog.mjs).
     writeEvent(live.logFile, "delivered", { message: text, ...(isChat(task) && { chat: true }) });
     live.unanswered.push(...items);

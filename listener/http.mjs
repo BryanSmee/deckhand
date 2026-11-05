@@ -378,8 +378,13 @@ export function createHttp(ctx) {
         remove: (user, id) => ctx.machines.remove(user, id),
         offers: (user, id) => ctx.machines.offers(user, id),
         // The next task routed to it, and a claim given back (claims.mjs).
-        claim: (user, id) => ctx.claims.claim(user, id),
+        claim: (user, id, reported) => ctx.claims.claim(user, id, { reported }),
         release: (user, id, run) => ctx.claims.release(user, id, run),
+        // A claim's run (#597): its output, its messages and its end, its machine's alone.
+        post: (user, id, run, lines, from) => ctx.claims.post(user, id, run, lines, from),
+        nextMessage: (user, id, run, from) => ctx.claims.nextMessage(user, id, run, from),
+        ask: (user, id, run, question) => ctx.claims.ask(user, id, run, question),
+        finish: (user, id, run, end) => ctx.claims.finish(user, id, run, end),
       },
     },
     log,

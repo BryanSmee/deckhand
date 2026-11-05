@@ -280,8 +280,9 @@ function settle(t, q, b, w, input, aside = null) {
 }
 
 // A task routed to a user's machines (claims.mjs), `m` its board() entry: its `machine` ({ owner,
-// want, via, machine, claimed, available }). Claimed, it is at work there (its run's own record
-// is #597's); queued, it waits for that machine, which the dashboard says.
+// want, via, machine, claimed, available }). Claimed, it is at work there (its external run's
+// record, runs.mjs startExternal(), once it has one); queued, it waits for that machine, which
+// the dashboard says.
 function onMachine(t, m) {
   if (!m) return;
   const { key: _, repo: __, ...machine } = m;

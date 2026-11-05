@@ -11,14 +11,16 @@
 // repository's secrets in tool output: its readers are the dashboard's, nobody else. The write
 // tools (#483) call what the dashboard's work area does (work.mjs), with its checks and its App
 // comments: what it refuses is the tool's error, its message as the dashboard shows it. The
-// machine tools (#595) register the owner's machine, with `deckhand:machine` (machines.mjs).
+// machine tools (#595) register the owner's machine, with `deckhand:machine` (machines.mjs), and
+// claim its tasks (#596); its run tools (#597) report on the run a claim started (claims.mjs).
 import { StringDecoder } from "node:string_decoder";
 
 import { Refused, readBody, send } from "../lib/http.mjs";
 import { agentFor } from "./agents/index.mjs";
 import { STATES } from "./board.mjs";
 import { parseKey } from "./events.mjs";
-import { CLAIM_WAIT_MS, LEASE_MS } from "./claims.mjs";
+import { AGENTS } from "./agents/index.mjs";
+import { CLAIM_WAIT_MS, LEASE_MS, MACHINE_PROTOCOL, MACHINE_PROTOCOLS } from "./claims.mjs";
 import { HEARTBEAT_MS, MAX_CAPACITY, ONLINE_MS, WARNING } from "./machines.mjs";
 import { reader, stampOf } from "./runlog.mjs";
 import { taskId } from "./spelling.mjs";
@@ -28,6 +30,13 @@ import { taskId } from "./spelling.mjs";
 export const PROTOCOL_VERSIONS = ["2025-06-18", "2025-03-26", "2024-11-05"];
 // A JSON-RPC call is small: a tool's name and its few arguments.
 export const MAX_BODY = 64 * 1024;
+// But for a machine's post_events (deckhand:machine): a batch of its agent's output, whose lines
+// may hold a file it read. Edge's limit too (../edge/http.mjs MAX_MACHINE_BODY).
+export const MAX_MACHINE_BODY = 1024 * 1024;
+// The lines a post_events call takes at most.
+export const MAX_LINES = 1000;
+// A reply's characters at most (finish, ask): GitHub's comment takes 65 536.
+const MAX_REPLY = 60_000;
 // A log page's bytes, by default and at most: the runner reads 4 MB at most at once.
 export const PAGE_BYTES = 64 * 1024;
 export const MAX_PAGE_BYTES = 1024 * 1024;
@@ -84,7 +93,7 @@ const INSTRUCTIONS = `Deckhand runs coding agents on GitHub issues and pull requ
 read what its dashboard shows you: your repositories, their tasks (an issue or pull request and \
 its runs), each run's log, and the schedule; with the deckhand:work scope, rerun and schedule act \
 as its dashboard does, commenting on the issue as the user; with deckhand:machine, a machine's \
-driver registers it, says it is there and claims the tasks routed to it. A task is named by its key, \
+driver registers it, says it is there, claims the tasks routed to it and reports on their runs. A task is named by its key, \
 "owner/repo#12" for an issue, "owner/repo#pr-12" for a pull request.`;
 
 const RPC = {
@@ -104,6 +113,13 @@ const object = (properties = {}, required = []) => ({
   ...(required.length && { required }),
   additionalProperties: false,
 });
+
+// The run tools' protocol (claims.mjs MACHINE_PROTOCOL): a driver says the one it speaks.
+const PROTOCOL = {
+  type: "integer",
+  enum: MACHINE_PROTOCOLS,
+  description: `The version of these tools' protocol the driver speaks: ${MACHINE_PROTOCOL} by default.`,
+};
 
 const REPO = {
   type: "string",
@@ -279,8 +295,99 @@ const TOOL_SPECS = [
     scope: MACHINE,
     description: `Waits up to ${CLAIM_WAIT_MS / 1000} s for the next task your machine may take, and claims it: an issue routed to your machines (a \`runs-on:<label>\` label you added, or your \`/machine <name or label>\` comment) in a repository offered to it, within its capacity. Returns the work as a sandbox run gets it: repository, issue, branch, mode, prompt and message (\`resume\`: the machine ran the issue before, its session goes on); none when nothing came. The claim holds a lease of ${LEASE_MS / 60000} minutes that heartbeat renews: one that runs out gives the task back, and it waits for this machine again. ${WARNING}`,
     inputSchema: object(
-      { machine: { type: "string", description: "Its id, from register_machine." } },
+      {
+        machine: { type: "string", description: "Its id, from register_machine." },
+        agent: {
+          type: "string",
+          enum: Object.keys(AGENTS),
+          description:
+            "The agent it runs the task with, whose output post_events sends: claude by default.",
+        },
+        model: { type: "string", description: "Its model, for the run's record." },
+        effort: { type: "string", description: "Its effort, for the run's record." },
+        protocol: PROTOCOL,
+      },
       ["machine"],
+    ),
+  },
+  {
+    name: "post_events",
+    title: "Send the run's output",
+    scope: MACHINE,
+    description: `Sends the claimed run's agent output, its stream-json lines as the agent prints them (\`claude -p --output-format stream-json\`), ${MAX_LINES} lines and ${MAX_MACHINE_BODY / 1024 / 1024} MB at most a call (a longer line cut): they are its log on the dashboard, redacted as a sandbox run's. \`from\`: the number of its lines sent before, from the last answer's \`next\`; a line Deckhand has already is skipped, so a call that failed can be sent again as it was. At each result line, the comments waiting for the run go to next_message, or its inbox closes: the agent should end with that result as its answer, then call finish.`,
+    inputSchema: object(
+      {
+        machine: { type: "string", description: "Its id, from register_machine." },
+        run: { type: "string", description: "The claim's run, from claim." },
+        lines: {
+          type: "array",
+          items: { type: "string" },
+          maxItems: MAX_LINES,
+          description: "The agent's output lines, in order, each one JSON event.",
+        },
+        from: {
+          type: "integer",
+          minimum: 0,
+          description: "How many of its lines were sent before: the last answer's `next`.",
+        },
+        protocol: PROTOCOL,
+      },
+      ["machine", "run", "lines"],
+    ),
+  },
+  {
+    name: "next_message",
+    title: "Wait for the run's next message",
+    scope: MACHINE,
+    description: `Waits up to ${CLAIM_WAIT_MS / 1000} s for the comments that reach the claimed run while it works (yours only, and Deckhand's own), each a message for its agent's input, as a sandbox's inbox gets them. \`from\`: how many it read before, from the last answer's \`next\`. \`closed\`: no more will come; the agent ends with its answer, then call finish. Comments that come after go to the next claim.`,
+    inputSchema: object(
+      {
+        machine: { type: "string", description: "Its id, from register_machine." },
+        run: { type: "string", description: "The claim's run, from claim." },
+        from: {
+          type: "integer",
+          minimum: 0,
+          description: "How many messages it read before: the last answer's `next`. None: 0.",
+        },
+        protocol: PROTOCOL,
+      },
+      ["machine", "run"],
+    ),
+  },
+  {
+    name: "ask",
+    title: "Stop the run to ask",
+    scope: MACHINE,
+    description:
+      "Ends the claimed run waiting for input: `question` is posted on the issue as the App, as a sandbox run's reply that asks (its needs-input marker added), and the issue is labelled as waiting. The owner's answer starts the next claim, which resumes the session.",
+    inputSchema: object(
+      {
+        machine: { type: "string", description: "Its id, from register_machine." },
+        run: { type: "string", description: "The claim's run, from claim." },
+        question: {
+          type: "string",
+          description: "The questions, in Markdown, as the agent's final message has them.",
+        },
+        protocol: PROTOCOL,
+      },
+      ["machine", "run", "question"],
+    ),
+  },
+  {
+    name: "finish",
+    title: "End the run",
+    scope: MACHINE,
+    description:
+      "Ends the claimed run: `reply` (the agent's final message; its last result line's without one) is posted on the issue as the App, then what follows any run's end (a review's fix loop, a CI fix, the queue). `outcome`: ok, error (the agent failed), or needs-input (as ask).",
+    inputSchema: object(
+      {
+        machine: { type: "string", description: "Its id, from register_machine." },
+        run: { type: "string", description: "The claim's run, from claim." },
+        outcome: { type: "string", enum: ["ok", "error", "needs-input"] },
+        reply: { type: "string", description: "The reply, in Markdown." },
+        protocol: PROTOCOL,
+      },
+      ["machine", "run", "outcome"],
     ),
   },
   {
@@ -288,7 +395,7 @@ const TOOL_SPECS = [
     title: "Give a claimed task back",
     scope: MACHINE,
     description:
-      "Gives a claim back: its comments wait again, for this machine (the issue sticks to it), as soon as it claims again. No claim ends as done yet (#597): a released claim, like one whose lease ran out, is claimed again.",
+      "Gives a claim back: its run ends as interrupted, the issue told, and its comments wait again, for this machine (the issue sticks to it), as soon as it claims again, as when its lease runs out. finish ends a run that is done.",
     inputSchema: object(
       {
         machine: { type: "string", description: "Its id, from register_machine." },
@@ -331,8 +438,9 @@ export const TOOLS = TOOL_SPECS.map(({ scope = READ, ...tool }) => ({
 //                            Refused as the dashboard's
 //   schedule(user, repo, body)  its POST …/work, the same way
 //   machines                 the user's machines (machines.mjs createMachines()): register(),
-//                            heartbeat() (its claims' leases renewed), remove(), offers(), and
-//                            its claims' claim() and release() (claims.mjs), each throwing Refused
+//                            heartbeat() (its claims' leases renewed), remove(), offers(), its
+//                            claims' claim() and release(), and their runs' post(),
+//                            nextMessage(), ask() and finish() (claims.mjs), each throwing Refused
 // `version`: Deckhand's, which `initialize` says.
 export function createMcp({ source, version = "dev", now = Date.now, log = () => {} }) {
   const tools = {
@@ -347,6 +455,10 @@ export function createMcp({ source, version = "dev", now = Date.now, log = () =>
     heartbeat,
     unregister_machine: unregisterMachine,
     claim: claimTool,
+    post_events: postEvents,
+    next_message: nextMessage,
+    ask: askTool,
+    finish: finishTool,
     release: releaseTool,
   };
 
@@ -632,14 +744,83 @@ export function createMcp({ source, version = "dev", now = Date.now, log = () =>
 
   async function claimTool(user, args) {
     const id = requiredString(args, "machine");
+    protocolOf(args);
+    const reported = {
+      agent: optionalString(args, "agent"),
+      model: optionalString(args, "model")?.slice(0, 100) ?? null,
+      effort: optionalString(args, "effort")?.slice(0, 40) ?? null,
+    };
+    if (reported.agent !== null && !Object.hasOwn(AGENTS, reported.agent)) {
+      throw new BadArguments(`\`agent\` is one of ${Object.keys(AGENTS).join(", ")}.`);
+    }
     return machineAct(
-      () => source.machines.claim(user, id),
+      () => source.machines.claim(user, id, reported),
       (work) =>
         work
           ? result({ work }, [
               `Claimed ${work.key} (${work.mode}${work.resume ? ", its session goes on" : ""}): run ${work.run}, on ${work.branch}. Call heartbeat every ${HEARTBEAT_MS / 1000} s with it.`,
             ])
           : result({ work: null }, ["Nothing to take now: claim again."]),
+    );
+  }
+
+  async function postEvents(user, args) {
+    const id = requiredString(args, "machine");
+    const run = requiredString(args, "run");
+    protocolOf(args);
+    const lines = optionalStrings(args, "lines");
+    if (lines === null) throw new BadArguments("`lines` is required.");
+    if (lines.length > MAX_LINES) throw new BadArguments(`\`lines\`: ${MAX_LINES} at most.`);
+    const from = optionalInteger(args, "from", 0, Number.MAX_SAFE_INTEGER);
+    return machineAct(
+      () => source.machines.post(user, id, run, lines, from),
+      ({ next }) => result({ next }, [`${count(lines.length, "line")} taken: send from ${next}.`]),
+    );
+  }
+
+  async function nextMessage(user, args) {
+    const id = requiredString(args, "machine");
+    const run = requiredString(args, "run");
+    protocolOf(args);
+    const from = optionalInteger(args, "from", 0, Number.MAX_SAFE_INTEGER) ?? 0;
+    return machineAct(
+      () => source.machines.nextMessage(user, id, run, from),
+      ({ messages, next, closed }) =>
+        result({ messages, next, closed }, [
+          messages.length
+            ? `${count(messages.length, "message")} for the agent:`
+            : closed
+              ? "Its inbox is closed: the agent ends with its answer, then call finish."
+              : "No message yet: ask again.",
+          ...messages.flatMap((m) => ["", m]),
+        ]),
+    );
+  }
+
+  async function askTool(user, args) {
+    const id = requiredString(args, "machine");
+    const run = requiredString(args, "run");
+    protocolOf(args);
+    const question = replyOf(args, "question", true);
+    return machineAct(
+      () => source.machines.ask(user, id, run, question),
+      ({ key, status }) =>
+        result({ key, status }, [`${key}: its questions are posted; it waits for input.`]),
+    );
+  }
+
+  async function finishTool(user, args) {
+    const id = requiredString(args, "machine");
+    const run = requiredString(args, "run");
+    protocolOf(args);
+    const outcome = requiredString(args, "outcome");
+    if (!["ok", "error", "needs-input"].includes(outcome)) {
+      throw new BadArguments("`outcome` is ok, error or needs-input.");
+    }
+    const reply = replyOf(args, "reply", false);
+    return machineAct(
+      () => source.machines.finish(user, id, run, { outcome, reply }),
+      ({ key, status }) => result({ key, status }, [`${key}: done (${status}).`]),
     );
   }
 
@@ -698,7 +879,11 @@ export function createMcp({ source, version = "dev", now = Date.now, log = () =>
     }
     let body;
     try {
-      body = JSON.parse((await readBody(req, MAX_BODY)).toString("utf8"));
+      body = JSON.parse(
+        (await readBody(req, scopes.includes(MACHINE) ? MAX_MACHINE_BODY : MAX_BODY)).toString(
+          "utf8",
+        ),
+      );
     } catch (error) {
       // Cut, unanswered (readBody() destroys the request): edge refuses a body that large
       // first, with a 413 its client reads (../edge/http.mjs mcpBody()).
@@ -982,6 +1167,27 @@ function optionalStrings(args, name) {
   if (value === undefined || value === null) return null;
   if (!Array.isArray(value) || value.some((v) => typeof v !== "string")) {
     throw new BadArguments(`\`${name}\` is a list of strings.`);
+  }
+  return value;
+}
+
+// The run tools' protocol the driver says it speaks, one this copy still takes.
+function protocolOf(args) {
+  const value = args.protocol;
+  if (value === undefined || value === null) return MACHINE_PROTOCOL;
+  if (!MACHINE_PROTOCOLS.includes(value)) {
+    throw new BadArguments(
+      `\`protocol\` ${JSON.stringify(value)} isn't one this Deckhand speaks: ${MACHINE_PROTOCOLS.join(", ")}. Update the driver.`,
+    );
+  }
+  return value;
+}
+
+// A reply's text (finish, ask), MAX_REPLY characters at most.
+function replyOf(args, name, required) {
+  const value = required ? requiredString(args, name) : optionalString(args, name);
+  if (value !== null && value.length > MAX_REPLY) {
+    throw new BadArguments(`\`${name}\` is ${MAX_REPLY} characters at most.`);
   }
   return value;
 }
