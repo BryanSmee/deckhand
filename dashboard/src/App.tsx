@@ -22,6 +22,7 @@ import { Overview } from "./Overview";
 import { type Jumps, Palette } from "./Palette";
 import { getPref, nextTheme, setPref, usePref } from "./prefs";
 import { needingYou } from "./Repos";
+import { RepoSlots } from "./RepoSlots";
 import { formatRoute, isOverview, parseRoute, type Route } from "./route";
 import { Settings } from "./Settings";
 import { PageHeader, type Request, Sidebar, TabBar, TopBar } from "./Shell";
@@ -345,6 +346,7 @@ export function Dashboard({ state, error, repos, refresh, onOverview }: Props) {
             </main>
           ) : onBoard && route.repo ? (
             <div class={styles.page}>
+              {!wide && <RepoSlots state={state} repo={route.repo} form="bar" />}
               <Board
                 state={state}
                 refresh={refresh}
@@ -394,6 +396,7 @@ export function Dashboard({ state, error, repos, refresh, onOverview }: Props) {
           ) : (
             <div class={styles.body}>
               <aside class={styles.side}>
+                {!wide && route.repo && <RepoSlots state={state} repo={route.repo} form="bar" />}
                 <TaskList
                   tasks={inTab}
                   chip={chip}

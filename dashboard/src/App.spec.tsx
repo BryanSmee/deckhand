@@ -143,6 +143,37 @@ test("a repo's link and the state chips filter the list", async () => {
   expect(rows()).toEqual(["Dark mode for the settings page"]);
 });
 
+test("a repo's page shows its run slots, in the header or atop the list on a phone; All and an older listener nothing", () => {
+  const repoSlots = { "acme/api": { running: 1, queued: 3, max: 2, own: true } };
+  const meter = () => screen.queryByRole("img", { name: "acme/api: 1 of 2 run slots in use" });
+  history.replaceState(null, "", "#/acme/api");
+  const { unmount } = render(<Dashboard state={makeState({ repoSlots })} error={null} />);
+  expect(screen.getByText("1 of 2 running · 3 queued").closest("header")).toBeTruthy();
+  expect(meter()).toBeTruthy();
+  unmount();
+  // The board's header too.
+  history.replaceState(null, "", "#/acme/api/board");
+  const board = render(<Dashboard state={makeState({ repoSlots })} error={null} />);
+  expect(meter()).toBeTruthy();
+  board.unmount();
+  // A phone has no page header: atop the list.
+  wide = false;
+  history.replaceState(null, "", "#/acme/api");
+  const phone = render(<Dashboard state={makeState({ repoSlots })} error={null} />);
+  expect(screen.getByText("1 of 2 running · 3 queued")).toBeTruthy();
+  expect(meter()).toBeTruthy();
+  phone.unmount();
+  wide = true;
+  // All's tasks: none; nor from a listener from before repoSlots.
+  history.replaceState(null, "", "#/tasks");
+  const all = render(<Dashboard state={makeState({ repoSlots })} error={null} />);
+  expect(meter()).toBeNull();
+  all.unmount();
+  history.replaceState(null, "", "#/acme/api");
+  render(<Dashboard state={makeState()} error={null} />);
+  expect(screen.queryByText(/of 2 running/)).toBeNull();
+});
+
 test("a repo's address in another case opens it, under GitHub's spelling", async () => {
   wide = false;
   const repo = "Storywake/storywake";

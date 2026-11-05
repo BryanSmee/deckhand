@@ -38,6 +38,12 @@ export const en = {
   "slots.free": "free",
   "slots.held": "{count} held between runs",
   "slots.queued": "{count} queued",
+  "slots.shared": {
+    one: "{running} running · of {count} shared slot",
+    other: "{running} running · of {count} shared slots",
+  },
+  "slots.repoLabel": "{repo}: {running} of {max} run slots in use",
+  "slots.repoSharedLabel": "{repo}: {running} of {max} shared run slots in use",
 
   "review.ciFailed": "CI failed, not reviewed",
   "review.findings": { one: "{what} finding", other: "{what} findings" },

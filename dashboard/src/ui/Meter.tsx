@@ -29,6 +29,7 @@ export function Meter({
   rail,
   large,
   title,
+  label: named,
   class: className,
 }: {
   running: number;
@@ -37,13 +38,14 @@ export function Meter({
   rail?: boolean;
   large?: boolean;
   title?: string;
+  // Its accessible name, when not the server's slots (a repo's: format.ts repoSlotsLabel()).
+  label?: string;
   class?: string;
 }) {
   const zones = meterZones(running, max, auto);
   const slots = t("ui.meter", { running, count: max });
-  const label = auto
-    ? t("ui.meterAuto", { slots, auto: zones.auto, count: zones.reserved })
-    : slots;
+  const label =
+    named ?? (auto ? t("ui.meterAuto", { slots, auto: zones.auto, count: zones.reserved }) : slots);
   const cls = [styles.meter, rail && styles.rail, large && styles.large, className]
     .filter(Boolean)
     .join(" ");

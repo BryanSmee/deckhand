@@ -442,6 +442,44 @@ test("api/state: a task's pull request in its fix loop has its review from the s
   );
 });
 
+test("api/state (#639): each seen repo's run slots, against its own max_parallel or the shared MAX_PARALLEL", async (t) => {
+  const ctx = oneRun({
+    config: { maxParallel: 4, users: ["alice"] },
+    permissions: permissionsOf({ alice: { "org/capped": ["*"], "org/shared": ["*"] } }),
+    deliverable: () => 0,
+  });
+  const task = (repo, id, running, settings, more = {}) =>
+    ctx.tasks.set(`${repo}#${id}`, {
+      ...{ repo, id, kind: "issue", running, settings },
+      pending: running ? [] : [{ mode: "work", replyTo: 9, text: "Go." }],
+      ...more,
+    });
+  // org/capped's max_parallel: 2, read last by its running task (the queued one's is older).
+  task("org/capped", 1, true, { maxParallel: 2 });
+  task("org/capped", 2, false, { maxParallel: 3 });
+  // Nor a chat's, in a pool of its own, nor a task that is the owner's alone.
+  task("org/capped", "chat-1", true, { maxParallel: 2 }, { pool: "chats" });
+  task("org/capped", 3, true, { maxParallel: 2 }, { owner: "bob" });
+  // org/shared sets none: MAX_PARALLEL, shared; one equal to it holds nothing back either.
+  task("org/shared", 1, true, {});
+  task("org/shared", 2, false, undefined);
+  task("org/equal", 1, true, { maxParallel: 4 });
+  // A repo alice doesn't see: left out.
+  task("org/hidden", 1, true, { maxParallel: 1 });
+  const url = await serveHttp(t, ctx);
+  const state = async () =>
+    (await fetch(`${url}/api/state`, { headers: { "x-user": "alice" } })).json();
+  assert.deepEqual((await state()).repoSlots, {
+    "org/capped": { running: 1, queued: 1, max: 2, own: true },
+    "org/shared": { running: 1, queued: 1, max: 4, own: false },
+  });
+  ctx.permissions = permissionsOf({ alice: { "org/equal": ["*"] } });
+  const http = createHttp(ctx);
+  const { url: other } = await serve(t, (req, res) => http.handle(req, res, { user: "alice" }));
+  const equal = await (await fetch(`${other}/api/state`)).json();
+  assert.deepEqual(equal.repoSlots, { "org/equal": { running: 1, queued: 0, max: 4, own: false } });
+});
+
 test("api/review (#625): the last review's findings for a repo the login sees, 404 otherwise", async (t) => {
   const asked = [];
   const findings = { verdict: "comment", findings: [{ text: "<b>a hole</b>" }] };
