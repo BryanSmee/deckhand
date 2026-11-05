@@ -238,6 +238,11 @@ test("a host: beyond the grant refused for the operator to change; within it ask
   assert.equal(verdict({ kind: "host", value: "github.com" }).verdict, "given");
   const open = { ...LIVE, hosts: ["*"] };
   assert.equal(verdict({ kind: "host", value: "evil.example" }, { live: open }).verdict, "given");
+  // A granted host through the open internet's `*`: told its private addresses stay out of reach.
+  assert.match(
+    verdict({ kind: "host", value: "registry.npmjs.org" }, { live: open }).message,
+    /at its public addresses; with the open internet, a host's private addresses stay out of reach/,
+  );
   // Not a host: refused, nothing asked.
   for (const value of ["", "*", "a b", "https://x.example/"]) {
     assert.equal(verdict({ kind: "host", value }).verdict, "invalid", value);

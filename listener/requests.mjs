@@ -150,8 +150,9 @@ export function createRequests(
     } finally {
       busy.delete(id);
     }
-    // Its run ended meanwhile (ended()): closed already.
+    // Its run ended meanwhile (ended() left it to this): nobody left to ask.
     if (record.state !== "pending") return;
+    if (!taskOfRun(run)) return close(record, "denied", "Denied: this sandbox's run has ended.");
     if (decided.verdict === "ask") {
       Object.assign(record, { what: decided.what, adds: decided.adds, live: decided.live });
       arm(record);
@@ -259,13 +260,14 @@ export function createRequests(
       return await answering(record, String(user).toLowerCase(), choice);
     } finally {
       busy.delete(id);
-      // Its timeout passed meanwhile, and the answer didn't close it (a failure).
-      if (record.state === "pending" && record.expiresAt <= now()) expire(record);
+      // The answer didn't close it (a failure): its run ended meanwhile, or its timeout passed.
+      if (record.state === "pending" && !taskOfRun(record.run)) ended(record.run);
+      else if (record.state === "pending" && record.expiresAt <= now()) expire(record);
     }
   }
 
-  // answer()'s, the request held: each wait may end with the request closed (its run ended),
-  // which nothing here undoes.
+  // answer()'s, the request held (ended() and its timeout leave it to this): its run ending
+  // before the approval applies denies it; once applied, it is granted, as it was.
   const gone = () => ({ error: 409, message: "Its sandbox has stopped: the request is closed." });
   async function answering(record, by, choice) {
     const task = taskOfRun(record.run);
@@ -278,7 +280,7 @@ export function createRequests(
       return { request: shown(record) };
     }
     const decided = await decide(task, record);
-    if (record.state !== "pending" || !taskOfRun(record.run)) {
+    if (!taskOfRun(record.run)) {
       await close(record, "denied", "Denied: this sandbox's run has ended.");
       return gone();
     }
@@ -297,9 +299,10 @@ export function createRequests(
   }
 
   // A run that ended: its requests still waiting are denied (its agent is gone).
+  // One being decided or answered is left to that, which closes it as it applied it or not.
   function ended(run) {
     for (const record of requests.values()) {
-      if (record.run !== run || record.state !== "pending") continue;
+      if (record.run !== run || record.state !== "pending" || busy.has(record.id)) continue;
       close(record, "denied", "Denied: this sandbox's run has ended.").catch((error) =>
         log(`Permission requests: ${error.stack ?? error}`),
       );

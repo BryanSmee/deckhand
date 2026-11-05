@@ -1026,4 +1026,9 @@ test("a request's answer: waited for, a run asking in a loop stopped at REQUESTS
   for (let i = 2; i < REQUESTS_MAX; i++) await permissions.ask(record, { kind: "engine" });
   const over = await permissions.ask(record, { kind: "engine" });
   assert.equal(over.status, 429);
+  // For the run's whole life, not a few hours: its count goes as the run ends.
+  clock.now += 24 * 60 * 60_000;
+  assert.equal((await permissions.ask(record, { kind: "engine" })).status, 429);
+  await permissions.forget("run-c");
+  assert.equal((await permissions.ask(record, { kind: "engine" })).status, 202);
 });

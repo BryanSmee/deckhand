@@ -65,7 +65,8 @@ export function createPermissions({ store, now = Date.now, sleep = realSleep }) 
       { ttlMs: REQUEST_TTL_MS },
     );
     if (created) {
-      const asked = await store.increment(countKey(record.id), 1, { ttlMs: REQUEST_TTL_MS });
+      // No expiry: it lasts as long as the run, which deletes it as it ends (forget()).
+      const asked = await store.increment(countKey(record.id), 1);
       if (asked > REQUESTS_MAX) {
         await store.delete(requestKey(record.id, id));
         return refusal(429, `this run asked ${REQUESTS_MAX} times already: no more requests`);
@@ -123,7 +124,10 @@ export function createPermissions({ store, now = Date.now, sleep = realSleep }) 
     }
   }
 
-  return { ask, answerOf, answer };
+  // A run ended (DELETE /runs/:id), or its record expired: its count goes with it.
+  const forget = (run) => store.delete(countKey(run));
+
+  return { ask, answerOf, answer, forget };
 }
 
 const refusal = (status, message) => ({ status, body: { message } });

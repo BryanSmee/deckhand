@@ -286,8 +286,16 @@ export function requestVerdict({ kind, value }, { ceiling, profile, live }) {
     if (!host || host === "*" || hostProblem(host)) {
       return invalid("a host is a name such as registry.npmjs.org");
     }
-    if (live.hosts && matchHost(host, live.hosts) !== null) {
+    const reached = live.hosts ? matchHost(host, live.hosts) : null;
+    if (reached === "exact" || reached === "wildcard") {
       return given(`${host} is reachable from this sandbox already`);
+    }
+    // Through the open internet's `*` alone (a chat with `internet`): its public addresses only,
+    // never a private one, whatever the grants say (preparation.mjs openHosts()).
+    if (reached === "any") {
+      return given(
+        `${host} is reachable from this sandbox already at its public addresses; with the open internet, a host's private addresses stay out of reach, whatever is approved`,
+      );
     }
     // The narrowest entry that covers it: the host itself, the longest `*.domain`, `*` last.
     const entry =

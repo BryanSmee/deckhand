@@ -671,15 +671,24 @@ export function createChats(
   }
 
   // The profile a chat's next start gets (preparation.mjs): its saved one, with what its owner
-  // approved once for it, which this start uses up.
+  // approved once for it, which this start uses up once its preparation is through
+  // (spentOnce()): a start that fails before keeps it for the next one.
   function startProfile(task) {
     const chat = subjectOf(task);
     if (!chat) return null;
+    if (task.live) task.live.once = chat.once ?? null;
     if (!chat.once) return chat.profile ?? null;
-    const profile = widened(chat.profile, chat.once);
+    return widened(chat.profile, chat.once);
+  }
+
+  // The start that read it (startProfile()) is prepared: what was approved once is used up,
+  // unless the owner approved more once since (a new value).
+  function spentOnce(task) {
+    const chat = subjectOf(task);
+    const used = task.live?.once;
+    if (!chat || !used || chat.once !== used) return;
     chat.once = null;
     save();
-    return profile;
   }
 
   // The chats going whose owner may no longer run the agent on their repository: stopped. Every
@@ -814,6 +823,7 @@ export function createChats(
     options,
     profileOf: (task) => chats.get(task.id.slice("chat-".length))?.profile ?? null,
     startProfile,
+    spentOnce,
     subjectOf,
     decideRequest,
     grantRequest,

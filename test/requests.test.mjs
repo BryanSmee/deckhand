@@ -65,6 +65,8 @@ function setup({ store = openStore("memory:"), verdicts = {}, failing = false } 
       },
       grantRequest: async (_task, record, scope) => {
         granted.push({ id: record.id, scope, adds: record.adds });
+        // The chat's save, which a test may hold.
+        await ctx.saving;
         return record.live ? "It applies now." : "It applies at the next start.";
       },
     },
@@ -329,13 +331,14 @@ test("a run ending while its approval is decided: closed as denied, nothing gran
 
 test("a run ending while its request is first decided: nothing armed, nothing asked", async () => {
   let decided;
-  const { requests, told, clock } = setup({
+  const { requests, told, clock, ctx } = setup({
     verdicts: { host: new Promise((resolve) => (decided = resolve)) },
   });
   const receiving = requests.received(event(1));
   // Being decided: not answerable yet.
   assert.equal((await requests.answer("alice", CHAT, ID(1), "chat")).error, 409);
   requests.ended(RUN);
+  ctx.tasks.clear();
   decided(ASK);
   await receiving;
   await settled();
@@ -345,5 +348,24 @@ test("a run ending while its request is first decided: nothing armed, nothing as
   assert.deepEqual(
     told.map((t) => t.state),
     ["denied"],
+  );
+});
+
+test("a run ending while an approval is saved: granted, as it was applied, and told so", async () => {
+  const { requests, told, granted, task, ctx } = setup({ verdicts: { host: ASK } });
+  await requests.received(event(1));
+  let saved;
+  ctx.saving = new Promise((resolve) => (saved = resolve));
+  const approving = requests.answer("alice", CHAT, ID(1), "chat");
+  await settled();
+  assert.equal(granted.length, 1);
+  task.live.finishing = true;
+  requests.ended(RUN);
+  saved();
+  assert.equal((await approving).request.state, "granted");
+  await settled();
+  assert.deepEqual(
+    told.map((t) => t.state),
+    ["granted"],
   );
 });

@@ -122,6 +122,8 @@ export function createPreparation(ctx) {
       live.cancelled || !caps.has("push")
         ? null
         : ((await ctx.linkedBranches?.link(task, note)) ?? null);
+    // Its preparation through: what its owner approved once for it is used up (#479).
+    if (isChat(task)) ctx.chats?.spentOnce?.(task);
     return {
       // Another agent takes over: the branches are part of what it is handed.
       message: handoff ? handoffMessage({ ...handoff, branches }) : message,

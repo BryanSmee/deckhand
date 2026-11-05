@@ -23,7 +23,7 @@ const KINDS = ["host", "github", "engine", "mount"];
 // Past the orchestrator's longest timeout (an hour): a request no answer ever reaches.
 const GIVE_UP_MS = 65 * 60_000;
 
-const DESCRIPTION = `Ask the user of this chat for a permission this sandbox lacks, when something you need is refused: a host the network refuses (kind "host", value its name, such as registry.npmjs.org), GitHub beyond reading (kind "github", value "comment" or "push"), a container engine (kind "engine", no value), or one of the repository's granted host mounts (kind "mount", value the path it is mounted at). It waits for their answer, which may take minutes; no answer in time denies it. What Deckhand's operator doesn't allow the repository is refused at once, with the reason: don't ask for it again. A host approved is reachable at once; the rest apply when the sandbox starts again, which the answer says.`;
+const DESCRIPTION = `Ask the user of this chat for a permission this sandbox lacks, when something you need is refused: a host the network refuses (kind "host", value its name, such as registry.npmjs.org), GitHub beyond reading (kind "github", value "comment" or "push": a chat only reads GitHub for now, so these are refused), a container engine (kind "engine", no value), or one of the repository's granted host mounts (kind "mount", value the path it is mounted at). It waits for their answer, which may take minutes; no answer in time denies it. What Deckhand's operator doesn't allow the repository is refused at once, with the reason: don't ask for it again. A host approved is reachable at once; the rest apply when the sandbox starts again, which the answer says.`;
 
 const TOOL = {
   name: "request_permission",
@@ -153,7 +153,11 @@ async function handle(msg) {
       });
     }
     const answer = await ask(kind, String(value), String(reason));
-    return reply(id, { content: [{ type: "text", text: answer.message || answer.state }] });
+    // A refusal or a denial is the tool's error: the agent stops there rather than asking again.
+    return reply(id, {
+      content: [{ type: "text", text: answer.message || answer.state }],
+      ...(answer.state !== "granted" && { isError: true }),
+    });
   }
   reply(id, null, { code: -32601, message: `no method ${method}` });
 }

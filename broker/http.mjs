@@ -259,6 +259,7 @@ export function createBrokerHandler({
     if (req.method === "DELETE" && run && path === `/runs/${id}`) {
       const had = await runs.end(run);
       await files.remove(run);
+      await permissions.forget(run);
       return sendJson(res, { ended: had });
     }
     if (req.method === "POST" && run && path === `/runs/${id}/tokens`) {

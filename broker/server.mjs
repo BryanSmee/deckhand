@@ -34,6 +34,7 @@ import { createCallers, inClusterReview } from "./callers.mjs";
 import { createFiles } from "./files.mjs";
 import { createBrokerServer } from "./http.mjs";
 import { declareMetrics } from "./metrics.mjs";
+import { createPermissions } from "./permissions.mjs";
 import { createRuns } from "./runs.mjs";
 
 export const DRAIN_MS = 30_000;
@@ -76,7 +77,16 @@ export function createBroker({
     mkdirSync(keysDir, { recursive: true });
     publishKey(keysDir, key);
   }
-  const runs = createRuns({ store, key, now, expired: (id) => files.remove(id) });
+  const permissions = createPermissions({ store, now, sleep });
+  const runs = createRuns({
+    store,
+    key,
+    now,
+    expired: async (id) => {
+      await files.remove(id);
+      await permissions.forget(id);
+    },
+  });
   const files = createFiles({ store, blobs, runs, now, sleep });
   const metrics = registry ? declareMetrics(registry, { runs }) : undefined;
   let draining = false;
@@ -91,6 +101,7 @@ export function createBroker({
     sleep,
     log,
     metrics,
+    permissions,
     ...(health && { health }),
   });
   server.startDraining = () => (draining = true);

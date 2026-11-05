@@ -893,6 +893,9 @@ test("requests: what is approved once for a start goes to the next one alone (st
   // Its saved profile unchanged; the next start gets it once.
   assert.deepEqual(chats.profileOf(task).capabilities, ["pull"]);
   assert.deepEqual(chats.startProfile(task).capabilities, ["pull", "setup"]);
+  // A start that fails before its preparation is through keeps it for the next one.
+  assert.deepEqual(chats.startProfile(task).capabilities, ["pull", "setup"]);
+  chats.spentOnce(task);
   assert.deepEqual(chats.startProfile(task).capabilities, ["pull"]);
   // Saved for the chat only within its ceiling: refused, the sandbox's hosts untouched.
   const host = { kind: "host", what: "x", adds: { hosts: ["evil.example"] }, live: true };
