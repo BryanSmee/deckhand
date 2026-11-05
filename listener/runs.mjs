@@ -1171,6 +1171,22 @@ export function createRuns(ctx) {
         ?.pushed({ repo: task.repo, base: task.base, number: pull.number })
         .catch((error) => log(`${key}: requesting its reviewers: ${error.stack ?? error}`));
     }
+    // A conflict run that is over: the review loop goes on from what it pushed (reviews.mjs
+    // rebased()), its decision marking the loop at once (looping()).
+    const rebaseRun = live.handled.find(
+      (item) => item.reason === "conflict" && !task.pending.includes(item),
+    );
+    if (rebaseRun) {
+      ctx.reviews
+        ?.rebased({
+          repo: task.repo,
+          number: rebaseRun.replyTo,
+          base: task.base,
+          status: record.status,
+          from: rebaseRun.rebaseFrom ?? null,
+        })
+        .catch((error) => log(`${key}: after the rebase run: ${error.stack ?? error}`));
+    }
     // Any run's end: a CI fix run may have waited for the issue's task to be free (reviews.mjs
     // runEnded()).
     ctx.reviews?.runEnded(task.repo);

@@ -868,6 +868,7 @@ ctx.conflicts = createConflicts({
   policies,
   decided: (key, entry) => ctx.decisions.record(key, entry),
   fixes: (repo, number) => ctx.reviews.fixes(repo, number),
+  looping: (repo, number) => ctx.reviews.looping(repo, number),
   reply: ctx.reply,
   metrics: counted,
   log,

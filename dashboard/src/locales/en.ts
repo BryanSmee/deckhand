@@ -77,6 +77,7 @@ export const en = {
   "loop.checks": "Review · waiting for checks",
   "loop.ci": "Review · waiting for CI",
   "loop.ciFix": "Review · fixing CI",
+  "loop.rebasing": "Review · rebasing",
   "loop.first": "Review · first review",
   "loop.roundOf": "Review · round {round} of {rounds}",
   "loop.round": "Review · round {round}",

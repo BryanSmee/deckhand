@@ -1709,3 +1709,187 @@ test("a maintainer's review in merge mode: its findings counted with the loop's 
   await off.reviews.settle({ ...off.run, auto: false }, off.posted(MEDIUM, at("sha-1")));
   assert.equal(reviewLoop(off.reviews.entry("org/repo", 5)).history.at(-1).blocking, 1);
 });
+
+// Issue #896: a conflict run (conflicts.mjs) during the loop, or after its last decision.
+const rebaseEnd = (from = "sha-1", status = "ok") => ({ ...done, status, from });
+
+// `s`'s pull request turned ready at sha-1: the loop's review queued (consider()).
+async function readyAt(s, sha = "sha-1") {
+  await s.reviews.consider("pull_request", {
+    action: "ready_for_review",
+    installation: { id: 1 },
+    repository: { full_name: "org/repo", default_branch: "trunk" },
+    pull_request: { ...PR, head: { sha, repo: { full_name: "org/repo" } } },
+  });
+}
+
+test("rebase: a merge refused for the conflict, the rebased head reviewed, then merged (#896)", async (t) => {
+  const path = join(tempDir(t), "reviews.json");
+  const s = setup(t, { path, pr: { mergeable_state: "dirty" } });
+  await readyAt(s);
+  assert.equal(await s.settle(), null);
+  assert.match(s.replies[0].text, /`mergeable_state: dirty`/);
+  // The conflict watcher's run pushed sha-2, now clean: its review, no fix round used.
+  s.over.pr = { ...at("sha-2"), mergeable_state: "clean" };
+  const review = await s.reviews.rebased(rebaseEnd());
+  assert.deepEqual([review.reason, review.id, review.replyTo], ["review", "12", 5]);
+  assert.equal(s.reviews.fixes("org/repo", 5), 0);
+  // Its end, redelivered or after a restart: one review only.
+  assert.equal(await s.reviews.rebased(rebaseEnd()), null);
+  const again = setup(t, { path, pr: { ...at("sha-2"), mergeable_state: "clean" } });
+  assert.equal(await again.reviews.rebased(rebaseEnd()), null);
+  assert.equal(s.accepted.length + again.accepted.length, 2);
+  // Its review, clean: the merge decided again, at the rebased head.
+  const merged = await again.reviews.settle(again.run, again.posted(CLEAN, at("sha-2")));
+  assert.deepEqual(merged, { sha: "sha-2", method: "squash" });
+});
+
+test("rebase: one that failed, stopped to ask or pushed nothing leaves the pull request alone", async (t) => {
+  for (const [status, sha, from] of [
+    ["error", "sha-2", "sha-1"],
+    ["needs-input", "sha-2", "sha-1"],
+    ["cancelled", "sha-2", "sha-1"],
+    ["ok", "sha-1", "sha-1"],
+    // Pushed nothing, on a head pushed after the review.
+    ["ok", "sha-3", "sha-3"],
+  ]) {
+    const s = setup(t, { pr: { mergeable_state: "dirty" } });
+    await readyAt(s);
+    await s.settle();
+    s.over.pr = { ...at(sha), mergeable_state: "clean" };
+    assert.equal(await s.reviews.rebased(rebaseEnd(from, status)), null, status);
+    assert.deepEqual([s.accepted.length, s.replies.length], [1, 1], status);
+    // The merge's decision stands.
+    assert.equal(await s.settle(CLEAN, {}), null);
+    assert.equal(s.merges().length, 0);
+  }
+  // Pushed, but its issue waits for the maintainer's input.
+  const asks = setup(t, { pr: { mergeable_state: "dirty" } });
+  await readyAt(asks);
+  await asks.settle();
+  asks.over.pr = { ...at("sha-2"), labels: [{ name: "needs-input" }] };
+  assert.equal(await asks.reviews.rebased(rebaseEnd()), null);
+  assert.equal(asks.accepted.length, 1);
+});
+
+test("rebase: only on a pull request the loop reviewed, with review.on: ready still", async (t) => {
+  // Never reviewed automatically: no entry, or a maintainer's review alone.
+  const none = setup(t, { pr: at("sha-2") });
+  assert.equal(await none.reviews.rebased(rebaseEnd()), null);
+  await none.reviews.settle({ ...none.run, auto: false }, none.posted(CLEAN));
+  assert.equal(await none.reviews.rebased(rebaseEnd()), null);
+  assert.deepEqual(none.accepted, []);
+  // Turned off since the loop's review.
+  const path = join(tempDir(t), "reviews.json");
+  await readyAt(setup(t, { path }));
+  const off = setup(t, { path, yaml: "review:\n  on: never\n", pr: at("sha-2") });
+  assert.equal(await off.reviews.rebased(rebaseEnd()), null);
+  assert.deepEqual(off.accepted, []);
+});
+
+test("rebase: a fix run skipped for the conflict run starts after the rebased head's review", async (t) => {
+  let busy = false;
+  const s = setup(t, { busy: () => busy, pr: at("sha-1") });
+  await readyAt(s);
+  // The conflict watcher queued its run while the review's end was decided.
+  busy = true;
+  assert.equal(await s.reviews.settle(s.run, s.posted(HIGH)), null);
+  assert.match(s.replies[0].text, /no fix run started/);
+  busy = false;
+  s.over.pr = at("sha-2");
+  assert.equal((await s.reviews.rebased(rebaseEnd())).reason, "review");
+  // Still blocking at the rebased head: the loop's first fix run, round 1 of 1.
+  const fix = await s.reviews.settle(s.run, s.posted(HIGH, at("sha-2")));
+  assert.deepEqual([fix.reason, fix.round, fix.rounds], ["review-fix", 1, 1]);
+  // Its push reviewed, then merged: the rebase used up no round.
+  s.over.pr = at("sha-3");
+  assert.equal((await s.reviews.fixed(done)).reason, "review");
+  const merged = await s.reviews.settle(s.run, s.posted(CLEAN, at("sha-3")));
+  assert.deepEqual(merged, { sha: "sha-3", method: "squash" });
+});
+
+test("rebase: a merge waiting for checks, refused for the conflict run going, or still waiting", async (t) => {
+  let busy = false;
+  const s = setup(t, { busy: () => busy, runs: [GOING] });
+  await readyAt(s);
+  assert.equal(await s.settle(), null);
+  // The conflict run starts while the merge waits; the checks end while it runs.
+  busy = true;
+  s.over.runs = [{ name: "CI", status: "completed", conclusion: "success" }];
+  await s.reviews.checksDone("workflow_run", completed());
+  assert.match(s.replies[0].text, /#12 has a run going or queued/);
+  busy = false;
+  s.over.pr = at("sha-2");
+  assert.equal((await s.reviews.rebased(rebaseEnd())).reason, "review");
+  assert.deepEqual(await s.reviews.settle(s.run, s.posted(CLEAN, at("sha-2"))), {
+    sha: "sha-2",
+    method: "squash",
+  });
+  // Its end before any decision: the old head's wait goes, the rebased head is reviewed.
+  const w = setup(t, { runs: [GOING] });
+  await readyAt(w);
+  await w.settle();
+  w.over.pr = at("sha-2");
+  assert.equal((await w.reviews.rebased(rebaseEnd())).reason, "review");
+  w.over.runs = [{ name: "CI", status: "completed", conclusion: "success" }];
+  await w.reviews.checksDone("workflow_run", completed());
+  assert.equal(w.merges().length, 0);
+  assert.deepEqual(await w.reviews.settle(w.run, w.posted(CLEAN, at("sha-2"))), {
+    sha: "sha-2",
+    method: "squash",
+  });
+});
+
+test("rebase: any other merge decision stands, the rebased head reviewed all the same", async (t) => {
+  const s = setup(t, { yaml: MERGE, pr: at("sha-1") });
+  await readyAt(s);
+  await round(s, HIGH, "sha-2");
+  // Its one round used: the review after it still blocks, and the merge is refused for it.
+  assert.equal(await s.reviews.settle(s.run, s.posted(HIGH, at("sha-2"))), null);
+  assert.match(s.replies.at(-1).text, /still has/);
+  s.over.pr = at("sha-3");
+  assert.equal((await s.reviews.rebased(rebaseEnd("sha-2"))).reason, "review");
+  assert.equal(await s.reviews.settle(s.run, s.posted(CLEAN, at("sha-3"))), null);
+  assert.equal(s.merges().length, 0);
+});
+
+test("rebase: waiting for CI, the CI step follows the rebased head itself", async (t) => {
+  const yaml = "review:\n  on: ready\n  fix: true\n  ci: wait\n";
+  const s = setup(t, { yaml, runs: [GOING], pr: at("sha-1") });
+  await readyAt(s);
+  assert.deepEqual(s.accepted, []);
+  assert.equal(s.reviews.looping("org/repo", 5), true);
+  // The wait moves to the rebased head, whose runs decide: no review of its own besides.
+  s.over.pr = at("sha-2");
+  assert.equal(await s.reviews.rebased(rebaseEnd()), null);
+  assert.equal(s.reviews.entry("org/repo", 5).ciWaiting.sha, "sha-2");
+  s.over.runs = [{ name: "CI", status: "completed", conclusion: "success" }];
+  await s.reviews.checksDone("workflow_run", completed("sha-2"));
+  assert.deepEqual(
+    s.accepted.map((i) => i.reason),
+    ["review"],
+  );
+  assert.equal(s.reviews.looping("org/repo", 5), false);
+});
+
+test("looping: while what follows a run is decided, not while the merge waits for checks", async (t) => {
+  const s = setup(t, { runs: [GOING] });
+  await readyAt(s);
+  assert.equal(s.reviews.looping("org/repo", 5), false);
+  // From the review's end on, synchronously (runs.mjs cleanUp()).
+  const settling = s.settle();
+  assert.equal(s.reviews.looping("org/repo", 5), true);
+  await settling;
+  assert.equal(s.reviews.looping("org/repo", 5), false);
+  assert.ok(s.reviews.entry("org/repo", 5).waiting);
+});
+
+test("review loop: rebasing while a conflict run goes on a pull request the loop reviewed", () => {
+  const entry = { head: "sha-1", rounds: [{ round: 0, head: "sha-1", blocking: 0 }] };
+  assert.equal(reviewLoop(entry, "conflict").loop, "rebasing");
+  assert.equal(reviewLoop({ ...entry, mergeAt: 1 }, "conflict").loop, "rebasing");
+  // A maintainer's review alone, or none: not the loop's.
+  const manual = { rounds: [{ round: 0, head: "sha-1", blocking: 0, manual: true }] };
+  assert.equal(reviewLoop(manual, "conflict").loop, "clean");
+  assert.equal(reviewLoop(null, "conflict"), null);
+});
