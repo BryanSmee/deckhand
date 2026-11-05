@@ -53,7 +53,7 @@ spec:
                 [ -n "$password" ] || { echo "deckhand-redis: no password for $service" >&2; exit 1; }
                 # SCAN, the store's keys(), isn't held to the user's key pattern: only the
                 # services listing their keys get it, which see the others' key names.
-                case $service in orchestrator|runner) scan=" +scan" ;; *) scan="" ;; esac
+                case $service in edge|orchestrator|runner) scan=" +scan" ;; *) scan="" ;; esac
                 echo "user $service on >$password ~deckhand:$service:* resetchannels -@all +evalsha +eval +time +exists$scan +hmget +hset +del +pexpireat +incr +xadd +xgroup|create +xreadgroup +xack +xdel +xinfo|groups +getrange +strlen +set +append +select +ping +quit" >> "$conf"
               done
           securityContext:
