@@ -203,6 +203,7 @@ test("issue comments: trigger, text and reply target", () => {
       trigger: "work",
       modeLine: null,
       after: null,
+      machine: null,
       text: "Use X.",
       replyTo: 12,
       comment: undefined,
@@ -448,6 +449,7 @@ test("trigger lines and options", () => {
     trigger: "stop",
     mode: null,
     after: null,
+    machine: null,
     text: "",
   });
   // `/cancel` stops a run: its own command, not the brainstorm's wrap-up.
@@ -455,6 +457,7 @@ test("trigger lines and options", () => {
     trigger: "cancel",
     mode: null,
     after: null,
+    machine: null,
     text: "it loops",
   });
   assert.equal(splitTrigger(config, "/cancel please").trigger, null);
@@ -462,6 +465,7 @@ test("trigger lines and options", () => {
     trigger: null,
     mode: null,
     after: null,
+    machine: null,
     text: "just text",
   });
   // The default trigger, compared loosely; the lines after it are the instructions.
@@ -470,6 +474,7 @@ test("trigger lines and options", () => {
       trigger: "work",
       mode: null,
       after: null,
+      machine: null,
       text: "Fix it.",
     });
   }
@@ -509,6 +514,7 @@ test("a /mode line picks the mode, and is never taken for /model", () => {
     trigger: "work",
     mode: "review",
     after: null,
+    machine: null,
     text: "Look at X.",
   });
   // On the trigger's line too.
@@ -516,6 +522,7 @@ test("a /mode line picks the mode, and is never taken for /model", () => {
     trigger: "work",
     mode: "brainstorm",
     after: null,
+    machine: null,
     text: "Ideas?",
   });
   assert.equal(splitTrigger(config, "Deckhand /model sonnet").mode, null);
@@ -525,6 +532,7 @@ test("a /mode line picks the mode, and is never taken for /model", () => {
     trigger: null,
     mode: "work",
     after: null,
+    machine: null,
     text: "Go ahead.",
   });
   const model = splitTrigger(config, "Deckhand\n/model sonnet");
@@ -557,6 +565,7 @@ test("/after: on the trigger line or its own, with /mode, /model, /effort and th
     trigger: "work",
     mode: null,
     after: { numbers: [77] },
+    machine: null,
     text: "",
   });
   const body =
@@ -565,6 +574,7 @@ test("/after: on the trigger line or its own, with /mode, /model, /effort and th
     trigger: "work",
     mode: "work",
     after: { numbers: [77, 80] },
+    machine: null,
     text: "/effort high\nDo it on top of the new parser.",
   });
   // Both on the trigger line, either order.
@@ -589,7 +599,13 @@ test("/after: on the trigger line or its own, with /mode, /model, /effort and th
 
 test("/agent, /model and /effort on the trigger line, each kept on its own line", () => {
   const agent = splitTrigger(config, "Deckhand /agent codex\nDo X");
-  assert.deepEqual(agent, { trigger: "work", mode: null, after: null, text: "/agent codex\nDo X" });
+  assert.deepEqual(agent, {
+    trigger: "work",
+    mode: null,
+    after: null,
+    machine: null,
+    text: "/agent codex\nDo X",
+  });
   const options = {};
   assert.equal(takeOptions(agent.text, options), "Do X");
   assert.deepEqual(options, { agent: "codex" });

@@ -228,7 +228,7 @@ test("MCP: a token without deckhand:read lists no read tool, and calls none", as
   const scopes = "deckhand:machine";
   assert.deepEqual(
     (await rpc("tools/list", {}, { scopes })).tools.map((x) => x.name),
-    ["register_machine", "heartbeat", "unregister_machine"],
+    ["register_machine", "heartbeat", "claim", "release", "unregister_machine"],
   );
   const refused = await tool("list_repos", {}, { scopes });
   assert.equal(refused.isError, true);
@@ -917,6 +917,57 @@ test("MCP: register, heartbeat and unregister a machine with deckhand:machine, r
   const after = await tool("heartbeat", { machine: machine.id }, MACHINE);
   assert.equal(after.isError, true);
   assert.match(after.content[0].text, /register it again/);
+});
+
+test("MCP: claim, heartbeat with the claims' runs, and release, with deckhand:machine", async (t) => {
+  const { ctx } = orchestrator();
+  withMachines(ctx);
+  const asked = [];
+  let work = null;
+  ctx.claims = {
+    claim: async (user, id) => (asked.push(["claim", user, id]), work),
+    renew: (user, id, runs) => (
+      asked.push(["renew", user, id, runs]),
+      [{ run: "r1", key: "org/repo#12", leaseUntil: 5 }]
+    ),
+    release: (user, id, run) => {
+      asked.push(["release", user, id, run]);
+      if (run !== "r1") throw new Refused(404, "No claim r2 on this machine.");
+      return "org/repo#12";
+    },
+  };
+  const { tool } = await serveMcp(t, ctx);
+  const desk = await tool("register_machine", { name: "desk", repos: ["org/repo"] }, MACHINE);
+  const id = desk.structuredContent.machine.id;
+  const refused = await tool("claim", { machine: id }, { scopes: "deckhand:work" });
+  assert.match(refused.content[0].text, /deckhand:machine/);
+  const none = await tool("claim", { machine: id }, MACHINE);
+  assert.deepEqual(none.structuredContent, { work: null });
+  assert.equal(none.content[0].text, "Nothing to take now: claim again.");
+  work = { run: "r1", key: "org/repo#12", mode: "work", branch: "issue-12-x", resume: true };
+  const claimed = await tool("claim", { machine: id }, MACHINE);
+  assert.deepEqual(claimed.structuredContent.work, work);
+  assert.match(
+    claimed.content[0].text,
+    /^Claimed org\/repo#12 \(work, its session goes on\): run r1/,
+  );
+  const beat = await tool("heartbeat", { machine: id, runs: ["r1"] }, MACHINE);
+  assert.deepEqual(beat.structuredContent.claims, [
+    { run: "r1", key: "org/repo#12", leaseUntil: 5 },
+  ]);
+  assert.equal((await tool("heartbeat", { machine: id, runs: "r1" }, MACHINE)).isError, true);
+  const released = await tool("release", { machine: id, run: "r1" }, MACHINE);
+  assert.deepEqual(released.structuredContent, { released: "r1", key: "org/repo#12" });
+  const wrong = await tool("release", { machine: id, run: "r2" }, MACHINE);
+  assert.equal(wrong.isError, true);
+  assert.equal(wrong.content[0].text, "No claim r2 on this machine.");
+  assert.deepEqual(asked, [
+    ["claim", "alice", id],
+    ["claim", "alice", id],
+    ["renew", "alice", id, ["r1"]],
+    ["release", "alice", id, "r1"],
+    ["release", "alice", id, "r2"],
+  ]);
 });
 
 test("MCP: a machine is listed and reached by its owner alone", async (t) => {

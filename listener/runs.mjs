@@ -680,6 +680,8 @@ export function createRuns(ctx) {
   function cancel(key, by) {
     const task = ctx.tasks.get(key);
     if (!task) return null;
+    // A machine's claim (claims.mjs): over, its machine told at its next heartbeat.
+    if (task.claim && ctx.claims?.cancel(task, by)) return "running";
     const live = task.live;
     if (live && !live.finishing && !live.cancelled) {
       live.cancelled = { by, at: Date.now() };

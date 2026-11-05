@@ -18,6 +18,7 @@ import { Refused, readBody, send } from "../lib/http.mjs";
 import { agentFor } from "./agents/index.mjs";
 import { STATES } from "./board.mjs";
 import { parseKey } from "./events.mjs";
+import { CLAIM_WAIT_MS, LEASE_MS } from "./claims.mjs";
 import { HEARTBEAT_MS, MAX_CAPACITY, ONLINE_MS, WARNING } from "./machines.mjs";
 import { reader, stampOf } from "./runlog.mjs";
 import { taskId } from "./spelling.mjs";
@@ -83,7 +84,7 @@ const INSTRUCTIONS = `Deckhand runs coding agents on GitHub issues and pull requ
 read what its dashboard shows you: your repositories, their tasks (an issue or pull request and \
 its runs), each run's log, and the schedule; with the deckhand:work scope, rerun and schedule act \
 as its dashboard does, commenting on the issue as the user; with deckhand:machine, a machine's \
-driver registers it and says it is there. A task is named by its key, \
+driver registers it, says it is there and claims the tasks routed to it. A task is named by its key, \
 "owner/repo#12" for an issue, "owner/repo#pr-12" for a pull request.`;
 
 const RPC = {
@@ -257,13 +258,43 @@ const TOOL_SPECS = [
     name: "heartbeat",
     title: "Say this machine is there",
     scope: MACHINE,
-    description: `Says your machine is there, every ${HEARTBEAT_MS / 1000} s: it is online while its last heartbeat is under ${ONLINE_MS / 1000} s old. A machine Deckhand no longer has (removed from the dashboard) is refused: register it again.`,
+    description: `Says your machine is there, every ${HEARTBEAT_MS / 1000} s: it is online while its last heartbeat is under ${ONLINE_MS / 1000} s old, and its claims' leases (${LEASE_MS / 60000} minutes) are renewed. Returns its claims: one it no longer lists has ended (cancelled, or its lease ran out), and its run should stop. A machine Deckhand no longer has (removed from the dashboard) is refused: register it again.`,
     inputSchema: object(
       {
         machine: { type: "string", description: "Its id, from register_machine." },
         version: { type: "string", description: "The driver's version." },
+        runs: {
+          type: "array",
+          items: { type: "string" },
+          description:
+            "The claims' runs it still has, from claim: only theirs are renewed. Left out, all of its claims are.",
+        },
       },
       ["machine"],
+    ),
+  },
+  {
+    name: "claim",
+    title: "Claim this machine's next task",
+    scope: MACHINE,
+    description: `Waits up to ${CLAIM_WAIT_MS / 1000} s for the next task your machine may take, and claims it: an issue routed to your machines (a \`runs-on:<label>\` label you added, or your \`/machine <name or label>\` comment) in a repository offered to it, within its capacity. Returns the work as a sandbox run gets it: repository, issue, branch, mode, prompt and message (\`resume\`: the machine ran the issue before, its session goes on); none when nothing came. The claim holds a lease of ${LEASE_MS / 60000} minutes that heartbeat renews: one that runs out gives the task back, and it waits for this machine again. ${WARNING}`,
+    inputSchema: object(
+      { machine: { type: "string", description: "Its id, from register_machine." } },
+      ["machine"],
+    ),
+  },
+  {
+    name: "release",
+    title: "Give a claimed task back",
+    scope: MACHINE,
+    description:
+      "Gives a claim back: its comments wait again, for this machine (the issue sticks to it), as soon as it claims again.",
+    inputSchema: object(
+      {
+        machine: { type: "string", description: "Its id, from register_machine." },
+        run: { type: "string", description: "The claim's run, from claim." },
+      },
+      ["machine", "run"],
     ),
   },
   {
@@ -300,7 +331,8 @@ export const TOOLS = TOOL_SPECS.map(({ scope = READ, ...tool }) => ({
 //                            Refused as the dashboard's
 //   schedule(user, repo, body)  its POST …/work, the same way
 //   machines                 the user's machines (machines.mjs createMachines()): register(),
-//                            heartbeat(), remove() and offers(), each throwing Refused
+//                            heartbeat() (its claims' leases renewed), remove(), offers(), and
+//                            its claims' claim() and release() (claims.mjs), each throwing Refused
 // `version`: Deckhand's, which `initialize` says.
 export function createMcp({ source, version = "dev", now = Date.now, log = () => {} }) {
   const tools = {
@@ -314,6 +346,8 @@ export function createMcp({ source, version = "dev", now = Date.now, log = () =>
     register_machine: registerMachine,
     heartbeat,
     unregister_machine: unregisterMachine,
+    claim: claimTool,
+    release: releaseTool,
   };
 
   // --- The tools ---------------------------------------------------------------------------
@@ -578,12 +612,43 @@ export function createMcp({ source, version = "dev", now = Date.now, log = () =>
   async function heartbeat(user, args) {
     const id = requiredString(args, "machine");
     const version = optionalString(args, "version");
+    const runs = optionalStrings(args, "runs");
     return machineAct(
-      () => source.machines.heartbeat(user, id, version),
+      () => source.machines.heartbeat(user, id, version, runs),
       (m) =>
-        result({ machine: machineView(m), heartbeatSeconds: HEARTBEAT_MS / 1000 }, [
-          `${m.name} is online.`,
-        ]),
+        result(
+          {
+            machine: machineView(m),
+            heartbeatSeconds: HEARTBEAT_MS / 1000,
+            claims: m.claims ?? [],
+          },
+          [
+            `${m.name} is online.`,
+            ...(m.claims ?? []).map((c) => `- ${c.key}: run ${c.run}, its lease renewed`),
+          ],
+        ),
+    );
+  }
+
+  async function claimTool(user, args) {
+    const id = requiredString(args, "machine");
+    return machineAct(
+      () => source.machines.claim(user, id),
+      (work) =>
+        work
+          ? result({ work }, [
+              `Claimed ${work.key} (${work.mode}${work.resume ? ", its session goes on" : ""}): run ${work.run}, on ${work.branch}. Call heartbeat every ${HEARTBEAT_MS / 1000} s with it.`,
+            ])
+          : result({ work: null }, ["Nothing to take now: claim again."]),
+    );
+  }
+
+  async function releaseTool(user, args) {
+    const id = requiredString(args, "machine");
+    const run = requiredString(args, "run");
+    return machineAct(
+      () => source.machines.release(user, id, run),
+      (key) => result({ released: run, key }, [`${key} is given back: it waits again.`]),
     );
   }
 
@@ -908,6 +973,16 @@ function optionalString(args, name) {
   const value = args[name];
   if (value === undefined || value === null) return null;
   if (typeof value !== "string" || !value) throw new BadArguments(`\`${name}\` is a string.`);
+  return value;
+}
+
+// A list of strings, or null when left out.
+function optionalStrings(args, name) {
+  const value = args[name];
+  if (value === undefined || value === null) return null;
+  if (!Array.isArray(value) || value.some((v) => typeof v !== "string")) {
+    throw new BadArguments(`\`${name}\` is a list of strings.`);
+  }
   return value;
 }
 

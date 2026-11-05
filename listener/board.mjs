@@ -8,7 +8,8 @@
 //   working         a run's agent is at work
 //   stopping        a brainstorm is wrapping up ("/stop")
 //   queued          comments wait for a run (a free slot, or the running one to finish);
-//                   `position`: its place in the run order while it waits for a slot
+//                   `position`: its place in the run order while it waits for a slot; a task
+//                   routed to a user's machines (`machine`, claims.mjs) waits for one of them
 //   in-review       its pull request is in the automatic review-and-fix loop, between its
 //                   runs: the next review or fix run queued or being decided, or the
 //                   auto-merge waiting for checks (`review`, reviews.mjs reviewLoop()); while
@@ -123,7 +124,8 @@ function questionsFor(t, last, input, aside) {
 // dismissed runs and those whose questions were set aside (dismissals.mjs list());
 // `pr(key)`, `decisions(key)`: its pull request (pulls.mjs) and policy decisions, newest first
 // (decisions.mjs), for when it last changed; `reviewed(repo, number)`: its pull request's entry
-// in the store's `reviews`, for its `review`.
+// in the store's `reviews`, for its `review`. `machines`: the tasks routed to a user's machines
+// (claims.mjs board()), each with its `machine`.
 // A task waiting for input carries `questions`: { source, runId?, items, raw }, from the reply
 // of its last run when it stopped to ask, else from its issue's body (questions.mjs).
 export function board({
@@ -136,18 +138,21 @@ export function board({
   pr = () => null,
   decisions = () => [],
   reviewed = () => null,
+  machines = [],
 }) {
-  const tasks = gather(runs, [queued, brainstorms, waits, inputs]);
+  const tasks = gather(runs, [queued, brainstorms, waits, inputs, machines]);
   const byKey = (list) => new Map(list.map((x) => [one(x.key), x]));
   const waiting = byKey(queued);
   const talks = byKey(brainstorms);
   const held = byKey(waits);
   const labelled = byKey(inputs);
   const dismissed = byKey(dismissals);
+  const routed = byKey(machines);
   for (const t of tasks.values()) {
     const k = one(t.key);
     const aside = dismissed.get(k)?.questions ? dismissed.get(k) : null;
     settle(t, waiting.get(k), talks.get(k), held.get(k), labelled.get(k), aside);
+    onMachine(t, routed.get(k));
     inReview(t, waiting.get(k), pr(t.key), reviewed);
     t.dismissed = dismissedOf(t, dismissed.get(k));
     t.updatedAt = updatedAt(t, pr(t.key), decisions(t.key));
@@ -180,7 +185,7 @@ const one = taskId;
 
 // One task per key (one() of it), in the order they first appear, with the first one's
 // spelling: the runs' (each keeps its latest RUNS_PER_TASK), then each of `lists`' (queued,
-// brainstorms, waits, inputs).
+// brainstorms, waits, inputs, machines).
 function gather(runs, lists) {
   const tasks = new Map();
   const entry = (key, repo) => {
@@ -272,6 +277,17 @@ function settle(t, q, b, w, input, aside = null) {
     if (q.canWait) t.canWait = true;
   }
   t.rerunnable = rerunnable(t);
+}
+
+// A task routed to a user's machines (claims.mjs), `m` its board() entry: its `machine` ({ owner,
+// want, via, machine, claimed, available }). Claimed, it is at work there (its run's own record
+// is #597's); queued, it waits for that machine, which the dashboard says.
+function onMachine(t, m) {
+  if (!m) return;
+  const { key: _, repo: __, ...machine } = m;
+  t.machine = machine;
+  t.kind ??= "issue";
+  if (m.claimed && t.runs[0]?.status !== "running") t.state = "working";
 }
 
 // The reasons of the loop's own runs (reviews.mjs).

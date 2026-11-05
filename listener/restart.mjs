@@ -447,14 +447,25 @@ export function createRestart(ctx) {
 
   function queueState() {
     const saved = {};
+    const plainOf = (item) => plainWith(item, eyesOf(item));
     for (const [key, t] of tasks) {
       // Once each: one a run put back in `pending` may still be moving.
       const all = [...new Set([...takenBy(t.live), ...(parked.get(t) ?? []), ...t.pending])];
-      if (!all.length && !Object.keys(t.next).length) continue;
-      const pending = all.map((item) => plainWith(item, eyesOf(item)));
+      // A machine task's comments held for its owner, and its machine's claim (claims.mjs):
+      // in the same write as the queue they come from and go back to.
+      const held = t.held ?? [];
+      if (!all.length && !Object.keys(t.next).length && !held.length && !t.claim) continue;
+      const pending = all.map(plainOf);
       // The comments' text and authors: the store is the listener's own (its files the
       // owner's only, lib/store-file.mjs).
-      saved[key] = { ...pick(t), pending, next: t.next, dueAt: t.dueAt ?? null };
+      saved[key] = {
+        ...pick(t),
+        pending,
+        next: t.next,
+        dueAt: t.dueAt ?? null,
+        ...(held.length && { held: held.map(plainOf) }),
+        ...(t.claim && { claim: { ...t.claim, items: t.claim.items.map(plainOf) } }),
+      };
     }
     return saved;
   }
@@ -498,7 +509,19 @@ export function createRestart(ctx) {
         tasks.set(key, task);
       }
       task.next = { ...t.next, ...task.next };
+      // Claimed by one of its machines (claims.mjs): still, with a fresh lease; without machines
+      // here, its comments queued again.
+      if (t.claim && ctx.claims) {
+        ctx.claims.restore(task, { ...t.claim, items: t.claim.items.map(revive) });
+        log(`${key}: claimed by ${t.claim.name} (${t.claim.machine}) before the restart`);
+      } else if (t.claim) t.pending.unshift(...t.claim.items);
       task.pending.push(...t.pending.map(revive));
+      // Held for a machine task's owner, as the comments queued are checked.
+      for (const item of t.held ?? []) {
+        const refused = noLongerAllowed(config, item);
+        if (!refused) task.held.push(revive(item));
+        else ctx.track(ctx.settle(revive(item), "refused"));
+      }
       if (!t.pending.length) continue;
       // Saved before deadlines were: its pause starts again.
       const dueAt = t.dueAt ?? undefined;

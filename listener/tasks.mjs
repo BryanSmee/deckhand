@@ -55,10 +55,16 @@ export const isChat = (task) => task?.kind === "chat";
 
 // The pools a task's runs take their slots in (#476): `shared`, the issues', pull requests' and
 // discussions', under MAX_PARALLEL, AUTO_PICKUP_SLOTS and the repos' max_parallel; `chats`, the
-// users' chats, under MAX_RUNNING_CHATS (machines, #594, add `machine:<id>`). Each counts against
-// its own cap (repo-config.mjs startable()): one never holds another's run back.
+// users' chats, under MAX_RUNNING_CHATS. Each counts against its own cap (repo-config.mjs
+// startable()): one never holds another's run back. A task routed to a user's machine (#596,
+// claims.mjs) is in `machines` while no machine holds it, then `machine:<id>` once one claimed
+// it (it sticks there): under that machine's capacity, which its claims count. Those pools have
+// no cap here: schedule() starts none of their tasks, a machine's claim takes them.
 export const SHARED = "shared";
 export const CHATS = "chats";
+export const MACHINES = "machines";
+export const machinePool = (id) => `machine:${id}`;
+export const isMachinePool = (pool) => pool === MACHINES || pool.startsWith("machine:");
 // A task saved before tasks had a pool: a chat's, else shared.
 export const poolOf = (task) => task?.pool ?? (isChat(task) ? CHATS : SHARED);
 
@@ -66,9 +72,10 @@ export const poolOf = (task) => task?.pool ?? (isChat(task) ? CHATS : SHARED);
 export const poolCaps = (config) => new Map([[CHATS, config.maxRunningChats ?? 0]]);
 
 // Its sandbox counted among its pool's runs going: shared's in `ctx.running` (MAX_PARALLEL), the
-// others' in `ctx.pools` (pool → count). `n` is 1 as it starts, -1 once it is over.
+// others' in `ctx.pools` (pool → count). `n` is 1 as it starts, -1 once it is over: in the pool
+// it started in, though the task moved since (a `/machine` comment during its run).
 export function countRun(ctx, task, n) {
-  const pool = poolOf(task);
+  const pool = n > 0 ? (task.countedIn = poolOf(task)) : (task.countedIn ?? poolOf(task));
   if (pool === SHARED) ctx.running += n;
   else {
     ctx.pools ??= new Map();
@@ -83,13 +90,16 @@ export const runningIn = (ctx, pool) =>
 // A task with nothing queued nor running yet: `fields` are the comment's (repo, id, kind,
 // number, base, name, settings), or those a listener left (restart.mjs); with its `owner`, a
 // login whose task it is alone (a chat's: chats.mjs), null for the repo's users' tasks, and its
-// `pool` (poolOf()).
+// `pool` (poolOf()). `held`: other people's comments on a task routed to a machine, until its
+// owner delivers them; `claim`: the machine's that holds it (claims.mjs).
 export function newTask(fields) {
   return {
     owner: null,
     ...fields,
     pool: poolOf(fields),
     pending: [],
+    held: [],
+    claim: null,
     running: false,
     ready: false,
     timer: null,
@@ -147,6 +157,10 @@ export function createTasks(ctx) {
   // Task key, as the delivery names it → its latest admit(), settled: the next waits for it.
   const admitting = new Map();
 
+  // An admitted comment's issue labels, as its delivery had them (admitNow()): its route's
+  // `runs-on` label is read from them rather than asked of GitHub again (claims.mjs routeFor()).
+  const labelsOf = new WeakMap();
+
   // A comment that passed the operator's checks, checked again with its repo's settings
   // (users, trigger lines), then queued. After the comments on its task that came before: its
   // checks await (the repo's settings, a pull request's lookup), and a follow-up whose answers
@@ -178,6 +192,9 @@ export function createTasks(ctx) {
     item.settings = settings;
     // Never queued nor sent to the agent: a stuck run would never read it.
     if (item.trigger === "cancel") return cancelRun(item);
+    // A `/machine` line routes the task (claims.mjs) before anything of it is queued: alone, it
+    // queues nothing.
+    if (item.machine && ctx.claims && !(await ctx.claims.command(item))) return;
     if (item.after) {
       // Waiting holds the task back, `/after none` drops its wait, either with a reply: the
       // start it holds back is its author's (`runs:start:<mode>`), a wait dropped alone a
@@ -198,6 +215,8 @@ export function createTasks(ctx) {
     }
     // Only the comment's own issue, as the delivery has it: a pull request's labels are its own.
     const issue = event === "issue_comment" && !payload.issue?.pull_request ? payload.issue : null;
+    // Its `runs-on` labels as the delivery has them, for its route (queue()).
+    if (issue && Array.isArray(issue.labels)) labelsOf.set(item, issue.labels);
     if (unanswered(item, issue)) {
       // Its text answers them only from an author who may answer (`runs:manage`), as the
       // dashboard's answers and questions.mjs applyInput() ask: else its run's start would take
@@ -427,6 +446,19 @@ export function createTasks(ctx) {
     const key = taskKey(item.repo, item.id);
     item.mode = await modeOf(item, key, name);
     if (!item.mode) return null;
+    // On its owner's machines (claims.mjs), or sandboxes; neither when its labeller may not run
+    // it (said on the issue), nor when its route can't be read: it may be meant for a machine.
+    let route = null;
+    try {
+      route = ctx.claims ? await ctx.claims.routeFor(item, labelsOf.get(item) ?? null) : null;
+    } catch (error) {
+      log(`${key}: not queued, its machine route can't be read: ${error.message ?? error}`);
+      return null;
+    }
+    if (route?.refused) {
+      log(`${key}: not queued, ${route.refused}`);
+      return null;
+    }
     ctx.titles.set(key, item.title);
     let task = tasks.get(key);
     if (!task) {
@@ -450,6 +482,11 @@ export function createTasks(ctx) {
     // When it was queued: the run order's, for a task nobody placed (queueOrder()).
     item.queuedAt ??= Date.now();
     item.queueId ??= queueId();
+    // A machine task's comment by someone but its owner: held for the owner (claims.mjs).
+    if (!isChat(task) && ctx.claims?.admit(task, item, route)) {
+      ctx.saveQueue?.();
+      return item.mode;
+    }
     task.pending.push(item);
     // In the store at once (restart.mjs): a listener killed during its pause doesn't lose it.
     ctx.saveQueue?.();
@@ -577,8 +614,11 @@ export function createTasks(ctx) {
     // The other pools' tasks after, by when their message came: startable() gives each its
     // pool's slots.
     const since = (t) => t.pending[0].queuedAt ?? 0;
+    // Not the machines' pools: their tasks wait for a machine's claim (claims.mjs).
     const others = [...tasks.values()]
-      .filter((t) => !t.running && t.pending.length && poolOf(t) !== SHARED)
+      .filter(
+        (t) => !t.running && t.pending.length && poolOf(t) !== SHARED && !isMachinePool(poolOf(t)),
+      )
       .sort((a, b) => since(a) - since(b));
     const ready = [...queued, ...others].filter((t) => t.ready);
     const perRepo = new Map();
@@ -599,6 +639,8 @@ export function createTasks(ctx) {
     for (const task of startable(ready, perRepo, ctx.running, config.maxParallel, options)) {
       ctx.run(task);
     }
+    // A machine task ready now: the machines' claims waiting for one look again.
+    ctx.claims?.wake();
   }
 
   // The tasks whose last run (`ctx.runs`, newest first) was picked, or followed a pick, and
