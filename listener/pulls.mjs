@@ -7,10 +7,10 @@
 // closed. `conflict`: whether its head conflicts with its base, as GitHub last computed it (absent
 // while unknown; a new head forgets it), read again from the dashboard's Sync and after the
 // repo's default branch moved (baseMoved()), which no delivery of the pull request says.
-// `pull_request` webhooks keep it current (events.mjs pullRequest()), and the listener's own record of the runs' changes (github-pulls.mjs); tasks older than that are looked up once per
+// `pull_request` webhooks keep it current (events.mjs pullRequest()), and the listener's own
+// record of the runs' changes (github-pulls.mjs); tasks older than that are looked up once per
 // listener start, from the repo's recent pull requests. Kept in the store (lib/store-map.mjs:
-// `pulls`), so a restart neither
-// forgets nor asks again. The open ones are asked about again at start and from the dashboard's
+// `pulls`), so a restart neither forgets nor asks again. The open ones are asked about again at start and from the dashboard's
 // Sync (resync()): a lost delivery would leave one a draft forever.
 import {
   linkedIssue,
@@ -27,6 +27,8 @@ import { respellMap, sameTask } from "./spelling.mjs";
 const open = (pr) => pr?.state === "draft" || pr?.state === "ready";
 // How many open pull requests' CI resync() reads at once (three GitHub calls each).
 const CI_AT_ONCE = 4;
+// How many open pull requests readMerge() reads at once (one GitHub call each).
+const MERGE_AT_ONCE = 4;
 
 // `listPulls(repo)`: the repo's recent pull requests, as GET /repos/{repo}/pulls has them;
 // `getPull(repo, number)`: one of them, or null.
@@ -52,6 +54,9 @@ export function createPulls({
   const sizeAsked = new Set();
   let fetching = null;
   let resyncing = null;
+  // The keys the resync under way read with getPull(): a user's Sync sharing it doesn't read
+  // them again.
+  let resyncRead = new Set();
   // repo (lowercase) → baseMoved()'s reads under way: the deliveries of one move (the push, the
   // merged pull request's `closed`) share them.
   const moving = new Map();
@@ -194,25 +199,18 @@ export function createPulls({
   // The open pull requests' states asked again from GitHub (one listing per repo, then those it
   // doesn't have or whose size isn't known one by one), and the tasks without one looked up
   // again at the next fill(). Resolves to how many changed state. One at a time: a second call shares it.
-  // `all`: the dashboard's Sync, which reads every open pull request itself (a listing doesn't
-  // say whether it conflicts, and a base that moved changes it without a delivery) and the CI of
-  // every one again (a CI delivery lost on a settled head); at start, only those not listed or
-  // without a size, and the CI of those not settled.
+  // `all`: the dashboard's Sync, which also reads every open pull request it didn't read itself
+  // (a listing doesn't say whether it conflicts, and a base that moved changes it without a
+  // delivery) and the CI of every one again (a CI delivery lost on a settled head), both after
+  // it resolves, so Sync doesn't wait for them; at start, only the CI of those not settled.
   function resync({ all = false } = {}) {
     // One going (the one at start): shared, then every pull request and CI read too if asked.
     if (resyncing) {
-      return all
-        ? resyncing.then(async (n) => {
-            await readMerge(
-              null,
-              openPulls().map(([key]) => key),
-            );
-            catchUp(openHeads());
-            return n;
-          })
-        : resyncing;
+      const read = resyncRead;
+      return all ? resyncing.then((n) => (readAllLater(read), catchUp(openHeads()), n)) : resyncing;
     }
     listed.clear();
+    const read = (resyncRead = new Set());
     resyncing = (async () => {
       const byRepo = new Map();
       for (const [key, pr] of openPulls()) {
@@ -227,9 +225,10 @@ export function createPulls({
         });
         for (const [key, pr] of entries) {
           let found = list.find((p) => p.number === pr.number);
-          // Not listed, its size not known yet (recorded from a listing, or before sizes
-          // were), or a user's Sync, which wants its mergeability: the pull request itself has it.
-          if (!found || !("additions" in pr) || all) {
+          // Not listed, or its size not known yet (recorded from a listing, or before sizes
+          // were): the pull request itself has it.
+          if (!found || !("additions" in pr)) {
+            read.add(key);
             try {
               found = await getPull(repo, pr.number);
             } catch (error) {
@@ -277,7 +276,8 @@ export function createPulls({
       }
       // What CI deliveries lost meanwhile (the listener down, a delivery that failed): read
       // again for the open pull requests whose CI isn't settled for their head, after, so the
-      // dashboard's Sync doesn't wait for them.
+      // dashboard's Sync doesn't wait for them. Its mergeability reads too.
+      if (all) readAllLater(read);
       catchUp(all ? openHeads() : stalePulls());
       return changed;
     })().finally(() => (resyncing = null));
@@ -392,39 +392,63 @@ export function createPulls({
       await sleep(mergeDelayMs);
       // A move from now on is after GitHub's answers this reads: a wait of its own.
       moving.delete(id);
-      const pending = await readMerge(repo);
+      const keys = openPulls()
+        .filter(([key]) => sameRepo(parseKey(key)?.repo, repo))
+        .map(([key]) => key);
+      const pending = await readMerge(keys);
       if (pending.length) {
         await sleep(mergeDelayMs);
-        await readMerge(repo, pending);
+        await readMerge(pending);
       }
     })().catch((error) => {
-      moving.delete(id);
+      if (moving.get(id) === done) moving.delete(id);
       log(`Pull requests of ${repo}: ${error.message ?? error}`);
     });
     moving.set(id, done);
     return done;
   }
 
-  // The open pull requests of `repo` (those of `keys` instead, if given) read one by one, whether
-  // each conflicts recorded. Resolves to the keys GitHub hadn't computed it for yet.
-  async function readMerge(repo, keys = null) {
+  // The open pull requests that `read` (the resync's) doesn't have read again, for a user's
+  // Sync, without waiting: caughtUp() resolves once they are.
+  let merging = Promise.resolve();
+  function readAllLater(read) {
+    const keys = openPulls()
+      .map(([key]) => key)
+      .filter((key) => !read.has(key));
+    const reads = readMerge(keys);
+    merging = Promise.all([merging, reads]);
+  }
+
+  // The open pull requests of `keys` read, MERGE_AT_ONCE at a time, whether each conflicts
+  // recorded. Resolves to the keys GitHub hadn't computed it for yet; never throws.
+  async function readMerge(keys) {
     const pending = [];
-    for (const [key, pr] of openPulls()) {
-      if (keys ? !keys.includes(key) : !sameRepo(parseKey(key)?.repo, repo)) continue;
-      let found;
-      try {
-        found = await getPull(parseKey(key).repo, pr.number);
-      } catch (error) {
-        log(`Pull requests: ${key} #${pr.number}: ${error.message ?? error}`);
-        continue;
+    const queue = [...keys];
+    const worker = async () => {
+      while (queue.length) {
+        const key = queue.shift();
+        if (await readOneMerge(key)) pending.push(key);
       }
-      if (!found) continue;
-      sawMerge(key, found);
-      if (mergeConflict(found).conflict === undefined && found.head?.sha === pr.head) {
-        pending.push(key);
-      }
-    }
+    };
+    await Promise.all(Array.from({ length: MERGE_AT_ONCE }, worker));
     return pending;
+  }
+
+  // Task `key`'s pull request read and whether it conflicts recorded, if it is still open.
+  // Resolves to whether GitHub hadn't computed it yet at the head recorded.
+  async function readOneMerge(key) {
+    const pr = pulls.get(key);
+    if (!open(pr)) return false;
+    let found;
+    try {
+      found = await getPull(parseKey(key).repo, pr.number);
+    } catch (error) {
+      log(`Pull requests: ${key} #${pr.number}: ${error.message ?? error}`);
+      return false;
+    }
+    if (!found) return false;
+    sawMerge(key, found);
+    return mergeConflict(found).conflict === undefined && found.head?.sha === pr.head;
   }
 
   // Rekeyed with spelled() (restart.mjs unifySpellings()): the conflict watcher would start
@@ -441,8 +465,8 @@ export function createPulls({
     ciChanged,
     sawMerge,
     baseMoved,
-    // The CI reads resync() started, for tests.
-    caughtUp: () => catching,
+    // The CI and mergeability reads resync() started, for tests.
+    caughtUp: () => Promise.all([catching, merging]),
     open: openPulls,
     keys: () => [...pulls.keys()],
     respell,

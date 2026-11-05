@@ -1021,45 +1021,75 @@ const readPull = (number, extra = {}) => ({
   ...extra,
 });
 
-test("pulls: a user's Sync reads every open pull request itself, so a listed one's conflict is current (#747)", async () => {
+test("pulls: a user's Sync reads every open pull request itself, after it answers (#747)", async () => {
   const asked = [];
   let mergeable = true;
+  let release = () => {};
+  let held = Promise.resolve();
   const pulls = createPulls({
     listPulls: async () => [readPull(31)],
     getPull: async (repo, number) => {
       asked.push(number);
+      await held;
       return readPull(number, { mergeable });
     },
   });
   pulls.record("org/repo#30", { ...pr(31, "ready"), head: "a1", additions: 1, conflict: false });
   // At start: listed and sized, not asked about.
   await pulls.resync();
+  await pulls.caughtUp();
   assert.deepEqual(asked, []);
-  // The base moved meanwhile: the user's Sync sees it.
+  // The base moved meanwhile: the user's Sync sees it, without waiting for GitHub's answer.
   mergeable = false;
+  held = new Promise((resolve) => (release = resolve));
   await pulls.resync({ all: true });
   assert.deepEqual(asked, [31]);
-  assert.equal(pulls.get("org/repo#30").conflict, true);
+  assert.equal(pulls.get("org/repo#30").conflict, false);
+  release();
   await pulls.caughtUp();
+  assert.equal(pulls.get("org/repo#30").conflict, true);
 });
 
-test("pulls: a Sync during the start's resync reads every open pull request after it (#747)", async () => {
+test("pulls: a Sync during the start's resync reads, after it, those it didn't read (#747)", async () => {
   let release;
   const held = new Promise((resolve) => (release = resolve));
   const asked = [];
   const pulls = createPulls({
-    listPulls: async () => (await held, [readPull(31)]),
+    listPulls: async () => (await held, [readPull(31), readPull(33)]),
     getPull: async (repo, number) => (asked.push(number), readPull(number, { mergeable: false })),
   });
   pulls.record("org/repo#30", { ...pr(31, "ready"), head: "a1", additions: 1, conflict: false });
+  // Without a size: the start's resync reads it, Sync doesn't again.
+  pulls.record("org/repo#32", { ...pr(33, "ready"), head: "a1", conflict: false });
   const start = pulls.resync();
   const sync = pulls.resync({ all: true });
   release();
   await start;
   await sync;
-  assert.deepEqual(asked, [31]);
-  assert.equal(pulls.get("org/repo#30").conflict, true);
   await pulls.caughtUp();
+  assert.deepEqual(asked.sort(), [31, 33]);
+  assert.equal(pulls.get("org/repo#30").conflict, true);
+  assert.equal(pulls.get("org/repo#32").conflict, true);
+});
+
+test("pulls: a Sync's reads go a few at a time (#747)", async () => {
+  let going = 0;
+  let most = 0;
+  const pulls = createPulls({
+    listPulls: async () => Array.from({ length: 10 }, (_, i) => readPull(101 + i)),
+    getPull: async (repo, number) => {
+      most = Math.max(most, ++going);
+      await new Promise((resolve) => setImmediate(resolve));
+      going--;
+      return readPull(number, { mergeable: false });
+    },
+  });
+  for (let n = 1; n <= 10; n++) {
+    pulls.record(`org/repo#${n}`, { ...pr(100 + n, "ready"), head: "a1", additions: 1 });
+  }
+  await pulls.resync({ all: true });
+  await pulls.caughtUp();
+  assert.ok(most > 1 && most <= 4, `${most} at once`);
 });
 
 test("pulls: a base that moved has its repo's open pull requests read again after the wait (#747)", async () => {

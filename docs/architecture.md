@@ -706,10 +706,11 @@ next check, as any GitHub error there. What each check read is also passed to `p
 (`sawMerge()`), so the dashboard's `pr.conflict` is current for those repos too. In every repo,
 it also comes from the `pull_request` deliveries (mostly `mergeable: null`: GitHub computes it
 after sending them), from the dashboard's Sync, which reads each open pull request itself
-(`resync({ all })`: a listing has no `mergeable`), and from `pulls.mjs` `baseMoved()`: the same
-deliveries and auto-merge that call `soon()` read the repo's open pull requests again after
-`CONFLICT_MERGE_DELAY_MS`, and once more later those GitHub hadn't computed yet, since a base
-that moves changes it at the same head without a delivery. A read that says nothing keeps the
+(`resync({ all })`: a listing has no `mergeable`), a few at a time once its answer is sent, and
+from `pulls.mjs` `baseMoved()`: the same deliveries and auto-merge that call `soon()` read the
+repo's open pull requests again after `CONFLICT_MERGE_DELAY_MS`, and once more later those
+GitHub hadn't computed yet, since a base that moves changes it at the same head without a
+delivery. A read that says nothing keeps the
 last value known.
 
 The dashboard's Sync runs the same pass at once (`check()`), with every opted-in repo due
