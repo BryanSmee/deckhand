@@ -553,3 +553,58 @@ test("a route that can't be read: the kept one goes on; a person is told; Deckha
   assert.equal(t.task().pending.length, 2);
   assert.equal(poolOf(t.task()), "machines");
 });
+
+test("routed, the comments others queued before are held for the owner: a /machine line, or a runs-on label", async () => {
+  const line = bench();
+  line.t.register("alice", "Desk");
+  await line.t.say("bob", "Deckhand\nDo X.");
+  assert.equal(line.t.task().pending.length, 1);
+  await line.t.say("alice", "/machine Desk", { id: 101 });
+  assert.deepEqual(line.t.task().pending, []);
+  assert.deepEqual(
+    line.ctx.claims.heldOf(KEY).map((h) => h.author),
+    ["bob"],
+  );
+
+  const labels = [{ name: "runs-on:unreal" }];
+  const label = bench({ labels, events: [labelledBy("alice")] });
+  await label.t.say("bob", "Deckhand\nDo X.", { issueLabels: [] });
+  await label.t.say("alice", "Deckhand", { id: 101 });
+  assert.deepEqual(
+    label.t.task().pending.map((i) => i.author),
+    ["alice"],
+  );
+  assert.deepEqual(
+    label.ctx.claims.heldOf(KEY).map((h) => h.author),
+    ["bob"],
+  );
+});
+
+test("another user's runs-on label doesn't take the task while its owner's is still on", async () => {
+  const { t, ctx } = bench({
+    users: "alice,bob,carol",
+    labels: [{ name: "runs-on:unreal" }],
+    events: [labelledBy("alice")],
+  });
+  await t.say("alice", "Deckhand");
+  const both = [{ name: "runs-on:aaa" }, { name: "runs-on:unreal" }];
+  await t.say("alice", "More.", { id: 101, issueLabels: both });
+  const route = ctx.claims.view(t.task());
+  assert.deepEqual([route.owner, route.want], ["alice", "unreal"]);
+});
+
+test("Deckhand's own item whose route can't be read is tried a few times, then given up, logged", async () => {
+  const { t, ctx } = bench({ labels: [{ name: "runs-on:unreal" }], events: [labelledBy("alice")] });
+  ctx.routeRetryMs = 1;
+  t.labelsFail = true;
+  const { settings } = await ctx.repoSettings();
+  await ctx.accept(fixRound(settings));
+  for (let i = 0; i < 100 && !t.logs.some((l) => l.includes("after 5 tries")); i++) {
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  assert.ok(
+    t.logs.some((l) => l.includes("can't be read after 5 tries")),
+    t.logs.join("\n"),
+  );
+  assert.equal(t.task()?.pending.length ?? 0, 0);
+});

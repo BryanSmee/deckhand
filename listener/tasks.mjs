@@ -37,6 +37,7 @@ import { itemMay, startAction } from "./permissions.mjs";
 // How long Deckhand's own item waits before it is queued again, when its task's machine route
 // can't be read (queue()).
 export const ROUTE_RETRY_MS = 60_000;
+export const ROUTE_RETRIES = 5;
 
 // Why a queued comment may no longer run, or null: its repo left ALLOWED_REPOS, or its author
 // left ALLOWED_USERS or (`settings`, when known) the repo's `users`. Checked again when it was
@@ -161,6 +162,15 @@ export function createTasks(ctx) {
 
   // Task key, as the delivery names it → its latest admit(), settled: the next waits for it.
   const admitting = new Map();
+
+  // Deckhand's own items queued again once their machine route can be read (queue()): their
+  // timers, which stopRetries() clears as the orchestrator stops, and their tries so far.
+  const retrying = new Set();
+  const routeTries = new WeakMap();
+  function stopRetries() {
+    for (const timer of retrying) clearTimeout(timer);
+    retrying.clear();
+  }
 
   // An admitted comment's issue labels, as its delivery had them (admitNow()): its route's
   // `runs-on` label is read from them rather than asked of GitHub again (claims.mjs routeFor()).
@@ -463,14 +473,26 @@ export function createTasks(ctx) {
       route = ctx.claims.kept(item);
       if (route) log(`${key}: its machine route can't be read (${why}): the kept one goes on`);
       else if (!person) {
-        // Deckhand's own: asked again later rather than lost (a loop's step).
+        // Deckhand's own: asked again later rather than lost (a loop's step), ROUTE_RETRIES times.
+        const tries = (routeTries.get(item) ?? 0) + 1;
+        if (tries > ROUTE_RETRIES) {
+          log(
+            `${key}: not queued, its machine route can't be read after ${ROUTE_RETRIES} tries: ${why}`,
+          );
+          routeTries.delete(item);
+          await ctx.settle(item, "refused");
+          return null;
+        }
+        routeTries.set(item, tries);
         const retryMs = ctx.routeRetryMs ?? ROUTE_RETRY_MS;
         log(`${key}: its machine route can't be read (${why}): queued again in ${retryMs} ms`);
-        const timer = setTimeout(
-          () => accept(item).catch((e) => log(`${key}: ${e.stack ?? e}`)),
-          retryMs,
-        );
+        const timer = setTimeout(() => {
+          retrying.delete(timer);
+          if (ctx.stopping) return;
+          accept(item).catch((e) => log(`${key}: ${e.stack ?? e}`));
+        }, retryMs);
         timer.unref?.();
+        retrying.add(timer);
         return null;
       } else {
         log(`${key}: not queued, its machine route can't be read: ${why}`);
@@ -740,6 +762,7 @@ export function createTasks(ctx) {
   }
 
   return {
+    stopRetries,
     admit,
     accept,
     resume,

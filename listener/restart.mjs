@@ -511,6 +511,8 @@ export function createRestart(ctx) {
       task.next = { ...t.next, ...task.next };
       // Claimed by one of its machines (claims.mjs): still, with a fresh lease; without machines
       // here, its comments queued again.
+      // Its items aren't checked again here: they are once given back (claims.mjs giveBack()),
+      // before a run takes them.
       if (t.claim && ctx.claims) {
         ctx.claims.restore(task, { ...t.claim, items: t.claim.items.map(revive) });
         log(`${key}: claimed by ${t.claim.name} (${t.claim.machine}) before the restart`);

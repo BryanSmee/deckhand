@@ -2167,7 +2167,7 @@ With the block, an issue runs on its owner's machines instead of a sandbox when 
 `runs-on:<label>` label (the machines with that label of whoever last added it, an allowed user
 who may start work runs, as auto-pickup checks its labeller), or after a `/machine <name or
 label>` line (its author's; alone, it starts nothing). `/machine none` sends it back to
-sandboxes; only its owner moves it. A machine claims it within its own capacity, never a
+sandboxes, until a `/machine <label>` routes it again (a label added later doesn't); only its owner moves it. A machine claims it within its own capacity, never a
 `MAX_PARALLEL` or auto-pickup slot (the sweep skips `runs-on` issues), and keeps it: the next
 runs go there, in the same session. Other users' comments wait on the task's page until its
 owner delivers them; Deckhand's own (a review's fix round, a CI fix) don't.

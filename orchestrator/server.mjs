@@ -1395,6 +1395,7 @@ sigterm = () => {
   ctx.reviews.stop();
   ctx.autoPickup.stop();
   ctx.claims.stop();
+  ctx.stopRetries();
   ctx.chats.stop();
   ctx.requests.stop();
   history.stop();

@@ -77,8 +77,9 @@ export function branchSlug(title) {
 
 // Whether `item` is a person's that only the task's owner may send its runs: not Deckhand's own
 // (a review's fix round, a CI fix, a rebase: their `reason`; onboarding: no author).
+// One the owner delivered (`deliveredBy`) is theirs to send.
 const fromSomeoneElse = (item, owner) =>
-  !item.reason && !!item.author && lower(item.author) !== owner;
+  !item.reason && !!item.author && lower(item.author) !== owner && item.deliveredBy !== owner;
 
 // `ctx` (../orchestrator/server.mjs): the orchestrator's state and services, read at call time
 // (tasks, machines, repoSettings, repoFile, github, permissions, reply, settle, received,
@@ -122,13 +123,23 @@ export function createClaims(
   // Task `task` put in the pool `route` (null: none) says: shared again without one. A sandbox
   // that runs for it meanwhile keeps its slot where it started (tasks.mjs countRun()); what
   // queues after it goes by the pool.
-  // No longer anyone's alone (`/machine none`, its `runs-on` label taken off): the comments held
-  // for its owner are queued as any other's.
+  // Routed, what others queued before the route is held for its owner too; no longer anyone's
+  // alone (`/machine none`, its `runs-on` label taken off), the comments held for its owner are
+  // queued as any other's.
   function place(task, route) {
     const before = poolOf(task);
     task.pool = route ? (route.machine ? machinePool(route.machine) : MACHINES) : SHARED;
     if (before !== task.pool) log(`${keyOf(task)}: now in the ${task.pool} pool`);
-    if (route || !task.held.length) return;
+    if (route) {
+      const others = task.pending.filter((item) => fromSomeoneElse(item, route.owner));
+      if (!others.length) return;
+      task.pending = task.pending.filter((item) => !others.includes(item));
+      task.held.push(...others);
+      log(`${keyOf(task)}: ${others.length} queued comment(s) by others held for ${route.owner}`);
+      ctx.saveQueue?.();
+      return;
+    }
+    if (!task.held.length) return;
     const items = task.held.splice(0);
     task.pending.push(...items);
     log(`${keyOf(task)}: ${items.length} held comment(s) queued, the task no longer a machine's`);
@@ -163,7 +174,8 @@ export function createClaims(
       if (kept) routes.delete(taskId(key));
       return null;
     }
-    if (kept?.via === "label" && kept.want === asked.label) return kept;
+    // Its owner's label still on: theirs, whichever `runs-on` label someone else added since.
+    if (kept?.via === "label" && labels.some((l) => runsOn([l])?.label === kept.want)) return kept;
     // Whoever added it, as auto-pickup reads it: the latest labelling.
     const events = await paginate(
       (p) => ctx.github(item.repo, "GET", p),
@@ -296,8 +308,10 @@ export function createClaims(
       if (!route.machine && !byName && !labels.includes(lower(route.want))) continue;
       const items = [...task.pending];
       const work = await workOf(task, items, route, m);
-      // Claimed meanwhile (another claim of the machine), or its comments taken.
+      // Claimed meanwhile (another claim of the machine), its comments taken, or moved by its
+      // owner (`/machine`) while its work was read.
       if (task.running || !task.ready || task.pending[0] !== items[0]) continue;
+      if (routed(task) !== route) continue;
       if (claimsOf(m.id).length >= m.capacity) return null;
       take(task, route, m, items, work);
       return work;
@@ -514,6 +528,7 @@ export function createClaims(
   function deliverHeld(user, key) {
     const task = ownTask(user, key);
     const items = task.held.splice(0);
+    for (const item of items) item.deliveredBy = lower(user);
     task.pending.push(...items);
     log(`${key}: ${items.length} held comment(s) delivered by ${user}`);
     ctx.saveQueue?.();
