@@ -35,6 +35,7 @@ import { createGithubClient } from "../github/client.mjs";
 import { createProjects } from "../listener/projects.mjs";
 import { createBrainstorms, createIssueModes } from "../listener/brainstorms.mjs";
 import { createChats } from "../listener/chats.mjs";
+import { createRequests } from "../listener/requests.mjs";
 import { createComments } from "../listener/comments.mjs";
 import { createConflicts, intoDefaultBranch } from "../listener/conflicts.mjs";
 import {
@@ -1063,6 +1064,10 @@ ctx.discussionApi = createDiscussionApi({
 ctx.chats = createChats(ctx, { checks: discussionChecks });
 // From the store, before the spellings and the requests that read them.
 await ctx.chats.load();
+// Their agents' requests for more permissions (requests.mjs, #479), which the broker's stream
+// brings, waiting for their owner's answer.
+ctx.requests = createRequests(ctx);
+await ctx.requests.load();
 
 // The operator's credentials' fingerprints, which the github service redacts the runs' GitHub
 // writes by without holding them: the models service's sets, as it gave them (lib/redact.mjs,
@@ -1169,6 +1174,7 @@ ctx.waits.dedupe(
 ctx.reviews.forgetSteps(stepsGoing(ctx.tasks));
 // The chats' idle timers, from their last message, and who may still reach them.
 ctx.chats.start();
+ctx.requests.start();
 // The keys of comments dropped as the queue came back (their author no longer allowed) stay in
 // the run order otherwise, and would rank a new comment there as placed.
 order.keep(ctx.queueOrder().map((t) => taskKey(t.repo, t.id)));
@@ -1226,9 +1232,14 @@ function reconcileRuns() {
 const reconciling = setInterval(reconcileRuns, RECONCILE_MS);
 reconciling.unref();
 // Its stream: the runs' events (the broker keeps their screenshots, #609). A run token renewed:
-// the run's tokens asked again, for its output's redaction (#617).
+// the run's tokens asked again, for its output's redaction (#617). A request for more
+// permissions: decided, or held for its owner (#479).
 brokerService.consume({
-  handlers: { renewed: async ({ run }) => ctx.broker.runOf(run) && ctx.broker.recall(run) },
+  handlers: {
+    renewed: async ({ run }) => ctx.broker.runOf(run) && ctx.broker.recall(run),
+    // A run's request for more permissions (#479).
+    permission: (event) => ctx.requests.received(event),
+  },
 });
 // The screenshots this orchestrator kept before the broker did go to it, while it goes on: asked
 // until the broker takes them (a reply posted before links to them still). A folder no run
@@ -1352,6 +1363,7 @@ sigterm = () => {
   ctx.reviews.stop();
   ctx.autoPickup.stop();
   ctx.chats.stop();
+  ctx.requests.stop();
   history.stop();
   runEvents.stop();
   clearInterval(relinking);

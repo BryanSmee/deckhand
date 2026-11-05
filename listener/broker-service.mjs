@@ -226,6 +226,19 @@ export function createBrokerService({
 
   const forget = (run) => inboxes.delete(run);
 
+  // --- A run's requests for more permissions (#479, requests.mjs) --------------------------
+
+  // The answer to request `id` of `run`, { state, message }, for its sandbox's long poll.
+  // → whether the broker had it (false: the run or its request gone, nothing left to tell).
+  async function answerPermission(run, id, answer) {
+    const res = await caller.call("PUT", `/runs/${enc(run)}/permissions/${enc(id)}`, {
+      body: answer,
+    });
+    if (res.status === 404) return false;
+    await ok(res, `the answer to ${run}'s request ${id}`);
+    return true;
+  }
+
   // --- The broker's stream ---------------------------------------------------------------
 
   // The `runs` stream, read and acknowledged event by event: started, renewed, ended, shot (the
@@ -382,6 +395,7 @@ export function createBrokerService({
     persist,
     mirror: { files, sync, forget },
     consume,
+    answerPermission,
     removeShots,
     moveShots,
     readKeys,

@@ -242,7 +242,7 @@ async function workRun(
     },
     egressCa: async () => ca,
     linkedBranches,
-    chats: { profileOf: () => chat ?? null },
+    chats: { startProfile: () => chat ?? null },
     policies: { ...policies, grants: grantedOf(grants) },
     broker: {
       allow: (id, branches, fork) =>

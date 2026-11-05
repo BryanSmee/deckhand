@@ -105,6 +105,8 @@ export function createPreparation(ctx) {
     live.record.shots = live.shots;
     live.hosts = access.hosts;
     live.trusted = access.trusted;
+    // What a chat's request for a mount is checked against (#479, profiles.mjs requestVerdict()).
+    live.mounts = (access.mounts ?? []).map((m) => m.target);
     // Whether the proxy's engines' port is this run's (egress-http.mjs taskWhere()).
     live.engine = !!engine;
     live.uncached = mandatoryHosts(config, agent);
@@ -179,7 +181,8 @@ export function createPreparation(ctx) {
     let profile = null;
     if (isChat(task)) {
       const ceiling = ceilingOf({ outcome, grant: check.grant, mounts: check.mounts.mounts });
-      profile = narrowProfile(ctx.chats?.profileOf(task) ?? null, ceiling);
+      // Its saved profile, with what its owner approved once for this start (#479).
+      profile = narrowProfile(ctx.chats?.startProfile(task) ?? null, ceiling);
       used = used.filter((name) => profile.capabilities.includes(name));
       const out = leftOut(profile, ceiling);
       if (out) note(`Permissions profile: leaves out ${out}`);

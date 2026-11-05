@@ -173,6 +173,9 @@ export const SETTINGS = {
   CHATS_PER_USER: { default: 2, parse: whole("a whole number of chats (0: none)") },
   CHAT_IDLE_MINUTES: { default: 30, parse: aboveZero("a whole number of minutes above 0") },
   MAX_RUNNING_CHATS: { default: 2, parse: whole("a whole number of sandboxes (0: none)") },
+  // How long a chat's request for more permissions waits for its owner's answer (requests.mjs),
+  // denied past it: an hour at most, as the sandbox's tool call waits that long.
+  CHAT_PERMISSION_TIMEOUT: { default: 10, parse: minutesUpTo(60) },
   // Slots within MAX_PARALLEL kept for the open issues labelled AUTO_PICKUP_LABEL, which the
   // listener starts by itself, oldest first, in the repos whose `auto_pickup` opts in
   // (auto-pickup.mjs). 0: off.
@@ -575,6 +578,7 @@ export function loadConfig(env, file = NO_FILE, { service = "orchestrator" } = {
     brainstormIdleMs: s.BRAINSTORM_IDLE_MINUTES * 60000,
     chatsPerUser: s.CHATS_PER_USER,
     chatIdleMs: s.CHAT_IDLE_MINUTES * 60000,
+    chatPermissionMs: s.CHAT_PERMISSION_TIMEOUT * 60000,
     maxRunningChats: s.MAX_RUNNING_CHATS,
     dataDir: env.DATA_DIR || "/data",
     publicUrl: s.PUBLIC_URL,
@@ -743,6 +747,16 @@ function aboveZero(what) {
   return (text, { label }) => {
     const number = wholeNumber(text, undefined, label, what);
     if (!number) throw new ConfigError(`${label}: expected above 0, got 0`);
+    return number;
+  };
+}
+
+function minutesUpTo(max) {
+  return (text, { label }) => {
+    const number = wholeNumber(text, undefined, label, `a whole number of minutes, 1 to ${max}`);
+    if (!number || number > max) {
+      throw new ConfigError(`${label}: expected 1 to ${max} minutes, got ${number}`);
+    }
     return number;
   };
 }

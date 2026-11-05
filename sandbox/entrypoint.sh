@@ -378,6 +378,15 @@ if [ -n "${HTTPS_PROXY:-}" ]; then
   browser+=(--proxy-server "$HTTPS_PROXY" --proxy-bypass "${NO_PROXY:-localhost}")
 fi
 agent_mcp playwright playwright-mcp "${browser[@]}"
+# A chat's agent asks its user for what its sandbox lacks (#479, deckhand-permissions): only
+# where the broker takes its requests (TASK_PERMISSIONS, a chat's run). Its tool call waits for
+# their answer, up to the orchestrator's CHAT_PERMISSION_TIMEOUT (an hour at most): the agents'
+# own timeouts for a tool call go past it (Claude Code's MCP_TOOL_TIMEOUT, in ms; Codex's
+# tool_timeout_sec, from DECKHAND_MCP_TIMEOUT).
+if [ -n "${TASK_PERMISSIONS:-}" ]; then
+  export MCP_TOOL_TIMEOUT=${MCP_TOOL_TIMEOUT:-3900000}
+  DECKHAND_MCP_TIMEOUT=3900 agent_mcp deckhand-permissions deckhand-permissions mcp
+fi
 
 if [ $# -eq 0 ] && [ -n "${TASK_PROMPT:-}" ]; then
   # The volumes keep the session between runs: the first run starts on TASK_PROMPT, later
