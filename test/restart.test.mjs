@@ -1279,7 +1279,7 @@ async function endWhileStoreDown(t, { summary = false } = {}) {
   await until(() => lines.some((line) => waits.test(line)), {
     what: "the end to wait for the store",
   });
-  return { dir, store, ctx, down, task, ended, removed };
+  return { dir, store, ctx, down, task, ended, removed, lines };
 }
 
 test("a run's end the queue couldn't be written for: tried again until it lands, then its state goes, its task held meanwhile", async (t) => {
@@ -1344,6 +1344,10 @@ test("a run's end whose summary the store doesn't take: tried again, its sandbox
   assert.equal(first.task.running, true);
   first.down.on = false;
   await first.ended;
+  // Its first failure said, and the try that landed: not each one in between.
+  const said = first.lines.filter((line) => /summary/.test(line));
+  assert.equal(said.length, 2, said.join("\n"));
+  assert.match(said[1], /its summary saved, at try \d+/);
   assert.equal((await first.store.get(summaryKey("r1"))).id, "r1");
   assert.deepEqual(first.removed, ["r1"]);
   assert.equal(await savedRun(first.store, "r1"), null);

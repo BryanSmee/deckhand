@@ -22,7 +22,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { rmdirSync } from "node:fs";
 import { fingerprint, fingerprintRedactor } from "../lib/fingerprints.mjs";
-import { join, relative, resolve, sep } from "node:path";
+import { join } from "node:path";
 import { createAnalysis } from "../listener/analysis.mjs";
 import { planWarning } from "../listener/agents/credentials.mjs";
 import { AGENT_SECRETS } from "../listener/agents/index.mjs";
@@ -43,16 +43,17 @@ import {
   loadConfig,
   modelsServiceUrl,
   readConfigFile,
-  inData,
+  dataToCheck,
+  leftInData,
+  storeFolder,
   unwritableData,
   withModelCredentials,
 } from "../listener/config.mjs";
 import { activePassive } from "../lib/active.mjs";
 import { drain } from "../lib/drain.mjs";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { pathToFileURL } from "node:url";
 import { openStore } from "../lib/store.mjs";
 import { storeMaps } from "../lib/store-map.mjs";
-import { listDir } from "../lib/files.mjs";
 import { createLogger, deliveryContext, withLogContext } from "../lib/log.mjs";
 import { createRegistry, leaseMetric, startMetrics } from "../lib/metrics.mjs";
 import { createEdgeClient } from "../edge/client.mjs";
@@ -221,17 +222,12 @@ try {
 // (#619). Nothing else is written there: what a release before kept beside it is moved to the
 // store at the first start after the update (below), then removed.
 const storeUrl = env.STORE_URL || pathToFileURL(join(config.dataDir, "store")).href;
-// The store's folder in the data volume (`store`), or null: none there.
-const storeTop = inData(storeUrl, config.dataDir)
-  ? relative(resolve(config.dataDir), fileURLToPath(storeUrl)).split(sep)[0]
-  : null;
-// Not root (#536): a data volume it can't write would fail run after run, so it doesn't start.
-// The whole volume while a release before left something beside the store, which its moves
-// remove; else the store's folder alone, the rest of the volume never written (#619). Nothing
-// with no volume: an empty folder of its read-only image, the store elsewhere.
+// The store's folder in the data volume (`store`), "" for the volume itself, or null: none there.
+const storeTop = storeFolder(storeUrl, config.dataDir);
+// Not root (#536): a data volume it can't write would fail run after run, so it doesn't start
+// (config.mjs dataToCheck(): which of it, #619).
 {
-  const left = listDir(config.dataDir).some((name) => name !== storeTop);
-  const checked = left ? config.dataDir : storeTop && join(config.dataDir, storeTop);
+  const checked = dataToCheck(config.dataDir, storeTop);
   const unwritable = checked ? unwritableData(checked) : [];
   if (unwritable.length) {
     for (const line of unwritable) log.error(line);
@@ -1269,7 +1265,7 @@ function tidyData() {
     }
   }
   const moving = new Set(["logs", "shots", ...Object.keys(MAPS).map((name) => `${name}.json`)]);
-  const left = listDir(config.dataDir).filter((name) => name !== storeTop && !moving.has(name));
+  const left = leftInData(config.dataDir, storeTop, moving);
   if (left.length) {
     log.warn(
       `${config.dataDir} holds ${left.join(", ")}, which no longer is read: remove ${left.length > 1 ? "them" : "it"} (docs/setup.md#upgrading-the-orchestrator-without-a-volume-619)`,

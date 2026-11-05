@@ -1786,9 +1786,13 @@ and its copies go to any node. What changes for you:
   (the maps' `<name>.json`, `logs/<run>.live.json` and `.queued.json`, `logs/<run>.json` and
   `.summary.json`, `shots/`). On Compose and Kubernetes' base, it stays mounted: nothing to do.
   With Redis (the `redis` component, Helm's `store: redis`, or your own override), this release
-  no longer mounts it: if the orchestrator of the release before #619 has started once (its start
-  did those moves), there is nothing left to move; else update to that release first, or keep
-  the claim mounted for that one start with a patch in your overlay:
+  no longer mounts it: keep it mounted for that first start whatever the release before, as
+  that one goes on writing there while it runs (`logs/<run>.summary.json`, a summary its store
+  refused at a run's end; `logs/<run>.queued.json`, a task's queue it couldn't write), which
+  this release reads only from there: without it, those runs leave the dashboard's history and
+  those comments are lost. Once it started, its log says what it moved, and the volume holds
+  nothing but what it names as no longer read (`ls -A /data`); the next update of the
+  Deployment drops the mount. With kustomize, a patch in your overlay for that one update:
 
   ```yaml
   patches:
@@ -1812,6 +1816,22 @@ and its copies go to any node. What changes for you:
                   persistentVolumeClaim:
                     claimName: orchestrator-data
   ```
+
+  With Helm (`store: redis`), the same once `helm upgrade` is done, on the Deployment it made
+  (the claim is kept: `helm.sh/resource-policy: keep`). The copies it started meanwhile, without
+  the volume, move nothing and remove nothing of it: the patched ones do. The next
+  `helm upgrade` drops the mount again:
+
+  ```sh
+  kubectl -n deckhand patch deployment orchestrator --type json -p '[
+    {"op": "add", "path": "/spec/template/spec/volumes/-",
+     "value": {"name": "data", "persistentVolumeClaim": {"claimName": "orchestrator-data"}}},
+    {"op": "add", "path": "/spec/template/spec/containers/0/volumeMounts/-",
+     "value": {"name": "data", "mountPath": "/data"}}]'
+  ```
+
+  With Compose and your own Redis override, leave the `data` volume in its `volumes` for that
+  start, and take it out after.
 
 - **The older moves are gone**: a listener's `queue.json` (from before the store), its App's
   credentials (`app.json` with its key, `session.key`, `sessions.json`, `redeliveries.json`,
@@ -1843,8 +1863,10 @@ and its copies go to any node. What changes for you:
   the run as it is, for the next copy to end again. Those a release before left are moved at
   the next start.
 - **At start**, the orchestrator checks that it can write the whole `/data` only while a
-  release before left something there beside the store (#536's check); else the store's folder
-  alone, and nothing when its store is elsewhere and `/data` is empty.
+  release before left something there beside the store (#536's check), or while the store's
+  folder isn't made yet (a new volume, or an empty one a root orchestrator made: the chown hint
+  as before); else the store's folder alone, and nothing when its store is elsewhere and `/data`
+  is empty.
 
 ### Upgrading: access control (#725)
 

@@ -987,10 +987,19 @@ export function createRuns(ctx) {
   }
 
   // Whether the run's summary is in the store, tried again every QUEUE_RETRY_MS until it is, or
-  // this copy stops.
+  // this copy stops. Its first failure is logged, and the try that lands: not every 5 s of a
+  // long outage.
   async function summarySaved(live) {
     const retryMs = ctx.queueRetryMs ?? QUEUE_RETRY_MS;
-    while (!(await saveSummary(ctx.store, live.record, { log, secrets: ctx.storeSecrets?.() }))) {
+    let tries = 0;
+    const once = (line) => tries === 1 && log(line);
+    for (;;) {
+      tries++;
+      const saved = await saveSummary(ctx.store, live.record, {
+        log: once,
+        secrets: ctx.storeSecrets?.(),
+      });
+      if (saved) break;
       if (ctx.stopping || !(ctx.held?.() ?? true)) {
         log(
           `${live.key}: its summary not saved as this copy stops: the run stays for the next one`,
@@ -999,6 +1008,7 @@ export function createRuns(ctx) {
       }
       await new Promise((resolve) => setTimeout(resolve, retryMs).unref?.());
     }
+    if (tries > 1) log(`${live.key}: its summary saved, at try ${tries}`);
     return true;
   }
 
@@ -1019,8 +1029,9 @@ export function createRuns(ctx) {
     await Promise.race([revoked, new Promise((resolve) => setTimeout(resolve, 5000).unref())]);
     live.record.finishedAt = Date.now();
     // Its summary before anything of the run goes: tried again while the store is away, as the
-    // orchestrator keeps it nowhere else (#619). A copy that stops meanwhile leaves the run as it
-    // is, its sandbox and its state, for the next copy to end again.
+    // orchestrator keeps it nowhere else (#619). A copy that stops meanwhile leaves the run's
+    // sandbox and state for the next copy to end again; its tokens are revoked already (above),
+    // which an ended run no longer needs.
     if (!(await summarySaved(live))) return false;
     // What it wrote last, at the runner before its state goes, and its last segment closed
     // there after it (../runner/logs.mjs).

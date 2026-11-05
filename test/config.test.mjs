@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { constants, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 import {
   ConfigError,
   loadConfig,
@@ -9,6 +10,9 @@ import {
   parseConfigFile,
   readConfigFile,
   repoAllowed,
+  dataToCheck,
+  leftInData,
+  storeFolder,
   unwritableData,
   withCredentialFiles,
 } from "../listener/config.mjs";
@@ -1005,4 +1009,53 @@ test("RUNNER_URL: http(s) URLs only, each of its copies'", () => {
   );
   const both = "http://a:8080,http://b:8080";
   assert.equal(loadConfig({ ALLOWED_USERS, RUNNER_URL: both }).runnerUrl, both);
+});
+
+// Where the orchestrator's store is in its data volume (#619): its folder, the volume itself, or
+// nowhere (another folder, Redis).
+test("storeFolder: the store's folder in the data volume, the volume itself, or none", () => {
+  const dir = resolve("data-619");
+  const url = (...parts) => pathToFileURL(join(dir, ...parts)).href;
+  assert.equal(storeFolder(url("store"), dir), "store");
+  assert.equal(storeFolder(url("state", "store"), dir), "state");
+  assert.equal(storeFolder(url(), dir), "");
+  assert.equal(storeFolder(pathToFileURL(resolve("elsewhere", "store")).href, dir), null);
+  assert.equal(storeFolder(pathToFileURL(`${dir}-2`).href, dir), null);
+  assert.equal(storeFolder("redis://deckhand@redis:6379", dir), null);
+  assert.equal(storeFolder("memory:", dir), null);
+});
+
+// #536's check, narrowed (#619): the whole volume only while a release before left something in
+// it, or while the store's folder isn't there yet; the store's folder alone otherwise; nothing
+// with no volume.
+test("dataToCheck: the whole volume, the store's folder alone, or nothing", () => {
+  const dir = resolve("data-619");
+  const store = join(dir, "store");
+  const check = (entries, folder, exists = true) =>
+    dataToCheck(dir, folder, { list: () => entries, exists: () => exists });
+  // Something a release before left beside the store: the moves remove it.
+  assert.equal(check(["store", "logs"], "store"), dir);
+  assert.equal(check(["titles.json"], null), dir);
+  // The store alone: its folder alone, the rest never written.
+  assert.equal(check(["store"], "store"), store);
+  // A new volume, or an empty one a root orchestrator made: the store's folder made in it.
+  assert.equal(check([], "store", false), dir);
+  // Redis, or a store elsewhere, and nothing left: no volume to check (a read-only image's).
+  assert.equal(check([], null), null);
+  // The store at the volume's root: all of it is the store's.
+  assert.equal(check(["state.json", "keys"], ""), dir);
+});
+
+test("leftInData: what nothing reads any more, never the store's nor what is still moving", () => {
+  const dir = resolve("data-619");
+  const moving = new Set(["logs", "shots", "titles.json"]);
+  const list = () => ["store", "logs", "shots", "titles.json", "run-token.key", "queue.json"];
+  assert.deepEqual(leftInData(dir, "store", moving, { list }), ["run-token.key", "queue.json"]);
+  assert.deepEqual(leftInData(dir, null, moving, { list }), [
+    "store",
+    "run-token.key",
+    "queue.json",
+  ]);
+  // The store at the volume's root: its own files, never named.
+  assert.deepEqual(leftInData(dir, "", moving, { list: () => ["state.json", "keys"] }), []);
 });

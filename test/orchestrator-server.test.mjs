@@ -2979,6 +2979,26 @@ mounts:
     assert.doesNotMatch(ctx.listener.output(), /no longer is read/);
   });
 
+  // What a release before left in the data volume (#619): moved, its emptied folders removed, and
+  // what nothing reads any more named for the operator, never the store nor what still moves.
+  test("a data volume of a release before: moved, emptied, what is left named", async (t) => {
+    let data;
+    const { listener } = await listen(t, {}, (dir) => {
+      data = join(dir, "orchestrator-data");
+      mkdirSync(join(data, "logs"), { recursive: true });
+      mkdirSync(join(data, "shots"));
+      writeFileSync(join(data, "titles.json"), JSON.stringify({ "org/repo#5": "Five" }));
+      writeFileSync(join(data, "run-token.key"), "old");
+      return { ORCHESTRATOR_DATA_DIR: data };
+    });
+    const line = await listener.until(/holds .*, which no longer is read/);
+    assert.match(
+      line,
+      /holds run-token\.key, which no longer is read: remove it \(docs\/setup\.md#upgrading-the-orchestrator-without-a-volume-619\)/,
+    );
+    assert.deepEqual(readdirSync(data).sort(), ["run-token.key", "store"]);
+  });
+
   test("a listener killed mid-run: Claude answers meanwhile, the next one replies once", async (t) => {
     const ctx = await holding(t);
     const { dir, github } = ctx;

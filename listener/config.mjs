@@ -2,8 +2,9 @@
 // networks come from here so nothing in the listener is tied to one deployment. What the
 // operator grants one repo (hosts, mounts, limits) is in its grants folder instead (grants.mjs).
 import { accessSync, constants, existsSync, readdirSync } from "node:fs";
-import { isAbsolute, join, relative, resolve } from "node:path";
+import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
+import { listDir } from "../lib/files.mjs";
 import {
   AGENT_SECRETS,
   AGENTS,
@@ -304,12 +305,37 @@ export function readConfigFile(env, read) {
   });
 }
 
-// Whether `storeUrl` (STORE_URL) is a folder in the data volume `dir`: the orchestrator's
-// default, file://<dir>/store. One elsewhere, or Redis, needs no volume (#619).
-export function inData(storeUrl, dir) {
-  if (!String(storeUrl).startsWith("file:")) return false;
+// Where `storeUrl` (STORE_URL) is in the data volume `dir` (#619): the name of its folder there
+// (`store` by default, file://<dir>/store), "" when it is the volume itself, null when it is
+// elsewhere or Redis, which need no volume.
+export function storeFolder(storeUrl, dir) {
+  if (!String(storeUrl).startsWith("file:")) return null;
   const path = relative(resolve(dir), fileURLToPath(storeUrl));
-  return !path.startsWith("..") && !isAbsolute(path);
+  if (path.startsWith("..") || isAbsolute(path)) return null;
+  return path.split(sep)[0];
+}
+
+// The folder #536's write check covers (unwritableData()), or null: the whole volume while a
+// release before left something there beside the store (its moves remove it), or while the
+// store's folder isn't made yet (the volume must take it: an empty one root's gets the chown
+// hint); else the store's folder alone, the rest never written (#619). None when the store is
+// elsewhere and nothing is left: an empty folder of a read-only image.
+export function dataToCheck(dir, folder, { list = listDir, exists = existsSync } = {}) {
+  if (folder === "") return dir;
+  const left = list(dir).some((name) => name !== folder);
+  if (left) return dir;
+  if (folder === null) return null;
+  const store = join(dir, folder);
+  return exists(store) ? store : dir;
+}
+
+// What a release before left in the data volume that nothing reads any more, once its moves are
+// done (#619): its entries but the store's folder and what the moves still take (`moving`: logs/,
+// shots/, the maps' files, for a later start). None with the store at the volume's root: every
+// entry is the store's then.
+export function leftInData(dir, folder, moving, { list = listDir } = {}) {
+  if (folder === "") return [];
+  return list(dir).filter((name) => name !== folder && !moving.has(name));
 }
 
 // The screenshots' folder of the data volume: one folder per run, which the orchestrator makes
