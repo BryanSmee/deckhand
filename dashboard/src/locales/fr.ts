@@ -13,6 +13,7 @@ import { policies } from "./fr-policies";
 import { queue } from "./fr-queue";
 import { repos } from "./fr-repos";
 import { request } from "./fr-request";
+import { review } from "./fr-review";
 import { ui } from "./fr-ui";
 
 export const fr = {
@@ -291,4 +292,5 @@ export const fr = {
   ...queue,
   ...detail,
   ...log,
+  ...review,
 } satisfies Catalog;
