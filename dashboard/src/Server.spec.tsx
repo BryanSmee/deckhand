@@ -7,7 +7,7 @@ import type { RepoList } from "./api";
 import { Dashboard } from "./App";
 import { lastSyncLine } from "./Server";
 import { makeState, mockApi } from "./testUtils";
-import type { AppLinks, ServerSetup, State } from "./types";
+import type { AppLinks, GithubStatus, ServerSetup, State } from "./types";
 
 const SETUP: ServerSetup = {
   engine: "sysbox",
@@ -51,7 +51,7 @@ const list = (app: AppLinks | null = APP): RepoList => ({
 let api: ReturnType<typeof mockApi>;
 beforeEach(() => {
   history.replaceState(null, "", "#/settings/server");
-  api = mockApi({ "api/server": () => SETUP });
+  api = mockApi({ "api/server": () => SETUP, "api/github-status": () => githubStatus() });
 });
 
 const card = (name: string) =>
@@ -295,4 +295,107 @@ test("nothing missing: no row for it", async () => {
   render(<Dashboard state={makeState()} error={null} repos={list()} />);
   await screen.findByText("Sysbox");
   expect(card("GitHub App").queryByText("Missing in its settings")).toBeNull();
+});
+
+// GitHub's status as api/github-status gives it (#681): read 3 minutes before the fixture's
+// `now`, all operational.
+const NOW = makeState().now;
+const githubStatus = (partial: Partial<GithubStatus> = {}): GithubStatus => ({
+  watched: true,
+  checkedAt: NOW - 180_000,
+  triedAt: NOW - 180_000,
+  failed: null,
+  indicator: "none",
+  description: "All Systems Operational",
+  components: [],
+  incidents: [],
+  ...partial,
+});
+const githubValue = (term: string) =>
+  card("GitHub status").getByText(term).closest("div")!.querySelector("dd")!;
+
+test("GitHub's status, each indicator in its tone; a major or critical one on the status card too", async () => {
+  const levels = [
+    ["none", "All Systems Operational", "s-done", false],
+    ["minor", "Minor Service Outage", "s-input", false],
+    ["major", "Partial System Outage", "s-err", true],
+    ["critical", "Major System Outage", "s-err", true],
+  ] as const;
+  for (const [indicator, description, tone, noted] of levels) {
+    api.routes["api/github-status"] = () => githubStatus({ indicator, description });
+    const { unmount } = render(<Dashboard state={makeState()} error={null} repos={list()} />);
+    const shown = await card("GitHub status").findByText(description);
+    expect(shown.classList.contains(tone)).toBe(true);
+    expect(githubValue("Last checked").textContent).toBe("3 min ago");
+    const note = card("The listener is up").queryByText(/GitHub reports a problem/);
+    expect(note?.textContent ?? null).toBe(
+      noted ? `GitHub reports a problem: ${description}. See GitHub's status below.` : null,
+    );
+    unmount();
+  }
+});
+
+test("GitHub's components Deckhand depends on and its open incidents, each linked", async () => {
+  api.routes["api/github-status"] = () =>
+    githubStatus({
+      indicator: "major",
+      description: "Partial System Outage",
+      components: [
+        { name: "Webhooks", status: "degraded_performance" },
+        { name: "Git Operations", status: "major_outage" },
+      ],
+      incidents: [
+        {
+          name: "Disruption with some GitHub services",
+          status: "investigating",
+          impact: "major",
+          startedAt: NOW - 3_600_000,
+          url: "https://www.githubstatus.com/incidents/x8wr3gq6l9fd",
+        },
+      ],
+    });
+  render(<Dashboard state={makeState()} error={null} repos={list()} />);
+  await card("GitHub status").findByText("Partial System Outage");
+  expect(githubValue("Affected").textContent).toBe(
+    "Webhooks · Degraded performanceGit Operations · Major outage",
+  );
+  const incidents = githubValue("Open incident");
+  expect(
+    within(incidents)
+      .getByRole("link", { name: "Disruption with some GitHub services ↗" })
+      .getAttribute("href"),
+  ).toBe("https://www.githubstatus.com/incidents/x8wr3gq6l9fd");
+  expect(incidents.textContent).toMatch(/Investigating · since /);
+});
+
+test("a failed check: the last status read stays, with when it was read and why the next failed", async () => {
+  api.routes["api/github-status"] = () =>
+    githubStatus({ indicator: "minor", triedAt: NOW - 60_000, failed: "HTTP 503" });
+  render(<Dashboard state={makeState()} error={null} repos={list()} />);
+  expect(await card("GitHub status").findByText("All Systems Operational")).toBeTruthy();
+  expect(githubValue("Last checked").textContent).toBe(
+    "3 min ago" + "the check 1 min ago failed (HTTP 503): the last status read is shown",
+  );
+});
+
+test("GitHub's status: none read yet, unreadable, or not followed off github.com", async () => {
+  api.routes["api/github-status"] = () =>
+    githubStatus({ indicator: null, checkedAt: null, failed: "timed out" });
+  const first = render(<Dashboard state={makeState()} error={null} repos={list()} />);
+  expect(await card("GitHub status").findByText("Not read yet")).toBeTruthy();
+  expect(githubValue("Last checked").textContent).toContain("Never");
+  first.unmount();
+
+  api.routes["api/github-status"] = () =>
+    new Response(JSON.stringify({ error: "The github service couldn't be asked: try again." }), {
+      status: 502,
+    });
+  const second = render(<Dashboard state={makeState()} error={null} repos={list()} />);
+  expect(await card("GitHub status").findByText(/Couldn't read/)).toBeTruthy();
+  second.unmount();
+
+  api.routes["api/github-status"] = () => ({ watched: false });
+  render(<Dashboard state={makeState()} error={null} repos={list()} />);
+  await screen.findByText("Sysbox");
+  await waitFor(() => expect(screen.queryByRole("heading", { name: "GitHub status" })).toBeNull());
 });

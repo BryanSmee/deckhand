@@ -480,6 +480,8 @@ const ctx = {
   held: () => leaseHeld,
   // How it is set up (engine, egress proxy, grants, who may sign in): GET api/server.
   serverSetup: () => serverSetup(config),
+  // GitHub's own status, as the github service last read it (GET api/github-status).
+  githubStatus: () => githubService.status(),
   // The services' health, each one's GET /health (GET api/health: the status page).
   health: createHealth({
     urls: {

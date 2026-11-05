@@ -515,6 +515,33 @@ export interface ServerSetup {
   allowedRepos: string[];
 }
 
+// GitHub's own status (#681): GET api/github-status, githubstatus.com's summary as the github
+// service last read it (github/status.mjs), every 5 minutes. `watched`: false off github.com
+// (GitHub Enterprise Server), nothing else said then.
+export type GithubIndicator = "none" | "minor" | "major" | "critical" | "maintenance";
+export interface GithubStatus {
+  watched: boolean;
+  // When the summary shown was read, and the last try (null: none yet); why that try failed
+  // (null: it didn't), the summary before it kept.
+  checkedAt?: number | null;
+  triedAt?: number | null;
+  failed?: string | null;
+  // null until a summary is read.
+  indicator?: GithubIndicator | null;
+  // GitHub's own words for it: "All Systems Operational", "Partial System Outage".
+  description?: string;
+  // The components Deckhand depends on that aren't operational: "Webhooks", "degraded_performance".
+  components?: { name: string; status: string }[];
+  // The open incidents, each with its page on githubstatus.com (null: none known).
+  incidents?: {
+    name: string;
+    status: string;
+    impact: string | null;
+    startedAt: number | null;
+    url: string | null;
+  }[];
+}
+
 export interface RepoSlots {
   running: number;
   queued: number;
