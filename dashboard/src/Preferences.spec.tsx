@@ -275,6 +275,10 @@ test("the switches: Show closed is the board's, the shortcuts turn / off", () =>
   expect(localStorage.getItem("deckhand.notify.ready")).toBe("0");
   fireEvent.click(screen.getByRole("switch", { name: "Wrap long log lines" }));
   expect(localStorage.getItem("deckhand.log.wrap")).toBe("1");
+  const times = screen.getByRole("switch", { name: "Show log timestamps" }) as HTMLInputElement;
+  expect(times.checked).toBe(false);
+  fireEvent.click(times);
+  expect(localStorage.getItem("deckhand.log.times")).toBe("1");
   leave(page);
 
   history.replaceState(null, "", "#/acme/app");

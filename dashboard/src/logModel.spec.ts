@@ -9,6 +9,8 @@ import {
   plainText,
   search,
   shortDuration,
+  stampLabel,
+  stampTitle,
   timeLabel,
   toolLabel,
 } from "./logModel";
@@ -141,6 +143,50 @@ test("as text: each section under its title", () => {
   );
   expect(text).toContain("[Bash] node --test\n    ERROR: ✖ retries once");
   expect(text).toContain("== Push and pull request ==\n[Bash] git push");
+});
+
+// #719: each line after its time, those without one (a call's output, a log from before them)
+// after blanks as wide; a text of several lines, its first line only.
+test("as text with timestamps: each line's time first, the others aligned", () => {
+  const list = logSections(
+    [
+      { kind: "phase", phase: "work", at: 1000 },
+      { kind: "meta", text: "Started" },
+      { kind: "tool", name: "Bash", text: "ls", at: 2000 },
+      { kind: "output", text: "a\nb", error: false, at: 3000 },
+      { kind: "result", status: "ok", text: "Done.", minutes: 1, at: 4000 },
+    ],
+    5000,
+    false,
+  );
+  const [one, two, four] = [1000, 2000, 4000].map(stampLabel);
+  const blank = " ".repeat(one.length);
+  expect(plainText(list, true)).toBe(
+    [
+      `${one} == Work ==`,
+      `${blank} › Started`,
+      `${two} [Bash] ls`,
+      `${blank}     a`,
+      `${blank}     b`,
+      `${four} Done in 1 min`,
+      `${blank} Done.`,
+      "",
+    ].join("\n"),
+  );
+  // A log with no time anywhere (from before them): as it was, times on or not.
+  const untimed = logSections([{ kind: "meta", text: "Started" }], 0, false);
+  expect(plainText(untimed, true)).toBe(plainText(untimed));
+  // Off: as it was.
+  expect(plainText(list)).toBe(
+    "== Work ==\n› Started\n[Bash] ls\n    a\n    b\nDone in 1 min\nDone.\n",
+  );
+});
+
+test("a timestamp: the time of day on a 24-hour clock; its date and time since the start", () => {
+  const at = new Date(2026, 0, 1, 14, 5, 12).getTime();
+  expect(stampLabel(at)).toBe("14:05:12");
+  expect(stampLabel(new Date(2026, 0, 1, 0, 0, 7).getTime())).toBe("00:00:07");
+  expect(stampTitle(at, at - 192000)).toMatch(/2026.* · 3m 12s after the run started$/);
 });
 
 test("a run that ended in error: an error, not a failed command", () => {

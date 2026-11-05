@@ -4,7 +4,8 @@ import { act, fireEvent, render, screen, within } from "@testing-library/preact"
 import { beforeEach, expect, test, vi } from "vitest";
 import { useRunLog } from "./api";
 import { Log } from "./Log";
-import { setPref } from "./prefs";
+import { stampLabel } from "./logModel";
+import { getPref, setPref } from "./prefs";
 import { FakeSource } from "./testUtils";
 import type { Entry, Run } from "./types";
 
@@ -229,6 +230,58 @@ test("copy: the log as text", async () => {
   });
   expect(await screen.findByRole("button", { name: "Copied" })).toBeTruthy();
   expect(writeText.mock.calls[0][0]).toMatch(/^== Setup ==\n› Cloned acme\/app\n/);
+});
+
+// #719: each item's time of day on its left, its section's start on its header.
+const stamped: Entry[] = [
+  { kind: "meta", text: "Starting", at: 1000 },
+  { kind: "phase", phase: "setup", at: 2000 },
+  { kind: "raw", text: "npm ci", at: 3000 },
+  { kind: "phase", phase: "work", at: 60000 },
+  // One with no time (a log from before them): an empty cell.
+  { kind: "meta", text: "Claude Code started" },
+  { kind: "text", text: "Looking.", at: 61000 },
+  { kind: "tool", name: "Bash", text: "ls", id: "t1", at: 62000 },
+  { kind: "output", text: "a.md", error: false, id: "t1", at: 63000 },
+  { kind: "result", status: "ok", text: "Done.", minutes: 1, at: 125000 },
+];
+
+test("timestamps: off at first; the toolbar's clock shows them, kept, at once in every view", async () => {
+  const writeText = vi.fn(async (_text: string) => {});
+  vi.stubGlobal("navigator", { clipboard: { writeText } });
+  show({}, stamped);
+  const log = screen.getByRole("log");
+  expect(log.querySelector("time")).toBeNull();
+  const clock = screen.getByRole("button", { name: "Show timestamps" });
+  expect(clock.getAttribute("aria-pressed")).toBe("false");
+  fireEvent.click(clock);
+  expect(clock.getAttribute("aria-pressed")).toBe("true");
+  expect(getPref("logTimes")).toBe(true);
+  expect(localStorage.getItem("deckhand.log.times")).toBe("1");
+  // Every item's, and each section's start, on its header.
+  const times = [...log.querySelectorAll("time")].map((t) => t.textContent);
+  expect(times).toEqual([2000, 1000, 3000, 60000, 61000, 62000, 125000].map(stampLabel));
+  expect(stampLabel(62000)).toMatch(/^\d\d:\d\d:\d\d$/);
+  expect(section("Work").querySelector("summary time")!.textContent).toBe(stampLabel(60000));
+  // The full date, and the time since the run's start, on hover.
+  const call = within(section("Work")).getByText("ls").closest("details")!.parentElement!;
+  expect(call.querySelector("time")!.getAttribute("title")).toMatch(
+    /· 1m 02s after the run started$/,
+  );
+  // No time: an empty cell, the column kept.
+  const untimed = within(section("Work")).getByText("Claude Code started").closest("div")!;
+  const cell = untimed.parentElement!.firstElementChild!;
+  expect(cell.tagName).toBe("SPAN");
+  expect(cell.textContent).toBe("");
+  // Copied with them.
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: "Copy the log" }));
+  });
+  expect(writeText.mock.calls[0][0]).toContain(`${stampLabel(2000)} == Setup ==\n`);
+  // Preferences, or another tab, turns them off: the log as it was.
+  act(() => setPref("logTimes", false));
+  expect(log.querySelector("time")).toBeNull();
+  expect(log.querySelector("[class*=stamped]")).toBeNull();
 });
 
 test("copy without a clipboard, and the fallback fails: it says so", async () => {

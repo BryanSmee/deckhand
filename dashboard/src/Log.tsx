@@ -5,7 +5,8 @@
 // (the folds holding the matches open), filters it, folds it all and copies or downloads it; a phone has an action bar instead,
 // and its search replaces the page's header. A live run's log follows its end until the
 // reader scrolls up (from the start, unless Preferences says not to); Latest brings it back.
-// Long lines wrap, or scroll sideways (Preferences). Its shortcuts: F searches, Enter and Shift
+// Long lines wrap, or scroll sideways (Preferences). Each line's time of day shows on its left
+// when Preferences or the toolbar's clock says (the section's start on its header). Its shortcuts: F searches, Enter and Shift
 // Enter go through the matches, E and Shift E fold it all, X and Shift X go through the errors,
 // L follows it live, Ctrl Shift C copies it.
 import type { ComponentChildren } from "preact";
@@ -21,6 +22,7 @@ import {
   type Filter,
   isError,
   type Item,
+  itemAt,
   type LogSection,
   logSections,
   matcher,
@@ -30,6 +32,8 @@ import {
   search,
   shortDuration,
   shown,
+  stampLabel,
+  stampTitle,
   type Step,
   stepStatus,
   type Timing,
@@ -73,6 +77,9 @@ const Hits = createContext<{ query: string; starts: Map<string, number>; current
   current: -1,
 });
 
+// The timestamps, when shown: the run's start, which their tooltips count from (null: hidden).
+const Stamps = createContext<number | null>(null);
+
 // Near enough to the end to keep following it.
 const NEAR_END = 40;
 
@@ -95,6 +102,7 @@ export function Log({ run, entries, now, touch, searching, onSearching }: Props)
   const [follow] = usePref("logFollow");
   const [openErrors] = usePref("logErrors");
   const [wrap] = usePref("logWrap");
+  const [times, setTimes] = usePref("logTimes");
   const [following, setFollowing] = useState(live && follow);
   // How the last Copy went, for a moment.
   const [copied, setCopied] = useState<"ok" | "failed" | null>(null);
@@ -192,7 +200,7 @@ export function Log({ run, entries, now, touch, searching, onSearching }: Props)
       root.current?.querySelector(`[data-item="${focus}"]`)?.scrollIntoView?.({ block: "center" });
   }, [focus]);
 
-  const text = () => plainText(list);
+  const text = () => plainText(list, times);
   const copy = async () => {
     setCopied((await copyText(text())) ? "ok" : "failed");
     setTimeout(() => setCopied(null), 3000);
@@ -332,6 +340,15 @@ export function Log({ run, entries, now, touch, searching, onSearching }: Props)
               <IconButton
                 variant="ghost"
                 size="small"
+                label={t("log.showTimes")}
+                aria-pressed={times}
+                class={times ? styles.pressed : undefined}
+                icon={<Icon.Clock size={15} />}
+                onClick={() => setTimes(!times)}
+              />
+              <IconButton
+                variant="ghost"
+                size="small"
                 label={
                   copied === "ok"
                     ? t("log.copied")
@@ -364,34 +381,38 @@ export function Log({ run, entries, now, touch, searching, onSearching }: Props)
         )
       )}
 
-      <Hits.Provider value={{ query, starts: found.starts, current: at }}>
-        <div
-          class={styles.log}
-          role="log"
-          aria-label={query ? t("log.labelSearched", { query }) : t("log.label")}
-          data-testid="log"
-        >
-          {visible.map((s) => (
-            <SectionView
-              key={s.phase}
-              section={s}
-              filter={filter}
-              open={isOpen(s.phase, (openErrors && s.failures > 0) || s.phase === "work")}
-              onToggle={toggle(s.phase, (openErrors && s.failures > 0) || s.phase === "work")}
-              hits={query ? (found.hits.get(s.phase) ?? 0) : null}
-              isOpen={isOpen}
-              toggle={toggle}
-            />
-          ))}
-          {!list.length && <p class={styles.empty}>{live ? t("log.starting") : t("log.empty")}</p>}
-          {live && (
-            <p class={styles.live}>
-              <StatusDot state="running" />
-              {following ? t("log.workingFollowing") : t("log.working")}
-            </p>
-          )}
-        </div>
-      </Hits.Provider>
+      <Stamps.Provider value={times ? run.startedAt : null}>
+        <Hits.Provider value={{ query, starts: found.starts, current: at }}>
+          <div
+            class={styles.log}
+            role="log"
+            aria-label={query ? t("log.labelSearched", { query }) : t("log.label")}
+            data-testid="log"
+          >
+            {visible.map((s) => (
+              <SectionView
+                key={s.phase}
+                section={s}
+                filter={filter}
+                open={isOpen(s.phase, (openErrors && s.failures > 0) || s.phase === "work")}
+                onToggle={toggle(s.phase, (openErrors && s.failures > 0) || s.phase === "work")}
+                hits={query ? (found.hits.get(s.phase) ?? 0) : null}
+                isOpen={isOpen}
+                toggle={toggle}
+              />
+            ))}
+            {!list.length && (
+              <p class={styles.empty}>{live ? t("log.starting") : t("log.empty")}</p>
+            )}
+            {live && (
+              <p class={styles.live}>
+                <StatusDot state="running" />
+                {following ? t("log.workingFollowing") : t("log.working")}
+              </p>
+            )}
+          </div>
+        </Hits.Provider>
+      </Stamps.Provider>
 
       {!touch && live && !following && (
         <Button
@@ -480,6 +501,7 @@ function SectionView({ section: s, filter, open, onToggle, hits, isOpen, toggle 
   // section that failed otherwise (the agent ended in error) says so: its dot isn't alone.
   const flagged = failuresFail(s.phase) && s.failures > 0;
   const searchBadge = hits !== null ? styles.searchBadge : "";
+  const start = useContext(Stamps);
   return (
     <Fold
       title={t(PHASE_TITLES[s.phase])}
@@ -509,15 +531,34 @@ function SectionView({ section: s, filter, open, onToggle, hits, isOpen, toggle 
             />
           )}
           {s.seconds !== null && <span class={styles.mono}>{shortDuration(s.seconds)}</span>}
+          {start !== null && s.at !== null && <Stamp at={s.at} start={start} />}
         </>
       }
     >
       {s.items
         .filter((i) => shown(i, filter))
-        .map((item) => (
-          <ItemView key={item.id} item={item} isOpen={isOpen} toggle={toggle} />
-        ))}
+        .map((item) =>
+          start === null ? (
+            <ItemView key={item.id} item={item} isOpen={isOpen} toggle={toggle} />
+          ) : (
+            <div key={item.id} class={styles.stamped}>
+              <Stamp at={itemAt(item)} start={start} />
+              <ItemView item={item} isOpen={isOpen} toggle={toggle} />
+            </div>
+          ),
+        )}
     </Fold>
+  );
+}
+
+// A line's time of day, its date and time since the run's start in its tooltip; an empty cell
+// for one with no time (a log from before them), so the column stays.
+function Stamp({ at, start }: { at: number | undefined; start: number }) {
+  if (at === undefined) return <span class={styles.stamp} />;
+  return (
+    <time class={styles.stamp} dateTime={new Date(at).toISOString()} title={stampTitle(at, start)}>
+      {stampLabel(at)}
+    </time>
   );
 }
 
