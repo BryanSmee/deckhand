@@ -57,6 +57,23 @@ export function replyFooter(record, result, hint, later) {
   // An external run's (#597): its machine, and its model and effort only as its driver said them.
   const model = record.model ? ` ${record.model}` : "";
   const effort = record.effort ? ` · ${record.effort} effort` : "";
-  const on = record.machine ? ` · on ${record.machine}` : "";
+  const setup = record.setup ? ` (${setupText(record.setup)}, as it reports)` : "";
+  const on = record.machine ? ` · on ${record.machine}${setup}` : "";
   return `<sub>🤖 ${agent.displayName}${provider}${model}${effort}${on}${fast}${took !== null ? ` · ${took} min` : ""}${switched}${speedNote}${hint}${next}</sub>`;
+}
+
+// How an external run's agent ran, as its machine reported it at its claim (#599, mcp.mjs
+// setupOf(), which keeps its words to safe characters): "v2.1.3, sandbox on, `acceptEdits`,
+// Deckhand's settings". What it didn't say is left out.
+export function setupText({ version, sandbox, permissionMode, suggested }) {
+  return [
+    version && `v${version.replace(/^v/i, "")}`,
+    sandbox !== null && sandbox !== undefined && `sandbox ${sandbox ? "on" : "off"}`,
+    permissionMode && `\`${permissionMode}\``,
+    suggested !== null &&
+      suggested !== undefined &&
+      (suggested ? "Deckhand's settings" : "its own settings"),
+  ]
+    .filter(Boolean)
+    .join(", ");
 }

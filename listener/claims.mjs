@@ -42,8 +42,9 @@
 // Only its owner reaches it: a comment by another allowed user on a routed task is held, shown on
 // the dashboard, until the owner delivers it (or drops it). Deckhand's own items (a review's fix
 // round, a CI fix, a rebase) are delivered as on any task.
-import { AGENTS } from "./agents/index.mjs";
+import { AGENTS, agentFor } from "./agents/index.mjs";
 import { labeller, labellerRefusal } from "./auto-pickup.mjs";
+import { operatorHosts } from "./egress.mjs";
 import { commentsText, taskKey } from "./events.mjs";
 import { getJson, paginate } from "./github.mjs";
 import { openPull } from "./machine-pulls.mjs";
@@ -339,7 +340,7 @@ export function createClaims(
       // ones included.
       const refused = await refusedItems(ctx, task.repo, queued, settings);
       const items = queued.filter((item) => !refused.has(item));
-      const work = items.length ? await workOf(task, items, route, m, settings) : null;
+      const work = items.length ? await workOf(task, items, route, m, settings, reported) : null;
       // Claimed meanwhile (another claim of the machine), its comments taken, or moved by its
       // owner (`/machine`) while its work was read.
       if (task.running || !task.ready || task.pending[0] !== queued[0]) continue;
@@ -394,8 +395,10 @@ export function createClaims(
   }
 
   // What a claim returns: the work as a sandbox run gets it (its prompt and first message), for
-  // the owner's agent on the machine.
-  async function workOf(task, items, route, m, settings) {
+  // the owner's agent on the machine, with where to clone it from and the hosts a sandbox run of
+  // its repository may reach (the agent's, GitHub's and the operator's grant: #599), which the
+  // driver's suggested settings allow its agent's sandbox, advisory there.
+  async function workOf(task, items, route, m, settings, reported = {}) {
     const key = keyOf(task);
     const mode = items.at(-1).mode;
     const own = customMode(settings, mode);
@@ -436,8 +439,17 @@ export function createClaims(
       message: firstMessage({ mode, text, restored: false, started: resume }),
       options,
       leaseSeconds: leaseMs / 1000,
+      cloneUrl: `${config.githubUrl}/${task.repo}.git`,
+      hosts: await hostsOf(task.repo, reported.agent),
       protocol: MACHINE_PROTOCOL,
     };
+  }
+
+  // The hosts a sandbox run of `repo` with `agent` (the run's, startExternal()) may reach
+  // (egress.mjs operatorHosts()): those every run needs alone when its grant can't be read.
+  async function hostsOf(repo, agent) {
+    const grant = await Promise.resolve(ctx.grantOf?.(repo)).catch(() => null);
+    return operatorHosts(config, { hosts: grant?.hosts ?? [] }, agentFor(agent));
   }
 
   // The next work for the owner's machine `id`, waiting up to `wait` ms for one: → its work, or

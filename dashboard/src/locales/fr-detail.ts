@@ -18,6 +18,15 @@ export const detail = {
   "machine.waitingOne": "en attente que l’une d’elles la prenne",
   "machine.offline": "elle est hors ligne",
   "machine.noneOnline": "aucune n’est en ligne",
+  "machine.reported": "Selon {machine} : {setup}",
+  "machine.reportedHelp":
+    "Ce que la machine dit de la façon dont son agent tourne : Deckhand ne le vérifie pas, et n’y impose rien.",
+  "machine.version": "v{version}",
+  "machine.sandboxOn": "sandbox active",
+  "machine.sandboxOff": "sandbox inactive",
+  "machine.permissionMode": "mode {mode}",
+  "machine.suggested": "réglages de Deckhand",
+  "machine.ownSettings": "ses propres réglages",
   "held.label": "Commentaires retenus",
   "held.title": {
     one: "{count} commentaire retenu pour @{owner}",

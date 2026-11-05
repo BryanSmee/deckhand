@@ -8,7 +8,7 @@ import { answerToolRequest, postJson } from "./api";
 import { ago, machineName } from "./format";
 // `tr`: t() where the task is called `t`.
 import { t as tr, tx as txr } from "./i18n";
-import type { Task, ToolAnswer, ToolRequest } from "./types";
+import type { Run, Task, ToolAnswer, ToolRequest } from "./types";
 import { Button } from "./ui/Button";
 import * as Icon from "./ui/icons";
 import styles from "./MachineTask.module.css";
@@ -37,6 +37,25 @@ export function MachineFact({ task: t }: { task: Task }) {
     ? tr(m.machine ? "machine.waitingIt" : "machine.waitingOne")
     : tr(m.machine ? "machine.offline" : "machine.noneOnline");
   return <span title={title}>{tr("machine.runsOn", { asked, now })}</span>;
+}
+
+// "As Desk reports it: v2.1.3 · sandbox on · acceptEdits mode · Deckhand's settings":
+// how an external run's agent runs, as its machine said at its claim (#599), never checked.
+export function MachineSetup({ run: r }: { run: Run }) {
+  const s = r.setup;
+  if (!s || !r.machine) return null;
+  const parts = [
+    s.version && tr("machine.version", { version: s.version }),
+    s.sandbox !== null && tr(s.sandbox ? "machine.sandboxOn" : "machine.sandboxOff"),
+    s.permissionMode && tr("machine.permissionMode", { mode: s.permissionMode }),
+    s.suggested !== null && tr(s.suggested ? "machine.suggested" : "machine.ownSettings"),
+  ].filter(Boolean);
+  if (!parts.length) return null;
+  return (
+    <span title={tr("machine.reportedHelp")}>
+      {tr("machine.reported", { machine: r.machine, setup: parts.join(" · ") })}
+    </span>
+  );
 }
 
 interface Props {

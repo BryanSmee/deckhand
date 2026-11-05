@@ -313,6 +313,50 @@ test("a run claimed, logged, asking, answered and finished goes the steps of a s
   assert.deepEqual(said.runner, []);
 });
 
+test("a claim's work says where to clone and which hosts to allow; how the machine runs it is its record's, its log's and its reply's (#599)", async (t) => {
+  const b = bench(t);
+  const { ctx, said } = b;
+  ctx.grantOf = async (repo) => (repo === "org/repo" ? { hosts: ["Assets.example.com"] } : null);
+  const desk = b.register("alice", "Desk");
+  await b.say("alice", "Deckhand\n/machine Desk\nBuild it.");
+  b.ready();
+  const setup = {
+    version: "2.1.3",
+    sandbox: false,
+    permissionMode: "acceptEdits",
+    suggested: true,
+  };
+  const work = await ctx.claims.claim("alice", desk, { reported: { agent: "claude", setup } });
+  assert.equal(work.cloneUrl, "https://github.com/org/repo.git");
+  // The agent's API, GitHub's and the grant's: what a sandbox run of the repository reaches.
+  for (const host of ["api.anthropic.com", "github.com", "assets.example.com"]) {
+    assert.ok(work.hosts.includes(host), host);
+  }
+  const record = b.run(work.run);
+  assert.deepEqual(record.setup, setup);
+  const logged = readFileSync(join(ctx.logDir, `${work.run}.log`), "utf8");
+  assert.match(
+    logged,
+    /As Desk reports it, not checked by Deckhand: v2\.1\.3, sandbox off, `acceptEdits`, Deckhand's settings\./,
+  );
+  await ctx.claims.finish("alice", desk, work.run, { outcome: "ok", reply: "Built." });
+  assert.match(
+    said.answers.at(-1).body,
+    /· on Desk \(v2\.1\.3, sandbox off, `acceptEdits`, Deckhand's settings, as it reports\)/,
+  );
+
+  // A grant that can't be read: the hosts every run needs, still.
+  ctx.grantOf = async () => {
+    throw new Error("no policies");
+  };
+  await b.say("alice", "Deckhand\nAgain.", { id: 102 });
+  b.ready();
+  const again = await ctx.claims.claim("alice", desk, { reported: {} });
+  assert.ok(again.hosts.includes("github.com"));
+  assert.ok(!again.hosts.includes("assets.example.com"));
+  assert.equal(b.run(again.run).setup, null);
+});
+
 test("a machine's fix run that ends starts what a sandbox's does: the review's next step, the CI step", async (t) => {
   const b = bench(t);
   const { ctx, said } = b;

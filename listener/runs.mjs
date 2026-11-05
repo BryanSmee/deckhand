@@ -9,7 +9,7 @@ import { authOf, entryLabel, nextFallback, resolved, resolveEntry } from "./agen
 import { ReplyError } from "./comments.mjs";
 import { commentsText, dashboardLink, taskKey } from "./events.mjs";
 import { GitHubUnavailable } from "./github.mjs";
-import { nextStep, replyFooter } from "./footer.mjs";
+import { nextStep, replyFooter, setupText } from "./footer.mjs";
 import { brainstormDefaults, customMode, entryRun, isApart, isFresh } from "./modes.mjs";
 import { answersOnly } from "./capabilities.mjs";
 import { branchConfigReport } from "./onboarding.mjs";
@@ -1250,6 +1250,8 @@ export function createRuns(ctx) {
         model: reported.model ?? null,
         effort: reported.effort ?? null,
         machine: m.name,
+        // How its agent runs there, as the machine reports it (#599): never checked.
+        setup: reported.setup ?? null,
         mode: work.resume ? "continue" : "start",
       });
       addRun(ctx, record);
@@ -1262,6 +1264,11 @@ export function createRuns(ctx) {
       writeEvent(logFile, "note", {
         message: `Claimed by ${m.owner}'s machine ${m.name}: its agent runs there, its lines reported through /mcp.`,
       });
+      if (record.setup) {
+        writeEvent(logFile, "note", {
+          message: `As ${m.name} reports it, not checked by Deckhand: ${setupText(record.setup)}.`,
+        });
+      }
       enterPhase(live, "work");
       live.open = true;
       // In its saved state before they leave the saved queue, as a sandbox run's (restart.mjs).
