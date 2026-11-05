@@ -134,10 +134,11 @@ export function createHttp(ctx) {
     const runs = ctx.runs.filter((r) => !r.owner);
     const places = runPlaces(ctx.queueOrder?.() ?? [], (repo) => !shows || shows(repo));
     // A running task's comments are queued only when they wait for a follow-up run: the others
-    // are on their way to the live session.
-    const queued = [...tasks.values()]
+    // are on their way to the live session. `waiting`: every repo's, the total (#786).
+    const waiting = [...tasks.values()]
       .filter((t) => !t.owner)
-      .filter((t) => t.pending.length > (t.running ? ctx.deliverable(t) : 0))
+      .filter((t) => t.pending.length > (t.running ? ctx.deliverable(t) : 0));
+    const queued = waiting
       .filter((t) => !shows || shows(t.repo))
       .map((t) => ({
         key: taskKey(t.repo, t.id),
@@ -171,13 +172,13 @@ export function createHttp(ctx) {
       decisions: (key) => ctx.decisions?.get(key) ?? [],
       reviewed: (repo, number) => ctx.reviews?.entry(repo, number) ?? null,
     }).slice(0, 200);
-    return { shown, queued };
+    return { shown, queued, waiting: waiting.length };
   }
 
   // What the dashboard shows `user`: the repos they have `tasks:read` on, the totals of all.
   async function state(user) {
     const shows = await seeing(user, namedRepos(), TASKS, true);
-    const { shown, queued } = shownTasks(shows);
+    const { shown, waiting } = shownTasks(shows);
     // A wait's blockers are of its own repo (waits.mjs): those of the tasks `user` sees are in a
     // repo they see too.
     const { edges, blockers } = waitEdges(shown, ctx.waits.list());
@@ -241,8 +242,9 @@ export function createHttp(ctx) {
       // The names the lanes of these issues can have (lanes.mjs), by key.
       lanes,
       states: STATES,
+      // Totals of every repo, like `running`: numbers without names (#731, #786).
       running: ctx.running,
-      queued: queued.length,
+      queued: waiting,
       maxParallel: config.maxParallel,
       // AUTO_PICKUP_SLOTS, within maxParallel, how many auto-picked runs hold them now, and how
       // many slots the picks hold (tasks.mjs pickedCount()): those running, queued, asking or
