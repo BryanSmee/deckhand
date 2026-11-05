@@ -11,7 +11,7 @@ import { agentFor, entryName } from "./agents/index.mjs";
 import { entryLabel } from "./agents/select.mjs";
 import { kindOf } from "./modes.mjs";
 import { asksInput, replyQuestions, withoutMarker } from "./questions.mjs";
-import { listDir, readJson } from "../lib/files.mjs";
+import { listDir, readJson, setAside } from "../lib/files.mjs";
 import { storable, values } from "../lib/store.mjs";
 
 // "ok", "needs-input" or "error" for an agent's `result` event (null: no result).
@@ -143,8 +143,10 @@ const NOT_SUMMARIES = [".live.json", ".queued.json", KEPT];
 // removed. A key already there wins: a start that stopped before removing the file wrote it, and
 // the run may have changed since. Those a release before #619 kept there when the store failed
 // (<run>.summary.json) are newer than the store's, and go after them, over it. `secrets`: as
-// saveSummary()'s. A file that isn't a summary stays, logged at each start, as loadRuns() left it
-// out; one the store didn't take stays for the next start. The run states (.live.json) and
+// saveSummary()'s. A file that isn't a summary is set aside as <file>.bad (lib/files.mjs
+// setAside()), logged once: left as it was, it would be logged at every start (#853). A rename
+// that fails leaves it there, logged, for the next start to try again. One the store didn't take
+// stays for the next start. The run states (.live.json) and
 // queues (.queued.json) the release before kept beside them, which restart.mjs moves to the
 // store, aren't summaries. No `logDir` (an orchestrator with no volume, #619): none. → how many
 // moved.
@@ -160,7 +162,12 @@ export async function moveSummaries(logDir, store, { log = console.error, secret
     const path = join(logDir, file);
     const saved = readJson(path);
     if (saved?.id !== id) {
-      log(`Listing the run of ${file}: not a run's summary, left in ${logDir}`);
+      try {
+        const aside = setAside(logDir, file);
+        log(`Listing the run of ${file}: not a run's summary, set aside as ${aside}`);
+      } catch (error) {
+        log(`Listing the run of ${file}: not a run's summary, left in ${logDir}: ${error.message}`);
+      }
       return;
     }
     try {
