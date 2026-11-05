@@ -249,7 +249,7 @@ test("file: keys newly under `apart` move out of state.json on moveApart(), only
   assert.deepEqual(saved().sort(), ["queue", "titles/a", "titles/b"]);
   assert.equal(existsSync(join(dir, "keys", "titles%2F", "titles%2Fa")), false);
   // A key's file that can't be written: the call fails, nothing moved, read and listed once.
-  mkdirSync(join(dir, "keys", "titles%2F", "titles%2Fa"));
+  mkdirSync(join(dir, "keys", "titles%2F", "titles%2Fa"), { recursive: true });
   writeFileSync(join(dir, "keys", "titles%2F", "titles%2Fa", "x"), "");
   await assert.rejects(store.moveApart());
   rmSync(join(dir, "keys", "titles%2F", "titles%2Fa"), { recursive: true });
@@ -282,7 +282,14 @@ test("file: each prefix of `apart` a folder of its own, a listing reading only i
   const apart = ["summaries/", "titles/", "titles/acme/"];
   const store = fileStore({ dir, readdir, apart });
   t.after(() => store.close());
+  // No folder until a write in it: a copy of a release before #773, still acting while this one
+  // waits for its lease, lists keys/ whole, and would take a folder for a key's file.
+  assert.equal(await store.get("titles/x#1"), null);
+  assert.deepEqual((await store.keys("")).keys, []);
+  assert.equal(await store.moveApart(), 0);
+  assert.deepEqual(readdirSync(join(dir, "keys")), []);
   await store.set("summaries/a", 1);
+  assert.deepEqual(readdirSync(join(dir, "keys")), ["summaries%2F"]);
   await store.set("titles/x#1", "X");
   await store.set("titles/acme/y#1", "Y");
   await store.set("queue", [1]);

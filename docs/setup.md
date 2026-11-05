@@ -2022,9 +2022,12 @@ of them. Each map has a folder of its own in `keys/` now (`keys/summaries%2F/`,
 runs and the maps, it moves the files left right in `keys/` to their folders, in the same step
 and log line as the items below. With Redis, nothing changes.
 
-Going back to an earlier release: it doesn't know the folders, and finds neither the runs'
-history nor the maps' items in them. Roll back with a copy of the store's folder from before the
-update.
+The folders are made once the orchestrator holds its lease, at its first write in each: a copy
+of the release before, still acting meanwhile, never sees them.
+
+Going back to an earlier release that keeps them right in `keys/` (one from `main` between #687
+and #773): it takes the folders for keys' files, and fails to start. Roll back only with a copy
+of the store's folder from before the update, put back in place of this one.
 
 ### Upgrading: the maps' items a file each (#691)
 
