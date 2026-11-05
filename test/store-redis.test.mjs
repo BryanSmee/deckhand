@@ -287,11 +287,12 @@ async function realRedis() {
   throw new Error("redis-server didn't start");
 }
 
-// docs/setup.md's user, its keys under `deckhand-test:` rather than `deckhand:`: the stores the
-// tests open call Redis as it, so a command the store sends that its ACL lacks fails them
-// (NOPERM). Removed once the file's tests are done. → a URL signing in as it.
+// docs/setup.md's orchestrator user (+scan: it lists its keys), its keys under `deckhand-test:`
+// rather than `deckhand:orchestrator:`: the stores the tests open call Redis as it, so a command
+// the store sends that its ACL lacks fails them (NOPERM). Removed once the file's tests are
+// done. → a URL signing in as it.
 async function setupUser(url) {
-  const line = /^user deckhand on (.*)$/m.exec(
+  const line = /^user orchestrator on (.*)$/m.exec(
     readFileSync(join(import.meta.dirname, "..", "docs", "setup.md"), "utf8"),
   )[1];
   const name = `deckhand-test-${randomUUID()}`;
@@ -300,7 +301,7 @@ async function setupUser(url) {
   const rules = line
     .replace(/>(<[^>]*>|\S+)/, `>${password}`)
     .split(" ")
-    .map((rule) => (rule === "~deckhand:*" ? "~deckhand-test:*" : rule));
+    .map((rule) => (rule === "~deckhand:orchestrator:*" ? "~deckhand-test:*" : rule));
   assert.ok(rules.includes("~deckhand-test:*"), line);
   const admin = redisClient(url);
   try {
