@@ -33,6 +33,7 @@ import { writeEvent } from "./runlog.mjs";
 import { sameTask, taskId } from "./spelling.mjs";
 import { createTaskModes } from "./task-modes.mjs";
 import { itemMay, startAction } from "./permissions.mjs";
+import { startedBy } from "./run-policy.mjs";
 
 // How long Deckhand's own item waits before it is queued again, when its task's machine route
 // can't be read (queue()).
@@ -53,6 +54,28 @@ export function noLongerAllowed(config, item, settings = null) {
     return `${item.author} is no longer an allowed user`;
   }
   return null;
+}
+
+// Which of `items` (queued on `repo`) may no longer run, as a run takes them: item → why. Their
+// author out of ALLOWED_USERS or (`settings`, null when they can't be read) the repo's `users`
+// (noLongerAllowed()), or refused `runs:start:<mode>`, the mode each was queued in, by the access
+// decision as it is now (`permissions`, permissions.mjs). A decision that fails refuses nothing
+// (logged): the comment was accepted, and only a refusal undoes it. What a sandbox's run
+// (runs.mjs dropRefused()) and a machine's claim (claims.mjs) both drop.
+export async function refusedItems({ config, permissions, log }, repo, items, settings) {
+  const refused = new Map();
+  await Promise.all(
+    items.map(async (item) => {
+      const gone = noLongerAllowed(config, item, settings);
+      if (gone) return void refused.set(item, gone);
+      if (!permissions || !startedBy(item)) return;
+      const action = startAction(item.mode);
+      const said = await permissions.decide(startedBy(item), repo, action);
+      if (said.error) log(`${taskKey(repo, item.id)}: ${action} not decided: ${said.error}`);
+      else if (!said.ok) refused.set(item, `${startedBy(item)} may no longer start ${action} here`);
+    }),
+  );
+  return refused;
 }
 
 // Whether `task` is a user's chat (chats.mjs): its key is `<repo>#chat-<id>`, it has no issue.

@@ -680,3 +680,46 @@ test("a claim whose machine is removed while its work is read writes no route ba
   assert.equal(poolOf(t.task()), "machines");
   assert.equal(ctx.claims.view(t.task()).machine, null);
 });
+
+test("a repo config with errors: no claim takes its task, whose comments stay queued", async () => {
+  const { t, ctx } = bench();
+  const desk = t.register("alice", "Desk");
+  await t.say("alice", "Deckhand\n/machine Desk");
+  t.ready();
+  const broken = parseRepoConfig("machines: [nope", ctx.config);
+  assert.ok(broken.errors.length);
+  ctx.repoSettings = async () => broken;
+  assert.equal(await ctx.claims.claim("alice", desk), null);
+  assert.equal(t.task().pending.length, 1);
+  assert.ok(t.logs.some((l) => l.includes(`${KEY}: not claimed, .deckhand.yaml has errors`)));
+});
+
+test("a claim asks the access decision again: a refused start drops its comment, one that can't be decided keeps it", async () => {
+  for (const said of [{ ok: false }, { ok: false, error: "the policy service is away" }]) {
+    const { t, ctx } = bench();
+    const desk = t.register("alice", "Desk");
+    await t.say("alice", "Deckhand\n/machine Desk\nGo.");
+    await t.say("bob", "Also the menu.", { id: 101 });
+    ctx.claims.deliverHeld("alice", KEY);
+    t.ready();
+    const asked = [];
+    ctx.permissions = {
+      decide: async (login, repo, action) => {
+        asked.push([login, action]);
+        return login === "bob" ? said : { ok: true };
+      },
+    };
+    const work = await ctx.claims.claim("alice", desk);
+    assert.deepEqual(asked.sort(), [
+      ["alice", "runs:start:work"],
+      ["bob", "runs:start:work"],
+    ]);
+    if (said.error) {
+      assert.match(work.message, /Also the menu\./);
+      assert.ok(t.logs.includes(`${KEY}: runs:start:work not decided: ${said.error}`));
+    } else {
+      assert.doesNotMatch(work.message, /menu/);
+      assert.deepEqual(t.settled.at(-1), [101, "refused"]);
+    }
+  }
+});

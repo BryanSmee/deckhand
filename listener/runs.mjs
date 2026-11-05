@@ -30,9 +30,7 @@ import {
 } from "./runlog.mjs";
 import { endWait, logSent, QUEUE_RETRY_MS } from "./restart.mjs";
 import { sandboxSpec, sessionName, sessionOf } from "./sandbox-spec.mjs";
-import { countRun, isChat, noLongerAllowed, pickedTask } from "./tasks.mjs";
-import { startAction } from "./permissions.mjs";
-import { startedBy } from "./run-policy.mjs";
+import { countRun, isChat, noLongerAllowed, pickedTask, refusedItems } from "./tasks.mjs";
 import { operatorSecrets, redact } from "./secrets.mjs";
 import { newLogContext, newRequestId, withLogContext } from "../lib/log.mjs";
 
@@ -129,27 +127,14 @@ export function createRuns(ctx) {
     } catch {
       // begin() reads them again, and fails the run with the error.
     }
-    // Their authors' access as it is now (permissions.mjs): `runs:start:<mode>`, the mode each
-    // was queued in. By item: a comment queued while it is decided was checked as it came. A
-    // decision that fails drops nothing: the comment was accepted, and only a refusal undoes it
-    // (the run's own policy decisions fail it where people see it).
+    // Their authors' access as it is now (permissions.mjs): by item, a comment queued while it
+    // is decided checked as it came.
     const snapshot = [...task.pending];
-    const verdicts = await Promise.all(
-      snapshot.map(async (item) => {
-        if (!ctx.permissions || !startedBy(item)) return true;
-        const action = startAction(item.mode);
-        const said = await ctx.permissions.decide(startedBy(item), task.repo, action);
-        if (said.error) log(`${taskKey(task.repo, task.id)}: ${action} not decided: ${said.error}`);
-        return said.ok || !!said.error;
-      }),
-    );
-    const may = new Map(snapshot.map((item, i) => [item, verdicts[i]]));
+    const refusedOf = await refusedItems(ctx, task.repo, snapshot, settings);
     let dropped = 0;
     task.pending = task.pending.filter((item) => {
-      const refused =
-        noLongerAllowed(config, item, settings) ||
-        (may.get(item) === false &&
-          `${item.author} may no longer start ${startAction(item.mode)} here`);
+      // One queued meanwhile, as it is checked when it came: its author's users, still.
+      const refused = refusedOf.get(item) ?? noLongerAllowed(config, item, settings);
       if (!refused) return true;
       log(`${taskKey(task.repo, task.id)}: a queued comment dropped: ${refused}`);
       ctx.track(ctx.settle(item, "refused"));
