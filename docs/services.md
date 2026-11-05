@@ -107,7 +107,9 @@ page (#560), with the same JSON (`lib/health.mjs`):
 and the runner `active` (whether this copy holds its lease), as before; nothing else, ever: the
 answer needs no token. Edge answers it on its internal port (its public `/health` stays a plain
 `ok`), the egress proxy beside `/ready`, the policy service in JSON now (its status unchanged).
-`/ready` is the readiness probe's: `503` once a service drains, or on a copy waiting for its lease,
+`/ready` is the readiness probe's (the orchestrator's says, beside `ok`, how many items of its
+state wait for the store, `waiting`, and how many runs' ends, `ending`: #821, still `200`):
+`503` once a service drains, or on a copy waiting for its lease,
 and on edge, the github and models services and the egress proxy until the broker has answered
 them (edge and the github and models services its keys and their service tokens, the proxy its
 service tokens; edge's on its public port, a plain `ready`, as its `/health`): a new pod's calls may not get out for a few seconds after it

@@ -28,7 +28,7 @@ import {
   timed,
   writeEvent,
 } from "./runlog.mjs";
-import { logSent, QUEUE_RETRY_MS } from "./restart.mjs";
+import { endWait, logSent, QUEUE_RETRY_MS } from "./restart.mjs";
 import { sandboxSpec, sessionName, sessionOf } from "./sandbox-spec.mjs";
 import { countRun, isChat, noLongerAllowed, pickedTask } from "./tasks.mjs";
 import { startAction } from "./permissions.mjs";
@@ -988,25 +988,32 @@ export function createRuns(ctx) {
 
   // Whether the run's summary is in the store, tried again every QUEUE_RETRY_MS until it is, or
   // this copy stops. Its first failure is logged, and the try that lands: not every 5 s of a
-  // long outage.
+  // long outage. Meanwhile the run is one whose end waits (restart.mjs endWait()): /ready and
+  // the dashboard's status page say it, the log again every 10 min.
   async function summarySaved(live) {
     const retryMs = ctx.queueRetryMs ?? QUEUE_RETRY_MS;
+    const wait = endWait(ctx, live, "its summary");
     let tries = 0;
     const once = (line) => tries === 1 && log(line);
-    for (;;) {
-      tries++;
-      const saved = await saveSummary(ctx.store, live.record, {
-        log: once,
-        secrets: ctx.storeSecrets?.(),
-      });
-      if (saved) break;
-      if (ctx.stopping || !(ctx.held?.() ?? true)) {
-        log(
-          `${live.key}: its summary not saved as this copy stops: the run stays for the next one`,
-        );
-        return false;
+    try {
+      for (;;) {
+        tries++;
+        const saved = await saveSummary(ctx.store, live.record, {
+          log: once,
+          secrets: ctx.storeSecrets?.(),
+          failed: wait.failed,
+        });
+        if (saved) break;
+        if (ctx.stopping || !(ctx.held?.() ?? true)) {
+          log(
+            `${live.key}: its summary not saved as this copy stops: the run stays for the next one`,
+          );
+          return false;
+        }
+        await new Promise((resolve) => setTimeout(resolve, retryMs).unref?.());
       }
-      await new Promise((resolve) => setTimeout(resolve, retryMs).unref?.());
+    } finally {
+      wait.done();
     }
     if (tries > 1) log(`${live.key}: its summary saved, at try ${tries}`);
     return true;

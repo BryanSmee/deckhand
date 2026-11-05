@@ -6,7 +6,13 @@ import { test } from "node:test";
 import { createBroker } from "../listener/broker.mjs";
 import { board } from "../listener/board.mjs";
 import { createPulls } from "../listener/pulls.mjs";
-import { createRestart, LIVE_PREFIX, QUEUE_KEY, savedCapabilities } from "../listener/restart.mjs";
+import {
+  createRestart,
+  endsWaitingWarnings,
+  LIVE_PREFIX,
+  QUEUE_KEY,
+  savedCapabilities,
+} from "../listener/restart.mjs";
 import { createTasks, newTask } from "../listener/tasks.mjs";
 import { ambiguous, respellMap, respelled, spellings } from "../listener/spelling.mjs";
 import { openLog, SUMMARIES, summaryKey } from "../listener/runlog.mjs";
@@ -1326,10 +1332,89 @@ test("a run's end the queue couldn't be written for: tried again until it lands,
   await ended;
   assert.equal(await savedRun(store, "r1"), null);
   assert.equal(task.running, false);
+  assert.equal(ctx.endsWaiting.size, 0);
   assert.deepEqual(
     (await store.get(QUEUE_KEY))["org/repo#1"].pending.map((i) => i.queueId),
     ["q-1"],
   );
+});
+
+// #821: a store that refuses a run's end for good (an unwritable file, a Redis ACL) holds its
+// task and slot as long as it does: said, not given up.
+test("a run's end that waits for the store: on /ready's and the status page's list while it waits, logged again now and then, off it once written", async (t) => {
+  const { ctx, down, ended, lines } = await endWhileStoreDown(t, { summary: true });
+  let now = 1_000_000;
+  const since = now;
+  ctx.now = () => now;
+  // Its first refusal was before the clock: its entry is the first one's.
+  const entry = ctx.endsWaiting.get("r1");
+  Object.assign(entry, { since, loggedAt: since });
+  assert.equal(entry.key, "org/repo#1");
+  assert.equal(entry.what, "its summary");
+  assert.equal(entry.error, "disk full");
+  now = since + 3 * 60_000;
+  assert.deepEqual(endsWaitingWarnings(ctx), [
+    "org/repo#1: its end waits for the store (its summary, 3 min: disk full), holding its task and a parallel slot",
+  ]);
+  // Not each try: once ENDING_LOG_MS have gone by since it last said so.
+  const still = () => lines.filter((line) => /still not saved/.test(line));
+  const tries = entry.tries;
+  await until(() => entry.tries >= tries + 2, { what: "two more tries" });
+  assert.deepEqual(still(), []);
+  now = since + 10 * 60_000;
+  await until(() => still().length === 1, { what: "the end said again" });
+  assert.match(
+    still()[0],
+    /^org\/repo#1: its summary still not saved, \d+ tries in 10 min \(disk full\)/,
+  );
+  down.on = false;
+  assert.equal(await ended, true);
+  assert.equal(ctx.endsWaiting.size, 0);
+  assert.deepEqual(endsWaitingWarnings(ctx), []);
+});
+
+test("a run's end the queue waits for: listed as such with the store's error, and off the list once its copy leaves it to the next", async (t) => {
+  const { ctx, ended } = await endWhileStoreDown(t);
+  const entry = ctx.endsWaiting.get("r1");
+  assert.equal(entry.what, "the queue");
+  assert.equal(entry.error, "disk full");
+  ctx.stopping = true;
+  await ended;
+  assert.equal(ctx.endsWaiting.size, 0);
+});
+
+test("a run's end whose queue is written but whose state isn't removed: listed for its state's removal, off the list once removed", async (t) => {
+  const { ctx, store, down, ended } = await endWhileStoreDown(t);
+  // The queue's write lands, its state's removal still refused.
+  const { delete: remove } = store;
+  let refusing = true;
+  store.delete = (...args) => (refusing ? Promise.reject(new Error("NOPERM")) : remove(...args));
+  down.on = false;
+  await until(() => ctx.endsWaiting.get("r1")?.what === "its state's removal", {
+    what: "the end to wait for its state's removal",
+  });
+  assert.equal(ctx.endsWaiting.get("r1").error, "NOPERM");
+  refusing = false;
+  assert.equal(await ended, true);
+  assert.equal(ctx.endsWaiting.size, 0);
+  assert.equal(await savedRun(store, "r1"), null);
+});
+
+test("more runs' ends waiting than the status page shows: the last line counts the others", () => {
+  const ctx = { now: () => 60_000, endsWaiting: new Map() };
+  for (let i = 1; i <= 7; i++) {
+    ctx.endsWaiting.set(`r${i}`, {
+      key: `org/repo#${i}`,
+      what: "its summary",
+      since: 0,
+      error: null,
+    });
+  }
+  const lines = endsWaitingWarnings(ctx, { max: 5 });
+  assert.equal(lines.length, 5);
+  assert.match(lines[3], /^org\/repo#4: its end waits for the store \(its summary, 1 min\)/);
+  assert.equal(lines[4], "and 3 more run(s) whose end waits for the store");
+  assert.equal(endsWaitingWarnings(ctx, { max: 7 }).length, 7);
 });
 
 test("a copy that stops while its run's end can't write the queue: the next has the comment once, and no run", async (t) => {
