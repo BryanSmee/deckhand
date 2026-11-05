@@ -1335,6 +1335,22 @@ describe("listener", options, () => {
     );
   });
 
+  // #939: GitHub failing the read a comment's admission needs, after the github service's tries:
+  // the comment is held rather than dropped, and the next comment admits it first.
+  test("GitHub failing the repo's config at a comment's admission: held, then admitted before the next one", async (t) => {
+    const files = { down: { ".deckhand.yaml": Array(4).fill(500) } };
+    const { dir, github, listener, send } = await listen(t, files);
+    await send(comment("alice", "Deckhand\nfirst"));
+    await listener.until(
+      /org\/repo#12: not queued yet, GitHub returned 500 reading \.deckhand\.yaml of org\/repo \(GET [^)]+\): admitted again in 1 min/,
+    );
+    const second = comment("alice", "Deckhand\nsecond");
+    await send({ ...second, comment: { ...second.comment, id: 100 } });
+    // Both handled, the held one first.
+    await settled(github, [99, 100]);
+    assert.match(messages(dir).join(""), /first[\s\S]*second/);
+  });
+
   test("a delivery whose handling throws is logged, and the next one is still handled", async (t) => {
     const { listener, send } = await listen(t);
     assert.equal((await send(null)).status, 202);

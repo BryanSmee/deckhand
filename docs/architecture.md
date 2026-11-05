@@ -1580,7 +1580,11 @@ blob id; the orchestrator GitHub's own status as it last read it (`GET /status`,
   `GitHubUnavailable`, `github.mjs`) ends as `error`, its log and summary saying GitHub's
   status, method and path, and its comments go back in the queue, 👀 kept, for a run 1, 5 then
   15 minutes later (`runs.mjs` `githubDown()`, `GITHUB_REQUEUE_MS`); after those, its reply
-  says GitHub failed.
+  says GitHub failed. A comment whose admission it stops (`tasks.mjs` `admit()`, which reads
+  `.deckhand.yaml` before anything is queued, #939) is held rather than dropped, in the
+  orchestrator's `admissions` map so that a handover keeps it, and admitted again 1, 5 then 15
+  minutes later (`holdAdmission()`, `ADMIT_RETRY_MS`), or at once behind a later comment on its
+  task, which waits for it; after those, a trigger's reply says GitHub failed.
 - **The App's key**: edge's /setup has the service convert a new App's manifest code
   (`POST /app/manifest`), so a key never reaches edge or the orchestrator.
 

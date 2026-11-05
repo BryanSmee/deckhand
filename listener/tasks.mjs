@@ -1,6 +1,7 @@
 // Tasks: one queue per issue, pull request or discussion, at most maxParallel containers.
 // A comment that passed the checks is queued under its task's key ("org/repo#12"); after a
 // pause (so a burst is one run) it starts a run, or goes to the running one (deliver()).
+import { randomUUID } from "node:crypto";
 import { configErrors } from "./access.mjs";
 import { agentFor } from "./agents/index.mjs";
 import { repoAllowed } from "./config.mjs";
@@ -16,7 +17,7 @@ import {
   taskKey,
   workItem,
 } from "./events.mjs";
-import { getJson } from "./github.mjs";
+import { GitHubUnavailable, getJson } from "./github.mjs";
 import { customMode, entryRun, isApart } from "./modes.mjs";
 import { liveMessage } from "./prompts.mjs";
 import { ANSWER, hasOpenQuestions, stillAsks } from "./questions.mjs";
@@ -29,7 +30,7 @@ import {
 } from "./repo-config.mjs";
 import { queueId } from "./restart.mjs";
 import { LOOPING, loopState } from "./reviews.mjs";
-import { writeEvent } from "./runlog.mjs";
+import { minutes, writeEvent } from "./runlog.mjs";
 import { sameTask, taskId } from "./spelling.mjs";
 import { createTaskModes } from "./task-modes.mjs";
 import { itemMay, startAction } from "./permissions.mjs";
@@ -39,6 +40,11 @@ import { startedBy } from "./run-policy.mjs";
 // can't be read (queue()).
 export const ROUTE_RETRY_MS = 60_000;
 export const ROUTE_RETRIES = 5;
+
+// How long a comment whose admission GitHub kept failing (its repo's settings, GitHubUnavailable
+// after the App's own tries) is held before it is admitted again, each time; after those, its
+// trigger's reply says so (holdAdmission()). As a run's start (runs.mjs GITHUB_REQUEUE_MS).
+export const ADMIT_RETRY_MS = [60_000, 5 * 60_000, 15 * 60_000];
 
 // Why a queued comment may no longer run, or null: its repo left ALLOWED_REPOS, or its author
 // left ALLOWED_USERS or (`settings`, when known) the repo's `users`. Checked again when it was
@@ -190,9 +196,16 @@ export function createTasks(ctx) {
   // timers, which stopRetries() clears as the orchestrator stops, and their tries so far.
   const retrying = new Set();
   const routeTries = new WeakMap();
+  // Comments whose admission GitHub kept failing (holdAdmission()): id → { key, first, event,
+  // payload, tries, dueAt, at }, in the store (ctx.admissions, orchestrator/server.mjs MAPS) so
+  // that a copy taking over admits them (startAdmissions()); their timers, which stopRetries()
+  // clears too.
+  const held = ctx.admissions ?? new Map();
+  const heldTimers = new Map();
   function stopRetries() {
-    for (const timer of retrying) clearTimeout(timer);
+    for (const timer of [...retrying, ...heldTimers.values()]) clearTimeout(timer);
     retrying.clear();
+    heldTimers.clear();
   }
 
   // An admitted comment's issue labels, as its delivery had them (admitNow()): its route's
@@ -205,15 +218,100 @@ export function createTasks(ctx) {
   // came first mustn't pass the comment that creates the task (accept() keeps that order only
   // from there on).
   function admit(first, event, payload) {
-    return inOrder(admitting, taskKey(first.repo, first.id), () => admitNow(first, event, payload));
+    const key = taskKey(first.repo, first.id);
+    return inOrder(admitting, key, async () => {
+      // Those GitHub held back on the same task go first: GitHub answering now, they came before.
+      await admitHeld(key);
+      return admitNow(first, event, payload);
+    });
   }
 
-  async function admitNow(first, event, payload) {
+  // Each comment held: its timer armed again (a copy that just took the lease).
+  function startAdmissions() {
+    for (const id of held.keys()) arm(id);
+    if (held.size) log(`${held.size} comment(s) held while GitHub failed, admitted again later`);
+  }
+
+  function arm(id) {
+    clearTimeout(heldTimers.get(id));
+    const { key, dueAt } = held.get(id);
+    const timer = setTimeout(
+      () => {
+        heldTimers.delete(id);
+        if (ctx.stopping) return;
+        inOrder(admitting, key, () => admitHeld(key, dueAt)).catch((e) => log(`${key}: ${e}`));
+      },
+      Math.max(0, dueAt - Date.now()),
+    );
+    timer.unref?.();
+    heldTimers.set(id, timer);
+  }
+
+  // Task `key`'s held comments admitted again, oldest first. Those due by `upTo` (the timer's:
+  // its own dueAt) count a try; the others go early, behind a later comment, and keep theirs.
+  // Each one is dropped from the store once admitted, or held anew (`again.held`).
+  async function admitHeld(key, upTo = -Infinity) {
+    const ours = [...held].filter(([, h]) => h.key === key).sort(([, a], [, b]) => a.at - b.at);
+    for (const [id, h] of ours) {
+      const again = { ...h, id, counts: h.dueAt <= upTo, held: false };
+      clearTimeout(heldTimers.get(id));
+      heldTimers.delete(id);
+      try {
+        await admitNow(h.first, h.event, h.payload, again);
+      } catch (error) {
+        log(`${key}: ${error.stack ?? error}`);
+      }
+      if (!again.held) held.delete(id);
+    }
+  }
+
+  // GitHub failing the read of `first`'s repo settings (GitHubUnavailable) after the App's own
+  // tries: the comment is held, not dropped, and admitted again ADMIT_RETRY_MS later, or sooner
+  // behind a later comment on its task (admit()); its settings, users and trigger lines are only
+  // known then. Its 👀 isn't on yet: nothing to settle. Once those tries are over, a trigger's
+  // reply says GitHub failed. `again`: admitHeld()'s, for one held before.
+  async function holdAdmission(first, event, payload, error, again = null) {
+    const key = taskKey(first.repo, first.id);
+    const at = Date.now();
+    if (again && !again.counts) {
+      // Gone early, behind a later comment: kept as it was, its timer armed again.
+      again.held = true;
+      arm(again.id);
+      log(`${key}: not queued yet, ${error.message}: held still`);
+      return;
+    }
+    const tries = (again?.tries ?? 0) + 1;
+    const ms = (ctx.admitRetryMs ?? ADMIT_RETRY_MS)[tries - 1];
+    if (ms === undefined) {
+      log(`${key}: not queued, ${error.message}, ${tries} tries`);
+      // As for config errors: only to someone asking for a run, outside discussions.
+      if ((first.trigger || first.modeLine) && first.kind !== "discussion") {
+        const text = `Not queued: ${error.message}, ${tries} times. Comment again once GitHub answers.`;
+        await ctx.reply(first.repo, first.replyTo, text).catch((e) => log(`${key}: ${e}`));
+      }
+      return;
+    }
+    const id = again?.id ?? randomUUID();
+    held.set(id, { key, first, event, payload, tries, dueAt: at + ms, at: again?.at ?? at });
+    if (again) again.held = true;
+    arm(id);
+    const later = ms < 60_000 ? `${Math.round(ms / 1000)} s` : `${minutes(ms)} min`;
+    log(`${key}: not queued yet, ${error.message}: admitted again in ${later}`);
+  }
+
+  async function admitNow(first, event, payload, again = null) {
     // An author with no action on the repo: hidden from them, so nothing said, not even its
     // config's errors (permissions.mjs). Nor while that can't be decided: whether they see it is
     // what isn't known.
     if (first.author && !(await may(first, null))) return;
-    const { settings, errors } = await ctx.repoSettings(first.repo, first.base);
+    let read;
+    try {
+      read = await ctx.repoSettings(first.repo, first.base);
+    } catch (error) {
+      if (!(error instanceof GitHubUnavailable)) throw error;
+      return holdAdmission(first, event, payload, error, again);
+    }
+    const { settings, errors } = read;
     if (errors.length) {
       log(`${first.repo}: ${CONFIG_FILE} has errors: ${errors.join("; ")}`);
       // Only to someone asking for a run: other comments can't tell a broken config from none,
@@ -791,6 +889,7 @@ export function createTasks(ctx) {
 
   return {
     stopRetries,
+    startAdmissions,
     admit,
     accept,
     resume,
