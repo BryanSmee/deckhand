@@ -260,6 +260,51 @@
   font-weight: 600;
 }
 
+/* Each item after its time of day (Preferences, the toolbar's clock), in a column of its own:
+   its first line's, or an empty cell. */
+.stamped {
+  display: grid;
+  grid-template-columns: 8ch minmax(0, 1fr);
+  gap: 4px;
+  align-items: start;
+}
+
+.stamp {
+  padding: 2px 0;
+  color: var(--text-3);
+  font: 11.5px/20px var(--mono);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  cursor: default;
+}
+
+.stamped > :last-child {
+  min-width: 0;
+}
+
+/* Level with the first line of what it times. */
+.stamped:has(> .sub) > .stamp {
+  padding-top: 11px;
+}
+
+.stamped:has(> .say) > .stamp {
+  padding-top: 16px;
+}
+
+.stamped:has(> .result) > .stamp {
+  padding-top: 19px;
+}
+
+.stamped:has(> pre.out) > .stamp {
+  padding-top: 6px;
+}
+
+/* The toolbar's clock while the times show. */
+.tools .pressed {
+  background: var(--surface-2);
+  color: var(--text);
+}
+
 pre.out {
   margin: 0;
   padding: 6px 12px 8px 88px;
@@ -278,9 +323,10 @@ pre.out {
   overflow-x: auto;
 }
 
-/* An output with no call before it: a box of its own. */
+/* An output with no call before it: a box of its own (each in its own cell with the times). */
 .line + pre.out,
-.say + pre.out {
+.say + pre.out,
+.stamped:has(> .line, > .say) + .stamped > pre.out {
   border: 1px solid var(--border);
   border-radius: 10px;
 }

@@ -70,6 +70,9 @@ export const log = {
   "log.timeDone": "How long it took",
   "log.timeRunning": "Running for",
   "log.timeUnfinished": "Still running when the run ended",
+  // A line's timestamp (#719): the toolbar's switch, and its tooltip.
+  "log.showTimes": "Show timestamps",
+  "log.stampTitle": "{date} · {elapsed} after the run started",
 
   // Thread.tsx: a discussion's thread, its reply and comment boxes.
   "thread.reading": "Reading the discussion…",

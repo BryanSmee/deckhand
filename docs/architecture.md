@@ -602,12 +602,15 @@ a record saved before records kept their phase takes its log's. The dashboard's 
 listed in `board.mjs` (`STATES`, and the comment above it) and in [setup](setup.md) (The
 dashboard); `in-review`, between the runs of a review loop, is in Reviews below.
 
-The dashboard times slow steps from `at` lines (`{"type":"listener","event":"at","at":…}`).
+The dashboard times slow steps from `at` lines (`{"type":"listener","event":"at","at":…}`),
+and shows each line's time of day when Preferences says (#719).
 The runner follows the sandbox with `docker logs --follow --timestamps` (`runner.follow()`
 hands each line Docker's time, without the stamp, after a restart too; Docker also stamps
 each 16 KiB part of a longer line inside it, moby/moby#37681, and those stamps go too). Before an agent line
-with a tool call or a tool result, `runs.mjs` writes an `at` line with that time, so the agent's
-line stays as it printed it; text lines get none. An image build's output is written by whole
+with a tool call, a tool result, a message or a result, `runs.mjs` writes an `at` line with that
+time, so the agent's line stays as it printed it. A plain line (not the agent's: setup's output,
+a push's) gets one when it starts a run of them, after one of the agent's lines or a phase, and
+then only when the second changed (`needsStamp()`), so a noisy `npm ci` doesn't double the log. An image build's output is written by whole
 lines (`buildOutput()`), with an `at` line, at the orchestrator's time, before each step's first
 line. Logs from before `at` lines have none, and show no times.
 
@@ -616,8 +619,13 @@ plain progress (`#12 [build 5/9] RUN npm ci`, `#12 CACHED`, `#12 DONE 41.2s`,
 `#12 ERROR: …`) comes as `step` entries, one when a step starts and one each time its status
 changes, and its output as `raw` entries with the step's number; the lines of no step
 (BuildKit's error summary) stay `raw`. An `at` line gives no entry: its time goes on the next
-line's `tool`, `output` and starting `step` entries (`at`, ms). `dashboard/src/types.ts`
-`Entry` is the contract.
+line's `tool`, `output`, `text`, `result` and starting `step` entries (`at`, ms). A run of plain
+lines starts at an `at` line just before one, and ends at the agent's next line (`endsPlain()`)
+or a phase: its `raw` entries take the last time said in it (an `at` line's, or one of the
+listener's own lines', which carry theirs: `meta`, `message`). Plain lines with no `at` line
+before their run (logs from before #719) get none. A page of `get_run_log` from the middle of a
+log reads again the lines before it from the agent's last one (`mcp.mjs` `linesBack()`), so it
+reads as the whole log does there. `dashboard/src/types.ts` `Entry` is the contract.
 
 ### Hot and cold
 
