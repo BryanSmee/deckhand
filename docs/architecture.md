@@ -1128,7 +1128,9 @@ branch, sha, ready }` (or `ask`). Before the run ends, the orchestrator checks i
   claim's run clones or fetches into `<workspace>/<owner>/<repo>/issue-<n>`, writes its settings
   (`settingsFor()`) and runs `claude -p` with stream-json in and out, its lines batched to
   `post_events`, `next_message`'s comments written to its input, its input closed once the
-  inbox is; then it pushes the branch with the owner's git and calls `finish`. Claude Code's
+  inbox is; then it pushes the branch with the owner's git (`--force-with-lease` on GitHub's
+  copy as fetched; the clone's hooks never run) and calls `finish` with its `branch` and `sha`
+  (#598), `ready` when the run ended well without asking. Claude Code's
   `--permission-prompt-tool` is the driver file itself run as a stdio MCP server
   (`permissions`), which asks the driver over the loopback with the run's secret; the driver
   calls `approve_permission` (#600) until it is answered.

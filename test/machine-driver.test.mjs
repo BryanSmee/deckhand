@@ -480,7 +480,6 @@ test("the driver's loop: claim, run, stream, push, finish; its lease kept throug
     ["system", "assistant", "result", "assistant", "result"],
   );
   assert.equal(r1[4].result, "Done: Also the menu. COMMIT");
-  assert.deepEqual(mcp.seen.finished.r1, { machine: "m1", run: "r1", protocol: 1, outcome: "ok" });
   // Its lease, kept through the long turn.
   assert.ok(
     mcp.seen.heartbeats.filter((runs) => runs?.includes("r1")).length >= 3,
@@ -493,6 +492,21 @@ test("the driver's loop: claim, run, stream, push, finish; its lease kept throug
     { env, encoding: "utf8" },
   );
   assert.deepEqual(pushed.trim().split("\n"), ["Turn 2", "Start"]);
+  // Its end names the branch it pushed and its head, whose pull request the App opens (#598):
+  // ready for review, the run having ended well without asking.
+  const head = execFileSync("git", ["--git-dir", repo, "rev-parse", "issue-12-build-the-level"], {
+    env,
+    encoding: "utf8",
+  }).trim();
+  assert.deepEqual(mcp.seen.finished.r1, {
+    machine: "m1",
+    run: "r1",
+    protocol: 1,
+    outcome: "ok",
+    branch: "issue-12-build-the-level",
+    sha: head,
+    ready: true,
+  });
 
   // How Claude Code ran: in the issue's clone, its settings and the claim's prompt.
   const dir = join(root, "work", "org", "game", "issue-12");

@@ -809,10 +809,25 @@ export function createDriver({
     const files = p.join(driverHome, "runs");
     mkdirSync(files, { recursive: true });
     const ids = { machine, run: work.run, protocol: PROTOCOL };
-    const end = (outcome, reply = null) =>
-      persist("finish", { ...ids, outcome, ...(reply && { reply }) }).catch((e) =>
-        log(`${work.key}: finish: ${e.message}`),
-      );
+    // `branch`: the issue's branch as GitHub has it ({ sha, ready }), whose pull request the App
+    // opens (#598). Refused (its head moved meanwhile, say), the run still ends, without it.
+    const end = async (outcome, reply = null, branch = null) => {
+      const args = { ...ids, outcome, ...(reply && { reply }) };
+      try {
+        if (branch) {
+          return await persist("finish", {
+            ...args,
+            branch: work.branch,
+            sha: branch.sha,
+            ready: branch.ready,
+          });
+        }
+        return await persist("finish", args);
+      } catch (error) {
+        log(`${work.key}: finish: ${error.message}`);
+        if (branch && error instanceof ToolError) return end(outcome, reply);
+      }
+    };
     let ready;
     try {
       ready = await checkout(work, dir);
@@ -975,13 +990,18 @@ export function createDriver({
         `${said ? `${said}\n\n` : ""}${config.name} couldn't push ${work.branch}:\n\n${fence(error.message)}`,
       );
     }
-    if (pushed) log(`${work.key}: pushed ${work.branch}`);
-    if (ok) return end("ok");
+    if (pushed?.now) log(`${work.key}: pushed ${work.branch}`);
+    // Ready for review when it ends well without asking (its reply's marker), as a sandbox's work
+    // run marks its own; a draft otherwise.
+    const asks = String(last?.result ?? "").includes("<!-- needs-input -->");
+    const branch = pushed && { sha: pushed.sha, ready: !!ok && !asks };
+    if (ok) return end("ok", null, branch);
     return end(
       "error",
       last?.result
         ? null
         : `Claude Code exited with ${exit.code ?? exit.signal} on ${config.name}:\n\n${fence(stderr.trim() || "(nothing on stderr)")}`,
+      branch,
     );
   }
 
@@ -1034,14 +1054,15 @@ export function createDriver({
 
   // The branch pushed when it has commits past its base and isn't GitHub's copy: with a lease on
   // the copy fetched, so that a rebase (history rewritten, on the task's own branch) goes, but
-  // never over a push made meanwhile. → whether it was.
+  // never over a push made meanwhile. → the branch as GitHub has it now, { sha, now } (`now`: by
+  // this push), or null when it has none with commits past the base.
   async function push(work, dir, { base, lease }) {
     const ahead = Number(
       (await git(dir, ["rev-list", "--count", `${base}..HEAD`]).catch(() => "1")).trim(),
     );
-    if (!ahead) return false;
+    if (!ahead) return null;
     const head = (await git(dir, ["rev-parse", "HEAD"])).trim();
-    if (head === lease) return false;
+    if (head === lease) return { sha: head, now: false };
     await git(dir, [
       "push",
       "--quiet",
@@ -1049,7 +1070,7 @@ export function createDriver({
       "origin",
       `HEAD:refs/heads/${work.branch}`,
     ]);
-    return true;
+    return { sha: head, now: true };
   }
 
   // An empty folder, the driver's git's hooks.

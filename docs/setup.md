@@ -620,7 +620,9 @@ and runs `claude -p` there, its output sent to Deckhand as the
 run's log and the comments that reach it written to its input; `--resume` goes on with the
 issue's session when the machine ran it before. Then the driver pushes the branch with your git
 (with a lease on GitHub's copy as it fetched it: a rebase goes, never over a push made meanwhile;
-the clone's own git hooks are never run) and ends the run; Deckhand posts the reply and opens the pull request.
+the clone's own git hooks are never run) and ends the run, naming the branch and its head: the
+App opens its pull request, ready for review when the run ended well without asking, a draft
+otherwise; Deckhand posts the reply and opens the pull request.
 
 **The suggested settings.** For each run the driver writes Claude Code settings
 (`runs/<run>.settings.json` in its folder, which says the Claude Code version they were checked
