@@ -286,6 +286,31 @@ export const policies = {
   "server.repos": "Dépôts autorisés",
   "server.everyRepo": "Tous les dépôts où l’App est installée",
 
+  // Settings › Server: GitHub's own status (githubstatus.com, #681)
+  "server.githubOutage":
+    "GitHub signale un problème : {description}. Voir l’état de GitHub plus bas.",
+  "server.github": "État de GitHub",
+  "server.githubIndicator": "État",
+  "server.githubUnknown": "Pas encore lu",
+  "server.githubComponents": "Touchés",
+  "server.githubIncidents": { one: "Incident en cours", other: "Incidents en cours" },
+  "server.githubSince": "depuis {when}",
+  "server.githubChecked": "Dernière vérification",
+  "server.githubNever": "Jamais",
+  "server.githubFailed":
+    "la vérification {when} a échoué ({error}) : le dernier état lu est affiché",
+  "server.githubOperational": "Opérationnel",
+  "server.githubDegraded": "Performances dégradées",
+  "server.githubPartial": "Panne partielle",
+  "server.githubMajor": "Panne majeure",
+  "server.githubMaintenance": "En maintenance",
+  "server.githubInvestigating": "En cours d’analyse",
+  "server.githubIdentified": "Identifié",
+  "server.githubMonitoring": "Sous surveillance",
+  "server.githubScheduled": "Planifié",
+  "server.githubInProgress": "En cours",
+  "server.githubVerifying": "En vérification",
+
   // Settings › Server: the webhook deliveries and the last sync
   "server.deliveries": "Livraisons de webhooks",
   "server.noSync": "Aucune synchro pour l’instant.",

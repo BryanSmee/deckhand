@@ -16,6 +16,7 @@
 //     /events, POST /events/ack): pushes, a run's notes, the pull requests runs changed;
 //   - the App itself: its public parts (GET /app), /setup's manifest conversion (POST
 //     /app/manifest);
+//   - GitHub's own status, githubstatus.com's as it last read it (GET /status, status.mjs);
 //   - the runner's repos' tarballs and blobs (build contexts, image tags).
 //
 // Each route names its callers (ROUTES, ../lib/service-token.mjs serviceGuard()). The
@@ -96,6 +97,8 @@ export const ROUTES = {
   "GET /as-installation/:id/*": READERS,
   // The App.
   "GET /app": READERS,
+  // GitHub's own status, githubstatus.com's as last read (status.mjs): Settings › Server's.
+  "GET /status": ["orchestrator"],
   // /setup's conversion, edge's.
   "POST /app/manifest": ["edge"],
   // The runs, as the orchestrator decided them, and what they did.
@@ -205,6 +208,9 @@ export function createGithubService({
   health = healthInfo(),
   // Its metrics' hooks (metrics.mjs githubMetrics()): none counted without.
   metrics = NO_METRICS,
+  // GitHub's own status (status.mjs createGithubStatus()), started by server.mjs: unwatched
+  // without.
+  githubStatus = { current: () => ({ watched: false }) },
 }) {
   const guard = serviceGuard({
     service: "github",
@@ -626,6 +632,7 @@ export function createGithubService({
       );
     }
     if (path === "/app") return sendJson(res, app.info());
+    if (path === "/status") return sendJson(res, githubStatus.current());
     if (path === "/app/manifest") {
       const { code } = (await readJsonBody(req, 64 * 1024)) ?? {};
       const made = await app.convert(code);

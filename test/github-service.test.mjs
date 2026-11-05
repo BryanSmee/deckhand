@@ -15,6 +15,7 @@ import { createAppHolder } from "../github/app.mjs";
 import { createGithubClient } from "../github/client.mjs";
 import { githubMetrics } from "../github/metrics.mjs";
 import { createRuns, SLOT_MS, STREAM } from "../github/runs.mjs";
+import { createGithubStatus } from "../github/status.mjs";
 import { createRegistry } from "../lib/metrics.mjs";
 import { createGithubService, GITHUB_STATUS, mutates } from "../github/service.mjs";
 import { fingerprint, fingerprintRedactor } from "../lib/fingerprints.mjs";
@@ -98,6 +99,8 @@ async function service(
     brokerReady,
     // ../github/metrics.mjs githubMetrics()'s hooks: its App's calls counted too.
     metrics,
+    // ../github/status.mjs createGithubStatus()'s.
+    githubStatus,
   } = {},
 ) {
   const dir = tempDir(t);
@@ -129,6 +132,7 @@ async function service(
     mirrorDir: join(dir, "mirrors"),
     gatewayOptions,
     ...(metrics && { metrics }),
+    ...(githubStatus && { githubStatus }),
   });
   made.server.listen(0, "127.0.0.1");
   await new Promise((resolve) => made.server.once("listening", resolve));
@@ -137,11 +141,13 @@ async function service(
 }
 
 // Two copies of the service on one store, the broker's key, and a fake GitHub.
-async function setup(t, { answer, gatewayOptions, bound, env, metrics } = {}) {
+async function setup(t, { answer, gatewayOptions, bound, env, metrics, githubStatus } = {}) {
   const github = await fakeGitHub(t, answer);
   const store = openStore("memory:");
   const key = testKey();
-  const a = await service(t, github, { store, key, gatewayOptions, bound, env, metrics });
+  const a = await service(t, github, {
+    ...{ store, key, gatewayOptions, bound, env, metrics, githubStatus },
+  });
   const b = await service(t, github, { store, key, gatewayOptions, bound, env });
   const as = (sub) => `Bearer ${signServiceToken({ sub, aud: "github" }, key)}`;
   // A call to a copy as `sub`, with the orchestrator's epoch on its writes.
@@ -288,6 +294,35 @@ test("each route takes its callers only: edge reads, the runner gets tarballs, t
   const redelivered = await call(a, "edge", "POST", "/as-app/app/hook/deliveries/1/attempts");
   assert.equal(redelivered.headers.get(GITHUB_STATUS), "200");
   assert.equal(asApp("POST", "/app/hook/deliveries/1/attempts").length, 1);
+});
+
+test("GET /status: GitHub's status as last read, the orchestrator's alone", async (t) => {
+  const answers = [
+    { status: { indicator: "major", description: "Partial System Outage" }, components: [] },
+  ];
+  const githubStatus = createGithubStatus({
+    fetch: async () => Response.json(answers.shift()),
+    now: () => 1000,
+  });
+  await githubStatus.check();
+  const { a, b, call, key } = await setup(t, { githubStatus });
+  assert.equal((await call(a, "edge", "GET", "/status")).status, 403);
+  assert.equal((await call(a, "runner", "GET", "/status")).status, 403);
+  // Through the orchestrator's client, as api/github-status reads it.
+  const client = createGithubClient({
+    urls: a.url,
+    token: () => `Bearer ${signServiceToken({ sub: "orchestrator", aud: "github" }, key)}`,
+  });
+  t.after(() => client.stop());
+  const status = await client.status();
+  assert.deepEqual(
+    [status.watched, status.indicator, status.description, status.checkedAt],
+    [true, "major", "Partial System Outage", 1000],
+  );
+  // A copy without it (GitHub Enterprise Server): unwatched.
+  assert.deepEqual(await (await call(b, "orchestrator", "GET", "/status")).json(), {
+    watched: false,
+  });
 });
 
 test("with Docker, a caller's token counts only from its own network", async (t) => {

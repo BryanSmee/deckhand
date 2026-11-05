@@ -88,6 +88,7 @@ const ROUTES = [
   ["/api/mcp/clients/:id/revoke", /^\/api\/mcp\/clients\/[A-Za-z0-9_-]+\/revoke$/],
   ["/api/state", "/api/state"],
   ["/api/server", "/api/server"],
+  ["/api/github-status", "/api/github-status"],
   ["/api/health", "/api/health"],
   ["/api/sync", "/api/sync"],
   ["/api/review", "/api/review"],

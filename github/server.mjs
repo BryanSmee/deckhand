@@ -30,6 +30,7 @@ import { policyClient } from "../listener/policy-client.mjs";
 import { createAppHolder } from "./app.mjs";
 import { declareMetrics } from "./metrics.mjs";
 import { createGithubService } from "./service.mjs";
+import { createGithubStatus } from "./status.mjs";
 
 const env = process.env;
 // Its lines redact the App's key too, once read (below).
@@ -112,6 +113,13 @@ const grants = {
     (await grantOf(config, repo, { granted: grantsBy(policies) })).allowWorkflowSecrets === true,
 };
 
+// GitHub's own status, for Settings › Server: githubstatus.com's, which is github.com's alone.
+const githubStatus = createGithubStatus({
+  watched: config.githubUrl === "https://github.com",
+  log,
+});
+githubStatus.start();
+
 const { server } = createGithubService({
   config,
   store,
@@ -123,6 +131,7 @@ const { server } = createGithubService({
   // Granted repos' copies, their pushed workflow files checked against them: a cache.
   mirrorDir,
   metrics,
+  githubStatus,
   log,
 });
 
@@ -144,5 +153,6 @@ drainOnSigterm([server], {
   before: async () => {
     server.startDraining();
     broker.stop();
+    githubStatus.stop();
   },
 });

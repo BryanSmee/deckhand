@@ -2,8 +2,9 @@
 // Deckhand is and how it is set up, read-only. The listener's status and version (api/state's
 // `server`), the services' health under it (api/health, Health.tsx), its run slots (api/state),
 // the engine, proxy, grants and access
-// (api/server, read when the page opens), and the GitHub App (api/repos's `app`) with the last sync
-// and Sync now.
+// (api/server, read when the page opens), the GitHub App (api/repos's `app`) with the last sync
+// and Sync now, and GitHub's own status beside it (api/github-status, #681), so that a problem at
+// GitHub isn't taken for one in Deckhand.
 import { Fragment } from "preact";
 import { useCan } from "./access";
 import { usePolled } from "./api";
@@ -12,7 +13,16 @@ import { Services } from "./Health";
 import { t, tx } from "./i18n";
 import type { Plain } from "./locales";
 import { useSync } from "./Sync";
-import type { AppLinks, Auth, Health, ServerSetup, State, SyncResult } from "./types";
+import type {
+  AppLinks,
+  Auth,
+  GithubIndicator,
+  GithubStatus,
+  Health,
+  ServerSetup,
+  State,
+  SyncResult,
+} from "./types";
 import { Button, buttonClass } from "./ui/Button";
 import * as Icon from "./ui/icons";
 import { Meter } from "./ui/Meter";
@@ -44,18 +54,21 @@ export function Server({
   narrow = false,
 }: Props) {
   const setup = usePolled<ServerSetup>("api/server", null);
+  const github = usePolled<GithubStatus>("api/github-status", GITHUB_STATUS_MS);
+  const now = state?.now ?? Date.now();
   return (
     <div class={styles.page}>
-      <Status state={state} error={error} />
+      <Status state={state} error={error} github={github.data} />
       <Services health={health} error={healthError} narrow={narrow} />
       <Runs state={state} setup={setup.data} error={setup.error} />
       <App
         app={app}
         setup={setup.data}
         lastSync={state?.lastSync ?? null}
-        now={state?.now ?? Date.now()}
+        now={now}
         refresh={refresh}
       />
+      <GitHub status={github.data} error={github.error} now={now} />
     </div>
   );
 }
@@ -67,7 +80,24 @@ const repoName = (url: string) => url.replace(/^[a-z]+:\/\/[^/]+\//i, "").replac
 
 // "The listener is up", with its version, uptime, Node and source; or that it can't be read.
 // Before api/state's first answer, neutral: it isn't known to be up yet.
-function Status({ state, error }: { state: State | null; error: string | null }) {
+// GitHub's status is read again every minute while the page is open: the github service reads
+// githubstatus.com every 5.
+export const GITHUB_STATUS_MS = 60_000;
+
+// A problem GitHub reports as major or critical: said on the status card too, seen without
+// scrolling.
+const outage = (github: GithubStatus | null) =>
+  github?.watched && (github.indicator === "major" || github.indicator === "critical");
+
+function Status({
+  state,
+  error,
+  github,
+}: {
+  state: State | null;
+  error: string | null;
+  github: GithubStatus | null;
+}) {
   const down = Boolean(error);
   const server = state?.server;
   const url = server && versionUrl(server);
@@ -108,6 +138,12 @@ function Status({ state, error }: { state: State | null; error: string | null })
                   ),
                 })
               : tx("server.version", facts)}
+          </span>
+        )}
+        {outage(github) && (
+          <span class={`${styles.githubNote} s-err`}>
+            <Icon.Alert size={14} />
+            {t("server.githubOutage", { description: github!.description || github!.indicator! })}
           </span>
         )}
       </div>
@@ -404,6 +440,153 @@ function App({
             <span class={styles.env}> · ALLOWED_REPOS</span>
           </dd>
         </div>
+      </dl>
+    </Card>
+  );
+}
+
+// githubstatus.com's indicator → the status card's tones: operational green, minor amber, major
+// and critical red, maintenance blue; not read yet, grey.
+const INDICATOR_TONES: Record<GithubIndicator, string> = {
+  none: "s-done",
+  minor: "s-input",
+  major: "s-err",
+  critical: "s-err",
+  maintenance: "s-run",
+};
+
+// githubstatus.com's words for a component's and an incident's state, written when shown; one
+// it adds later, as it says it.
+const STATES: Record<string, Plain> = {
+  operational: "server.githubOperational",
+  degraded_performance: "server.githubDegraded",
+  partial_outage: "server.githubPartial",
+  major_outage: "server.githubMajor",
+  under_maintenance: "server.githubMaintenance",
+  investigating: "server.githubInvestigating",
+  identified: "server.githubIdentified",
+  monitoring: "server.githubMonitoring",
+  scheduled: "server.githubScheduled",
+  in_progress: "server.githubInProgress",
+  verifying: "server.githubVerifying",
+};
+const stateText = (state: string) => (STATES[state] ? t(STATES[state]) : state.replace(/_/g, " "));
+
+// GitHub's own status: the indicator in its words, the components Deckhand depends on that
+// aren't operational, the open incidents, and when it was last read. Off github.com, nothing.
+function GitHub({
+  status,
+  error,
+  now,
+}: {
+  status: GithubStatus | null;
+  error: string | null;
+  now: number;
+}) {
+  if (status && !status.watched) return null;
+  const indicator = status?.indicator ?? null;
+  const tone = indicator ? INDICATOR_TONES[indicator] : "s-idle";
+  const components = status?.components ?? [];
+  const incidents = status?.incidents ?? [];
+  const checked = status?.checkedAt;
+  return (
+    <Card as="section" aria-labelledby="server-github">
+      <div class={styles.head}>
+        <h2 id="server-github">{t("server.github")}</h2>
+        <span class={styles.links}>
+          <a
+            class={buttonClass("secondary", "small")}
+            href="https://www.githubstatus.com"
+            target="_blank"
+            rel="noreferrer"
+          >
+            githubstatus.com
+            <External />
+          </a>
+        </span>
+      </div>
+      <dl class={styles.kv}>
+        <div>
+          <dt>{t("server.githubIndicator")}</dt>
+          <dd>
+            {indicator ? (
+              <span class={`${styles.indicator} ${tone}`}>
+                <span class={styles.dot} aria-hidden="true" />
+                {status!.description || indicator}
+              </span>
+            ) : status ? (
+              t("server.githubUnknown")
+            ) : error ? (
+              <span class={styles.bad}>{t("server.unread", { error })}</span>
+            ) : (
+              "…"
+            )}
+          </dd>
+        </div>
+        {components.length > 0 && (
+          <div>
+            <dt>{t("server.githubComponents")}</dt>
+            <dd class={styles.wrap}>
+              {components.map((c) => (
+                <span key={c.name}>
+                  {c.name}
+                  {" · "}
+                  <span class={c.status === "major_outage" ? styles.bad : styles.warn}>
+                    {stateText(c.status)}
+                  </span>
+                </span>
+              ))}
+            </dd>
+          </div>
+        )}
+        {incidents.length > 0 && (
+          <div>
+            <dt>{t("server.githubIncidents", { count: incidents.length })}</dt>
+            <dd>
+              <ul class={styles.incidents}>
+                {incidents.map((i, n) => (
+                  <li key={i.url ?? n}>
+                    {i.url ? (
+                      <a href={i.url} target="_blank" rel="noreferrer">
+                        {i.name} ↗
+                      </a>
+                    ) : (
+                      i.name
+                    )}
+                    <span class={styles.small}>
+                      {[
+                        stateText(i.status),
+                        i.startedAt !== null &&
+                          t("server.githubSince", { when: dayTime(i.startedAt, now) }),
+                      ]
+                        .filter(Boolean)
+                        .join(" · ")}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </dd>
+          </div>
+        )}
+        {status && (
+          <div>
+            <dt>{t("server.githubChecked")}</dt>
+            <dd class={styles.wrap}>
+              <span>{checked ? ago(checked, now) : t("server.githubNever")}</span>
+              {/* The summary above is the last one read: why the next one wasn't, and when. */}
+              {status.failed && status.triedAt && (
+                <span class={styles.bad}>
+                  {t("server.githubFailed", {
+                    when: ago(status.triedAt, now),
+                    error: status.failed,
+                  })}
+                </span>
+              )}
+              {/* Deckhand's own API failing, the last answer still shown. */}
+              {error && <span class={styles.bad}>{t("server.unread", { error })}</span>}
+            </dd>
+          </div>
+        )}
       </dl>
     </Card>
   );

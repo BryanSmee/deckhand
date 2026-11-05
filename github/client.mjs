@@ -121,6 +121,10 @@ export function createGithubClient({
   // service's gateway redacts the runs' writes by: never the credentials themselves.
   const fingerprints = (body) => client.json("PUT", "/fingerprints", { body });
 
+  // GitHub's own status as the service last read it (status.mjs): a page's read, not waited for.
+  const status = () =>
+    client.json("GET", "/status", { waitMs: 5_000, signal: AbortSignal.timeout(5_000) });
+
   const setup = {
     info: () => client.json("GET", "/app", { waitMs: 10_000 }),
     // /setup's manifest code → the App's credentials but its key, which the service keeps.
@@ -182,6 +186,7 @@ export function createGithubClient({
     runs,
     claim,
     fingerprints,
+    status,
     setup,
     consume,
     persist,

@@ -724,6 +724,16 @@ than at a run's end.
   engine, the egress proxy and how many hosts the grants folder grants, whether that folder
   reads without errors (the files to fix, never their errors, which quote mount roots: a repo's config panel shows its own), which Claude credentials are set, which one runs use first and which ones `FALLBACKS` names (variable names only), `ALLOWED_USERS` and `ALLOWED_REPOS`. It scans the grants folder, so
   the page reads it when it opens rather than at each poll.
+  `GET api/github-status` (#681, `server:read` too) says what GitHub itself reports, so that a
+  problem at GitHub isn't taken for one in Deckhand: githubstatus.com's summary, which the github
+  service reads every 5 minutes (`github/status.mjs`, its way out being GitHub's) and keeps in
+  memory, never the browser: the indicator (`none`, `minor`, `major`, `critical`) and its
+  description, the components Deckhand depends on that aren't operational (API Requests,
+  Webhooks, Git Operations, Pull Requests, Issues, Actions), the open incidents with their
+  pages, and when it was read. A failed read keeps the last one, with why (`failed`); it never
+  touches the service's health. Off github.com (`GITHUB_URL` another), nothing is read. The
+  Server page shows it beside the GitHub App, and a `major` or `critical` one on its status
+  card too.
   `api/state`'s `access` says what the signed-in user may do (#732: `permissions.mjs`
   `dashboard()`): their server-wide actions, and on each repo they see, its actions and the
   modes they may start runs in, so that the dashboard shows only the controls the orchestrator
@@ -1460,7 +1470,8 @@ one installation, the runs and their end, its reactions and the service's events
 reads, never a write (a GraphQL mutation refused), but /setup's conversion of a manifest code
 (`POST /app/manifest`) and the redeliveries (`POST /as-app/app/hook/deliveries/:id/attempts`);
 the runner a repository's tarball and a file's
-blob id. The orchestrator calls through `github/client.mjs` (`app()`: `request()`, `asApp()`,
+blob id; the orchestrator GitHub's own status as it last read it (`GET /status`,
+`github/status.mjs`). The orchestrator calls through `github/client.mjs` (`app()`: `request()`, `asApp()`,
 `asInstallation()`, `identity()`).
 
 - **A run** is told to the service once its sandbox's network or pod is known (`broker.mjs`
