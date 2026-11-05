@@ -120,7 +120,8 @@ function lastAt(v) {
 // Read from its verdict block first (a fenced `json deckhand-review` block, readBlock(), #645):
 // its items are typed, so nothing is guessed. A block that doesn't validate is logged (`log`)
 // and the markdown read instead (readMarkdown()), the block's own `request-changes` kept, and so
-// is one whose markdown asks for changes the block doesn't; a reply
+// is one the markdown is stricter than (strictness(): it blocks on an item the block lacks, or
+// asks for changes the block doesn't); a reply
 // without one (a repo's own prompt, an older session) reads from its markdown as before it.
 // The rating is capped by the most severe finding (RATING_CAPS), and anything blocking makes
 // the verdict `request-changes`, whatever the message says. `allowed`: the most severe
@@ -136,14 +137,17 @@ export function parseReview(text, { allowed = "low", log = () => {} } = {}) {
   const md = readMarkdown(rest);
   if (json !== null) {
     const read = readBlock(json);
-    // The markdown asking for changes the block doesn't: one of the two left something out (a
-    // finding, say), so the block is no surer than the markdown, read as when it doesn't validate.
+    const fromBlock =
+      read.block && settle({ summary: md.summary, ...read.block }, { allowed, sure: true });
+    // The markdown stricter than the block (blocking on a finding or a comment the block lacks,
+    // or asking for changes it doesn't): one of the two left something out, so the block is no
+    // surer than the markdown, read as when it doesn't validate.
     const error =
       read.error ??
-      (md.said === "request-changes" && read.block.verdict !== "request-changes"
-        ? `its verdict is \`${read.block.verdict}\`, the markdown's \`request-changes\``
+      (strictness(markdownAlone(md, read.block, allowed)) > strictness(fromBlock)
+        ? "the markdown blocks or requests changes where the block doesn't"
         : null);
-    if (!error) return settle({ summary: md.summary, ...read.block }, { allowed, sure: true });
+    if (!error) return fromBlock;
     log(`the review's verdict block doesn't validate (${error}): read from its markdown`);
     // The model's `request-changes` stands, the block's or the markdown's: the block may be what
     // says changes are needed, and a reply that strayed from its format once may have again.
@@ -157,6 +161,20 @@ export function parseReview(text, { allowed = "low", log = () => {} } = {}) {
   const sure = !doubtful && (findings.length > 0 || (none && !unsure));
   return settle({ summary, findings, followUps, comments, rating }, { said, allowed, sure });
 }
+
+// The markdown's review settled on its own, every doubt kept (`sure: false`: its
+// `request-changes` stands), to hold a verdict block to it: without its own verdict, it only
+// blocks on its items; without its own rating, the block's.
+const markdownAlone = (md, block, allowed) =>
+  settle(
+    { ...md, rating: md.rating ?? block.rating },
+    { said: md.said ?? "comment", allowed, sure: false },
+  );
+
+// How far a settled review stops the pull request: 2 blocking on its items (GitHub's
+// REQUEST_CHANGES, a fix run), 1 its verdict alone `request-changes` (no merge), 0 neither.
+const strictness = (review) =>
+  blocks(review, review.allowed) ? 2 : review.verdict === "request-changes" ? 1 : 0;
 
 // The review from its items, its rating capped and its verdict decided (parseReview()): `said`,
 // the model's verdict (a block's `verdict`, unless given), reads `comment` when it asked for changes on nothing blocking but
@@ -195,24 +213,30 @@ function settle(
 const BLOCK_OPEN = /^ {0,3}(`{3,}|~{3,})\s*json\s+deckhand-review\s*$/i;
 
 // `text` → { json, rest }: the last verdict block's contents (null: none), and the text without
-// it, for the markdown (its JSON lines would read as text under a section). Other fences are
-// no concern: a reply wrapped whole in one, as the prompt's example is, still has its block. An
-// unclosed block runs to the end, so it fails to validate rather than passing for markdown.
+// any verdict block, for the markdown (their JSON lines would read as its text, an earlier
+// block's `"verdict": …` as its verdict). Other fences are no concern: a reply wrapped whole in
+// one, as the prompt's example is, still has its block. An unclosed block runs to the end, so
+// it fails to validate rather than passing for markdown.
 function verdictBlock(text) {
   const lines = String(text ?? "").split(/\r?\n/);
-  const from = lines.findLastIndex((line) => BLOCK_OPEN.test(line));
-  if (from < 0) return { json: null, rest: lines.join("\n") };
-  const fence = BLOCK_OPEN.exec(lines[from])[1];
-  let to = from + 1;
-  while (to < lines.length) {
-    const close = /^ {0,3}(`{3,}|~{3,})\s*$/.exec(lines[to]);
-    if (close && close[1][0] === fence[0] && close[1].length >= fence.length) break;
-    to++;
+  const rest = [];
+  let json = null;
+  for (let from = 0; from < lines.length; from++) {
+    const open = BLOCK_OPEN.exec(lines[from]);
+    if (!open) {
+      rest.push(lines[from]);
+      continue;
+    }
+    let to = from + 1;
+    while (to < lines.length) {
+      const close = /^ {0,3}(`{3,}|~{3,})\s*$/.exec(lines[to]);
+      if (close && close[1][0] === open[1][0] && close[1].length >= open[1].length) break;
+      to++;
+    }
+    json = lines.slice(from + 1, to).join("\n");
+    from = to;
   }
-  return {
-    json: lines.slice(from + 1, to).join("\n"),
-    rest: [...lines.slice(0, from), ...lines.slice(to + 1)].join("\n"),
-  };
+  return { json, rest: rest.join("\n") };
 }
 
 // A verdict block's JSON → { block: { findings, followUps, comments, rating, verdict } } or
@@ -279,9 +303,12 @@ function place(item) {
 function blockVerdict(json) {
   try {
     const data = JSON.parse(json);
-    return isObject(data) ? data.verdict : null;
+    // "request changes" too, as the markdown's is read.
+    return isObject(data) && typeof data.verdict === "string"
+      ? data.verdict.toLowerCase().replace(" ", "-")
+      : null;
   } catch {
-    return /"verdict"\s*:\s*"request-changes"/.test(json) ? "request-changes" : null;
+    return /"verdict"\s*:\s*"request[- ]changes"/i.test(json) ? "request-changes" : null;
   }
 }
 

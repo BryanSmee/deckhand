@@ -4246,15 +4246,39 @@ test("parseReview: the verdict block read first, the same review as its markdown
         "REQUEST_CHANGES",
       ],
     );
-    assert.match(disagree[0], /its verdict is `comment`, the markdown's `request-changes`/);
+    assert.match(disagree[0], /the markdown blocks or requests changes where the block doesn't/);
   }
   // Without findings in the markdown either, the verdict stays: one of the two is wrong.
   const bare = parseReview(
     `Rating: 9/10\nVerdict: request-changes\n\n${block({ ...notes, verdict: "comment" })}`,
   );
   assert.equal(bare.verdict, "request-changes");
-  // Agreeing on request-changes: the block's review.
-  assert.deepEqual(parseReview(`${asked}\n\n${block(notes)}`).findings, []);
+  // The verdicts agreeing, but the markdown blocking on a finding the block lacks: the same.
+  for (const said of ["request-changes", "comment"]) {
+    const lacking = [];
+    const review = parseReview(
+      `${asked.replace("request-changes", said)}\n\n${block({ ...notes, rating: 9, verdict: said })}`,
+      { log: (line) => lacking.push(line) },
+    );
+    assert.deepEqual(
+      [review.verdict, review.rating, review.findings.length, reviewEvent(review)],
+      ["request-changes", 4, 1, "REQUEST_CHANGES"],
+      said,
+    );
+    assert.match(lacking[0], /the markdown blocks or requests changes where the block doesn't/);
+  }
+  // A block that says as much as the markdown, or more: its own review, nothing logged.
+  const same = [];
+  const highBlock = {
+    ...notes,
+    findings: [{ severity: "high", path: "a.mjs", line: 1, text: "bug." }],
+  };
+  const agreed = parseReview(`${asked}\n\n${block(highBlock)}`, { log: (line) => same.push(line) });
+  assert.deepEqual([agreed.verdict, agreed.findings.length, same], ["request-changes", 1, []]);
+  const more = parseReview(`Fine.\n\nRating: 9/10\nVerdict: comment\n\n${block(highBlock)}`, {
+    log: (line) => same.push(line),
+  });
+  assert.deepEqual([more.verdict, more.rating, same], ["request-changes", 5, []]);
   // A title's bold and a text's blank lines are dropped: the posted review reads them back.
   const styled = {
     ...notes,
@@ -4332,6 +4356,9 @@ test("parseReview: a verdict block that doesn't validate is logged, the markdown
       why,
     );
   }
+  // An invalid block's "request changes", spelt as the markdown may: kept too.
+  const spelt = { ...SECTIONS_BLOCK, verdict: "request changes" };
+  assert.equal(parseReview(`${clean}\n\n${block(spelt)}`).verdict, "request-changes");
   // Unreadable JSON that still says request-changes: kept too.
   const broken = parseReview(`${clean}\n\n${block('{ "verdict": "request-changes", }')}`);
   assert.equal(broken.verdict, "request-changes");
