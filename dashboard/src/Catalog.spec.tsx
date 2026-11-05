@@ -1,10 +1,22 @@
 // Every page of #723 writes its own texts through the catalog: in a marked one (testCatalog.ts),
 // nothing of the dashboard's own is left unmarked. What the page was given (the tasks, the
 // repositories, what the API answered) is data, not the dashboard's to translate.
-import { fireEvent, render, screen, waitFor } from "@testing-library/preact";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/preact";
 import { beforeAll, beforeEach, expect, test, vi } from "vitest";
 import type { RepoList } from "./api";
-import type { AccessReport, AppLinks, McpClient, Repo, RepoConfig, ServerSetup } from "./types";
+import paletteStyles from "./Palette.module.css";
+import statusStyles from "./ui/Status.module.css";
+import type {
+  AccessReport,
+  AnalysisPreview,
+  AppLinks,
+  Health,
+  Inboxes,
+  McpClient,
+  Repo,
+  RepoConfig,
+  ServerSetup,
+} from "./types";
 
 vi.mock("./locales", async (original) =>
   (await import("./testCatalog")).withMarked(await original()),
@@ -14,7 +26,8 @@ vi.mock("./locales", async (original) =>
 let { Dashboard } = {} as typeof import("./App");
 let { makeCapabilities, makePolicyFile, makeState, makeChat, makeChats, mockApi } =
   {} as typeof import("./testUtils");
-let { unmarked, useMarked } = {} as typeof import("./testCatalog");
+let { keysShown, unmarked, useMarked } = {} as typeof import("./testCatalog");
+let { CATALOGS } = {} as typeof import("./locales");
 let { STATE_NAMES } = {} as typeof import("./format");
 
 beforeAll(async () => {
@@ -22,7 +35,8 @@ beforeAll(async () => {
   ({ Dashboard } = await import("./App"));
   ({ makeCapabilities, makePolicyFile, makeState, makeChat, makeChats, mockApi } =
     await import("./testUtils"));
-  ({ unmarked, useMarked } = await import("./testCatalog"));
+  ({ keysShown, unmarked, useMarked } = await import("./testCatalog"));
+  ({ CATALOGS } = await import("./locales"));
   ({ STATE_NAMES } = await import("./format"));
 });
 
@@ -38,13 +52,13 @@ function strings(...values: unknown[]): string[] {
   return [...found];
 }
 
-// Keys (they aren't translated), names (the services', a policy's decisions', a language's own),
-// what the browser writes of a time, and a commit's short sha.
+// Keys (they aren't translated), names (the services', the first as the health alert writes it
+// at the start of its sentence, a language's own), what the browser
+// writes of a date in a language it has no data for (English), and a commit's short sha.
 const NAMES = [
   ...["Ctrl", "Shift", "Esc", "Space"],
   ...["Deckhand", "GitHub", "Claude", "English"],
-  ...["edge", "github", "policy", "orchestrator", "models", "broker", "runner", "proxy"],
-  ...["deny", "fix", "link", "branch", "request"],
+  ...["edge", "github", "policy", "orchestrator", "models", "broker", "runner", "proxy", "Runner"],
   ...["AM", "PM", "Oct"],
   "abcdef1",
 ];
@@ -214,6 +228,44 @@ const ACCESS: AccessReport = {
   ],
 };
 
+// Every kind of request open on acme/app: New request shows each form.
+const INBOXES: Record<string, Inboxes> = {
+  "acme/app": { ideas: 4, bugs: 5, discussions: "Ideas" },
+};
+
+const PREVIEW: AnalysisPreview = {
+  runs: ["a"],
+  included: 5,
+  left: 2,
+  bytes: 1,
+  tokens: 5000,
+  kinds: ["bug", "audit", "work"],
+  max: 50,
+};
+
+// A service down and one starting: the sidebar's alert shows.
+const HEALTH: Health = {
+  checkedAt: Date.now(),
+  services: [
+    {
+      name: "runner",
+      state: "down",
+      startedAt: null,
+      version: null,
+      checkedAt: Date.now(),
+      reason: "connect ECONNREFUSED",
+    },
+    {
+      name: "broker",
+      state: "starting",
+      startedAt: Date.now(),
+      version: "1.2.3",
+      checkedAt: Date.now(),
+      warnings: ["no Redis yet"],
+    },
+  ],
+};
+
 let config: RepoConfig;
 let given: unknown[];
 beforeEach(() => {
@@ -232,23 +284,31 @@ beforeEach(() => {
     "api/server": () => SETUP,
     "api/mcp/clients": () => CLIENTS,
     "api/access": () => ACCESS,
-    "api/health": () => ({ checkedAt: Date.now(), services: [] }),
+    "api/health": () => HEALTH,
+    "api/repos/acme/app/analyze": () => PREVIEW,
     "api/chats": () => makeChats([makeChat()]),
   };
   mockApi(routes);
-  given = [REPOS, APP, config, SETUP, CLIENTS, ACCESS, makeChats([makeChat()])];
+  given = [REPOS, APP, config, SETUP, CLIENTS, ACCESS, HEALTH, PREVIEW, makeChats([makeChat()])];
 });
 
 const show = (hash: string) => {
   history.replaceState(null, "", hash);
-  const state = makeState();
+  const state = makeState({ inboxes: INBOXES });
   given.push(state);
   return render(<Dashboard state={state} error={null} repos={list()} />).container;
 };
 
-// A task's state, as format.ts names it, is the run pages' to move (#722).
-const left = (root: Element = document.body) =>
-  unmarked(root, [...NAMES, ...Object.values(STATE_NAMES), ...strings(given)]);
+// A task's state, as format.ts names it on its badge and in the palette, is the run pages' to
+// move (#722). A key shown as it is fails first: unmarked() would take it for an identifier.
+const left = (root: Element = document.body, more: readonly string[] = []) => {
+  const keys = keysShown(root, Object.keys(CATALOGS.en));
+  if (keys.length) return keys;
+  return unmarked(root, [...NAMES, ...more, ...strings(given)], {
+    [`.${statusStyles.badge}, .${statusStyles.dot}, .${paletteStyles.state}`]:
+      Object.values(STATE_NAMES),
+  });
+};
 
 test.each([
   ["Overview", "#/", null],
@@ -258,22 +318,34 @@ test.each([
     "#/settings/repositories/acme/app",
     "expected one of low, medium, high",
   ],
-  ["its policies", "#/settings/repositories/acme/app/policies", "size.rego"],
+  // Rego's keywords, and the decisions' names breakable() cuts out of their rules'.
+  [
+    "its policies",
+    "#/settings/repositories/acme/app/policies",
+    "size.rego",
+    ["allow", "deny", "fix", "link", "branch", "request"],
+  ],
   ["its capabilities", "#/settings/repositories/acme/app/capabilities", "work"],
   ["Settings › Preferences", "#/settings/preferences", null],
   ["Settings › MCP clients", "#/settings/clients", "Claude Code"],
   ["Settings › Server", "#/settings/server", /alice/],
   ["Settings › Access", "#/settings/access", "@carol"],
   ["Chats", "#/chats", null],
-])("%s", async (_, hash, shown) => {
+] as [string, string, string | RegExp | null, string[]?][])("%s", async (_, hash, shown, more) => {
   show(hash);
   if (shown) await screen.findAllByText(shown);
   // What loads after (the API's answers) shows too.
   await waitFor(() => expect(document.querySelector("[aria-busy=true]")).toBeNull());
-  expect(left()).toEqual([]);
+  expect(left(document.body, more)).toEqual([]);
 });
 
-test("the palette, its shortcuts' help and New request", async () => {
+test("the health alert", async () => {
+  show("#/");
+  const alert = await screen.findAllByRole("link", { name: /⟦ down⟧/ });
+  expect(alert.flatMap((a) => left(a))).toEqual([]);
+});
+
+test("the palette and its shortcuts' help", async () => {
   show("#/");
   fireEvent.keyDown(document.body, { key: "k", ctrlKey: true });
   expect(left(screen.getByRole("dialog"))).toEqual([]);
@@ -284,8 +356,19 @@ test("the palette, its shortcuts' help and New request", async () => {
 
   fireEvent.keyDown(document.body, { key: "?", shiftKey: true });
   expect(left(screen.getByRole("dialog"))).toEqual([]);
-  fireEvent.keyDown(document.body, { key: "Escape" });
+});
 
+test("New request: each kind's form", async () => {
+  show("#/acme/app");
   fireEvent.keyDown(document.body, { key: "n" });
-  expect(left(await screen.findByRole("dialog"))).toEqual([]);
+  const dialog = await screen.findByRole("dialog");
+  const kinds = within(dialog).getByRole("group", { name: /⟦/ });
+  for (const kind of within(kinds).getAllByRole("button")) {
+    fireEvent.click(kind);
+    // Its form, not only the switch: the description's field is each inbox form's.
+    if (/Analy/.test(kind.textContent!)) await within(dialog).findByText(/⟦ runs? match/);
+    else expect(within(dialog).getAllByRole("textbox", { name: /⟦/ }).length).toBeGreaterThan(0);
+    // A run's kind, as runKindName() names it, is the run pages' (#722).
+    expect(left(dialog, ["Bug", "Work"])).toEqual([]);
+  }
 });

@@ -29,7 +29,7 @@ const fileName = ({ layer, file }: CapabilityRow["files"][number]) =>
 const filesOf = (row: CapabilityRow) =>
   row.files
     .map((f) => (f.layer === "repo" ? t("config.repoFile", { file: fileName(f) }) : fileName(f)))
-    .join(", ");
+    .join(t("list.comma"));
 
 // The modes whose runs wouldn't start, for the header's badge: null when every one starts.
 export function capabilityTrouble({ capabilities }: RepoConfig): string | null {
@@ -121,7 +121,9 @@ function Mode({ mode: m }: { mode: ModeCapabilities }) {
         )}
       </div>
       {files.length > 0 && (
-        <span class={styles.note}>{t("config.decidedBy", { files: files.join(", ") })}</span>
+        <span class={styles.note}>
+          {t("config.decidedBy", { files: files.join(t("list.comma")) })}
+        </span>
       )}
       {m.errors.length > 0 && (
         <ul class={styles.errors} aria-label={t("config.modeErrors")}>
@@ -197,7 +199,7 @@ function Catalogue({ catalogue }: { catalogue: CapabilityInfo[] }) {
           <li key={c.name} class={styles.entry}>
             <span class={styles.key}>{c.name}</span>
             <span class={styles.what}>{c.what}</span>
-            <span class={styles.needs}>{c.needs.length ? c.needs.join(", ") : "—"}</span>
+            <span class={styles.needs}>{c.needs.length ? c.needs.join(t("list.comma")) : "—"}</span>
             <span class={styles.asked}>
               {c.config.length
                 ? c.config.join(t("config.catalogueOr"))

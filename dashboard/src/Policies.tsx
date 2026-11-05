@@ -224,7 +224,7 @@ function Decision({
 function Layer({ decision, layer: l }: { decision: string; layer: PolicyLayer }) {
   // What a rule said, then the files that define it, if any.
   const from = (said: string, files: string[]) =>
-    files.length ? t("policies.inFiles", { said, files: files.join(", ") }) : said;
+    files.length ? t("policies.inFiles", { said, files: files.join(t("list.comma")) }) : said;
   const allow =
     l.allow === null
       ? t("policies.notAsked")

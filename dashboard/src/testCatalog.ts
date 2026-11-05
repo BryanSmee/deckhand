@@ -43,28 +43,60 @@ export const useMarked = () => localStorage.setItem("deckhand.language", MARKED)
 const VERBATIM = "script, style, code, kbd, pre, samp";
 const ATTRIBUTES = ["aria-label", "aria-description", "title", "placeholder", "alt"];
 
-// The texts under `root` (its text, and the attributes a user reads or hears) that still hold
-// a word outside the marks, once `data` is taken out: what the page shows of its own (task
-// titles, repositories, names, keys) isn't the dashboard's to translate, nor are identifiers
-// (`allow_run`, `.deckhand/policy/`).
-export function unmarked(root: Element, data: readonly string[] = []): string[] {
-  const texts: string[] = [];
+// What a text under `root` says (its text nodes, and the attributes a user reads or hears), with
+// the element it is on.
+function texts(root: Element): { text: string; on: Element }[] {
+  const found: { text: string; on: Element }[] = [];
   const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT | NodeFilter.SHOW_ELEMENT);
   for (let node: Node | null = walker.currentNode; node; node = walker.nextNode()) {
     if (node instanceof Text) {
-      if (!node.parentElement?.closest(VERBATIM)) texts.push(node.data);
+      const on = node.parentElement;
+      if (on && !on.closest(VERBATIM)) found.push({ text: node.data, on });
     } else if (node instanceof Element)
       for (const name of ATTRIBUTES) {
         const value = node.getAttribute(name);
-        if (value) texts.push(value);
+        if (value) found.push({ text: value, on: node });
       }
   }
-  // Identifiers too (rule names, files, paths, addresses), in the data as in the page.
-  const verbatim = (text: string) => text.replace(/[\w.:-]*(?:[_/]|\.\w)[\w.:/-]*/g, " ");
-  const longest = data.map(verbatim).sort((a, b) => b.length - a.length);
-  return texts.filter((text) => {
-    let rest = verbatim(text.replace(/⟦[^⟧]*⟧/g, " "));
-    for (const d of longest) if (d.trim()) rest = rest.split(d).join(" ");
-    return /\p{L}{2,}/u.test(rest);
-  });
+  return found;
 }
+
+const escape = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+// `words` taken out of `text` where they stand as whole words: "request" leaves "requests".
+function without(text: string, words: readonly string[]): string {
+  const longest = words.filter((w) => w.trim()).sort((a, b) => b.length - a.length);
+  if (!longest.length) return text;
+  const any = longest.map(escape).join("|");
+  return text.replace(new RegExp(`(?<![\\p{L}\\p{N}])(?:${any})(?![\\p{L}\\p{N}])`, "gu"), " ");
+}
+
+// Identifiers (rule names, files, paths, addresses), in the data as in the page.
+const verbatim = (text: string) => text.replace(/[\w.:-]*(?:[_/]|\.\w)[\w.:/-]*/g, " ");
+
+// The texts under `root` that still hold a word outside the marks, once `data` is taken out:
+// what the page shows of its own (task titles, repositories, names, keys) isn't the
+// dashboard's to translate, nor are identifiers (`allow_run`, `.deckhand/policy/`). `within`
+// gives more data, taken out only under the elements a selector matches.
+export function unmarked(
+  root: Element,
+  data: readonly string[] = [],
+  within: Record<string, readonly string[]> = {},
+): string[] {
+  const words = data.map(verbatim);
+  return texts(root)
+    .filter(({ text, on }) => {
+      const scoped = Object.entries(within).flatMap(([selector, more]) =>
+        on.closest(selector) ? more.map(verbatim) : [],
+      );
+      const rest = without(verbatim(text.replace(/⟦[^⟧]*⟧/g, " ")), [...words, ...scoped]);
+      return /\p{L}{2,}/u.test(rest);
+    })
+    .map(({ text }) => text);
+}
+
+// The texts under `root` that show one of `keys` as it is: a key passed on where its text
+// was meant (unmarked() takes it for an identifier).
+export const keysShown = (root: Element, keys: readonly string[]): string[] =>
+  texts(root)
+    .map(({ text }) => text)
+    .filter((text) => keys.some((key) => without(text, [key]) !== text));

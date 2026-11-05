@@ -672,21 +672,23 @@ function GrantCard({ grant }: { grant: Grant }) {
     ["machines", grant.allowMachines],
   ];
   const policies = grant.grantFiles.length
-    ? grant.grantFiles.map((f) => `policy/${f}`).join(", ")
+    ? grant.grantFiles.map((f) => `policy/${f}`).join(t("list.comma"))
     : t("config.grantNoPolicy");
   const lists: [string, string][] = [
-    ["files", grant.files.join(", ") || t("config.grantNoFile")],
+    ["files", grant.files.join(t("list.comma")) || t("config.grantNoFile")],
     ["policies", policies],
-    ["hosts", grant.hosts.join(", ") || t("config.none")],
+    ["hosts", grant.hosts.join(t("list.comma")) || t("config.none")],
   ];
-  if (grant.cachedHosts.length) lists.push(["cached_hosts", grant.cachedHosts.join(", ")]);
+  if (grant.cachedHosts.length)
+    lists.push(["cached_hosts", grant.cachedHosts.join(t("list.comma"))]);
   if (grant.mounts.length) {
     const roots = grant.mounts.map((m) =>
       m.readOnly ? t("config.grantRootReadOnly", { root: m.root }) : m.root,
     );
-    lists.push(["mounts", roots.join(", ")]);
+    lists.push(["mounts", roots.join(t("list.comma"))]);
   }
-  if (grant.allowProjects.length) lists.push(["allow_projects", grant.allowProjects.join(", ")]);
+  if (grant.allowProjects.length)
+    lists.push(["allow_projects", grant.allowProjects.join(t("list.comma"))]);
   lists.push(["limits", t("config.grantLimits", { cpus, memory, pids })]);
   return (
     <div class={styles.card}>

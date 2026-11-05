@@ -149,7 +149,7 @@ function User({ user: u }: { user: UserAccess }) {
           {none.length > 0 && (
             <span>
               {tx("config.accessNoActionOn", {
-                repos: <span class={styles.mono}>{none.join(", ")}</span>,
+                repos: <span class={styles.mono}>{none.join(t("list.comma"))}</span>,
               })}
             </span>
           )}
@@ -157,7 +157,7 @@ function User({ user: u }: { user: UserAccess }) {
             <span>
               {tx("config.accessOutside", {
                 users: <code>users</code>,
-                repos: <span class={styles.mono}>{outside.join(", ")}</span>,
+                repos: <span class={styles.mono}>{outside.join(t("list.comma"))}</span>,
               })}
             </span>
           )}
@@ -199,7 +199,7 @@ function Row({
                     a.files.length
                       ? t("config.accessChipAllowed", {
                           meaning: meaning(a.action),
-                          files: a.files.join(", "),
+                          files: a.files.join(t("list.comma")),
                         })
                       : meaning(a.action)
                   }
@@ -224,8 +224,8 @@ function Row({
             {(files.length > 0 || d.denied.length > 0) && (
               <span class={styles.note}>
                 {noteOf(
-                  files.join(", "),
-                  [...new Set(d.denied.map(denyFile))].join(", "),
+                  files.join(t("list.comma")),
+                  [...new Set(d.denied.map(denyFile))].join(t("list.comma")),
                   [...new Set(d.denied.map((x) => x.reason).filter(Boolean))].join("; "),
                 )}
               </span>

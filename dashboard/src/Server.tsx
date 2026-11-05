@@ -128,7 +128,7 @@ const ENGINES: Record<NonNullable<ServerSetup["engine"]>, Plain> = {
 // API key as fallback", "Plan · API key also set".
 function claudeText({ set, default: first, fallbacks = [] }: NonNullable<ServerSetup["claude"]>) {
   if (!first) return t("server.noCredential");
-  const names = (auths: Auth[]) => auths.map((a) => t(AUTH_NAMES[a].label)).join(", ");
+  const names = (auths: Auth[]) => auths.map((a) => t(AUTH_NAMES[a].label)).join(t("list.comma"));
   const after = fallbacks.filter((a) => a !== first);
   const others = set.filter((a) => a !== first && !after.includes(a));
   const label = t(AUTH_NAMES[first].label);
@@ -311,7 +311,7 @@ function App({
                 {i.missing.length > 0 && (
                   <>
                     <span class={styles.bad}>
-                      {t("server.lacks", { missing: i.missing.join(", ") })}
+                      {t("server.lacks", { missing: i.missing.join(t("list.comma")) })}
                     </span>
                     {" · "}
                   </>
@@ -332,7 +332,7 @@ function App({
                   <span class={styles.bad}>
                     {t("server.missingPermissions", {
                       count: app.missingPermissions.length,
-                      names: app.missingPermissions.join(", "),
+                      names: app.missingPermissions.join(t("list.comma")),
                     })}
                   </span>
                   {" · "}
@@ -344,7 +344,7 @@ function App({
                   <span class={styles.bad}>
                     {t("server.missingEvents", {
                       count: app.missingEvents.length,
-                      names: app.missingEvents.join(", "),
+                      names: app.missingEvents.join(t("list.comma")),
                     })}
                   </span>
                   {" · "}
@@ -384,7 +384,7 @@ function App({
         <div>
           <dt>{t("server.users")}</dt>
           <dd>
-            {setup ? setup.allowedUsers.join(", ") : "…"}
+            {setup ? setup.allowedUsers.join(t("list.comma")) : "…"}
             <span class={styles.env}> · ALLOWED_USERS</span>
           </dd>
         </div>

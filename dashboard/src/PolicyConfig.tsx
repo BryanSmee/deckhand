@@ -183,7 +183,7 @@ function ordered(files: PolicyFile[]): PolicyFile[] {
 function failing(files: PolicyFile[], errors: PolicyError[]): string {
   const bad = files.filter((f) => errorsOf(errors, f).length).map((f) => f.name);
   if (!bad.length) return t("policyConfig.untilChecked");
-  return t("policyConfig.untilCompiles", { files: bad.join(", "), count: bad.length });
+  return t("policyConfig.untilCompiles", { files: bad.join(t("list.comma")), count: bad.length });
 }
 
 // Identifiers the model's paragraphs name, each in <code>, by its own name.
@@ -440,7 +440,7 @@ function DecisionCard({
   // A layer's rule as the note says it: its definitions, and their files.
   const said = (rule: string, list: PolicyFile[]) =>
     list.length
-      ? `${rule} ×${list.reduce((n, f) => n + definitions(f, rule), 0)} (${list.map((f) => f.name).join(", ")})`
+      ? `${rule} ×${list.reduce((n, f) => n + definitions(f, rule), 0)} (${list.map((f) => f.name).join(t("list.comma"))})`
       : t("policyConfig.noRule", { rule });
   const repoAllow = !repoAllowing.length
     ? t("policyConfig.noAllowRule")
@@ -518,7 +518,7 @@ function FileRow({
       <span class={styles.effect}>{effect}</span>
       <span class={styles.rules}>
         {f.rules.length
-          ? f.rules.map((r) => `${r} ×${definitions(f, r)}`).join(", ")
+          ? f.rules.map((r) => `${r} ×${definitions(f, r)}`).join(t("list.comma"))
           : t("policyConfig.noRules")}
       </span>
       <span class={styles.compiles}>
