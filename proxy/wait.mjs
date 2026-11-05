@@ -18,9 +18,13 @@ const NOT_REACHED = new Set([
   "ENETUNREACH",
 ]);
 
+// An answer that says to ask again, which did nothing: the egress policy's 503 while the runner
+// can't tell where a sandbox is (#936).
+export class AskAgain extends Error {}
+
 // fetch() wraps the socket's error in its own.
 export const notReached = (error) =>
-  NOT_REACHED.has(error?.code) || NOT_REACHED.has(error?.cause?.code);
+  error instanceof AskAgain || NOT_REACHED.has(error?.code) || NOT_REACHED.has(error?.cause?.code);
 
 const realSleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 

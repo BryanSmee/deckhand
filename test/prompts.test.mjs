@@ -589,6 +589,12 @@ test("a plan's limit: the run goes on on the key, and later runs stay there unti
   const rate = { ok: false, text: "API Error: 429 rate_limit_error" };
   assert.equal(nextFallback(config, first, rate, 429, { apiReset: 5, now }).until, 5);
   assert.equal(nextFallback(config, first, rate, 429, { now }).until, now + 5 * 3600_000);
+  // Deckhand's egress proxy refusing the plan's call is no reason to leave the plan (#936).
+  const refused = {
+    ok: false,
+    text: "Failed to authenticate. API Error: 403 Deckhand's egress proxy: only a running sandbox reaches the models service",
+  };
+  assert.equal(nextFallback(config, first, refused, null, { now }), null);
   // The run on the key: same agent and provider, its session goes on, on the key.
   const r = resolveEntry({
     config,

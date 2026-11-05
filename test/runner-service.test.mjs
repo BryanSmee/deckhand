@@ -20,7 +20,7 @@ import { keyId } from "../lib/tokens.mjs";
 import { markerName } from "../listener/runner/deployment.mjs";
 import { createDockerRunner } from "../listener/runner/docker.mjs";
 import { SANDBOX_USER } from "../listener/sandbox-spec.mjs";
-import { createRunnerClient } from "../runner/client.mjs";
+import { createRunnerClient, RunnerAway } from "../runner/client.mjs";
 import { createEvents } from "../runner/events.mjs";
 import { createLogs } from "../runner/logs.mjs";
 import { createRunnerService, ROUTES } from "../runner/service.mjs";
@@ -974,20 +974,82 @@ test("run events: an end said once, with its exit code, across the copies' looks
   );
 });
 
-test("the egress policy's questions fall back on the runner's last answer while it is away", async (t) => {
+test("the egress policy's questions fall back on the runner's last answer while it is away, and say it is away without one", async (t) => {
   const store = fileStore();
   const backend = host();
   const a = await copy(t, { store, backend });
-  const { runner } = client(a.url, { policyWaitMs: 30 });
+  // Long enough for a call to the runner while it is there (it bounds each call as a whole), on
+  // a busy machine too: the pauses while it is away are 20 ms each (client()).
+  const { runner } = client(a.url, { policyWaitMs: 1000 });
   await runner.start(SPEC);
   const at = await runner.locate("10.1.0.2");
   assert.deepEqual(at, { sandbox: "id-dh-o-a-1-1", name: "dh-o-a-1" });
   assert.deepEqual(await runner.proxyAddresses({ fresh: true }), ["10.0.0.3"]);
   await a.service.stop({ graceMs: 100 });
   assert.deepEqual(await runner.locate("10.1.0.2"), at);
-  assert.deepEqual(await runner.proxyAddresses({ fresh: true }), ["10.0.0.3"]);
-  assert.equal(await runner.locate("10.1.0.99"), null);
+  assert.deepEqual(await runner.proxyAddresses(), ["10.0.0.3"]);
+  // Asked fresh (a caller not among them): the last list can't say, away.
+  await assert.rejects(runner.proxyAddresses({ fresh: true }), RunnerAway);
+  // An address it has no answer for: unknown, not "no sandbox there" (#936).
+  await assert.rejects(runner.locate("10.1.0.99"), RunnerAway);
   assert.equal(await runner.installing("dh-o-a-1"), null);
+});
+
+test("the egress policy's questions while the runner is away: one answer's lookups within one wait (#936)", async (t) => {
+  const backend = host();
+  const a = await copy(t, { store: fileStore(), backend });
+  // The client's own clock, which its pauses move on: the runner refuses at once once stopped.
+  let clock = 0;
+  const { runner } = client(a.url, {
+    now: () => clock,
+    sleep: async (ms) => (clock += ms),
+    policyWaitMs: 3000,
+  });
+  await runner.start(SPEC);
+  const at = await runner.locate("10.1.0.2");
+  assert.deepEqual(await runner.proxyAddresses(), ["10.0.0.3"]);
+  await a.service.stop({ graceMs: 100 });
+  // An answer of the egress policy, past the proxy's addresses' second: they, then the caller.
+  for (const [i, skip] of [2000, 1500, 5000].entries()) {
+    clock += skip;
+    const asked = clock;
+    assert.deepEqual(await runner.proxyAddresses(), ["10.0.0.3"]);
+    assert.deepEqual(await runner.locate("10.1.0.2"), at);
+    // An address with no last answer, in the same answer: away, at once.
+    await assert.rejects(runner.locate("10.1.0.99"), RunnerAway);
+    assert.equal(await runner.installing("dh-o-a-1"), null);
+    // Within one wait, below the proxy's 5 s for the whole answer.
+    assert.ok(clock - asked <= 3000, `question ${i}: ${clock - asked} ms`);
+  }
+});
+
+test("the egress policy's questions: an answer with a status is the runner's word, a fresh list that can't be had is away (#936)", async () => {
+  const answers = {
+    "/addresses/10.1.0.2": [200, { at: { sandbox: "net-a", name: "a" } }],
+    "/proxy-addresses": [200, { addresses: ["10.0.0.3"] }],
+  };
+  let up = true;
+  const fetch = async (url) => {
+    if (!up)
+      throw Object.assign(new TypeError("fetch failed"), { cause: { code: "ECONNREFUSED" } });
+    const [status, body] = answers[new URL(url).pathname] ?? [500, { message: "its backend" }];
+    return new Response(JSON.stringify(body), { status });
+  };
+  let clock = 0;
+  const { runner } = client("http://runner", {
+    fetch,
+    now: () => clock,
+    sleep: async (ms) => (clock += ms),
+    policyWaitMs: 3000,
+  });
+  // The runner answering an error: no place there, as it says, not away.
+  assert.equal(await runner.locate("10.1.0.7"), null);
+  assert.deepEqual(await runner.proxyAddresses(), ["10.0.0.3"]);
+  up = false;
+  clock += 5000;
+  // The last list for a caller among them; a fresh one for one that isn't: away.
+  assert.deepEqual(await runner.proxyAddresses(), ["10.0.0.3"]);
+  await assert.rejects(runner.proxyAddresses({ fresh: true }), RunnerAway);
 });
 
 // Two copies on two nodes: each its own client of one Redis (#509), TEST_REDIS_URL's.

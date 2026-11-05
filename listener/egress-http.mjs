@@ -15,6 +15,7 @@ import { drainable } from "../lib/drain.mjs";
 import { sendJson } from "../lib/http.mjs";
 import { SANDBOX_URLS } from "../lib/services.mjs";
 import { withRequest } from "../lib/log.mjs";
+import { RunnerAway } from "../runner/client.mjs";
 
 // The hosts of the services' names, as sandboxes call them.
 const SERVICE_HOSTS = Object.values(SANDBOX_URLS).map((url) => new URL(url).hostname);
@@ -30,7 +31,7 @@ function sandboxOfTask(task) {
 // The running task a connection from `ip` belongs to, by the ID of the network (or pod) the
 // address is on, as the runner tells now (runner.locate()), with whether it is the task's
 // sandbox or its container engine; null for any other container there (the proxy's) or
-// none. Nothing per run is kept: a run whose engine starts before its sandbox, or
+// none; RunnerAway when the runner can't tell. Nothing per run is kept: a run whose engine starts before its sandbox, or
 // another run's starting meanwhile, changes nothing for the others (#517).
 // `engine`: the connection came in on the proxy's engines' port (lib/services.mjs
 // ENGINE_PROXY_PORT): an engine that shares its sandbox's address (a Kubernetes pod) is told
@@ -78,12 +79,22 @@ export function createEgressHttp(ctx) {
     const url = new URL(req.url, "http://egress");
     const ip = url.searchParams.get("ip") ?? "";
     const host = url.searchParams.get("host") ?? "";
-    // Only the proxy may ask: it is the one that knows the connection's source address.
-    if (!(await fromProxy(ctx, req))) {
-      return sendJson(res, { allowed: false }, 403);
-    }
     const viaEngine = url.searchParams.get("engine") === "1";
-    const where = await taskWhere(ctx, ip, { engine: viaEngine });
+    let where;
+    try {
+      // Only the proxy may ask: it is the one that knows the connection's source address.
+      if (!(await fromProxy(ctx, req))) {
+        return sendJson(res, { allowed: false }, 403);
+      }
+      where = await taskWhere(ctx, ip, { engine: viaEngine });
+    } catch (error) {
+      if (!(error instanceof RunnerAway)) throw error;
+      // The runner away (handing over, updating), and this copy has no earlier answer to go on
+      // (it just took over): not "no run there", which would refuse a running sandbox (#936).
+      // A 503 has the proxy ask again (proxy/proxy.mjs egressPolicy()).
+      log(`Egress: ${host} for ${ip} waits for the runner`);
+      return sendJson(res, { allowed: false, reason: "runner_away" }, 503);
+    }
     const task = where?.task ?? null;
     // Not a sandbox: the runner's builder or an agent's install pod, or nothing.
     // The engines' port is a run's engine's only. Asked before a service's name is answered
