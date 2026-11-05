@@ -289,13 +289,10 @@ services:
       RUNNER_URL: http://runner:8080
       SERVICE_NETWORKS: runner=${RUNNER_SUBNET:-10.231.250.48/28},edge=${EDGE_ORCHESTRATOR_SUBNET:-10.231.250.192/28}
     volumes:
-      # Its state: the runs' summaries, queue and brainstorm state, its store (the queue, the
-      # lease). Nothing secret.
+      # Its store's folder (/data/store, STORE_URL's default) and nothing else: its queue, lease,
+      # maps, live runs' states and the runs' summaries. Nothing secret. With Redis as its store,
+      # no volume at all (docs/setup.md#the-store).
       - data:/data
-      # The screenshots an orchestrator kept before the broker did (#609), one folder per run
-      # (SHOTS_VOLUME): moved to the broker at its start, then removed. Nothing is written there
-      # any more.
-      - screenshots:/data/shots
       # Your configuration, one folder you keep in git (server.example/ to start from), read
       # only: config.yaml, your settings, read at start (docs/setup.md#settings); grants/,
       # what you grant each repo (hosts, Dockerfile, host mounts, limits), one
@@ -314,7 +311,7 @@ services:
       start_period: 1m
       start_interval: 1s
     logging: *logging
-    # As the node user (orchestrator/Dockerfile): it writes its volumes alone.
+    # As the node user (orchestrator/Dockerfile): it writes its store's folder alone.
     read_only: true
     cap_drop: [ALL]
     security_opt: ["no-new-privileges:true"]
@@ -984,8 +981,6 @@ volumes:
   # Edge's: the App's credentials but its key, the session key, its store.
   edge-data:
   runner-data:
-  screenshots:
-    name: ${SHOTS_VOLUME:-deckhand-screenshots}
   egress-cache:
   broker-keys:
   broker-store:

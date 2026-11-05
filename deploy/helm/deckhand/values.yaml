@@ -63,15 +63,14 @@ redis:
   storageClass: ""
 
 # The services' claims. Empty classes: the cluster's default. With `store: redis`, the
-# orchestrator's and the runner's claims are ReadWriteMany (sharedStorageClass, else
-# storageClass), and edge's, the broker's, the github and models services' go.
+# runner's claim is ReadWriteMany (sharedStorageClass, else storageClass), and edge's, the
+# orchestrator's, the broker's, the github and models services' go.
 persistence:
   storageClass: ""
   sharedStorageClass: ""
   sizes:
     edge-data: 1Gi
     orchestrator-data: 5Gi
-    orchestrator-screenshots: 5Gi
     runner-data: 5Gi
     broker-store: 2Gi
     github-data: 10Gi

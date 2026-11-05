@@ -135,8 +135,6 @@ test(
       "NetworkPolicy deckhand-sandboxes/deckhand-installs",
       "NetworkPolicy deckhand-sandboxes/deckhand-sandboxes",
       "PersistentVolumeClaim deckhand/egress-cache",
-      "PersistentVolumeClaim deckhand/orchestrator-data",
-      "PersistentVolumeClaim deckhand/orchestrator-screenshots",
       "PersistentVolumeClaim deckhand/runner-data",
     ]);
   },
@@ -263,31 +261,25 @@ test("helm: the services' claims take the storage class and sizes given", { skip
         .map((c) => [c.metadata.name, c.spec]),
     );
   const file = claims({ persistence: { storageClass: "ssd", sizes: { "github-data": "50Gi" } } });
-  assert.equal(Object.keys(file).length, 8);
+  assert.equal(Object.keys(file).length, 7);
   for (const [name, spec] of Object.entries(file)) {
     assert.equal(spec.storageClassName, "ssd", name);
     assert.deepEqual(spec.accessModes, ["ReadWriteOnce"], name);
   }
   assert.equal(file["github-data"].resources.requests.storage, "50Gi");
   assert.equal(file["edge-data"].resources.requests.storage, "1Gi");
-  // With Redis: the shared ones ReadWriteMany, on their class; the stores' claims gone.
+  // With Redis: the shared one ReadWriteMany, on its class; the stores' claims gone, the
+  // orchestrator's with them (#619).
   const values = {
     store: "redis",
     persistence: { storageClass: "ssd", sharedStorageClass: "nfs" },
     redis: { storageClass: "fast", size: "8Gi" },
   };
   const redis = claims(values);
-  assert.deepEqual(Object.keys(redis).sort(), [
-    "egress-cache",
-    "orchestrator-data",
-    "orchestrator-screenshots",
-    "runner-data",
-  ]);
+  assert.deepEqual(Object.keys(redis).sort(), ["egress-cache", "runner-data"]);
   assert.equal(redis["egress-cache"].storageClassName, "ssd");
-  for (const name of ["orchestrator-data", "orchestrator-screenshots", "runner-data"]) {
-    assert.deepEqual(redis[name].accessModes, ["ReadWriteMany"], name);
-    assert.equal(redis[name].storageClassName, "nfs", name);
-  }
+  assert.deepEqual(redis["runner-data"].accessModes, ["ReadWriteMany"]);
+  assert.equal(redis["runner-data"].storageClassName, "nfs");
   const [template] = named(helm(t, values), "StatefulSet", "redis").spec.volumeClaimTemplates;
   assert.equal(template.spec.storageClassName, "fast");
   assert.equal(template.spec.resources.requests.storage, "8Gi");

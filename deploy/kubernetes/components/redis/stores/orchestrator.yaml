@@ -16,5 +16,12 @@ spec:
                 secretKeyRef:
                   name: deckhand-redis
                   key: orchestrator
-      # Its claims are ReadWriteMany (kustomization.yaml): its copies on any node.
+          # Its store is in Redis now: nothing of its own on disk, no volume at all (#619), its
+          # root read-only. Its copies on any node.
+          volumeMounts:
+            - $patch: delete
+              mountPath: /data
       affinity: null
+      volumes:
+        - $patch: delete
+          name: data
