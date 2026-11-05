@@ -758,6 +758,59 @@ test("access: the policy listings kept for MAX_ACCESS repositories at most, the 
   assert.equal(listings("acme/r1"), 2);
 });
 
+test("access: what GitHub said of MAX_ACCESS repositories kept at most, the one read longest ago dropped first (#863)", async (t) => {
+  const names = Array.from({ length: MAX_ACCESS + 1 }, (_, i) => `acme/r${i}`);
+  const repos = Object.fromEntries(names.map((name) => [name, {}]));
+  const { github } = fakeGithub(repos);
+  const engine = policyEngineOf(t, { readOperator: () => new Map() });
+  const clock = { now: 0 };
+  const policies = createPolicies({
+    config: {},
+    github,
+    service: localService(engine),
+    now: () => clock.now,
+  });
+  // r0 read first, then again once that read is past ACCESS_MS, while there is still room, then
+  // the last two: the oldest read is r1's.
+  await policies.access("bob", "acme/r0");
+  clock.now += ACCESS_MS;
+  for (const name of names.slice(1, -2)) await policies.access("bob", name);
+  await policies.access("bob", "acme/r0");
+  for (const name of names.slice(-2)) await policies.access("bob", name);
+  // A GitHub hiccup gives what it last said, if it is still kept.
+  clock.now += ACCESS_MS;
+  repos["acme/r0"].infoDown = repos["acme/r1"].infoDown = true;
+  assert.equal((await policies.access("bob", "acme/r0")).error, null);
+  assert.match((await policies.access("bob", "acme/r1")).error, /502/);
+});
+
+test("access: the renamed repositories' names kept for MAX_ACCESS at most, the one read longest ago dropped first (#863)", async (t) => {
+  const names = Array.from({ length: MAX_ACCESS + 1 }, (_, i) => `acme/old${i}`);
+  const repos = Object.fromEntries(names.map((name, i) => [name, { renamed: `acme/new${i}` }]));
+  repos["acme/alias0"] = { renamed: "acme/new0" };
+  const { github, calls } = fakeGithub(repos);
+  const engine = policyEngineOf(t, { readOperator: () => new Map() });
+  const clock = { now: 0 };
+  const policies = createPolicies({
+    config: {},
+    github,
+    service: localService(engine),
+    now: () => clock.now,
+  });
+  const reads = (name) => calls.filter((p) => p === `/repos/${name}`).length;
+  // new0 read first, then again under another name while there is still room, then the last
+  // two: the oldest is new1, dropped by the last.
+  await policies.access("bob", "acme/old0");
+  clock.now += ACCESS_MS;
+  for (const name of names.slice(1, -2)) await policies.access("bob", name);
+  await policies.access("bob", "acme/alias0");
+  for (const name of names.slice(-2)) await policies.access("bob", name);
+  // A push under the current name forgets the names it was asked by, while it is kept.
+  policies.forget("acme/new0");
+  await policies.access("bob", "acme/alias0");
+  assert.equal(reads("acme/alias0"), 2);
+});
+
 test("access: a repository's name is owner/repo, nothing GitHub's paths would read otherwise", async (t) => {
   const { github, calls } = fakeGithub({ "acme/y": {} });
   const engine = policyEngineOf(t, { readOperator: () => new Map() });

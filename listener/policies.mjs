@@ -1093,10 +1093,15 @@ export function createPolicies({
         // forget() are all of the repository the caller asked about.
         const current = String(info.full_name).toLowerCase();
         if (current !== key) {
+          const names = new Set([...(renamed.get(current) ?? []), key]);
+          // Moved last, as listing() moves its listings, so that the oldest is first to go.
+          renamed.delete(current);
           if (renamed.size >= MAX_ACCESS) renamed.delete(renamed.keys().next().value);
-          renamed.set(current, new Set([...(renamed.get(current) ?? []), key]));
+          renamed.set(current, names);
           info = { ...info, full_name: name };
         }
+        // Moved last too, a fresh read.
+        repoInfos.delete(key);
         if (repoInfos.size >= MAX_ACCESS) repoInfos.delete(repoInfos.keys().next().value);
         repoInfos.set(key, { at: now(), info });
       }
