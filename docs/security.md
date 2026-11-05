@@ -2332,7 +2332,8 @@ client, and no sandbox service, run token or git gateway is on the machine.
   `claim` gives a machine only the tasks of its own owner, whose route it fits (the machine the
   task sticks to, or its name or label), in a repository offered to it now (above), within its
   capacity. The claim holds a lease of 2 minutes that the machine's heartbeat renews; one that
-  runs out gives the task's comments back, for that machine. Another owner's `/machine` on the
+  runs out ends its run as interrupted (the issue told) and gives the task's comments back, for
+  that machine. Another owner's `/machine` on the
   task is refused while its owner is a user here; taking its `runs-on` label off (anyone who
   may edit labels) ends a label route, as `/machine none` does: the task goes back to
   sandboxes, Deckhand's default, and the comments held for its owner are queued.
@@ -2346,6 +2347,14 @@ client, and no sandbox service, run token or git gateway is on the machine.
   is checked again first, as a sandbox run's are: one whose author left `ALLOWED_USERS` or the
   repository's `users`, or may no longer start its mode, is dropped. Pushes are the owner's own git's; the App writes
   what it writes for any run (#597, #598).
+- **Its run** (#597, [External runs](architecture.md#external-runs)): only the machine holding
+  the claim reports on it (`post_events`, `next_message`, `ask`, `finish`): each call names the
+  machine, its owner's, and the claim's run; another login's machine, the owner's other one or
+  another run is refused as one that doesn't exist. What it reports is the run's log and reply:
+  its lines are redacted of the operator's secrets as a sandbox's output is, and its reply is
+  posted by the App on the task's own issue or pull request alone, as a sandbox run's (no other
+  write of the App's is the machine's to ask for). Its run gets no token: a call is its owner's
+  MCP token's, which edge checks.
 - **What Deckhand doesn't enforce**: anything on the machine. An agent runs there on its own,
   with the owner's files, credentials and network; Deckhand suggests settings for it and
   enforces none. `register_machine`'s answer and the dashboard's list of machines say so.

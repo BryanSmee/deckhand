@@ -81,6 +81,9 @@ export interface Run {
   // Why it didn't get the speed or model asked for (the operator turned fast mode off…). Sent,
   // not shown: the reply says it.
   speedNote?: string | null;
+  // The name of the user's machine an external run ran on (listener/runs.mjs startExternal(),
+  // #597); absent for a sandbox's. Sent, not shown: the task's machine is.
+  machine?: string | null;
   phase?: string | null;
   startedAt: number;
   finishedAt: number | null;
