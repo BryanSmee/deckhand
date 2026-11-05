@@ -1659,7 +1659,7 @@ when whoever added it, and whoever edited the issue since, have `runs:start:work
 `review.request` names is requested only with `tasks:read`. A repository where a login has no
 action at all is hidden from it everywhere: the repositories list, the tasks, inboxes, lanes and
 blockers of `api/state`, `/status` and the live logs (`logs:read`); its routes answer as one
-outside `ALLOWED_REPOS`. Totals (running, queued, slots) stay. The repository's `users` still
+outside `ALLOWED_REPOS`. Totals (running, queued, slots) stay, of every repository. The repository's `users` still
 narrow it: a login outside them has no action there.
 
 A rule may give, or deny, a prefix ending in `*`: `runs:start:*` (every mode), `runs:*`,

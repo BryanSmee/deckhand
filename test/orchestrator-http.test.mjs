@@ -353,6 +353,16 @@ test("access (#731): a login with no action: its totals only, 403 server-wide, n
   assert.deepEqual([seen.tasks, seen.inboxes], [[], {}]);
   // Totals stay: numbers without names.
   assert.deepEqual([seen.maxParallel, seen.running], [3, 1]);
+  // Queued too, of every repo like running (#786): org/repo's waiting issue counted, not listed.
+  ctx.tasks.set("org/repo#12", {
+    ...{ repo: "org/repo", id: 12, kind: "issue", running: false },
+    pending: [{ mode: "work", replyTo: 99, text: "Also the docs." }],
+  });
+  const later = await (await get("/api/state", dave)).json();
+  assert.deepEqual([later.tasks, later.queued], [[], 1]);
+  const bobs = await (await get("/api/state", { "x-user": "bob" })).json();
+  assert.deepEqual([bobs.tasks.some((x) => x.key === "org/repo#12"), bobs.queued], [true, 1]);
+  ctx.tasks.clear();
   assert.equal((await get("/api/runs/org-repo-pr-3-1000/stream", dave)).status, 404);
   for (const path of ["/api/server", "/api/health"]) {
     assert.equal((await get(path, dave)).status, 403, path);

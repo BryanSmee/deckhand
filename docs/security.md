@@ -2130,7 +2130,7 @@ everywhere: the repositories list, the tasks, inboxes, lanes and blockers of `ap
 404 and message), so a login can't tell a hidden repository from one that doesn't exist; a
 blocker in a repository it doesn't see is "a hidden issue", its title never read for it.
 Without `server:read`, the repositories list names only the installations of the accounts
-owning a repository the login sees. Totals without names stay (running, queued, slots).
+owning a repository the login sees. Totals without names stay (running, queued, slots), of every repository.
 
 **Fail closed.** An unknown login, a repository no rule names, a policy that doesn't compile or
 errs, policies that can't be read and a policy service that can't be reached all give no action:
