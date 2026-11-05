@@ -1152,3 +1152,82 @@ test("applyInput: a run's ticked reply goes on through the work area, refusals l
   await applyInput(ctx, change);
   assert.deepEqual(calls.at(-1), ["log", "org/repo#12: ticks: #12 is closed."]);
 });
+
+test("applyInput: what it logs as the label moves, and a bare trigger with wait_for_answers off", async () => {
+  const logs = (calls) => calls.filter(([what]) => what !== "title").map(([, ...rest]) => rest);
+  // Filed with questions by the App's bot (an inbox run's): labelled, no user to check.
+  const filed = inputCtx();
+  filed.ctx.repoSettings = async () => assert.fail("no user to check");
+  await applyInput(filed.ctx, map("opened", { text: asks, user: BOT, type: "Bot" }));
+  assert.deepEqual(logs(filed.calls).slice(0, 2), [
+    [12, true],
+    ["org/repo#12: open questions, labelled"],
+  ]);
+  // "None": nothing to change.
+  assert.equal(map("opened", { text: none, user: BOT, type: "Bot" }), null);
+  // An allowed user's answer: the label off.
+  const comment = (body) => {
+    const p = issues("created", { labels: ["needs-input"] });
+    p.comment = { id: 9, body, user: { login: "alice", type: "User" } };
+    return inputEvent(config, "issue_comment", p, BOT);
+  };
+  const answered = inputCtx();
+  await applyInput(answered.ctx, comment("1. That one"));
+  assert.deepEqual(logs(answered.calls).slice(0, 2), [
+    [12, false],
+    ["org/repo#12: answered, label removed"],
+  ]);
+  // A trigger line alone while the repo waits for answers: said, the label stays.
+  const bare = inputCtx();
+  await applyInput(bare.ctx, comment("Deckhand"));
+  assert.deepEqual(logs(bare.calls), [
+    ["org/repo#12: alice's comment answers nothing, the label stays"],
+  ]);
+  // `wait_for_answers: false`: any comment answers them, a bare trigger line too.
+  const off = inputCtx({ users: ["alice", "bob"], trigger: "deckhand", waitForAnswers: false });
+  await applyInput(off.ctx, comment("Deckhand"));
+  assert.deepEqual(logs(off.calls).slice(0, 2), [
+    [12, false],
+    ["org/repo#12: answered, label removed"],
+  ]);
+  // Every box of the issue ticked by an allowed user: the label off, and what waited starts.
+  const ticks = inputCtx();
+  const edit = map("edited", {
+    text: ticked("x", "x"),
+    labels: ["needs-input"],
+    sender: { login: "bob", type: "User" },
+    changes: { body: { from: ticked("x", " ") } },
+  });
+  await applyInput(ticks.ctx, edit);
+  assert.deepEqual(logs(ticks.calls), [
+    [12, false],
+    ["org/repo#12: answered, label removed"],
+    ["org/repo#12", false],
+    [12],
+  ]);
+});
+
+test("applyInput: the bot's or someone not allowed's last tick on a person's issue: kept as ignored ticks, the label on", async () => {
+  for (const sender of [
+    { login: BOT, type: "Bot" },
+    { login: "mallory", type: "User" },
+  ]) {
+    const inputs = createInputs({ listLabelled: async () => [] });
+    inputs.set("org/repo#12", true, parseQuestions(questionsSection(ticked("x", " "))));
+    const { ctx, calls } = inputCtx();
+    ctx.inputs = inputs;
+    const edit = map("edited", {
+      text: ticked("x", "x"),
+      labels: ["needs-input"],
+      sender,
+      changes: { body: { from: ticked("x", " ") } },
+    });
+    await applyInput(ctx, edit);
+    assert.equal(inputs.ticksIgnored("org/repo#12"), true, sender.login);
+    assert.equal(inputs.has("org/repo#12"), true);
+    assert.deepEqual(
+      calls.filter(([what]) => what === "label" || what === "answered"),
+      [],
+    );
+  }
+});

@@ -43,6 +43,7 @@ import {
   hasOpa,
   fileMap,
   mapStore,
+  until,
 } from "./helpers.mjs";
 
 const config = { ...testConfig(), bot: "deckhand-app[bot]" };
@@ -672,8 +673,13 @@ test("fixMessage: the findings fenced off from the instruction, as data to check
 });
 
 test("review.fix: a review that requests changes queues one work run on the issue's task", async (t) => {
-  const { fix, accepted } = fixSetup(t);
+  const logged = [];
+  const { fix, accepted } = fixSetup(t, FIX, { log: (line) => logged.push(line) });
   const item = await fix();
+  assert.ok(
+    logged.includes("org/repo#pr-5: the review requests changes, starting a fix run"),
+    logged.join("\n"),
+  );
   assert.equal(accepted.length, 1);
   assert.equal(accepted[0], item);
   assert.deepEqual(
@@ -1236,6 +1242,20 @@ test("dashboard Fix: one round more once they ran out, counted before it is queu
   // Another click grants one more: each grants one round at most.
   assert.deepEqual((await askFix(s)).said, [[4, 4, "1 high finding"]]);
   assert.equal(s.reviews.entry("org/repo", 5).grantedTo, 4);
+});
+
+test("dashboard Fix: a review only on GitHub, nothing kept of it: round 1, said, counted", async (t) => {
+  const s = setup(t, FIX, { github: async () => Response.json({ labels: [] }) });
+  assert.equal(s.reviews.entry("org/repo", 5), null);
+  const { item, said } = await askFix(s);
+  assert.deepEqual(said, [[1, 1, "1 high finding"]]);
+  assert.deepEqual(
+    [item.reason, item.trigger, item.id, item.replyTo, item.round, item.rounds],
+    ["review-fix", "work", "12", 5, 1, 1],
+  );
+  assert.match(item.text, /^The automated review of pull request #5 requested changes\./);
+  assert.match(item.text, /`a\.mjs:1`: a hole\./);
+  assert.equal(s.reviews.entry("org/repo", 5).fixes, 1);
 });
 
 test("dashboard Fix: two clicks at once start one fix run", async (t) => {
@@ -1868,7 +1888,7 @@ const RED = {
 function ciSetup(
   t,
   yaml = CI,
-  { path, reviewed, busy = () => false, policies = null, gh: over = {} } = {},
+  { path, reviewed, busy = () => false, policies = null, log = () => {}, gh: over = {} } = {},
 ) {
   let time = 1_800_000_000_000;
   const gh = {
@@ -1913,6 +1933,7 @@ function ciSetup(
     reviewed: reviewed ?? fileMap(path ?? join(tempDir(t), "reviews.json")),
     config: { ...config, needsInputLabel: "needs-input" },
     repoSettings: async () => read,
+    log,
     // The loop's state as each item is queued: an auto-picked task's follow-up keeps its
     // reserved slot only while it goes on (tasks.mjs pickHolds()).
     accept: async (item) => {
@@ -2451,6 +2472,48 @@ test("review.ci: the CI fix run's gates, as a review fix run's", async (t) => {
     ],
   );
   assert.equal(denied.accepted.length, 0);
+});
+
+test("review.ci: each step logged: waiting, a busy task, the CI fix run, no review after it", async (t) => {
+  const logged = [];
+  const has = (line) => assert.ok(logged.includes(line), `${line}\n---\n${logged.join("\n")}`);
+  // The work run that marked it ready still going on #12.
+  let going = true;
+  const s = ciSetup(t, CI, {
+    log: (line) => logged.push(line),
+    busy: (key) => going && key === "org/repo#12",
+  });
+  // An Actions run going on the head: the review waits.
+  assert.equal(await s.ready(), null);
+  has("org/repo#pr-5: waiting for CI, 1 Actions run(s) on sha-1 going");
+  // It fails while #12's run goes on: decided again once that one is over, nothing said yet.
+  s.gh.runs = [RED];
+  await s.runDone();
+  has(
+    "org/repo#pr-5: CI failed on sha-1, #12 has a run going or queued: deciding again once it is over",
+  );
+  assert.deepEqual([s.accepted, s.replies], [[], []]);
+  going = false;
+  // runEnded() alone decides it again (not waited for: its log line is), no tick().
+  s.reviews.runEnded("org/repo");
+  const started = "org/repo#pr-5: CI failed on sha-1, starting a CI fix run (1 of 1)";
+  await until(() => logged.includes(started), { what: started });
+  assert.equal(s.of("ci-fix").length, 1);
+  const [item] = s.of("ci-fix");
+  assert.deepEqual([item.trigger, item.id, item.replyTo], ["work", "12", 5]);
+  assert.match(item.text, /^CI failed on pull request #5 at sha-1/);
+  assert.match(item.text, /- Run 7: Tests \(failure\)/);
+  assert.match(s.replies[0], /^\*\*CI failed\*\* on sha-1/);
+  // The CI fix run pushed nothing: no review, said so.
+  assert.equal(await s.ciFixed(), null);
+  assert.ok(
+    logged.some((l) =>
+      l.startsWith("org/repo#pr-5: no review after the CI fix run, the CI fix run pushed nothing"),
+    ),
+    logged.join("\n"),
+  );
+  assert.match(s.replies.at(-1), /^\*\*No review\*\*/);
+  assert.equal(s.of("review").length, 0);
 });
 
 test("ciFixMessage and ciFailedText: names fenced or quoted, they can't format or mention", () => {

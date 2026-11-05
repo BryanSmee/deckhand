@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { mock, test } from "node:test";
 import { createBrainstorms, createIssueModes, REPLY_GRACE_MS } from "../listener/brainstorms.mjs";
+import { promptFor } from "../listener/prompts.mjs";
 import { mapStore } from "./helpers.mjs";
 
 test("brainstorms: active, idle once the deadline passes, restored, stopped, ended", async (t) => {
@@ -137,4 +138,15 @@ test("respell: brainstorms and modes saved under another spelling move, timers a
   modes.respell(spelled);
   assert.deepEqual(modes.keys(), ["Org/repo#3"]);
   assert.deepEqual(Object.fromEntries(await maps.again("modes")), { "Org/repo#3": "audit" });
+});
+
+// The issue's work after a brainstorm: a fresh session, from the issue (its volumes apart from
+// the brainstorm's: preparation.test.mjs). It reads what the brainstorm settled there.
+test("work after a brainstorm reads what was settled from the issue", () => {
+  const prompt = promptFor(
+    { repo: "org/repo", kind: "issue", number: 12, base: "main", settings: {} },
+    { mode: "work", text: "", settings: {}, config: { users: [], hosts: [] }, grant: {} },
+  );
+  assert.match(prompt, /^Work on GitHub issue #12 of org\/repo/);
+  assert.match(prompt, /gh issue view 12 --comments`\. If it was brainstormed there/);
 });

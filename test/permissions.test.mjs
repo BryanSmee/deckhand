@@ -6,11 +6,13 @@ import { test } from "node:test";
 import {
   anyAction,
   createPermissions,
+  itemMay,
   modePattern,
   refusal,
   repoActions,
   serverActions,
 } from "../listener/permissions.mjs";
+import { createTasks } from "../listener/tasks.mjs";
 import { apiRoute, mustDo } from "../listener/web.mjs";
 import { Refused, sendJson } from "../lib/http.mjs";
 import { MEMBER, VIEWER, permissionsOf, serve } from "./helpers.mjs";
@@ -334,4 +336,42 @@ test("apiRoute and mustDo: a decision that fails hides the repo, or answers 503,
   failing.length = 0;
   assert.equal(await refusedWith(mustDo(permissions, "carol", "org/app", "runs:manage")), null);
   assert.equal(await refusedWith(mustDo(permissions, "dave", "org/app", "runs:manage")), 403);
+});
+
+test("itemMay: a comment's author with no action on its repo: refused, the log naming them; nothing read or queued", async () => {
+  const logs = [];
+  const log = (line) => logs.push(line);
+  const permissions = permissionsOf({ bob: { "org/repo": MEMBER } });
+  const item = { repo: "org/repo", id: "12", author: "alice" };
+  assert.equal(await itemMay(permissions, log, item, null), false);
+  assert.deepEqual(logs, ["org/repo#12: alice has no action here"]);
+  assert.equal(await itemMay(permissions, log, { ...item, author: "bob" }, null), true);
+  // Without permissions (some tests): every action.
+  assert.equal(await itemMay(null, log, item, null), true);
+  // A comment of hers: refused before the repo's config is read, so no run, nothing said.
+  logs.length = 0;
+  const read = [];
+  const ctx = {
+    config: { users: ["alice", "bob"] },
+    log,
+    skip: () => null,
+    tasks: new Map(),
+    runs: [],
+    permissions,
+    repoSettings: async (repo) => (read.push(repo), { settings: {}, errors: ["unread"] }),
+    reply: async () => assert.fail("nothing is said"),
+  };
+  const { admit } = createTasks(ctx);
+  const payload = {
+    action: "created",
+    repository: { full_name: "org/repo", default_branch: "main" },
+    issue: { number: 12 },
+    comment: { id: 99, body: "Deckhand", user: { login: "alice", type: "User" } },
+    sender: { login: "alice" },
+  };
+  await admit({ ...item, base: "main", trigger: "work", replyTo: 12 }, "issue_comment", payload);
+  assert.deepEqual(
+    [logs, read, ctx.tasks.size],
+    [["org/repo#12: alice has no action here"], [], 0],
+  );
 });

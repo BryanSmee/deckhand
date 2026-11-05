@@ -198,6 +198,26 @@ test("the oldest labelled issue across the opted-in repos starts, as the labelle
   assert.equal(runTrigger(item), "auto-pickup");
 });
 
+test("a pick: the App's comment before the label comes off, then the run, logged with its labeller", async () => {
+  const { pickup, p } = setup({
+    repos: { "org/a": { issues: [issue(12, 1)] } },
+    events: { "org/a#12": [labelled("bob")] },
+  });
+  // What the label's removal and the queue had seen when each step came.
+  const steps = [];
+  const push = p.comments.push.bind(p.comments);
+  p.comments.push = (...x) => (steps.push(["comment", p.removed.length]), push(...x));
+  const accepted = p.accepted.push.bind(p.accepted);
+  p.accepted.push = (...x) => (steps.push(["run", p.removed.length]), accepted(...x));
+  assert.deepEqual(await pickup.sweep(), ["org/a#12"]);
+  assert.deepEqual(steps, [
+    ["comment", 0],
+    ["run", 1],
+  ]);
+  assert.match(p.comments[0][1], /^Picked automatically: .* added by @bob/);
+  assert.deepEqual(p.logs, ["Auto-pickup: org/a#12: started (label added by bob)"]);
+});
+
 test("two free slots: the two oldest, in order", async () => {
   const { pickup } = setup({
     env: { MAX_PARALLEL: "4", AUTO_PICKUP_SLOTS: "2" },
