@@ -123,7 +123,8 @@ function stopSandboxes(dir) {
 }
 
 // `files`: the repo's files on its default branch, served by the contents API and as a
-// tarball; none: no .deckhand.yaml (404).
+// tarball; none: no .deckhand.yaml (404). `files.down`: path → the statuses its reads get
+// first, one each (an array, 0 for an answer), or every time (a number), GitHub failing them.
 async function fakeGitHub(files = {}) {
   const tarball = files["Dockerfile"] || files["docker/Dockerfile"] ? tarOf(files) : null;
   const requests = [];
@@ -179,6 +180,9 @@ async function fakeGitHub(files = {}) {
       const file = /^\/repos\/org\/repo\/contents\/([^?]+)(?:\?ref=(.+))?$/.exec(req.url);
       if (file) {
         const path = decodeURIComponent(file[1]);
+        const down = files.down?.[path];
+        const status = Array.isArray(down) ? down.shift() : down;
+        if (status) return res.writeHead(status).end('{"message":"Server Error"}');
         const ref = file[2] === undefined ? "trunk" : decodeURIComponent(file[2]);
         const text = ref === "trunk" ? files[path] : files[`${ref}:${path}`];
         if (text === undefined) return res.writeHead(404).end("{}");
@@ -640,7 +644,8 @@ async function startGithubService(dir, github, credentials, { key, policyService
     undefined,
     { service: "github" },
   );
-  const app = createAppHolder({ dir: own, api: config.githubApi });
+  // GitHub's hiccups tried again at once: the tries are github-app.test.mjs's.
+  const app = createAppHolder({ dir: own, api: config.githubApi, sleep: async () => {} });
   const keys = () => new Map([[key.kid, key.publicKey]]);
   const policies = createPolicies({
     config,
@@ -1301,6 +1306,23 @@ describe("listener", options, () => {
       sender: { login },
     };
   }
+
+  // #680: GitHub's short hiccups are tried again by the github service; one that lasts fails
+  // the run saying so, its comment back in the queue.
+  test("GitHub failing the repo's config: a hiccup or two, the run starts; for good, the run says why", async (t) => {
+    const files = { down: { ".deckhand.yaml": [500, 503] } };
+    const { listener, send } = await listen(t, files);
+    await send(comment("alice"));
+    await listener.until("done (ok)");
+    // The comment's admission reads it (a status 0: answered), the run's start finds it down.
+    files.down[".deckhand.yaml"] = [0, ...Array(20).fill(500)];
+    await send({ ...comment("alice"), comment: { ...comment("alice").comment, id: 100 } });
+    const output = await listener.until("done (error, GitHub unavailable)");
+    assert.match(
+      output,
+      /GitHub returned 500 reading \.deckhand\.yaml of org\/repo \(GET \/repos\/org\/repo\/contents\/\.deckhand\.yaml\?ref=trunk\), tried again in 1 min/,
+    );
+  });
 
   test("a delivery whose handling throws is logged, and the next one is still handled", async (t) => {
     const { listener, send } = await listen(t);

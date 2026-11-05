@@ -8,8 +8,10 @@ import {
   ISSUES_WRITE,
   OPTIONAL_PERMISSIONS,
   PERMISSIONS_MS,
+  RATE_WAIT_MAX_MS,
   READ_PERMISSIONS,
   REFRESH_MS,
+  RETRY_DELAYS,
   WORKFLOW_PUSH_PERMISSIONS,
   appSettingsUrl,
   checkAppSettings,
@@ -18,6 +20,7 @@ import {
   missingPermissions,
   readsGitHub,
   readsOf,
+  repeatable,
   tunnelsGitHub,
   saveCredentials,
 } from "../listener/github-app.mjs";
@@ -456,4 +459,119 @@ test("discussions: an installation without them mints no discussion run's token"
   await assert.rejects(app.repoToken("org/repo", { ...READS, discussions: "read" }), {
     status: 422,
   });
+});
+
+// GitHub answering `answers` in turn for calls to /repos/org/repo/x (a status, a Response, or
+// an Error thrown as fetch() would), then 200; the waits and lines logged recorded.
+function flaky(answers) {
+  const clock = { now: Date.parse("2026-10-14T12:00:00Z") };
+  const tokens = fakeGitHub(clock);
+  const left = [...answers];
+  const calls = [];
+  const fetch = async (url, init = {}) => {
+    const { pathname } = new URL(url);
+    if (!pathname.startsWith("/repos/org/repo/x")) return tokens.fetch(url, init);
+    calls.push(init.method ?? "GET");
+    const next = left.shift();
+    if (next instanceof Error) throw next;
+    if (next instanceof Response) return next;
+    if (next) return new Response(`{"message":"${next}"}`, { status: next });
+    return Response.json({ ok: true });
+  };
+  const waits = [];
+  const logs = [];
+  const app = createGitHubApp({
+    credentials,
+    fetch,
+    now: () => clock.now,
+    log: (line) => logs.push(line),
+    sleep: async (ms) => waits.push(ms),
+  });
+  app.remember("org/repo", 7);
+  return { app, calls, waits, logs };
+}
+
+test("a read GitHub fails once or twice (500, 503) is tried again after a short wait, each retry logged", async () => {
+  const { app, calls, waits, logs } = flaky([500, 503]);
+  const res = await app.request("org/repo", "GET", "/repos/org/repo/x");
+  assert.equal(res.status, 200);
+  assert.deepEqual(await res.json(), { ok: true });
+  assert.equal(calls.length, 3);
+  assert.deepEqual(waits, RETRY_DELAYS.slice(0, 2));
+  assert.deepEqual(logs, [
+    "GitHub GET /repos/org/repo/x: 500, tried again in 1 s (attempt 2)",
+    "GitHub GET /repos/org/repo/x: 503, tried again in 3 s (attempt 3)",
+  ]);
+});
+
+test("a read GitHub keeps failing is answered as GitHub left it, after every try", async () => {
+  const { app, calls, waits, logs } = flaky([502, 502, 502, 502, 502]);
+  const res = await app.request("org/repo", "GET", "/repos/org/repo/x");
+  assert.equal(res.status, 502);
+  assert.equal(calls.length, RETRY_DELAYS.length + 1);
+  assert.deepEqual(waits, RETRY_DELAYS);
+  assert.equal(logs.at(-1), 'GitHub GET /repos/org/repo/x: 502 {"message":"502"}');
+});
+
+test("no answer at all is tried again too; still none, the error is thrown", async () => {
+  const once = flaky([new TypeError("fetch failed")]);
+  assert.equal((await once.app.request("org/repo", "GET", "/repos/org/repo/x")).status, 200);
+  assert.match(once.logs[0], /fetch failed, tried again in 1 s \(attempt 2\)/);
+  const never = flaky(Array.from({ length: 4 }, () => new TypeError("fetch failed")));
+  await assert.rejects(never.app.request("org/repo", "GET", "/repos/org/repo/x"), /fetch failed/);
+  assert.equal(never.calls.length, 4);
+});
+
+test("a POST, a DELETE or a merge GitHub failed is never sent again; a PUT or PATCH is", async () => {
+  for (const method of ["POST", "DELETE"]) {
+    const { app, calls, waits } = flaky([500]);
+    assert.equal((await app.request("org/repo", method, "/repos/org/repo/x", {})).status, 500);
+    assert.deepEqual([calls.length, waits], [1, []]);
+  }
+  const merge = flaky([502]);
+  const res = await merge.app.request("org/repo", "PUT", "/repos/org/repo/x/pulls/1/merge", {});
+  assert.deepEqual([res.status, merge.calls.length], [502, 1]);
+  for (const method of ["PUT", "PATCH"]) {
+    const { app, calls } = flaky([504]);
+    assert.equal((await app.request("org/repo", method, "/repos/org/repo/x", {})).status, 200);
+    assert.equal(calls.length, 2);
+  }
+  assert.equal(repeatable("HEAD", "/x"), true);
+  assert.equal(repeatable("POST", "/graphql"), false);
+});
+
+test("GitHub's retry-after is waited for; a secondary rate limit doesn't count as a failed try", async () => {
+  const limited = () =>
+    new Response('{"message":"You have exceeded a secondary rate limit"}', {
+      status: 403,
+      headers: { "retry-after": "2" },
+    });
+  const later = new Response("busy", { status: 503, headers: { "retry-after": "5" } });
+  // Three hiccups and a rate limit among them: only the hiccups are tries (RETRY_DELAYS' three).
+  const read = flaky([limited(), 500, later, 500]);
+  assert.equal((await read.app.request("org/repo", "GET", "/repos/org/repo/x")).status, 200);
+  assert.deepEqual(read.waits, [2000, 1000, 5000, 9000]);
+  assert.match(read.logs[0], /rate limited, tried again in 2 s \(attempt 2\)/);
+  // A rate limit refused the call: even a POST goes again once it's over, a minute when GitHub
+  // says nothing.
+  const post = flaky([429]);
+  assert.equal((await post.app.request("org/repo", "POST", "/repos/org/repo/x", {})).status, 200);
+  assert.deepEqual(post.waits, [RATE_WAIT_MAX_MS]);
+});
+
+test("the primary rate limit, or a wait longer than RATE_WAIT_MAX_MS, is answered as it is", async () => {
+  const primary = new Response("API rate limit exceeded", {
+    status: 403,
+    headers: { "x-ratelimit-remaining": "0", "retry-after": "1" },
+  });
+  const long = new Response("slow down", { status: 429, headers: { "retry-after": "3600" } });
+  for (const answer of [primary, long]) {
+    const { app, calls, waits } = flaky([answer]);
+    const res = await app.request("org/repo", "GET", "/repos/org/repo/x");
+    assert.deepEqual([res.status, calls.length, waits], [answer.status, 1, []]);
+  }
+  // A 403 that isn't a rate limit is a refusal.
+  const refused = flaky([403]);
+  assert.equal((await refused.app.request("org/repo", "GET", "/repos/org/repo/x")).status, 403);
+  assert.equal(refused.calls.length, 1);
 });

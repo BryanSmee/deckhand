@@ -6,6 +6,7 @@ import { agentFor } from "./agents/index.mjs";
 import { authOf, entryLabel, nextFallback, resolved, resolveEntry } from "./agents/select.mjs";
 import { ReplyError } from "./comments.mjs";
 import { commentsText, dashboardLink, taskKey } from "./events.mjs";
+import { GitHubUnavailable } from "./github.mjs";
 import { nextStep, replyFooter } from "./footer.mjs";
 import { brainstormDefaults, customMode, entryRun, isApart, isFresh } from "./modes.mjs";
 import { answersOnly } from "./capabilities.mjs";
@@ -60,6 +61,9 @@ export const ANSWER_GRACE_MS = 2 * 60_000;
 const CATCH_UP_MS = 10_000;
 // The most a run's end waits for its state at the github service, every try included.
 const GITHUB_STATE_MS = 10_000;
+// A run GitHub kept failing before its sandbox started (GitHubUnavailable, after the App's own
+// tries): its comments back in the queue after each of these waits, then its reply says so.
+export const GITHUB_REQUEUE_MS = [60_000, 5 * 60_000, 15 * 60_000];
 
 // `ctx` (server.mjs): the listener's state and services, read at call time.
 export function createRuns(ctx) {
@@ -883,6 +887,11 @@ export function createRuns(ctx) {
         record.summary = `The reply couldn't be posted: ${error.reason}`;
         record.questions = null;
         writeEvent(live.logFile, "note", { message: `${record.summary} (${error.message})` });
+      } else if (error instanceof GitHubUnavailable) {
+        const gaveUp = githubDown(task, error);
+        if (gaveUp && !live.replied && !isChat(task)) {
+          await ctx.answer(target(task, live.asked), gaveUp).catch((e) => log(`${key}: ${e}`));
+        }
       } else log(`${key}: ${error.stack ?? error}`);
       if (error instanceof RunError && !live.replied) {
         // A chat's owner reads it in the conversation.
@@ -898,6 +907,32 @@ export function createRuns(ctx) {
       ctx.metrics?.runFinished(live);
       await cleanUp(task);
     }
+  }
+
+  // GitHub failing a call the run's start needed (GitHubUnavailable): the run ends as failed,
+  // its log and the dashboard saying why, and its comments go back in the queue for a run
+  // GITHUB_REQUEUE_MS later (`live.retryAt`, cleanUp()), keeping their 👀. → the reply's text once
+  // those tries are over, else null.
+  function githubDown(task, error) {
+    const { live } = task;
+    const delays = ctx.githubRequeueMs ?? GITHUB_REQUEUE_MS;
+    const tries = Math.max(0, ...live.handled.map((item) => item.githubTries ?? 0));
+    const ms = delays[tries];
+    if (ms === undefined) {
+      live.record.summary = `Failed: ${error.message}`;
+      log(`${live.key}: done (error, GitHub unavailable): ${error.message}, ${tries + 1} tries`);
+      writeEvent(live.logFile, "note", { message: `${live.record.summary}, ${tries + 1} tries` });
+      for (const item of live.handled) delete item.githubTries;
+      return `${agentOf(task).displayName} couldn't start: ${error.message}, ${tries + 1} times. Comment again once GitHub answers.`;
+    }
+    const later = ms < 60_000 ? `${Math.round(ms / 1000)} s` : `${minutes(ms)} min`;
+    live.record.summary = `Failed: ${error.message}. Tried again in ${later}`;
+    log(`${live.key}: done (error, GitHub unavailable): ${error.message}, tried again in ${later}`);
+    writeEvent(live.logFile, "note", { message: live.record.summary });
+    for (const item of live.handled) item.githubTries = tries + 1;
+    task.pending.unshift(...live.handled.filter((item) => !task.pending.includes(item)));
+    live.retryAt = Date.now() + ms;
+    return null;
   }
 
   // The provider failed: the run's comments go back in the queue, marked for the next entry of
@@ -1121,7 +1156,8 @@ export function createRuns(ctx) {
         .catch((error) => log(`${key}: what waits for it: ${error.message ?? error}`));
     }
     // Comments the run could not take go out together, after the usual pause.
-    if (task.pending.length) ctx.startLater(task);
+    // Or when GitHub may answer again (githubDown()).
+    if (task.pending.length) ctx.startLater(task, live.retryAt ?? undefined);
     ctx.schedule();
     // A slot is free: the next labelled issue, without waiting for the next sweep. Any run's
     // end, not only an auto-picked one's: its repo's own max_parallel may have held a labelled

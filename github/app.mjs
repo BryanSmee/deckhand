@@ -24,6 +24,8 @@ export function createAppHolder({
   now = Date.now,
   setTimer = setTimeout,
   log = () => {},
+  // Between the tries of a call GitHub failed (github-app.mjs request()): tests make it short.
+  sleep,
 }) {
   const file = join(dir, "app.json");
   // /setup's last conversion, for a listener that didn't get its answer (convert()).
@@ -41,7 +43,7 @@ export function createAppHolder({
   sweep();
   let app = null;
   function use(credentials) {
-    app = credentials?.pem ? createGitHubApp({ credentials, api, fetch, now, log }) : null;
+    app = credentials?.pem ? createGitHubApp({ credentials, api, fetch, now, log, sleep }) : null;
   }
   use(readJson(file));
 

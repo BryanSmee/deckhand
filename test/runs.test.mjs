@@ -8,7 +8,8 @@ import { fingerprint, fingerprintRedactor } from "../lib/fingerprints.mjs";
 import { openStore } from "../lib/store.mjs";
 import { createComments } from "../listener/comments.mjs";
 import { RunError } from "../listener/access.mjs";
-import { createRuns, reopenedMode } from "../listener/runs.mjs";
+import { GitHubUnavailable } from "../listener/github.mjs";
+import { createRuns, GITHUB_REQUEUE_MS, reopenedMode } from "../listener/runs.mjs";
 import { openLog } from "../listener/runlog.mjs";
 import { parseRepoConfig } from "../listener/repo-config.mjs";
 import { recordingFetch, tempDir, testConfig, until } from "./helpers.mjs";
@@ -870,6 +871,68 @@ test("an error whose reply GitHub refuses: logged", async (t) => {
   assert.equal(live.record.status, "error");
   assert.ok(logs.some((l) => /org\/repo#12: ReplyError: GitHub POST .*comments: 404/.test(l)));
   assert.deepEqual(settled, ["error"]);
+});
+
+// GitHub failing the read of the repo's config after the App's own tries (#680), for an item
+// tried `tries` times already.
+async function githubDown(t, tries = 0) {
+  const fails = new GitHubUnavailable(
+    "GET",
+    "/repos/org/repo/contents/.deckhand.yaml?ref=main",
+    500,
+    "reading .deckhand.yaml of org/repo",
+  );
+  const run = setup(t, { fails });
+  const later = [];
+  run.ctx.startLater = (task, dueAt) => later.push({ task, dueAt });
+  const item = { comment: { id: 7 }, ...(tries && { githubTries: tries }) };
+  const live = run.task.live;
+  live.handled.push(item);
+  await run.following;
+  return { ...run, item, later, record: live.record };
+}
+
+const DOWN =
+  "GitHub returned 500 reading .deckhand.yaml of org/repo (GET /repos/org/repo/contents/.deckhand.yaml?ref=main)";
+
+test("a run GitHub kept failing before its start: failed, said why, its comments back in the queue a minute later", async (t) => {
+  const before = Date.now();
+  const { task, item, later, answers, logs, settled, logPath, record } = await githubDown(t);
+  assert.equal(record.status, "error");
+  assert.equal(record.summary, `Failed: ${DOWN}. Tried again in 1 min`);
+  assert.deepEqual(answers, []);
+  assert.deepEqual(task.pending, [item]);
+  assert.equal(item.githubTries, 1);
+  // Its 👀 kept: settled by the next run.
+  assert.deepEqual(settled, []);
+  assert.equal(later.length, 1);
+  assert.ok(later[0].dueAt >= before + GITHUB_REQUEUE_MS[0]);
+  assert.ok(
+    logs.includes(`org/repo#12: done (error, GitHub unavailable): ${DOWN}, tried again in 1 min`),
+  );
+  // What the dashboard shows: the log says it, not an empty one.
+  assert.match(
+    readFileSync(logPath, "utf8"),
+    new RegExp(RegExp.escape(`Failed: ${DOWN}. Tried again in 1 min`)),
+  );
+});
+
+test("a run GitHub kept failing every time: its reply says GitHub failed, with the call", async (t) => {
+  const { task, item, later, answers, settled, logPath } = await githubDown(
+    t,
+    GITHUB_REQUEUE_MS.length,
+  );
+  assert.equal(task.pending.length, 0);
+  assert.equal(item.githubTries, undefined);
+  assert.equal(later.length, 0);
+  assert.deepEqual(answers, [
+    `Claude couldn't start: ${DOWN}, 4 times. Comment again once GitHub answers.`,
+  ]);
+  assert.deepEqual(settled, ["error"]);
+  assert.match(
+    readFileSync(logPath, "utf8"),
+    new RegExp(RegExp.escape(`Failed: ${DOWN}, 4 tries`)),
+  );
 });
 
 test("the agent's output moves its log through work, push and wrap-up", async (t) => {
