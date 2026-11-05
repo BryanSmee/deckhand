@@ -209,6 +209,31 @@ test("a card per repository: its status, tasks by state, backlog and lanes, and 
   expect(within(infra).getByText(/Onboarding opens a run/)).toBeTruthy();
 });
 
+test("a repository's card shows its run slots, shared or its own; none for one without", () => {
+  const repoSlots = {
+    "acme/app": { running: 1, queued: 2, max: 4, own: false },
+    "acme/api": { running: 0, queued: 1, max: 1, own: true },
+  };
+  render(
+    <Overview
+      state={{ ...state, repoSlots }}
+      repos={list([row("acme/infra")])}
+      github={github}
+      onChip={() => {}}
+    />,
+  );
+  const card = (name: string) =>
+    screen.getByRole("link", { name }).closest("article") as HTMLElement;
+  expect(
+    within(card("acme/app")).getByText("1 running · of 4 shared slots · 2 queued"),
+  ).toBeTruthy();
+  expect(
+    within(card("acme/app")).getByRole("img", { name: "acme/app: 1 of 4 shared run slots in use" }),
+  ).toBeTruthy();
+  expect(within(card("acme/api")).getByText("0 of 1 running · 1 queued")).toBeTruthy();
+  expect(within(card("acme/infra")).queryByText(/running/)).toBeNull();
+});
+
 test("Onboard starts a repository's onboarding, and shows it on its way", () => {
   const onboard = vi.fn(async () => {});
   const infra = row("acme/infra", { status: "not-onboarded" });

@@ -77,8 +77,20 @@ export function revive(item) {
   return revived;
 }
 
-function pick({ repo, id, kind, number, name, base, discussionId, settings, owner, pool }) {
-  return { repo, id, kind, number, name, base, discussionId, settings, owner, pool };
+function pick({
+  repo,
+  id,
+  kind,
+  number,
+  name,
+  base,
+  discussionId,
+  settings,
+  settingsAt,
+  owner,
+  pool,
+}) {
+  return { repo, id, kind, number, name, base, discussionId, settings, settingsAt, owner, pool };
 }
 
 // How often queueWritten() tries the queue's write again while the store is away, and a run's

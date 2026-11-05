@@ -26,7 +26,7 @@ import { LOOP_STEPS } from "./reviews.mjs";
 import { applyInput, inputEvent } from "./questions.mjs";
 import { forgottenFor, refreshFor } from "./repos.mjs";
 import { labelAdded } from "./auto-pickup.mjs";
-import { pickedTask } from "./tasks.mjs";
+import { pickedTask, poolOf, SHARED } from "./tasks.mjs";
 import { staleFor } from "./work.mjs";
 import { publicRun, stream } from "./runlog.mjs";
 import { endPicks } from "./picks.mjs";
@@ -177,6 +177,34 @@ export function createHttp(ctx) {
     return { shown, queued, waiting: waiting.length };
   }
 
+  // Each repo `shows` with tasks in the shared pool (#639): its runs going and its tasks
+  // waiting (queued as the totals count it), and the cap schedule() holds them to (repo-config.mjs
+  // startable()): its max_parallel when below MAX_PARALLEL (`own`), else MAX_PARALLEL, which the
+  // other repos share. Its settings are the ones read last, by any of its tasks (`settingsAt`:
+  // with a comment, tasks.mjs accept(), or as a run began, runs.mjs begin()), queued, running
+  // or done: a task kept from an older listener, without it, comes before them.
+  function repoSlots(shows) {
+    const slots = new Map();
+    for (const t of tasks.values()) {
+      // The shared pool's, as schedule() counts them against the repo's cap.
+      if (poolOf(t) !== SHARED || !shows(t.repo)) continue;
+      const name = t.repo.toLowerCase();
+      const s = slots.get(name) ?? { repo: t.repo, running: 0, queued: 0, settings: null, at: 0 };
+      if (t.running) s.running++;
+      if (t.pending.length > (t.running ? ctx.deliverable(t) : 0)) s.queued++;
+      const at = t.settingsAt ?? 0;
+      if (t.settings && (!s.settings || at >= s.at)) Object.assign(s, { settings: t.settings, at });
+      slots.set(name, s);
+    }
+    return Object.fromEntries(
+      [...slots.values()].map(({ repo, running, queued, settings }) => {
+        const cap = settings?.maxParallel;
+        const own = cap != null && !(cap >= config.maxParallel);
+        return [repo, { running, queued, max: own ? cap : config.maxParallel, own }];
+      }),
+    );
+  }
+
   // What the dashboard shows `user`: the repos they have `tasks:read` on, the totals of all.
   async function state(user) {
     const shows = await seeing(user, namedRepos(), TASKS, true);
@@ -248,6 +276,8 @@ export function createHttp(ctx) {
       running: ctx.running,
       queued: waiting,
       maxParallel: config.maxParallel,
+      // The repos' own, of those `user` sees (repoSlots()).
+      repoSlots: repoSlots(shows),
       // AUTO_PICKUP_SLOTS, within maxParallel, how many auto-picked runs hold them now, and how
       // many slots the picks hold (tasks.mjs pickedCount()): those running, queued, asking or
       // between two loop steps, what the sweep counts; absent while it is off.

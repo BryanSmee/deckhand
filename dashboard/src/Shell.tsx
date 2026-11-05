@@ -22,6 +22,7 @@ import { t } from "./i18n";
 import { withKey } from "./keys";
 import type { Permission } from "./notify";
 import { requestKinds } from "./NewRequest";
+import { RepoSlots } from "./RepoSlots";
 import { needingYou } from "./Repos";
 import { SettingsTabs } from "./Settings";
 import { formatRoute, isOverview, type Route } from "./route";
@@ -494,6 +495,7 @@ export function PageHeader({
       {settings && <SettingsTabs route={route} count={needs} class={styles.headerTabs} />}
       {!settings && <Segmented label={t("shell.view")} options={views} value={view} />}
       {!settings && !chatting && !repo && <span class={styles.hint}>{t("shell.boardHint")}</span>}
+      {!settings && !chatting && repo && <RepoSlots state={state} repo={repo} />}
       {!settings && state && (
         <PlanBars plans={state.plans} now={state.now} form="compact" class={styles.headerPlans} />
       )}

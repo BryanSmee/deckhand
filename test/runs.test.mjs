@@ -1168,7 +1168,15 @@ async function starting(t, { env = {}, items, yaml = "", previous = null }) {
   const record = ctx.runs[0];
   await ctx.run(task);
   const header = logs.find((l) => l.includes(": running "));
-  return { logs, answers, provided, moved, header, record: ctx.runs.find((r) => r !== record) };
+  return {
+    logs,
+    answers,
+    provided,
+    moved,
+    header,
+    task,
+    record: ctx.runs.find((r) => r !== record),
+  };
 }
 
 // A mode no config has: the run stops once its log has its first line.
@@ -1233,6 +1241,15 @@ test("a run refused as it starts (an /agent the operator hasn't configured, a co
     /^Claude can't run here: `\.deckhand\.yaml` on `trunk` has errors\.\n\n- max_parallel: expected a whole number/,
   );
   assert.deepEqual(broken.moved, []);
+});
+
+test("a run's start reads the repo's settings again, and when (#639: api/state's repo slots)", async (t) => {
+  t.mock.timers.enable({ apis: ["Date"], now: 7000 });
+  const { task } = await starting(t, {
+    items: [{ text: "Go.", ...STOP }],
+    yaml: "max_parallel: 1\n",
+  });
+  assert.deepEqual([task.settings.maxParallel, task.settingsAt], [1, 7000]);
 });
 
 test("a run's end asks the waits about its own issue again: its run may have closed it", async (t) => {

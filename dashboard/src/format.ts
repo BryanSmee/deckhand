@@ -8,6 +8,7 @@ import type {
   LoopState,
   PrState,
   PullRequest,
+  RepoSlots,
   RepoStatus,
   ReviewRound,
   Run,
@@ -397,6 +398,27 @@ export function runningText({
   maxParallel,
 }: Pick<State, "running" | "maxParallel">): string {
   return t("slots.running", { running, max: maxParallel });
+}
+
+// One repo's run slots (State.repoSlots), null when the listener sends none for it.
+export function repoSlotsOf(state: Pick<State, "repoSlots"> | null, repo: string | null) {
+  if (!state?.repoSlots || !repo) return null;
+  const name = Object.keys(state.repoSlots).find((r) => sameRepo(r, repo));
+  return name ? state.repoSlots[name] : null;
+}
+
+// A repo's run slots: "1 of 2 running · 3 queued" against its own max_parallel, "1 running · of 4
+// shared slots" against MAX_PARALLEL, which the other repos use too (not a quota of its own).
+export function repoSlotsText({ running, queued, max, own }: RepoSlots): string {
+  const used = own
+    ? t("slots.running", { running, max })
+    : t("slots.shared", { running, count: max });
+  return queued ? `${used} · ${t("slots.queued", { count: queued })}` : used;
+}
+
+// Its meter's accessible name, the repo's in it.
+export function repoSlotsLabel(repo: string, { running, max, own }: RepoSlots): string {
+  return t(own ? "slots.repoLabel" : "slots.repoSharedLabel", { repo, running, max });
 }
 
 // Auto-pickup's reserved slots and how they are used: "1 auto-pickup slot (1 in use)", "… (free)",

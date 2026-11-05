@@ -483,6 +483,13 @@ export interface ServerSetup {
   allowedRepos: string[];
 }
 
+export interface RepoSlots {
+  running: number;
+  queued: number;
+  max: number;
+  own: boolean;
+}
+
 export interface State {
   user: string;
   tasks: Task[];
@@ -501,6 +508,10 @@ export interface State {
   // hold, running or not (queued, asking, between two loop steps): the sweep picks no issue
   // for those; none from a listener from before it.
   autoPickup?: { slots: number; running: number; taken?: number };
+  // Each repo the user sees with tasks (#639): its runs going and its tasks queued, against
+  // `max`, its own max_parallel (`own`) or else maxParallel, which it shares with the others. A
+  // listener from before it sends none.
+  repoSlots?: Record<string, RepoSlots>;
   // Each repo's inbox issues and discussions category, for the repos whose config the
   // listener has read: New request offers those it has (listener/work.mjs
   // sendToInbox(), listener/discussions.mjs).

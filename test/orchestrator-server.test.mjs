@@ -5492,6 +5492,11 @@ allow_capabilities contains "read:pulls"
     // The shape dashboard/src/types.ts expects: change both together.
     assertShape(board, STATE_KEYS, "State");
     assertShape(board.server, SERVER_KEYS, "ServerInfo");
+    // org/repo's: its task, done, is still known.
+    assert.deepEqual(Object.keys(board.repoSlots), ["org/repo"]);
+    for (const slots of Object.values(board.repoSlots)) {
+      assertShape(slots, REPO_SLOTS_KEYS, "RepoSlots");
+    }
     // What alice may do (#732): Deckhand's default policies give every action.
     assertShape(board.access, ACCESS_KEYS, "Access");
     assert.deepEqual(board.access.server, ["server:read", "server:sync"]);
@@ -5721,6 +5726,7 @@ allow_capabilities contains "read:pulls"
       "running",
       "queued",
       "maxParallel",
+      "repoSlots",
       "githubUrl",
       "server",
       "lastSync",
@@ -5729,6 +5735,7 @@ allow_capabilities contains "read:pulls"
     ["inboxes", "lanes", "plans", "access"],
   ];
   const ACCESS_KEYS = [["server", "repos"], []];
+  const REPO_SLOTS_KEYS = [["running", "queued", "max", "own"], []];
   const REPO_ACCESS_KEYS = [["actions", "starts", "startsDenied"], []];
   const ACCESS_REPORT_KEYS = [["users", "repos", "error"], []];
   const USER_ACCESS_KEYS = [["login", "server", "repos"], []];

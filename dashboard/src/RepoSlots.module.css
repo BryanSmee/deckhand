@@ -1,0 +1,37 @@
+/* A repository's run slots: the meter, then what it says. */
+.slots {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  font-size: 12px;
+  color: var(--text-2);
+}
+
+.meter {
+  flex: 0 0 auto;
+  width: 72px;
+}
+
+.text {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-variant-numeric: tabular-nums;
+}
+
+/* A card's: its text wraps rather than lose the queue. */
+.card .text {
+  white-space: normal;
+}
+
+/* A phone's: a strip atop the repository's list or board. */
+.bar {
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.bar .meter {
+  width: 96px;
+}

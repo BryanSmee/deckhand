@@ -12,6 +12,9 @@ import {
   repoCounts,
   repoTabs,
   reservedText,
+  repoSlotsLabel,
+  repoSlotsOf,
+  repoSlotsText,
   runningText,
   sameRepo,
   runKindName,
@@ -396,6 +399,27 @@ test("dayTime: today, yesterday, then the date", () => {
 });
 
 describe("run slots", () => {
+  test("a repo's: against its own max_parallel, or worded as the shared slots", () => {
+    const own = { running: 1, queued: 3, max: 2, own: true };
+    expect(repoSlotsText(own)).toBe("1 of 2 running · 3 queued");
+    expect(repoSlotsText({ ...own, queued: 0 })).toBe("1 of 2 running");
+    const shared = { running: 1, queued: 0, max: 4, own: false };
+    expect(repoSlotsText(shared)).toBe("1 running · of 4 shared slots");
+    expect(repoSlotsText({ ...shared, max: 1, queued: 2 })).toBe(
+      "1 running · of 1 shared slot · 2 queued",
+    );
+    expect(repoSlotsLabel("acme/api", own)).toBe("acme/api: 1 of 2 run slots in use");
+    expect(repoSlotsLabel("acme/api", shared)).toBe("acme/api: 1 of 4 shared run slots in use");
+  });
+
+  test("a repo's slots are found under any spelling, none from a listener from before them", () => {
+    const slots = { running: 0, queued: 1, max: 2, own: true };
+    expect(repoSlotsOf({ repoSlots: { "Acme/Api": slots } }, "acme/api")).toBe(slots);
+    expect(repoSlotsOf({ repoSlots: { "acme/app": slots } }, "acme/api")).toBeNull();
+    expect(repoSlotsOf({}, "acme/api")).toBeNull();
+    expect(repoSlotsOf({ repoSlots: { "acme/api": slots } }, null)).toBeNull();
+  });
+
   test("the run count is the same with or without auto-pickup", () => {
     expect(runningText({ running: 2, maxParallel: 4 })).toBe("2 of 4 running");
     const auto = makeState({ running: 3, maxParallel: 4, autoPickup: { slots: 1, running: 1 } });
