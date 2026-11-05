@@ -555,13 +555,7 @@ token only reads, and Deckhand posts the review.
   reviews of the pull request is filed once, and one an issue labelled `follow-up` already has
   is linked instead; each merge files its follow-ups once, across redeliveries and restarts
   (the orchestrator's store, `reviews`), from its reviews and from those GitHub refused, posted as plain
-  comments (only the comments Deckhand posted them as, recorded in the orchestrator's store, `reviews`). Only a
-  bullet with its title in bold is a follow-up, and not one that says there is none: `None.`,
-  `- No follow-ups.` or `- **None found**` files nothing. An item under the wrong heading is
-  never filed, but posted under Comments: a blocking comment there (`- **blocking** …`, in
-  any form Comments reads) blocks as one under Comments does; a note stays a note and keeps
-  the review's own verdict; a finding (`- high: …`) there, and any other bullet without a bold
-  title, is posted as **unclear** (below).
+  comments (only the comments Deckhand posted them as, recorded in the orchestrator's store, `reviews`).
   A pull request closed without a merge files none, and a merge files at most 10 (the rest
   listed by title in the comment). The issue's body says the text is a review model's
   output, to check against the code, and quotes it. The review is told not to list again a
@@ -576,20 +570,28 @@ token only reads, and Deckhand posts the review.
   run applies it only when it is cheap and in scope, and a note alone never starts one. Nits
   are notes, not low findings. A blocking comment blocks like a finding, **whatever
   `max_allowed_severity` says** (the reviewer marked it on purpose), caps the rating at 8, and
-  goes to the fix run. The kind is read in bold, italics, backticks, brackets or
-  parentheses, or bare before a separator (`blocking: …`). A blocking comment put under Must fix
-  blocks as one under Comments does, and a note there is posted under Comments and keeps the
-  review's own verdict. A comment whose kind can't be read is posted as **unclear**, and
-  so is an item under Must fix that is no finding: when the review's own verdict asks for
-  changes, it blocks as a blocking comment does (it may be why), and the fix run is told to
-  treat it as blocking; with the review's "comment", it is posted as a note and
-  doesn't block, nor does the fix run treat it as blocking. A deeper
-  heading stays in its section (`### 🟠 High (1)` under Must fix, as Deckhand posts them);
-  any other heading after the review's own (`## Checks`, `## Blocking comments`) ends it.
-  Under it, a finding or a comment still reads as one (a blocking one blocks), nothing is a
-  follow-up, and anything else is no item but keeps the review's own "request changes". A review's verdict reads "comment" on follow-ups
-  and notes alone only when its Must fix section says `None.` and everything under Must fix
-  and Comments could be read.
+  goes to the fix run.
+
+<!-- onboarding: skip: How Deckhand reads a review's reply (its markdown, its `json deckhand-review` block) is in docs/repo-config.md in Deckhand's source. -->
+
+How a review's items are read. A comment's kind is read in bold, italics, backticks, brackets or
+parentheses, or bare before a separator (`blocking: …`). A blocking comment put under Must fix
+blocks as one under Comments does, and a note there is posted under Comments and keeps the review's
+own verdict. A comment whose kind can't be read is posted as **unclear**, and so is an item under
+Must fix that is no finding: when the review's own verdict asks for changes, it blocks as a blocking
+comment does (it may be why), and the fix run is told to treat it as blocking; with the review's
+"comment", it is posted as a note and doesn't block, nor does the fix run treat it as blocking. A
+deeper heading stays in its section (`### 🟠 High (1)` under Must fix, as Deckhand posts them); any
+other heading after the review's own (`## Checks`, `## Blocking comments`) ends it. Under it, a
+finding or a comment still reads as one (a blocking one blocks), nothing is a follow-up, and
+anything else is no item but keeps the review's own "request changes". A review's verdict reads
+"comment" on follow-ups and notes alone only when its Must fix section says `None.` and everything
+under Must fix and Comments could be read. Only a bullet with its title in bold is a follow-up, and
+not one that says there is none: `None.`, `- No follow-ups.` or `- **None found**` files nothing. An
+item under the wrong heading is never filed, but posted under Comments: a blocking comment there (`-
+**blocking** …`, in any form Comments reads) blocks as one under Comments does; a note stays a note
+and keeps the review's own verdict; a finding (`- high: …`) there, and any other bullet without a
+bold title, is posted as **unclear** (above).
 
 A reply in the format from before the sections (a `## Findings` list, as a repository's own
 `review.instructions` may still ask for) reads as must-fix findings, and so do the reviews
@@ -611,13 +613,26 @@ at the place of one of the markdown's findings or blocking comments. Where both 
 changes, the block decides whether that verdict reads "comment" (on tolerated findings, or on
 follow-ups and notes alone), however unsure the markdown read alone would be.
 
+<!-- onboarding: end -->
+
 - **Claims and acceptance criteria first.** Before security, the review lists the
   acceptance criteria of the issue the pull request closes (and the decisions settled in
   its thread) and the claims of the pull request's description (what it changes, adds or
   tests, the checks it ran), and checks each against the code. A criterion not met, or met
   only in part, and a claim the code contradicts are **high** findings; a claim it can't
-  verify (a check it can't run) is said in the summary, not filed as a finding. Unsure
-  between two severities, it picks the higher one.
+  verify (a check it can't run) is said in the summary, not filed as a finding.
+- **A plausibility bar for findings.** Each Must fix finding names the concrete, plausible
+  situation that triggers it, in how the repository is used and deployed. An edge case that
+  needs contrived conditions (several unlikely events at once, a trusted party acting against
+  itself, a value no caller produces) is a note under Comments, with its trigger, or left out,
+  and so are hardening and theoretical cases: they never block. Security keeps its bar: input
+  an untrusted party controls (a webhook, a pull request's diff, a fork, a sandbox) is
+  plausible by definition. Severities weigh the trigger's likelihood as well as its impact
+  (medium is an edge case a user or operator can plausibly hit; low a real defect with a
+  plausible trigger and a small cost); unsure between two, the review picks the higher one for
+  security and data loss, otherwise the one the likelihood supports. A repository's
+  `review.instructions` can tighten or loosen the bar (say, "report every edge case" for a
+  library whose callers are anyone).
 - **The rating follows the findings**: at most 3/10 with a critical finding, 5 with a high
   one, 8 with a medium one or a blocking comment; 10 only with no finding above low. Deckhand caps the rating
   it posts by these numbers, whatever the review wrote; below the cap, it is shown as
@@ -1210,7 +1225,7 @@ allow_capabilities contains c if {
 }
 ```
 
-<!-- onboarding: skip (listener/prompts.mjs leaves the inputs out of the onboarding prompt) -->
+<!-- onboarding: skip: The policies' inputs, field by field, are in docs/repo-config.md in Deckhand's source. -->
 
 ### The run input
 
