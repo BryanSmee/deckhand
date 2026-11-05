@@ -662,6 +662,33 @@ test("permissions: the ceiling a chat's run gets, a profile saved within it, wha
   assert.equal((await refusal(chats.setPermissions("bob", chat.id, { profile: {} }))).status, 404);
 });
 
+test("permissions: without SANDBOX_ENGINE, the panel greys the engine out with its reason, and the agent asking for it is refused (#873)", async (t) => {
+  const panel = async (env) => {
+    const { chats, ctx } = await setup(t, {
+      env: { GRANTS_DIR: grantsFolder(t, "hosts: []\n"), ...env },
+      policies: capabilityPolicies({
+        operator: () => ["pull", "setup", "docker"],
+        grants: ["docker"],
+      }),
+      yaml: "setup: npm ci\ndocker: {}\n",
+    });
+    const chat = await chats.create("alice", { repo: "org/repo", message: "hi" });
+    const view = await chats.permissions("alice", chat.id);
+    const task = ctx.tasks.get(chatKey(chat));
+    task.live = { id: "run-1", hosts: [], mounts: [], engine: false };
+    const asked = await chats.decideRequest(task, { kind: "engine", value: "" });
+    return { row: view.ceiling.capabilities.find((c) => c.name === "docker"), asked };
+  };
+  const without = await panel({});
+  assert.equal(without.row.allowed, false);
+  assert.equal(without.row.reason, "the operator hasn't set SANDBOX_ENGINE, so no run gets one");
+  assert.equal(without.asked.verdict, "beyond");
+  assert.match(without.asked.message, /the operator hasn't set SANDBOX_ENGINE/);
+  const withEngine = await panel({ SANDBOX_ENGINE: "sysbox" });
+  assert.equal(withEngine.row.allowed, true);
+  assert.equal(withEngine.asked.verdict, "saved");
+});
+
 test("permissions: the panel's ceiling is decided from the item a message queues, as its run's start reads it (#835)", async (t) => {
   const policies = capabilityPolicies();
   const { chats, ctx } = await setup(t, {

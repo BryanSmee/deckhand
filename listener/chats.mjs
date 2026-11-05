@@ -565,7 +565,12 @@ export function createChats(
       refuse(503, "The operator's grants folder has errors: no chat starts until they are fixed.");
     }
     const { outcome, check } = decided;
-    const limit = ceilingOf({ outcome, grant: check.grant, mounts: check.mounts.mounts });
+    const limit = ceilingOf({
+      outcome,
+      grant: check.grant,
+      mounts: check.mounts.mounts,
+      engine: !!config.engine,
+    });
     return { ceiling: limit, errors: outcome.errors.map((e) => e.replaceAll("`", "")) };
   }
 
@@ -637,8 +642,6 @@ export function createChats(
         hosts: live?.hosts ?? null,
         mounts: live?.mounts ?? [],
         engine: !!live?.engine,
-        // No SANDBOX_ENGINE: no run gets one (access.mjs engineFor()).
-        engines: !!config.engine,
         // With the open internet, no host mount (preparation.mjs).
         internet: !!live?.capabilities?.includes("internet"),
       },

@@ -3084,7 +3084,8 @@ folder and of the repository's default branch):
   GitHub gateway refuses every write of a chat's run (a REST write, a GraphQL mutation), even
   one an `allow_github` rule of yours allows, and `deny_github` still sees `mode: "chat"`.
 - **Capabilities**: those a `chat` run gets, each on or off (`docker`, the container engine, is
-  one, offered only when the repository is granted one and asks for it). `pull` stays on: a
+  one, offered only when the repository is granted one and asks for it, and you set
+  `SANDBOX_ENGINE`). `pull` stays on: a
   chat works in its clone. One turned off takes what needs it along.
 - **Network**: which of the hosts you grant the repository it reaches, all of them by default.
   The hosts every run needs (the agent's API, GitHub) aren't the profile's; a host your grants

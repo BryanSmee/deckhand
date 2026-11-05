@@ -31,6 +31,9 @@ export const DEFAULT_PROFILE = Object.freeze({
 // thread: preparation.mjs prepareBare() has nothing for it).
 const NEVER = { push: LEVEL_REASON };
 const REQUIRED = { pull: "a chat works in a clone of the repository" };
+// `docker` allowed by the policies, the config and the grant, in a deployment without
+// SANDBOX_ENGINE: no start gives it (access.mjs engineFor()), so it isn't offered.
+const NO_ENGINE = "the operator hasn't set SANDBOX_ENGINE, so no run gets one";
 
 const BY_NAME = new Map(CAPABILITIES.map((c) => [c.name, c]));
 
@@ -41,8 +44,9 @@ const BY_NAME = new Map(CAPABILITIES.map((c) => [c.name, c]));
 // writable, reason } (`reason`: why it is read-only); `github`, one row per level, { level,
 // allowed, reason }. `outcome`: capabilities.mjs outcomeOf()'s for a `chat` run; `grant`: the
 // operator's (grants.mjs); `mounts`: its config's mounts as the grant resolves them
-// (grants.mjs resolveMounts()). Pure.
-export function ceilingOf({ outcome, grant, mounts = [] }) {
+// (grants.mjs resolveMounts()); `engine`: whether the deployment has a container engine
+// (config.engine, SANDBOX_ENGINE). Pure.
+export function ceilingOf({ outcome, grant, mounts = [], engine = false }) {
   const capabilities = outcome.capabilities.map((row) => {
     const { what, needs } = BY_NAME.get(row.name);
     const line = (allowed, reason = null, required = false) => ({
@@ -55,6 +59,7 @@ export function ceilingOf({ outcome, grant, mounts = [] }) {
     });
     if (NEVER[row.name]) return line(false, NEVER[row.name]);
     if (!row.used) return line(false, plain(row.reason ?? row.status));
+    if (row.name === "docker" && !engine) return line(false, NO_ENGINE);
     if (REQUIRED[row.name]) return line(true, REQUIRED[row.name], true);
     return line(true);
   });
@@ -327,12 +332,6 @@ export function requestVerdict({ kind, value }, { ceiling, profile, live }) {
     const row = ceiling.capabilities.find((c) => c.name === "docker");
     if (!row?.allowed) return beyond(`the container engine: ${row?.reason ?? "not offered"}`);
     if (live.engine) return given("this sandbox has a container engine already");
-    // Granted, but the deployment has none: no start would give it (access.mjs engineFor()).
-    if (live.engines === false) {
-      return beyond(
-        "the container engine: the operator hasn't set SANDBOX_ENGINE, so no run gets one",
-      );
-    }
     const adds = { capabilities: withNeeds("docker", ceiling) };
     const has =
       saved.capabilities === null || adds.capabilities.every((c) => saved.capabilities.includes(c));
