@@ -913,6 +913,55 @@ deny_access contains {"action": "runs:manage", "reason": "spelled right"}
 );
 
 test(
+  "the real opa: the checks name a binding's role access-roles.rego doesn't define (#836), whoever it is for, and access() never sees it",
+  { skip: noOpa },
+  async (t) => {
+    const operator = {
+      "access.rego": bindings([
+        { users: ["alice"], repos: ["acme/*"], role: "viwer", actions: ["logs:read"] },
+        // Neither a login checked nor a repository: said all the same.
+        { users: ["mallory"], repos: ["other/x"], role: "membre" },
+        { users: ["mallory"], role: "membre" },
+        { users: ["bob"], repos: ["*/*"], role: "member" },
+        { users: ["bob"], role: "operator" },
+        { users: ["carol"], repos: ["acme/api"], actions: ["tasks:read"] },
+      ]),
+    };
+    const repos = {
+      "acme/api": {
+        private: true,
+        policies: { "deny.rego": "package deckhand\n" },
+      },
+    };
+    const { policies, asked } = realAccess(t, {
+      operator,
+      repos,
+      config: { users: ["alice", "bob"] },
+    });
+    const said = (role) =>
+      `\`bindings\` of the operator's policies give the role \`${role}\`, which \`access_roles\` doesn't define: its bindings give nothing but their own \`actions\``;
+    const roles = (warnings) => warnings.filter((w) => w.includes("`access_roles`")).sort();
+    // At start, server-wide: each unknown role once, and no action said for it.
+    const start = await policies.checkOperator();
+    assert.deepEqual(start.errors, []);
+    assert.deepEqual(start.warnings, [said("membre"), said("viwer")]);
+    // The config panel too; the onboarding check, the repository's own rules alone, doesn't.
+    assert.deepEqual(roles(await policies.accessNameWarnings("acme/api", "main")), [
+      said("membre"),
+      said("viwer"),
+    ]);
+    const before = asked();
+    assert.deepEqual(roles((await policies.checkRepo("acme/api", "main")).warnings), []);
+    assert.ok(asked() > before);
+    // A decision never sends the checks' input: the binding gives its own actions alone.
+    const alice = await policies.access("alice", repo("acme/api"));
+    assert.deepEqual(alice.actions, ["logs:read"]);
+    assert.deepEqual((await policies.access("alice")).actions, []);
+    assert.deepEqual((await policies.access("bob")).actions, ["server:*"]);
+  },
+);
+
+test(
   "the real opa: Deckhand's files alone, or rules that don't compile, say no action and ask nothing more",
   { skip: noOpa },
   async (t) => {
