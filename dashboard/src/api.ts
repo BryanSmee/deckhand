@@ -575,7 +575,7 @@ export const restartChat = (id: string) => postJson<{ message: string }>(`api/ch
 // The user's chats (listener/chats.mjs): their status, their runs (whose logs stream on their
 // own) and their messages still on their way. Polled as api/state is on the Chats page
 // (`often`), else now and then for the sidebar's count; not at all when `allowed` is false (a
-// listener without chats, a user who may start none).
+// user who may start none, off the page: App.tsx).
 export const CHATS_MS = 60_000;
 
 export function useChats(often: boolean, allowed = true): Polled<Chats> {

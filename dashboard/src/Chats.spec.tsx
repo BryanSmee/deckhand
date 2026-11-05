@@ -4,7 +4,7 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/preact";
 import { beforeEach, expect, test, vi } from "vitest";
 import { Dashboard } from "./App";
-import { chatState, runTurns } from "./chatModel";
+import { chatNote, chatState, HOLD_MS, holdMessages, runTurns } from "./chatModel";
 import { FakeSource, makeChat, makeChats, makeState, mockApi } from "./testUtils";
 import type { Chat, Chats, Entry, Run } from "./types";
 
@@ -286,4 +286,81 @@ test("runTurns: a failed run's reason, the sandbox's start folded apart", () => 
     2_000,
   );
   expect(turns.map((t) => t.kind)).toEqual(["you", "sandbox", "error"]);
+});
+
+test("holdMessages: held after leaving pending, until a later logged message has it, or HOLD_MS", () => {
+  const logged = [{ id: "r1:0", text: "yes" }];
+  // Seen waiting: held, with the logged messages there were then.
+  let { held, shown } = holdMessages([], { now: 0, pending: ["yes"], logged });
+  expect(held).toEqual([{ text: "yes", seen: 0, before: ["r1:0"] }]);
+  expect(shown).toEqual([]);
+  // Out of `pending` (taken by a run whose log hasn't come): still shown, though an earlier
+  // message said the same.
+  ({ held, shown } = holdMessages(held, { now: 1_000, pending: [], logged }));
+  expect(shown).toEqual(["yes"]);
+  // A later logged message has it (a delivery joins the messages it takes): no longer held.
+  const later = [...logged, { id: "r2:0", text: "no\n\n---\n\nyes" }];
+  expect(holdMessages(held, { now: 2_000, pending: [], logged: later })).toEqual({
+    held: [],
+    shown: [],
+  });
+  // None comes: dropped after HOLD_MS.
+  expect(holdMessages(held, { now: HOLD_MS, pending: [], logged }).shown).toEqual(["yes"]);
+  expect(holdMessages(held, { now: HOLD_MS + 1, pending: [], logged }).shown).toEqual([]);
+});
+
+test("holdMessages: the same text twice is two messages; one sent is held from then", () => {
+  let { held, shown } = holdMessages([], { now: 0, pending: ["ok", "ok"], logged: [] });
+  expect(held.length).toBe(2);
+  // One delivered, its log not here yet: both shown, one of them out of `pending`.
+  ({ held, shown } = holdMessages(held, { now: 1, pending: ["ok"], logged: [] }));
+  expect(shown).toEqual(["ok"]);
+  ({ held, shown } = holdMessages(held, { now: 2, pending: [], sent: ["go"], logged: [] }));
+  expect(shown).toEqual(["ok", "ok", "go"]);
+});
+
+test("a message delivered before its run's log streams: still shown, as on its way", async () => {
+  history.replaceState(null, "", "#/chats/0123456789abcdef");
+  const list = makeChats([makeChat({ status: "idle" })]);
+  show(list, {
+    // Delivered at once: the answer lists it nowhere.
+    "POST api/chats/0123456789abcdef/messages": () => ({ chat: makeChat({ status: "running" }) }),
+  });
+  const box = await screen.findByRole("textbox", { name: "Message" });
+  fireEvent.input(box, { target: { value: "Run the tests" } });
+  fireEvent.keyDown(box, { key: "Enter" });
+  const log = screen.getByRole("log", { name: "Conversation" });
+  await waitFor(() => expect(within(log).getByText(/^Queued/)).toBeTruthy());
+  expect(within(log).getByText("Run the tests")).toBeTruthy();
+});
+
+test("after a reset: starting afresh, not resuming, and the reset marked in the conversation", async () => {
+  const old = chatRun({ id: "run-1", status: "ok", startedAt: 1_000, finishedAt: 2_000 });
+  const reset = makeChat({ status: "stopped", resetAt: 5_000, runs: [old] });
+  expect(chatNote(reset)).toMatch(/from a fresh clone/);
+  expect(chatState({ ...reset, status: "running", runs: [old] })).toBe("starting");
+  const fresh = chatRun({ id: "run-2", phase: "setup", startedAt: 6_000 });
+  expect(chatState({ ...reset, status: "running", runs: [fresh, old] })).toBe("starting");
+  expect(chatNote(makeChat({ runs: [old] }))).toMatch(/where the chat left off/);
+  history.replaceState(null, "", "#/chats/0123456789abcdef");
+  show(makeChats([{ ...reset, status: "running", runs: [fresh, old] }]));
+  const log = await screen.findByRole("log", { name: "Conversation" });
+  const lines = within(log)
+    .getAllByText(/^(Sandbox started|Chat reset)/)
+    .map((p) => p.textContent!.split(" ")[1]);
+  expect(lines).toEqual(["started", "reset", "started"]);
+});
+
+test("a long chat: its last runs' logs streamed, the earlier ones on demand", async () => {
+  history.replaceState(null, "", "#/chats/0123456789abcdef");
+  const runs = Array.from({ length: 7 }, (_, i) =>
+    chatRun({ id: `run-${7 - i}`, status: "ok", startedAt: (7 - i) * 1_000 }),
+  );
+  show(makeChats([makeChat({ runs })]));
+  const more = await screen.findByRole("button", { name: "Show earlier (2 more sandbox runs)" });
+  await waitFor(() => expect(FakeSource.opened.length).toBe(5));
+  expect(FakeSource.opened[0].url).toBe("api/runs/run-3/stream");
+  fireEvent.click(more);
+  await waitFor(() => expect(FakeSource.opened.length).toBe(7));
+  expect(screen.queryByRole("button", { name: /Show earlier/ })).toBeNull();
 });

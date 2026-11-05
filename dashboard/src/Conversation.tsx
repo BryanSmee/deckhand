@@ -3,15 +3,26 @@
 // run log's own items (Log.tsx ItemView), each run's sandbox starting as a fold of its own. Then
 // your messages on their way (queued while the sandbox starts or resumes, or waits for a slot),
 // what the chat does now, and the composer: Enter sends, Shift Enter adds a line. It follows the
-// end as turns come, until you scroll up.
+// end as turns come, until you scroll up. A reset is marked where it dropped the session. Only
+// the last RUNS_SHOWN runs stream their logs at first (a stream each): the earlier ones on
+// demand.
 import { useLayoutEffect, useRef, useState } from "preact/hooks";
 import { sendChatMessage, useRunLogs } from "./api";
-import { CHAT_STATES, chatState, runTurns, type Turn, waitingTurns } from "./chatModel";
+import {
+  CHAT_STATES,
+  chatNote,
+  chatState,
+  type Held,
+  holdMessages,
+  runTurns,
+  type Turn,
+  waitingTurns,
+} from "./chatModel";
 import { dayTime, plural } from "./format";
 import { ItemView } from "./Log";
 import { PHASE_TITLES, shortDuration } from "./logModel";
 import type { Chat, Run } from "./types";
-import { IconButton } from "./ui/Button";
+import { Button, IconButton } from "./ui/Button";
 import { Fold } from "./ui/Fold";
 import * as Icon from "./ui/icons";
 import { StatusDot } from "./ui/Status";
@@ -19,9 +30,8 @@ import styles from "./Conversation.module.css";
 
 // Near enough to the end to keep following it.
 const NEAR_END = 40;
-// How long a message that left `pending` stays shown before a log has it: a run takes it as it
-// starts, and the chat's runs list it at the next poll.
-const HOLD_MS = 15_000;
+// The runs shown at first, and how many more each Show earlier adds.
+export const RUNS_SHOWN = 5;
 
 interface Props {
   chat: Chat;
@@ -32,7 +42,9 @@ interface Props {
 }
 
 export function Conversation({ chat, now, touch, onChat }: Props) {
-  const runs = chat.runs.toReversed();
+  const [shownRuns, setShownRuns] = useState(RUNS_SHOWN);
+  const runs = chat.runs.slice(0, shownRuns).toReversed();
+  const earlier = chat.runs.length - runs.length;
   const logs = useRunLogs(runs.map((r) => r.id));
   const [text, setText] = useState("");
   const [sending, setSending] = useState<string[]>([]);
@@ -42,26 +54,34 @@ export function Conversation({ chat, now, touch, onChat }: Props) {
   const [following, setFollowing] = useState(true);
   const scroller = useRef<HTMLDivElement>(null);
   const box = useRef<HTMLTextAreaElement>(null);
-  // Messages seen waiting (or just sent), and when: shown a while after they leave `pending`,
-  // until a log has them.
-  const held = useRef(new Map<string, number>());
+  // Messages seen waiting (or just sent): shown a while after they leave `pending`, until a
+  // log has them (chatModel.ts holdMessages()).
+  const held = useRef<Held[]>([]);
 
-  const turns = runs.flatMap((run) => [
-    startTurn(run, now),
-    ...runTurns(run, logs[run.id]?.entries ?? [], run.finishedAt ?? now),
-  ]);
-  const logged = turns.flatMap((t) => (t.kind === "you" ? [t.text] : []));
-  const at = Date.now();
-  for (const p of chat.pending) held.current.set(p.text, at);
-  for (const [said, seen] of held.current) {
-    if (at - seen > HOLD_MS || logged.some((l) => l.includes(said.trim()))) {
-      held.current.delete(said);
+  const turns: Turn[] = [];
+  // Where the last reset dropped the session, if a run had one: before the first run after it.
+  const resetAt = chat.resetAt;
+  let reset = resetAt === null || !chat.runs.some((r) => r.startedAt < resetAt);
+  for (const run of runs) {
+    if (!reset && run.startedAt >= resetAt!) {
+      turns.push(resetTurn(resetAt!, now));
+      reset = true;
     }
+    turns.push(startTurn(run, now));
+    turns.push(...runTurns(run, logs[run.id]?.entries ?? [], run.finishedAt ?? now));
   }
-  const pending = chat.pending.map((p) => p.text);
-  const kept = [...held.current.keys()].filter((t) => !pending.includes(t));
+  if (!reset) turns.push(resetTurn(resetAt!, now));
+  const logged = turns.flatMap((t) => (t.kind === "you" ? [{ id: t.id, text: t.text }] : []));
+  const loggedNow = useRef(logged);
+  loggedNow.current = logged;
+  const hold = holdMessages(held.current, {
+    now,
+    pending: chat.pending.map((p) => p.text),
+    logged,
+  });
+  held.current = hold.held;
   const waiting = waitingTurns(
-    { ...chat, pending: [...chat.pending, ...kept.map((t) => ({ text: t, queuedAt: 0 }))] },
+    { ...chat, pending: [...chat.pending, ...hold.shown.map((text) => ({ text, queuedAt: 0 }))] },
     sending,
   );
   const all = [...turns, ...waiting];
@@ -97,7 +117,12 @@ export function Conversation({ chat, now, touch, onChat }: Props) {
       return;
     }
     // Delivered already, or queued: shown until its run's log has it.
-    held.current.set(message, Date.now());
+    held.current = holdMessages(held.current, {
+      now,
+      pending: [],
+      sent: [message],
+      logged: loggedNow.current,
+    }).held;
     onChat(said.chat);
   };
 
@@ -122,6 +147,16 @@ export function Conversation({ chat, now, touch, onChat }: Props) {
         }}
       >
         <div class={styles.turns} role="log" aria-label="Conversation">
+          {earlier > 0 && (
+            <Button
+              variant="ghost"
+              size="small"
+              class={styles.earlier}
+              onClick={() => setShownRuns((n) => n + RUNS_SHOWN)}
+            >
+              Show earlier ({plural(earlier, "more sandbox run", "more sandbox runs")})
+            </Button>
+          )}
           {!all.length && (
             <p class={styles.hint}>
               Ask anything about {chat.repo}: your first message starts its sandbox.
@@ -142,7 +177,7 @@ export function Conversation({ chat, now, touch, onChat }: Props) {
         <p class={styles.state} role="status">
           <StatusDot tone={CHAT_STATES[state].tone} pulse={live} />
           {chat.reachable
-            ? CHAT_STATES[state].note
+            ? chatNote(chat, state)
             : "You can no longer run the agent on this repository: you can only delete this chat."}
         </p>
         {error && (
@@ -188,6 +223,15 @@ function startTurn(run: Run, now: number): Turn {
     kind: "note",
     id: `${run.id}:start`,
     text: `${resumed ? "Sandbox resumed" : "Sandbox started"} ${dayTime(run.startedAt, now)}`,
+  };
+}
+
+// A reset, at its time: the agent remembers nothing of the turns above it.
+function resetTurn(at: number, now: number): Turn {
+  return {
+    kind: "note",
+    id: `reset:${at}`,
+    text: `Chat reset ${dayTime(at, now)}: a fresh clone and session, the agent remembers nothing above`,
   };
 }
 

@@ -156,6 +156,8 @@ export const makeChats = (chats: Chat[] = [], partial: Partial<Chats> = {}): Cha
   limit: 4,
   repos: ["acme/api", "acme/app"],
   agents: [{ name: "claude@anthropic", label: "Claude (anthropic)" }],
+  models: ["best", "balanced", "fast"],
+  efforts: ["low", "medium", "high", "xhigh", "max"],
   ...partial,
 });
 

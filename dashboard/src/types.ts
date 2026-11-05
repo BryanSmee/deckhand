@@ -1131,10 +1131,13 @@ export interface Chat {
 
 // GET api/chats: the user's chats, most recently active first; how many they may keep
 // (CHATS_PER_USER: a repository's `chats.per_user` may lower it there); the repositories New
-// chat offers, and the agents the operator configured ("claude@anthropic", with its label).
+// chat offers, the agents the operator configured ("claude@anthropic", with its label), the
+// models' tiers ("best", "balanced", "fast") and the efforts.
 export interface Chats {
   chats: Chat[];
   limit: number;
   repos: string[];
   agents: { name: string; label: string }[];
+  models: string[];
+  efforts: string[];
 }

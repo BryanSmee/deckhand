@@ -94,6 +94,62 @@ export function waitingTurns(chat: Chat, sending: string[]): Turn[] {
   return [...queued, ...sent];
 }
 
+// How long a message that left `pending` stays shown before a log has it: a run takes it as it
+// starts, and the chat's runs list that run at the next poll.
+export const HOLD_MS = 15_000;
+
+// A message on its way, held: its text, when it was last seen waiting (or sent), and the logged
+// messages there were then (their turns' ids): only a later one can be it.
+export interface Held {
+  text: string;
+  seen: number;
+  before: string[];
+}
+
+// The held messages at `now`: those still in `pending` (seen again), those `sent` since (held
+// from now), and the others until a logged message that came after them has their text (a
+// delivery joins the messages it takes) or HOLD_MS has passed. `logged`: your turns in the
+// logs. `shown`: the held messages that `pending` doesn't list, to show after it.
+export function holdMessages(
+  held: Held[],
+  {
+    now,
+    pending,
+    sent = [],
+    logged,
+  }: { now: number; pending: string[]; sent?: string[]; logged: { id: string; text: string }[] },
+): { held: Held[]; shown: string[] } {
+  const ids = logged.map((l) => l.id);
+  const isLogged = (h: Held) =>
+    logged.some((l) => !h.before.includes(l.id) && l.text.includes(h.text.trim()));
+  // Each pending message takes one held message of its text, the oldest.
+  const waiting = [...pending];
+  const next: Held[] = [];
+  for (const h of held) {
+    const at = waiting.indexOf(h.text);
+    if (at >= 0) {
+      waiting.splice(at, 1);
+      next.push({ ...h, seen: now });
+    } else if (now - h.seen <= HOLD_MS && !isLogged(h)) next.push(h);
+  }
+  for (const text of [...waiting, ...sent]) next.push({ text, seen: now, before: ids });
+  // Shown apart from `pending`: the held ones it doesn't list, one per pending message of
+  // their text taken out.
+  const listed = [...pending];
+  const shown: string[] = [];
+  for (const h of next) {
+    const at = listed.indexOf(h.text);
+    if (at >= 0) listed.splice(at, 1);
+    else shown.push(h.text);
+  }
+  return { held: next, shown };
+}
+
+// The chat's runs since its last reset, which dropped its session: the others are another
+// conversation's, as far as the agent knows.
+export const runsSinceReset = (chat: Chat) =>
+  chat.runs.filter((r) => chat.resetAt === null || r.startedAt >= chat.resetAt);
+
 // What the chat does now, for its header and the composer's line: its word, its tone, and a
 // sentence. "Starting" while its sandbox starts (again: "Resuming"), "Waiting for a slot" while
 // its message waits for one of MAX_RUNNING_CHATS.
@@ -105,9 +161,19 @@ export function chatState(chat: Chat): ChatState {
   if (chat.queued) return "waiting";
   const live = chat.runs.find((r) => r.status === "running");
   if (live && live.phase === "work") return "working";
-  // Its run not listed yet, or still in its setup or image build.
-  const before = chat.runs.filter((r) => r !== live).length;
+  // Its run not listed yet, or still in its setup or image build: in the session of a run
+  // before it, unless a reset dropped that session.
+  const before = runsSinceReset(chat).filter((r) => r !== live).length;
   return before ? "resuming" : "starting";
+}
+
+// What the composer's line says of the chat now: a stopped chat with no run since its reset (or
+// none at all) starts from a fresh clone.
+export function chatNote(chat: Chat, state: ChatState = chatState(chat)): string {
+  if (state === "stopped" && !runsSinceReset(chat).length) {
+    return "No sandbox now: your next message starts it, from a fresh clone of the repository.";
+  }
+  return CHAT_STATES[state].note;
 }
 
 export const CHAT_STATES: Record<

@@ -748,6 +748,8 @@ test("GET /api/chats: the limit, the repositories New chat offers and the agents
   assert.equal(listed.limit, 2);
   assert.deepEqual(listed.repos, ["org/Other", "org/repo"]);
   assert.ok(listed.agents.some((a) => a.name === "claude@anthropic" && /^Claude/.test(a.label)));
+  assert.deepEqual(listed.models, ["best", "balanced", "fast"]);
+  assert.deepEqual(listed.efforts, ["low", "medium", "high", "xhigh", "max"]);
   assert.deepEqual((await chats.listed("bob")).repos, []);
   assert.deepEqual((await chats.listed("carol")).repos, [], "not in ALLOWED_USERS");
   // A message waiting for its sandbox: listed with the chat until it is delivered.

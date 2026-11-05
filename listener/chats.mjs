@@ -25,7 +25,7 @@
 // (preparation.mjs).
 import { randomBytes } from "node:crypto";
 import { capabilitiesInput, outcomeOf } from "./capabilities.mjs";
-import { repoAllowed } from "./config.mjs";
+import { MODEL_TIERS, repoAllowed } from "./config.mjs";
 import { EFFORTS, MODEL_NAME, taskKey } from "./events.mjs";
 import { grantCheck, grantsBy } from "./grants.mjs";
 import { removeRun } from "./history.mjs";
@@ -209,14 +209,17 @@ export function createChats(
   }
 
   // GET /api/chats: the user's chats, how many they may keep (a repository's `chats.per_user`
-  // may lower it there: create() says so), and what New chat offers: the repositories, and the
-  // agents the operator configured (`default`: the repository's).
+  // may lower it there: create() says so), and what New chat offers: the repositories, the
+  // agents the operator configured (`default`: the repository's), the models' tiers and the
+  // efforts.
   async function listed(user) {
     return {
       chats: await list(user),
       limit: config.chatsPerUser,
       repos: await startable(user),
       agents: pickable(config).map((name) => ({ name, label: entryLabel(name) })),
+      models: MODEL_TIERS,
+      efforts: EFFORTS,
     };
   }
 

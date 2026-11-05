@@ -390,11 +390,6 @@ function ConfirmDialog({
   );
 }
 
-// The models a chat may ask for by tier (listener/events.mjs MODEL_NAME takes any name; the
-// dashboard offers the tiers), and the efforts (EFFORTS).
-const MODELS = ["best", "balanced", "fast"];
-const EFFORTS = ["low", "medium", "high", "xhigh", "max"];
-
 // New chat: the repository (those whose `users` include you, with `runs:start:chat`), then
 // the agent, model and effort (the repository's by default), and a first message, which starts
 // its sandbox (none: the chat waits for one).
@@ -487,7 +482,7 @@ function NewChatDialog({
             onChange={(e) => set({ model: pick(e.currentTarget.value) })}
           >
             <option value="">The repository's</option>
-            {MODELS.map((m) => (
+            {list.models.map((m) => (
               <option key={m} value={m}>
                 {m[0].toUpperCase() + m.slice(1)}
               </option>
@@ -500,7 +495,7 @@ function NewChatDialog({
             onChange={(e) => set({ effort: pick(e.currentTarget.value) })}
           >
             <option value="">The repository's</option>
-            {EFFORTS.map((x) => (
+            {list.efforts.map((x) => (
               <option key={x} value={x}>
                 {x}
               </option>
