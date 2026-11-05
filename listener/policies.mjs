@@ -493,24 +493,35 @@ export function createPolicies({
     return new Map([...deckhand, ...operator]);
   }
 
-  // `stale`: when GitHub can't list it, the last listing of `ref` up to STALE_LISTING_MS old (a
-  // push forgot it: forget()), rather than a failure; run-policy.mjs's and access()'s, so that a
-  // GitHub hiccup doesn't refuse the comments of a repo that had no policy.
+  // `stale`: when GitHub can't list it for a hiccup (transient()), the last listing of `ref` up to
+  // STALE_LISTING_MS old (a push forgot it: forget()), rather than a failure; run-policy.mjs's
+  // and access()'s, so that a GitHub hiccup doesn't refuse the comments of a repo that had no
+  // policy. Any other failure (a 403: the App's access gone; the github service's own refusal)
+  // fails closed, and forgets the repo's listings, as repoOf() does (#856).
   async function listing(repo, ref, cached, stale = false) {
     const key = repo.toLowerCase();
     const kept = listings.get(key)?.get(ref);
     if (cached && kept && now() - kept.at < LISTING_MS) return kept.listed;
-    let listed;
+    const path = `/repos/${repo}/contents/${POLICY_DIR}?ref=${encodeURIComponent(ref)}`;
+    let res;
+    let listed = null;
     try {
-      listed = await getJson(
-        github,
-        repo,
-        `/repos/${repo}/contents/${POLICY_DIR}?ref=${encodeURIComponent(ref)}`,
-        [404],
-      );
+      res = await github(repo, "GET", path, undefined, [404]);
+      if (res.ok) listed = await res.json();
     } catch (error) {
-      if (!stale || !kept || now() - kept.at > STALE_LISTING_MS) throw error;
-      log(`${repo}: listing its policies: ${error.message ?? error}; the last listing kept`);
+      res = { error };
+    }
+    if (!res.ok && res.status !== 404) {
+      const why = res.error
+        ? String(res.error?.message ?? res.error)
+        : `GitHub GET ${path}: ${res.status}${await said(res)}`;
+      const hiccup = await transient(res);
+      await res.body?.cancel().catch(() => {});
+      if (!hiccup) listings.delete(key);
+      if (!stale || !hiccup || !kept || now() - kept.at > STALE_LISTING_MS) {
+        throw res.error ?? new Error(why);
+      }
+      log(`${repo}: listing its policies: ${why}; the last listing kept`);
       return kept.listed;
     }
     if (cached) {
