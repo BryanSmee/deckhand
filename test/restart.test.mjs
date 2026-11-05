@@ -6,13 +6,7 @@ import { test } from "node:test";
 import { createBroker } from "../listener/broker.mjs";
 import { board } from "../listener/board.mjs";
 import { createPulls } from "../listener/pulls.mjs";
-import {
-  createRestart,
-  liveRunIds,
-  LIVE_PREFIX,
-  QUEUE_KEY,
-  savedCapabilities,
-} from "../listener/restart.mjs";
+import { createRestart, LIVE_PREFIX, QUEUE_KEY, savedCapabilities } from "../listener/restart.mjs";
 import { createTasks, newTask } from "../listener/tasks.mjs";
 import { ambiguous, respellMap, respelled, spellings } from "../listener/spelling.mjs";
 import { openLog, SUMMARIES, summaryKey } from "../listener/runlog.mjs";
@@ -209,15 +203,52 @@ test("a key under runs/ the store refuses to remove is logged, the start going o
   assert.ok(await store.get(`${LIVE_PREFIX}r2`));
 });
 
-test("liveRunIds(): the ids of the runs' states in the store, not those of keys that hold none", async () => {
-  const store = fileStore();
-  await saveRun(store, "r1", 1, { agent: "claude" });
-  await store.set(`${LIVE_PREFIX}r2`, {
-    id: "r2",
-    task: { repo: "org/repo", id: 2, kind: "issue" },
-  });
-  await store.set(`${LIVE_PREFIX}r3`, "garbage");
-  assert.deepEqual([...(await liveRunIds(store))], ["r1"]);
+test("a logs/<run>.live.json that holds no run's state is set aside, logged once rather than at every start (#776)", async (t) => {
+  const dir = tempDir(t);
+  // Missing its task and record, and not JSON at all.
+  writeFileSync(join(dir, "a-1.live.json"), JSON.stringify({ id: "a-1" }));
+  writeFileSync(join(dir, "b-2.live.json"), "{not json");
+  const lines = [];
+  const ctx = runContext(dir, { log: (line) => lines.push(line) });
+  await createRestart(ctx).restoreRuns();
+  assert.deepEqual(readdirSync(dir).sort(), ["a-1.live.json.bad", "b-2.live.json.bad"]);
+  assert.equal(ctx.tasks.size, 0);
+  for (const file of ["a-1.live.json", "b-2.live.json"])
+    assert.ok(lines.includes(`${file}: not a run's state, set aside as ${file}.bad`));
+  // The next start reads neither, and says nothing of them.
+  lines.length = 0;
+  await createRestart(runContext(dir, { log: (line) => lines.push(line) })).restoreRuns();
+  assert.deepEqual(
+    lines.filter((line) => line.includes("live.json")),
+    [],
+  );
+});
+
+test("a logs/<run>.live.json set aside beside one the operator hasn't removed yet keeps that one (#776)", async (t) => {
+  const dir = tempDir(t);
+  writeFileSync(join(dir, "a-1.live.json"), "{}");
+  writeFileSync(join(dir, "a-1.live.json.bad"), "older");
+  const lines = [];
+  await createRestart(runContext(dir, { log: (line) => lines.push(line) })).restoreRuns();
+  assert.deepEqual(readdirSync(dir).sort(), ["a-1.live.json.bad", "a-1.live.json.bad.2"]);
+  assert.equal(readFileSync(join(dir, "a-1.live.json.bad"), "utf8"), "older");
+  assert.ok(lines.includes("a-1.live.json: not a run's state, set aside as a-1.live.json.bad.2"));
+});
+
+test("a logs/<run>.live.json that can't be set aside stays there, logged, the next start trying again (#776)", async (t) => {
+  const dir = tempDir(t);
+  // A name NAME_MAX allows (255) whose .bad it doesn't: the rename fails, as root too.
+  const file = `${"a".repeat(255 - ".live.json".length)}.live.json`;
+  writeFileSync(join(dir, file), "{}");
+  for (let start = 0; start < 2; start++) {
+    const lines = [];
+    await createRestart(runContext(dir, { log: (line) => lines.push(line) })).restoreRuns();
+    assert.deepEqual(readdirSync(dir), [file]);
+    assert.ok(
+      lines.some((line) => line.startsWith(`${file}: not a run's state, left there: `)),
+      lines.join("\n"),
+    );
+  }
 });
 
 test("a restored run keeps the network its tokens are bound to, and saves it again", async (t) => {
@@ -595,7 +626,7 @@ test("a run's state a listener of the release before kept in its files: moved to
       unanswered: [],
     }),
   );
-  // A file that isn't a run's state: left there.
+  // A file that isn't a run's state: set aside, logged once.
   writeFileSync(join(dir, "other.live.json"), "{}");
   // The broker service lost the run meanwhile (its store, say).
   await service.runs.end("new");
@@ -606,7 +637,7 @@ test("a run's state a listener of the release before kept in its files: moved to
   assert.deepEqual(broker.secretsOf("new"), [agentToken, token]);
   // Moved: in the store without its tokens, the file gone once the broker service has them.
   await until(() => !readdirSync(dir).includes("new.live.json"), { what: "the file's removal" });
-  assert.deepEqual(readdirSync(dir).sort(), ["other.live.json"]);
+  assert.deepEqual(readdirSync(dir).sort(), ["other.live.json.bad"]);
   const saved = await savedRun(store, "new");
   assert.equal(saved.sandbox, "net-new");
   const text = await storeText(store);
