@@ -25,12 +25,12 @@
 // (preparation.mjs).
 import { randomBytes } from "node:crypto";
 import { capabilitiesInput, outcomeOf } from "./capabilities.mjs";
-import { repoAllowed } from "./config.mjs";
+import { MODEL_TIERS, repoAllowed } from "./config.mjs";
 import { EFFORTS, MODEL_NAME, taskKey } from "./events.mjs";
 import { grantCheck, grantsBy } from "./grants.mjs";
 import { removeRun } from "./history.mjs";
 import { refusal as accessRefusal, startAction } from "./permissions.mjs";
-import { pickProblem } from "./agents/select.mjs";
+import { entryLabel, pickable, pickProblem } from "./agents/select.mjs";
 import { ceilingOf, checkProfile, DEFAULT_PROFILE, narrowProfile } from "./profiles.mjs";
 import { sandboxName } from "./repo-config.mjs";
 import { queueId } from "./restart.mjs";
@@ -178,6 +178,9 @@ export function createChats(
       status: statusOf(chat),
       // A message waiting for one of MAX_RUNNING_CHATS.
       queued: !!task && !task.running && task.pending.length > 0,
+      // Its messages not delivered yet (a sandbox starting or resuming, a slot to wait for): the
+      // conversation shows them until its run's log has them (runlog.mjs, "message").
+      pending: task ? task.pending.map((i) => ({ text: i.text, queuedAt: i.queuedAt })) : [],
       reachable: open,
       runs: open ? ctx.runs.filter((r) => r.chat === chat.id).map(publicRun) : [],
     };
@@ -188,6 +191,36 @@ export function createChats(
       .filter((chat) => own(chat, user))
       .sort((a, b) => b.lastActiveAt - a.lastActiveAt);
     return Promise.all(mine.map(view));
+  }
+
+  // The repositories New chat offers `user`: those the App lists, in ALLOWED_REPOS, among whose
+  // `users` they are, with `runs:start:chat` there. What create() checks again, and more (the
+  // App installed, the config's errors).
+  async function startable(user) {
+    const login = String(user).toLowerCase();
+    if (!config.users.includes(login)) return [];
+    const names = (ctx.repoList?.listed() ?? []).filter((repo) => {
+      const users = ctx.usersOf?.(repo);
+      return repoAllowed(config, repo) && (!users || users.includes(login));
+    });
+    if (!ctx.permissions) return names.toSorted();
+    const can = await ctx.permissions.which(login, names, START);
+    return names.filter((repo) => can.has(repo.toLowerCase())).toSorted();
+  }
+
+  // GET /api/chats: the user's chats, how many they may keep (a repository's `chats.per_user`
+  // may lower it there: create() says so), and what New chat offers: the repositories, the
+  // agents the operator configured (`default`: the repository's), the models' tiers and the
+  // efforts.
+  async function listed(user) {
+    return {
+      chats: await list(user),
+      limit: config.chatsPerUser,
+      repos: await startable(user),
+      agents: pickable(config).map((name) => ({ name, label: entryLabel(name) })),
+      models: MODEL_TIERS,
+      efforts: EFFORTS,
+    };
   }
 
   // The agent, model and effort a chat was created with, each that it names (runs.mjs begin(),
@@ -639,7 +672,7 @@ export function createChats(
       return m && { what: m[2] ?? "chat", id: m[1] };
     },
     gets: {
-      chats: async (req, res, user) => send(res, 200, { chats: await list(user) }),
+      chats: async (req, res, user) => send(res, 200, await listed(user)),
       chat: async (req, res, user, _, { id }) =>
         send(res, 200, { chat: await view(mine(user, id)) }),
       permissions: async (req, res, user, _, { id }) => send(res, 200, await permissions(user, id)),
@@ -692,6 +725,7 @@ export function createChats(
     options,
     profileOf: (task) => chats.get(task.id.slice("chat-".length))?.profile ?? null,
     list,
+    listed,
     create,
     message,
     reset,

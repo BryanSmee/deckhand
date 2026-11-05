@@ -450,7 +450,9 @@
 .tabbar {
   display: grid;
   flex: none;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  /* Four tabs, five with Chats: one row either way. */
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(0, 1fr);
   padding: 4px 8px calc(4px + env(safe-area-inset-bottom));
   background: var(--surface);
   border-top: 1px solid var(--border);
@@ -505,4 +507,12 @@
   margin-left: auto;
   font-size: 12.5px;
   color: var(--text-3);
+}
+
+/* Chats' "3 of 4" in the views: the chats kept, of the most the user may. */
+.kept {
+  margin-left: 6px;
+  color: var(--text-3);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
 }

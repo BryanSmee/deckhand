@@ -487,7 +487,8 @@ test("the API: GET and POST /api/chats, messages, reset and DELETE, signed in an
     (await call("GET", "/api/chats")).body.chats.map((c) => c.id),
     [id],
   );
-  assert.deepEqual((await call("GET", "/api/chats", { user: "bob" })).body, { chats: [] });
+  assert.deepEqual((await call("GET", "/api/chats", { user: "bob" })).body.chats, []);
+  assert.equal((await call("GET", "/api/chats", { user: "bob" })).body.limit, 2);
   assert.equal((await call("GET", `/api/chats/${id}`, { user: "bob" })).status, 404);
   assert.equal(
     (await call("POST", `/api/chats/${id}/messages`, { body: { text: "more" } })).status,
@@ -724,4 +725,41 @@ test("the API: GET and POST /api/chats/<id>/permissions, a 422 listing what woul
   assert.equal(restarted.status, 200);
   assert.match(restarted.body.message, /^No sandbox is going/);
   assert.equal((await call("DELETE", `/api/chats/${id}/permissions`)).status, 405);
+});
+
+test("GET /api/chats: the limit, the repositories New chat offers and the agents, a chat's undelivered messages", async (t) => {
+  // login → the repos (lower case) with runs:start:chat, as permissions.mjs which().
+  const starts = { alice: ["org/repo", "org/other"], bob: [] };
+  const permissions = {
+    decide: async (login, repo, action) => ({
+      ok: action !== "runs:start:chat" || starts[login].includes(repo.toLowerCase()),
+      error: null,
+    }),
+    which: async (login, repos, action) => {
+      assert.equal(action, "runs:start:chat");
+      return new Set(repos.map((r) => r.toLowerCase()).filter((r) => starts[login].includes(r)));
+    },
+  };
+  const { chats, ctx } = await setup(t, { permissions, env: { ALLOWED_REPOS: "org/*" } });
+  ctx.repoList = { listed: () => ["org/repo", "org/Other", "org/closed", "else/where"] };
+  // org/closed's `users` leave alice out; else/where is outside ALLOWED_REPOS.
+  ctx.usersOf = (repo) => (repo === "org/closed" ? ["bob"] : null);
+  const listed = await chats.listed("Alice");
+  assert.equal(listed.limit, 2);
+  assert.deepEqual(listed.repos, ["org/Other", "org/repo"]);
+  assert.ok(listed.agents.some((a) => a.name === "claude@anthropic" && /^Claude/.test(a.label)));
+  assert.deepEqual(listed.models, ["best", "balanced", "fast"]);
+  assert.deepEqual(listed.efforts, ["low", "medium", "high", "xhigh", "max"]);
+  assert.deepEqual((await chats.listed("bob")).repos, []);
+  assert.deepEqual((await chats.listed("carol")).repos, [], "not in ALLOWED_USERS");
+  // A message waiting for its sandbox: listed with the chat until it is delivered.
+  const chat = await chats.create("alice", { repo: "org/repo", message: "hi" });
+  const [view] = (await chats.listed("alice")).chats;
+  assert.equal(view.id, chat.id);
+  assert.deepEqual(
+    view.pending.map((p) => p.text),
+    ["hi"],
+  );
+  ctx.tasks.get(chatKey(chat)).pending.splice(0);
+  assert.deepEqual((await chats.listed("alice")).chats[0].pending, []);
 });

@@ -138,6 +138,21 @@ test("format: the listener's lines", () => {
     ),
     [{ kind: "meta", text: "New comment delivered to Claude at 09:05:07 UTC: Hi" }],
   );
+  // A chat's messages (#477): its owner's turns, delivered or starting its run.
+  assert.deepEqual(
+    format(line({ type: "listener", event: "delivered", at: 0, message: "Hi", chat: true })),
+    [{ kind: "message", text: "Hi" }],
+  );
+  assert.deepEqual(
+    format(line({ type: "listener", mode: "start", kind: "chat", message: "What is run()?" })),
+    [
+      { kind: "meta", text: "Starting a chat" },
+      { kind: "message", text: "What is run()?" },
+    ],
+  );
+  assert.deepEqual(format(line({ type: "listener", mode: "continue", kind: "chat" })), [
+    { kind: "meta", text: "Continuing the session" },
+  ]);
   const start = (e) => format(line({ type: "listener", ...e }))[0].text;
   assert.equal(start({ mode: "start", kind: "issue", taskMode: "work" }), "Starting");
   assert.equal(

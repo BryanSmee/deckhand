@@ -155,3 +155,35 @@ test("a chat with an agent that takes no messages mid-run (Codex): its messages 
   task.live.record.agent = "codex";
   assert.equal(s.deliverable(task), 0);
 });
+
+test("deliver(): a chat's message logged as its owner's (`chat: true`), an issue's comment not", () => {
+  const s = scheduler();
+  const sent = [];
+  Object.assign(s.ctx, { runner: { send: (id, message) => sent.push(id) }, saveLive: () => {} });
+  const logged = (task) => {
+    const lines = [];
+    task.running = true;
+    task.pending[0].text = "Run the tests";
+    task.live = {
+      id: `${task.id}-run`,
+      key: task.id,
+      open: true,
+      mode: task.pending[0].mode,
+      record: { agent: "claude" },
+      later: {},
+      handled: [],
+      unanswered: [],
+      logFile: { write: (line) => lines.push(JSON.parse(line)) },
+    };
+    task.next = {};
+    assert.equal(s.deliver(task), true);
+    return lines.map(({ at: _, ...line }) => line);
+  };
+  assert.deepEqual(logged(s.chat("a")), [
+    { type: "listener", event: "delivered", message: "Run the tests", chat: true },
+  ]);
+  assert.deepEqual(logged(s.issue(1)), [
+    { type: "listener", event: "delivered", message: "Run the tests" },
+  ]);
+  assert.equal(sent.length, 2);
+});

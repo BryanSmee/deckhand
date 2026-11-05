@@ -244,3 +244,7 @@ export const Grip = filled(
     <circle cx="15" cy="18" r="1.5" />
   </>,
 );
+// A chat's composer, and its menu's Reset and Delete.
+export const Send = stroke(1.8, <path d="M4 12 20 4l-4 16-4-7-8-1zM12 13l8-9" />);
+export const Reset = stroke(1.8, <path d="M4 12a8 8 0 1 0 2.4-5.7M4 4v4h4" />);
+export const Trash = stroke(1.8, <path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13M10 11v6M14 11v6" />);

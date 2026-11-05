@@ -25,7 +25,7 @@ import { needingYou } from "./Repos";
 import { SettingsTabs } from "./Settings";
 import { formatRoute, isOverview, type Route } from "./route";
 import type { Syncer } from "./Sync";
-import type { Health, State } from "./types";
+import type { Chats, Health, State } from "./types";
 import { Button, IconButton } from "./ui/Button";
 import { type Segment, Segmented } from "./ui/Choice";
 import * as Icon from "./ui/icons";
@@ -69,6 +69,8 @@ const repoHref = (route: Route, repo: string | null) => {
 interface Common {
   state: State | null;
   route: Route;
+  // api/chats (App.tsx): the Chats link, with how many the user keeps of the most they may.
+  chats?: Chats | null;
   // The services' health (api/health): a dot by Deckhand's name when one is down or starting.
   health?: Health | null;
 }
@@ -82,6 +84,11 @@ interface SidebarProps extends Common {
   notify: { permission: Permission; ask: () => void };
   syncer: Syncer;
 }
+
+// Chats: shown to a user who may start one somewhere (access.ts), or who keeps some.
+const chatsShown = (can: Can, chats: Chats | null | undefined) =>
+  !!chats && (can.anywhere("chat") || chats.chats.length > 0);
+const chatsHref = formatRoute({ repo: null, task: null, run: null, page: "chats" });
 
 export function Sidebar(props: SidebarProps) {
   const { state, route, repos, rail, onRail, onRequest, notify, health = null } = props;
@@ -164,7 +171,7 @@ function RepoLinks({
   rail?: boolean;
   touch?: boolean;
 }) {
-  const shown = route.page !== "settings";
+  const shown = route.page !== "settings" && route.page !== "chats";
   const dot = (c: RepoCounts) => (
     <span class={styles.dot}>
       <StatusDot tone={c.live ? "run" : "idle"} pulse={c.moving} />
@@ -394,18 +401,23 @@ export function PageHeader({
   github,
   needs = 0,
   state = null,
+  chats = null,
   children,
 }: {
   route: Route;
   github: string;
   needs?: number;
   state?: State | null;
+  // api/chats: Chats among the views, with how many the user keeps of the most they may.
+  chats?: Chats | null;
   children?: ComponentChildren;
 }) {
+  const can = useCan();
   const settings = route.page === "settings";
-  const repo = settings ? null : route.repo;
+  const chatting = route.page === "chats";
+  const repo = settings || chatting ? null : route.repo;
   // The board is one repository's: All has the Overview instead.
-  const views: Segment<"overview" | "tasks" | "board">[] = repo
+  const views: Segment<"overview" | "tasks" | "board" | "chats">[] = repo
     ? [
         {
           value: "tasks",
@@ -438,11 +450,31 @@ export function PageHeader({
           title: withKey("Tasks", "tasks"),
         },
       ];
-  const view = isOverview(route) ? "overview" : route.page === "board" ? "board" : "tasks";
+  // Chats are the user's own, on every repository: the same link from any of them.
+  if (chatsShown(can, chats)) {
+    views.push({
+      value: "chats",
+      label: "Chats",
+      icon: <Icon.Talk size={14} />,
+      href: chatsHref,
+      extra: (
+        <span class={styles.kept} title="The chats you keep, of the most you may">
+          {chats!.chats.length} of {chats!.limit}
+        </span>
+      ),
+    });
+  }
+  const view = chatting
+    ? "chats"
+    : isOverview(route)
+      ? "overview"
+      : route.page === "board"
+        ? "board"
+        : "tasks";
   return (
     <header class={`${styles.header} ${settings ? styles.tabbed : ""}`}>
       <div class={styles.title}>
-        <h1>{settings ? "Settings" : (repo ?? "All repositories")}</h1>
+        <h1>{settings ? "Settings" : chatting ? "Chats" : (repo ?? "All repositories")}</h1>
         {repo && (
           <a
             class={styles.github}
@@ -458,7 +490,7 @@ export function PageHeader({
       </div>
       {settings && <SettingsTabs route={route} count={needs} class={styles.headerTabs} />}
       {!settings && <Segmented label="View" options={views} value={view} />}
-      {!settings && !repo && (
+      {!settings && !chatting && !repo && (
         <span class={styles.hint}>The board is per repository: open one to plan its work.</span>
       )}
       {!settings && state && (
@@ -486,8 +518,10 @@ export function TopBar(props: TopBarProps) {
   const [sheet, setSheet] = useState(false);
   const counts = repoCounts(state?.tasks ?? [], route.repo);
   const settings = route.page === "settings";
-  const current = settings ? null : counts.repos.find((c) => sameRepo(c.repo, route.repo));
-  const label = settings ? "Settings" : (current?.repo ?? "All repositories");
+  const chatting = route.page === "chats";
+  const current =
+    settings || chatting ? null : counts.repos.find((c) => sameRepo(c.repo, route.repo));
+  const label = settings ? "Settings" : chatting ? "Chats" : (current?.repo ?? "All repositories");
   return (
     <>
       <header class={styles.topbar}>
@@ -536,7 +570,8 @@ export function TopBar(props: TopBarProps) {
 // The phone's tab bar. Tasks and Board are the repository shown, else the one last open
 // here. Else Tasks are All's (and stay All's on them), and Board the most recently active
 // repository's: the board is one repository's.
-export function TabBar({ state, route, lastRepo }: Common & { lastRepo: string | null }) {
+export function TabBar({ state, route, lastRepo, chats }: Common & { lastRepo: string | null }) {
+  const can = useCan();
   const counts = repoCounts(state?.tasks ?? [], route.repo);
   const onAllTasks = route.page === "tasks" && !route.repo;
   const tasksRepo = route.repo ?? (onAllTasks ? null : lastRepo);
@@ -561,6 +596,16 @@ export function TabBar({ state, route, lastRepo }: Common & { lastRepo: string |
       href: repo ? boardOf(repo) : tasksOf(null),
       current: route.page === "board",
     },
+    ...(chatsShown(can, chats)
+      ? [
+          {
+            label: "Chats",
+            icon: <Icon.Talk size={22} />,
+            href: chatsHref,
+            current: route.page === "chats",
+          },
+        ]
+      : []),
     {
       label: "Settings",
       icon: <Icon.Settings size={22} />,

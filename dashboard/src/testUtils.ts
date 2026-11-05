@@ -8,6 +8,8 @@ import type {
   Backlog,
   Capabilities,
   CapabilityInfo,
+  Chat,
+  Chats,
   ModeCapabilities,
   PlanUsage,
   PolicyFile,
@@ -126,6 +128,38 @@ export const makeRuns = (key: string, n: number, start = 0): Run[] =>
       status: i === 0 ? "running" : "ok",
     } satisfies Run;
   });
+
+// A chat as listener/chats.mjs view() gives it: alice's, on acme/app, stopped, with no run.
+export const makeChat = (partial: Partial<Chat> = {}): Chat => ({
+  id: "0123456789abcdef",
+  owner: "alice",
+  repo: "acme/app",
+  base: "main",
+  agent: null,
+  model: null,
+  effort: null,
+  title: "What does run() do?",
+  createdAt: 0,
+  lastActiveAt: 0,
+  resetAt: null,
+  status: "stopped",
+  queued: false,
+  reachable: true,
+  pending: [],
+  runs: [],
+  ...partial,
+});
+
+// GET api/chats: `chats`, of 4 at most, on acme/app or acme/api, with Claude to pick.
+export const makeChats = (chats: Chat[] = [], partial: Partial<Chats> = {}): Chats => ({
+  chats,
+  limit: 4,
+  repos: ["acme/api", "acme/app"],
+  agents: [{ name: "claude@anthropic", label: "Claude (anthropic)" }],
+  models: ["best", "balanced", "fast"],
+  efforts: ["low", "medium", "high", "xhigh", "max"],
+  ...partial,
+});
 
 // Runs going on, newest first, with only what the dialogs' links read.
 export const running = (ids: string[]) =>
@@ -247,10 +281,13 @@ export function makeCapabilities(over: Partial<Capabilities> = {}): Capabilities
 // A log stream (api.ts useRunLog()): the last one opened, which a spec makes speak.
 export class FakeSource {
   static last: FakeSource | null = null;
+  // Every one opened since the spec cleared it: a chat streams each of its runs' logs.
+  static opened: FakeSource[] = [];
   listeners = new Map<string, ((e: { data: string }) => void)[]>();
   closed = false;
   constructor(public url: string) {
     FakeSource.last = this;
+    FakeSource.opened.push(this);
   }
   addEventListener(type: string, fn: (e: { data: string }) => void) {
     this.listeners.set(type, [...(this.listeners.get(type) ?? []), fn]);
