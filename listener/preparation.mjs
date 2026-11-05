@@ -79,8 +79,9 @@ export function createPreparation(ctx) {
       note,
       log,
       granted: grantsBy(ctx.policies),
+      kept: profile?.mounts ?? null,
     });
-    if (profile) narrowAccess(access, profile, agent);
+    if (profile) narrowHosts(access, profile, agent);
     // The open internet: any public host, private addresses only for those every run needs
     // (access.mjs bareAccess() says why).
     if (caps.has("internet")) {
@@ -210,18 +211,14 @@ export function createPreparation(ctx) {
     return { caps: new Set(used), profile };
   }
 
-  // A chat's hosts and mounts, as its profile keeps them (narrowProfile()): the granted hosts it
-  // turned off are no longer reachable (the egress proxy reads `live.hosts`), but the ones every
-  // run needs; the mounts it turned off aren't in its spec, the others read-only unless it keeps
-  // them read-write. `access`: grantedAccess()'s, changed in place.
-  function narrowAccess(access, profile, agent) {
+  // A chat's hosts, as its profile keeps them (narrowProfile()): the granted hosts it turned
+  // off are no longer reachable (the egress proxy reads `live.hosts`), but the ones every run
+  // needs. Its mounts are narrowed by grantedAccess() (`kept`). `access`: grantedAccess()'s,
+  // changed in place.
+  function narrowHosts(access, profile, agent) {
     const hosts = access.grant.hosts.filter((h) => profile.hosts.includes(h.toLowerCase()));
     access.hosts = operatorHosts(config, { ...access.grant, hosts }, agent);
     access.trusted = operatorHosts(config, { ...access.grant, hosts }, agent);
-    access.mounts = access.mounts.flatMap((m) => {
-      const kept = profile.mounts.find((p) => p.target === m.target);
-      return kept ? [{ ...m, readOnly: m.readOnly || kept.readOnly }] : [];
-    });
   }
 
   // Whether GitHub says `repo` is private: null when it can't say, which the risky combinations

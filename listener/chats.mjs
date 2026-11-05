@@ -557,7 +557,9 @@ export function createChats(
   }
 
   // Its sandbox stopped once its agent has answered (runs.mjs rest()), its session kept: the
-  // next message starts it again, with the permissions saved now. → whether one was going.
+  // next message starts it again, with the permissions saved now. → whether one was going. Its
+  // owner's session only, as reset(): it starts nothing (the next message is checked as any),
+  // and a user who lost access can still stop what they left going.
   function restart(user, id) {
     const chat = mine(user, id);
     open(chat);

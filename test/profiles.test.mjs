@@ -182,3 +182,19 @@ test("a capability whose need a policy took away goes with it, whatever the prof
   const c = ceilingOf({ outcome: outcome(["setup", "read:issues"]), grant: GRANT, mounts: [] });
   assert.deepEqual(narrowProfile(null, c).capabilities, []);
 });
+
+test("a capability whose need is never on in a chat isn't offered: `image:branch` with `push` given by a policy", () => {
+  const settings = { setup: "npm ci", dockerfile: "Dockerfile" };
+  const grant = { ...GRANT, allowDockerfile: true, allowBranchDockerImages: true };
+  const c = ceiling([...CHAT, "push", "image:branch"], settings, grant);
+  const row = (name) => c.capabilities.find((r) => r.name === name);
+  assert.equal(row("image:repo").allowed, true);
+  assert.equal(row("push").allowed, false);
+  assert.equal(row("image:branch").allowed, false);
+  assert.match(row("image:branch").reason, /^it needs push: chats only read GitHub/);
+  assert.match(
+    checkProfile({ capabilities: ["pull", "image:branch"] }, c).errors[0],
+    /^`image:branch`: it needs push/,
+  );
+  assert.ok(!narrowProfile(null, c).capabilities.includes("image:branch"));
+});

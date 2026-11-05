@@ -982,5 +982,8 @@ test(
     );
     assert.equal(spec.engine, undefined);
     assert.ok(!JSON.stringify(spec).includes(`${nfs}/cache`));
+    // Its log says the mount it gets, not the one turned off.
+    assert.ok(notes.includes(`Host mount ${nfs}/data (read-only)`));
+    assert.ok(!notes.some((n) => n.startsWith(`Host mount ${nfs}/cache`)));
   },
 );

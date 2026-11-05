@@ -57,6 +57,21 @@ export function ceilingOf({ outcome, grant, mounts = [] }) {
     if (REQUIRED[row.name]) return line(true, REQUIRED[row.name], true);
     return line(true);
   });
+  // One whose need isn't allowed (`image:branch` with `push` never on) can't be either: its
+  // toggle would never take effect. Repeated until nothing changes, as needs chain.
+  for (let changed = true; changed;) {
+    changed = false;
+    for (const row of capabilities.filter((c) => c.allowed)) {
+      const missing = capabilities.find((c) => row.needs.includes(c.name) && !c.allowed);
+      if (!missing) continue;
+      Object.assign(row, {
+        allowed: false,
+        required: false,
+        reason: `it needs ${missing.name}: ${missing.reason}`,
+      });
+      changed = true;
+    }
+  }
   const push = capabilities.some((c) => c.name === "push" && c.allowed);
   return {
     capabilities,
