@@ -1526,7 +1526,9 @@ Such a run holds its task and a parallel slot, as one whose queue write or state
 without `summaries/`) would make last: not given up, as an hour's outage looks the same and the
 summary is kept nowhere else, but said (#821, `restart.mjs` `endWait()`): the orchestrator's
 `/ready` counts them (`ending`), the dashboard's status page lists each among the orchestrator's
-warnings (what waits, since when, the store's error), and the log says it again every 10 min. A restored run takes comments once the runner says its inbox is still open,
+warnings (what waits, since when, the store's error), its metrics count them
+(`deckhand_runs_ending`, which `DeckhandRunsEndingStuck` alerts on after 15 min, #861), and the
+log says it again every 10 min. A restored run takes comments once the runner says its inbox is still open,
 waited for 10 s at start, later if the runner is away. The list is held newest first with an index by id,
 and both lose the runs `history.mjs` removes, at start and daily: those older than
 `LOG_RETENTION_DAYS`, but for a running run and the latest run of a task still queued, in a
