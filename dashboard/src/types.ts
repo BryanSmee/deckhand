@@ -565,6 +565,9 @@ export type StepStatus = "running" | "cached" | "done" | "error" | "cancelled";
 // status "error" (its `error` says why): logModel.ts counts them per section.
 export type Entry =
   | { kind: "text"; text: string }
+  // A chat owner's message (listener/runlog.mjs): the one that started the run, or one delivered
+  // to it since.
+  | { kind: "message"; text: string }
   | { kind: "meta"; text: string }
   // Setup output; with `step`, the output of that image build step, without BuildKit's prefix.
   | { kind: "raw"; text: string; step?: number }
@@ -1094,4 +1097,47 @@ export interface ChatPermissions {
   };
   errors: string[];
   running: boolean;
+}
+
+// A user's chat with the agent on one of the repositories (listener/chats.mjs view()), its
+// owner's alone. `status`: "running" while its agent works on a message (or its sandbox starts,
+// or a message waits for a slot: `queued`), "idle" while its sandbox waits for the next one,
+// "stopped" without a sandbox. `reachable`: false once its owner may no longer run the agent
+// there (ALLOWED_USERS, the repo's `users`, the access decision): no runs then, Delete only.
+export type ChatStatus = "running" | "idle" | "stopped";
+
+export interface Chat {
+  id: string;
+  owner: string;
+  repo: string;
+  base: string;
+  // As created; null: the repository's.
+  agent: string | null;
+  model: string | null;
+  effort: string | null;
+  // Its first message's first line; null before one.
+  title: string | null;
+  createdAt: number;
+  lastActiveAt: number;
+  resetAt: number | null;
+  status: ChatStatus;
+  queued: boolean;
+  reachable: boolean;
+  // Its messages not delivered yet: shown until a run's log has them.
+  pending: { text: string; queuedAt: number }[];
+  // Its runs, newest first: their logs are the conversation.
+  runs: Run[];
+}
+
+// GET api/chats: the user's chats, most recently active first; how many they may keep
+// (CHATS_PER_USER: a repository's `chats.per_user` may lower it there); the repositories New
+// chat offers, the agents the operator configured ("claude@anthropic", with its label), the
+// models' tiers ("best", "balanced", "fast") and the efforts.
+export interface Chats {
+  chats: Chat[];
+  limit: number;
+  repos: string[];
+  agents: { name: string; label: string }[];
+  models: string[];
+  efforts: string[];
 }

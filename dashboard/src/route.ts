@@ -9,13 +9,15 @@
 //   #/settings/repositories/org/repo     with one's config open
 //   #/settings/repositories/org/repo/policies   its Policies tab (/capabilities: Capabilities)
 //   #/settings/preferences, #/settings/server, #/settings/access   Settings' other tabs
+//   #/chats                              the user's chats (Chats.tsx)
+//   #/chats/<id>                         with one's conversation open
 // Older addresses still parse, and the dashboard rewrites them to these (App.tsx useRoute()):
 // #/all, #/?task=… (All's tasks), #/repositories[/org/repo], #/graph/org/repo (the board),
 // #/board and #/graph (every repo's graph, now the Overview), and links from before the tabs
 // ("#task=<key>&run=<id>").
 
 // No page: a repo's tasks, or the Overview on All. "tasks" on All: every repo's tasks.
-export type Page = "tasks" | "board" | "settings";
+export type Page = "tasks" | "board" | "settings" | "chats";
 // Settings' tabs besides Repositories (its first, and the one with no `section`).
 export type Section = "preferences" | "clients" | "server" | "access";
 // A repository's settings' tabs besides Config (its first, and the one with no `configTab`).
@@ -29,6 +31,7 @@ export interface Route {
   config?: string | null; // settings: the repository whose config is open
   configTab?: ConfigTab; // its tab, when not Config
   section?: Section; // settings: another tab than Repositories
+  chat?: string | null; // chats: the one open
 }
 
 const REPO = /^[\w.-]+\/[\w.-]+$/;
@@ -59,6 +62,8 @@ export function parseRoute(hash: string): Route {
       ...(repos[2] ? { configTab: repos[2] as ConfigTab } : {}),
     };
   }
+  const chats = /^chats(?:\/([0-9a-f]{16}))?$/.exec(path);
+  if (chats) return { ...tasks(null), page: "chats", ...(chats[1] ? { chat: chats[1] } : {}) };
   const section = /^settings\/(preferences|clients|server|access)$/.exec(path);
   if (section) return { ...tasks(null), page: "settings", section: section[1] as Section };
   if (/^settings(?:\/[\w-]+)?$/.test(path)) return { ...tasks(null), page: "settings" };
@@ -78,7 +83,17 @@ export function parseRoute(hash: string): Route {
   return path === "tasks" || task ? { repo: null, ...opened, page: "tasks" } : overview;
 }
 
-export function formatRoute({ repo, task, run, page, config, configTab, section }: Route): string {
+export function formatRoute({
+  repo,
+  task,
+  run,
+  page,
+  config,
+  configTab,
+  section,
+  chat,
+}: Route): string {
+  if (page === "chats") return `#/chats${chat ? `/${chat}` : ""}`;
   if (page === "settings" && section) return `#/settings/${section}`;
   if (page === "settings") {
     const tab = config && configTab ? `/${configTab}` : "";

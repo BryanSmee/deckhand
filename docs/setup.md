@@ -722,7 +722,9 @@ rather than an issue (`/api/chats`, [architecture.md](architecture.md#chats)). I
 the repository's image, with its grants (hosts, setup) and under its `users`, in volumes of
 its own, and its answers stay in the conversation: Deckhand's default policies
 (`policy/mode-chat.rego`) give it the code, its setup and its reads, no branch, no engine and
-no GitHub write. Only its owner sees it.
+no GitHub write. Only its owner sees it, on the dashboard's Chats page: the chats they keep
+against `CHATS_PER_USER`, New chat (the repository, then the agent, model and effort), the
+conversation, and each chat's menu: its permissions (#478), Reset and Delete.
 
 - `CHATS_PER_USER` (2) is how many chats a user keeps, running or not, across the
   repositories; a repository's `chats.per_user` may lower it ([repo-config.md](repo-config.md#chats)).

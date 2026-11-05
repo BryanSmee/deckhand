@@ -90,6 +90,8 @@ const CLAUDE_TIERS = {
   ANTHROPIC_DEFAULT_HAIKU_MODEL: "HAIKU",
 };
 const TIERS = { best: "BEST", balanced: "BALANCED", fast: "FAST" };
+// The tiers a run's model may name, whatever its agent (the dashboard's New chat offers them).
+export const MODEL_TIERS = Object.keys(TIERS);
 
 // The Antigravity CLI's default version, and the sha256 of its release's tarballs for Linux,
 // pinned here: the release's own digest, which comes with the download, would follow a

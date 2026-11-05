@@ -50,7 +50,8 @@ export function authOf(config, { provider, credential }) {
 // provider and on each credential of it the operator set (`claude@anthropic:key`), and the
 // entries of FALLBACKS. A repo's config can't add any. Not a named credential when the default
 // is none of them (a gateway's token): it would go to the gateway, which only FALLBACKS may ask.
-function pickable(config) {
+// The dashboard's New chat offers them (chats.mjs).
+export function pickable(config) {
   const named = config.agents.flatMap((a) => {
     const own = entryName(a);
     const credentials = config.credentials?.[own];

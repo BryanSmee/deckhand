@@ -316,6 +316,7 @@ const STARTING = {
   idea: "New idea",
   bug: "New bug report",
   discussion: "Answering a discussion",
+  chat: "Starting a chat",
 };
 
 const GOING_ON = {
@@ -351,6 +352,8 @@ function listenerEntries(e, agent) {
     const text = `Stopped at ${time} UTC, silent for ${minutes(e.after)} min after its answer: the answer is posted`;
     return [{ kind: "meta", text }];
   }
+  // A chat's message (tasks.mjs deliver()): its owner's turn in the conversation.
+  if (e.event === "delivered" && e.chat) return [{ kind: "message", text: e.message }];
   if (e.event === "delivered") {
     const time = new Date(e.at).toISOString().slice(11, 19);
     const text = `New comment delivered to ${agent.displayName} at ${time} UTC: ${e.message}`;
@@ -366,6 +369,11 @@ function listenerEntries(e, agent) {
     ? `Falling back to ${entryLabel(entryName(agent.name, e.provider, e.credential))} from ${entryLabel(e.fallback.from)}, whose provider failed: ${e.fallback.reason}. `
     : "";
   const picked = e.picked && !e.picked.sticky ? `${agent.displayName} picked with /agent. ` : "";
+  // A chat's first line: its owner's messages that started the run, as theirs.
+  if (e.kind === "chat") {
+    const said = e.message ? [{ kind: "message", text: e.message }] : [];
+    return [{ kind: "meta", text: from + picked + what }, ...said];
+  }
   return [{ kind: "meta", text: from + picked + what + (e.message ? `: ${e.message}` : "") }];
 }
 

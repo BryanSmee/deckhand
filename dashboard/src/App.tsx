@@ -10,8 +10,9 @@
 // (Shortcuts.tsx) and Ctrl K (Palette.tsx).
 import { useEffect, useState } from "preact/hooks";
 import { AccessContext, canFrom } from "./access";
-import { type RepoList, useAppState, useHealth, useRepos } from "./api";
+import { type RepoList, useAppState, useChats, useHealth, useRepos } from "./api";
 import { Board, type BoardView } from "./Board";
+import { Chats } from "./Chats";
 import { Detail } from "./Detail";
 import { type ChipId, CHIPS, inChip, isLive, matchesSearch, repoTabs, sameRepo } from "./format";
 import { useShortcuts, useShortcutsOn } from "./keys";
@@ -173,6 +174,10 @@ export function Dashboard({ state, error, repos, refresh, onOverview }: Props) {
     canFrom(state?.access).server("server:read"),
   );
   const onBoard = route.page === "board";
+  const onChats = route.page === "chats";
+  // The user's chats: polled often on their page, else now and then for the sidebar's count,
+  // or read once for a user who may start none (api.ts useChats()).
+  const chats = useChats(onChats, canFrom(state?.access).anywhere("chat"));
   const overview = isOverview(route);
   useEffect(() => onOverview?.(overview), [overview]);
   // The address takes the sidebar's spelling, so links copied from it are the canonical ones.
@@ -185,12 +190,12 @@ export function Dashboard({ state, error, repos, refresh, onOverview }: Props) {
   }, [wide, overview, route.page, route.task, first?.key]);
   // The repo shown is the one to come back to (Tasks and Board on a phone, an empty address).
   useEffect(() => {
-    if (!onSettings) store("tab", route.repo ?? "");
+    if (!onSettings && !onChats) store("tab", route.repo ?? "");
     if (route.repo) {
       store("repo", route.repo);
       setLastRepo(route.repo);
     }
-  }, [onSettings, route.repo]);
+  }, [onSettings, onChats, route.repo]);
 
   const selectChip = (next: ChipId) => {
     store("chip", next);
@@ -215,10 +220,11 @@ export function Dashboard({ state, error, repos, refresh, onOverview }: Props) {
     route,
     syncer,
     health: health.data,
+    chats: chats.data,
     onRequest: (kind: Request) => setRequest({ kind }),
   };
   const railed = onBoard ? boardRail : rail;
-  const onTasks = !overview && !onBoard && !onSettings;
+  const onTasks = !overview && !onBoard && !onSettings && !onChats;
   const shownRepo = onSettings ? null : route.repo;
   const page = (next: Partial<Route>) => go({ repo: null, task: null, run: null, ...next });
 
@@ -273,6 +279,7 @@ export function Dashboard({ state, error, repos, refresh, onOverview }: Props) {
     back: () => {
       if (task && !wide) return go({ ...route, task: null, run: null }, true);
       if (onSettings && route.config) return page({ page: "settings" });
+      if (onChats && route.chat && !wide) return page({ page: "chats" });
       return false;
     },
   });
@@ -298,7 +305,7 @@ export function Dashboard({ state, error, repos, refresh, onOverview }: Props) {
 
   return (
     <AccessContext.Provider value={canFrom(state?.access)}>
-      <div class={`${styles.app} ${task ? styles.reading : ""}`}>
+      <div class={`${styles.app} ${task || (onChats && route.chat) ? styles.reading : ""}`}>
         {wide ? (
           <Sidebar {...shell} repos={repos} rail={railed} onRail={selectRail} notify={notify} />
         ) : (
@@ -312,6 +319,7 @@ export function Dashboard({ state, error, repos, refresh, onOverview }: Props) {
               github={github}
               needs={needingYou(repos?.repos ?? null, tasks)}
               state={state}
+              chats={chats.data}
             />
           )}
           {overview ? (
@@ -336,10 +344,20 @@ export function Dashboard({ state, error, repos, refresh, onOverview }: Props) {
                 view={wide ? view : phoneView}
                 onView={selectView}
                 header={(controls) => (
-                  <PageHeader route={route} github={github} state={state}>
+                  <PageHeader route={route} github={github} state={state} chats={chats.data}>
                     {controls}
                   </PageHeader>
                 )}
+              />
+            </div>
+          ) : onChats ? (
+            <div class={styles.page}>
+              <Chats
+                polled={chats}
+                open={route.chat ?? null}
+                onOpen={(id) => page({ page: "chats", chat: id })}
+                now={now}
+                touch={!wide}
               />
             </div>
           ) : onSettings ? (
@@ -396,7 +414,9 @@ export function Dashboard({ state, error, repos, refresh, onOverview }: Props) {
             </div>
           )}
         </div>
-        {!wide && !task && <TabBar state={state} route={route} lastRepo={lastRepo} />}
+        {!wide && !task && !(onChats && route.chat) && (
+          <TabBar state={state} route={route} lastRepo={lastRepo} chats={chats.data} />
+        )}
         {request && state && (
           <NewRequest
             kind={request.kind}

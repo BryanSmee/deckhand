@@ -176,6 +176,15 @@ sandbox, tokens, capabilities, inbox, log and restarts. What differs:
   the next message starts with it. Each start narrows it again (`preparation.mjs`): see
   [security.md](security.md#chats).
 
+The dashboard's Chats page (`dashboard/src/Chats.tsx`, #477) reads `GET /api/chats`, which
+also says how many chats the user may keep (`limit`, `CHATS_PER_USER`), the repositories New
+chat offers them (`repos`: those the App lists, in `ALLOWED_REPOS`, among whose `users` they
+are, with `runs:start:chat`) and the agents it offers (`agents`: what `/agent` may pick). Each
+chat lists its messages not delivered yet (`pending`). Its conversation is its runs' logs, read
+as any run's (`/api/runs/<id>/stream`): a chat run's first line and its delivered messages are
+`message` entries (`runlog.mjs`), the owner's turns, rather than notes. It reads nothing of the
+chat's sandbox, so a chat whose agent runs elsewhere (#601) shows the same way.
+
 ### Modes
 
 A `/mode <name>` line picks a mode: work, brainstorm or one of the repo's own (its config's
