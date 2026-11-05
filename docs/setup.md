@@ -2013,13 +2013,26 @@ they were before going back. An orchestrator from before #690 that already had t
 such time. If you go back from one of those to a release from before the store, then update
 again, the files only fill what the store lacks, as at the first update.
 
+### Upgrading: a folder per map in the file store (#773)
+
+With the file store, the runs' summaries and the maps' items were all files right in the store's
+`keys/` folder, so listing one map (at start, or the dashboard's history) read the names of all
+of them. Each map has a folder of its own in `keys/` now (`keys/summaries%2F/`,
+`keys/titles%2F/`, …). Nothing to do: once the orchestrator holds its lease, before it reads the
+runs and the maps, it moves the files left right in `keys/` to their folders, in the same step
+and log line as the items below. With Redis, nothing changes.
+
+Going back to an earlier release: it doesn't know the folders, and finds neither the runs'
+history nor the maps' items in them. Roll back with a copy of the store's folder from before the
+update.
+
 ### Upgrading: the maps' items a file each (#691)
 
 With the file store, the items of the orchestrator's maps (above) were keys in its `state.json`,
 written whole at each change of any of them. Each is a file of its own in the store's `keys/`
 now, as the runs' summaries are. Nothing to do: once the orchestrator holds its lease, so once
 the copy of the release before let it go, it moves those left in `state.json` to their files,
-and its log says so (`The store: 840 item(s) moved out of its state file, a file each`). One it
+and its log says so (`The store: 840 item(s) moved to their own files, a folder per map`). One it
 can't write stops the start there, said in its log and tried again every 5 seconds; nothing is
 lost meanwhile. Not before the lease: the release before, still acting, would delete none of
 them from their files. With Redis, nothing changes.
@@ -2460,10 +2473,12 @@ before #619, keep the old volume mounted for the first start, which moves what i
 final answer's first lines and the text of the comments it acted on (more for a long comment).
 So they take about a summary's size times the runs of those days: 50 runs a day for 90 days are
 4,500 summaries, some 20 MB of Redis's memory at 4 KB each. With `0` (forever), they grow with
-every run. With the file store, each is a file of its own in its folder (`keys/`), out of its
-`state.json`, which every lease renewal (each 5 s) writes whole. Each item of the
-orchestrator's maps (a title, a pull request, a lane) is a file of its own there too, so that
-changing one writes its file alone ([#691](#upgrading-the-maps-items-a-file-each-691)).
+every run. With the file store, each is a file of its own in its folder (`keys/summaries%2F/`),
+out of its `state.json`, which every lease renewal (each 5 s) writes whole. Each item of the
+orchestrator's maps (a title, a pull request, a lane) is a file of its own too, in its map's
+folder (`keys/titles%2F/`, …), so that changing one writes its file alone
+([#691](#upgrading-the-maps-items-a-file-each-691)), and listing one reads the names in its
+folder alone ([#773](#upgrading-a-folder-per-map-in-the-file-store-773)).
 
 Secrets never go in the store: the App's key, the signing key and the agents' credentials
 stay in their service's own secret or volume. A write holding one the service knows, a

@@ -416,11 +416,11 @@ async function fakeGitHub(files = {}) {
 }
 
 // The runs' summaries, in the orchestrator's store (runlog.mjs: its file backend keeps them a
-// file each, keys/): the first one's, or null.
+// file each, in keys/'s folder of summaries): the first one's, or null.
 function summary(dir) {
   try {
-    const folder = join(dir, "store", "keys");
-    const file = readdirSync(folder).find((f) => f.startsWith("summaries%2F"));
+    const folder = join(dir, "store", "keys", "summaries%2F");
+    const file = readdirSync(folder)[0];
     return file ? JSON.parse(readFileSync(join(folder, file), "utf8")).value : null;
   } catch {
     return null;
@@ -436,8 +436,9 @@ const RUN_FIELDS = [
 
 // A run that ended before the test's orchestrator starts: its log at the runner (`lines`, the
 // first the listener's: one blob of the runner's store, as a log from before segments reads),
-// its summary in the orchestrator's store, a file of its own (the file store's `keys/`).
-function pastRun(dir, id, lines) {
+// its summary in the orchestrator's store, a file of its own (the file store's `keys/`, in the
+// folder of summaries; right in `keys/` with `flat`, as a release before #773 kept it).
+function pastRun(dir, id, lines, { flat = false } = {}) {
   const text = lines.map((l) => `${JSON.stringify(l)}\n`).join("");
   const blobs = join(dir, "runner-store", "blobs");
   mkdirSync(blobs, { recursive: true });
@@ -457,7 +458,7 @@ function pastRun(dir, id, lines) {
     summary: summaryOf(result),
     questions: questionsOf(result),
   };
-  const keys = join(dir, "store", "keys");
+  const keys = join(dir, "store", "keys", ...(flat ? [] : ["summaries%2F"]));
   mkdirSync(keys, { recursive: true });
   const key = `summaries/${id}`;
   writeFileSync(join(keys, fileName(key)), JSON.stringify({ key, value: record }));
@@ -1391,7 +1392,9 @@ describe("listener", options, () => {
     await until(() => !liveStates(dir).length, "the run's state to go");
     // Its summary and its log, the runner's, and the orchestrator's store.
     const keys = join(dir, "store", "keys");
-    const kept = readdirSync(keys).map((f) => readFileSync(join(keys, f), "utf8"));
+    const kept = readdirSync(keys, { recursive: true, withFileTypes: true })
+      .filter((f) => f.isFile())
+      .map((f) => readFileSync(join(f.parentPath, f.name), "utf8"));
     kept.push(readFileSync(join(dir, "store", "state.json"), "utf8"));
     for (const log of [...kept, ...runLogs(dir).values()]) {
       assert.ok(!log.includes(secret) && !log.includes(credential));
@@ -2971,8 +2974,8 @@ mounts:
     assert.equal(replies(github).length, 1);
     assert.match(JSON.parse(replies(github)[0].body).body, /^All done\./);
     // Its summary in the store, the dashboard's history.
-    const keys = join(data, "store", "keys");
-    const summaries = readdirSync(keys).filter((f) => f.startsWith("summaries%2F"));
+    const keys = join(data, "store", "keys", "summaries%2F");
+    const summaries = readdirSync(keys);
     assert.equal(summaries.length, 1);
     assert.equal(JSON.parse(readFileSync(join(keys, summaries[0]), "utf8")).value.status, "ok");
     assert.deepEqual(readdirSync(data), ["store"]);
@@ -2988,7 +2991,7 @@ mounts:
     // A folder where the store writes the run's summary (its items a file each, keys/): the
     // write refused, whoever runs the test.
     const [{ id }] = liveStates(dir);
-    const blocked = join(dir, "store", "keys", fileName(`summaries/${id}`));
+    const blocked = join(dir, "store", "keys", "summaries%2F", fileName(`summaries/${id}`));
     mkdirSync(blocked, { recursive: true });
     writeFileSync(join(dir, "go"), "");
     await ctx.listener.until(/saving the summary of /);
@@ -4918,16 +4921,22 @@ allow_capabilities contains "read:pulls"
         join(dir, "store", "state.json"),
         JSON.stringify({ keys: { "modes/org/repo#3": { value: "review", expiresAt: null } } }),
       );
-      pastRun(dir, "org-repo-9-1000", [
-        {
-          type: "listener",
-          key: "org/repo#9",
-          repo: "org/repo",
-          taskMode: "work",
-          startedAt: 1000,
-        },
-        { type: "result", is_error: true, result: "It failed.", duration_ms: 6000 },
-      ]);
+      pastRun(
+        dir,
+        "org-repo-9-1000",
+        [
+          {
+            type: "listener",
+            key: "org/repo#9",
+            repo: "org/repo",
+            taskMode: "work",
+            startedAt: 1000,
+          },
+          { type: "result", is_error: true, result: "It failed.", duration_ms: 6000 },
+        ],
+        // Its summary where a release before #773 kept it: moved to its folder before it is read.
+        { flat: true },
+      );
       return { DEBOUNCE_MS: "60000", GITHUB_URL: github.url };
     });
     const { dir, port, send } = ctx;
@@ -4946,7 +4955,12 @@ allow_capabilities contains "read:pulls"
         name,
       );
     }
-    assert.ok(existsSync(join(dir, "store", "keys", "titles%2Forg%2Frepo%235")));
+    // A folder per map (#773), the summary moved into its own.
+    assert.ok(existsSync(join(dir, "store", "keys", "titles%2F", "titles%2Forg%2Frepo%235")));
+    assert.deepEqual(readdirSync(join(dir, "store", "keys", "summaries%2F")), [
+      "summaries%2Forg-repo-9-1000",
+    ]);
+    assert.equal(existsSync(join(dir, "store", "keys", "summaries%2Forg-repo-9-1000")), false);
     for (const [number, id] of [
       [5, 105],
       [6, 106],
