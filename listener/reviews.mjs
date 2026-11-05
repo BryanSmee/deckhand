@@ -139,11 +139,10 @@ export function parseReview(text, { allowed = "low", log = () => {} } = {}) {
     const read = readBlock(json);
     const fromBlock =
       read.block && settle({ summary: md.summary, ...read.block }, { allowed, sure: true });
-    // The markdown stricter than the block, read as it would be alone (blocking on a finding or
-    // a comment the block lacks, or asking for changes it doesn't): one of the two left something
-    // out, so the block is no surer than the markdown, read as when it doesn't validate.
-    const stricter =
-      read.block && strictness(markdownAlone(md, read.block, allowed)) > strictness(fromBlock);
+    // The markdown, read as it would be alone, saying more than the block (saysLess()): one of
+    // the two left something out, so the block is no surer than the markdown, read as when it
+    // doesn't validate.
+    const stricter = read.block && saysLess(fromBlock, markdownAlone(md, read.block, allowed));
     if (read.block && !stricter) return fromBlock;
     log(
       stricter
@@ -180,6 +179,32 @@ const markdownAlone = (md, block, allowed) =>
 // REQUEST_CHANGES, a fix run), 1 its verdict alone `request-changes` (no merge), 0 neither.
 const strictness = (review) =>
   blocks(review, review.allowed) ? 2 : review.verdict === "request-changes" ? 1 : 0;
+
+// Whether settled review `block` says less than `md` in anything that blocks, is posted as a
+// finding or reaches the policies (`input.review`): less strict (strictness()), a higher rating,
+// fewer findings at any severity and above, fewer blocking comments, or a finding or blocking
+// comment of the markdown's with a place that the block has nothing as severe at. The model
+// wrote both: they differ only when one left something out, and the markdown may be the right
+// one.
+function saysLess(block, md) {
+  if (strictness(md) > strictness(block) || md.rating < block.rating) return true;
+  const rank = (item) => (item.severity ? SEVERITIES.indexOf(item.severity) : RANK_BLOCKING);
+  const atLeast = (review, limit) => review.findings.filter((f) => rank(f) <= limit).length;
+  if (SEVERITIES.some((_, limit) => atLeast(md, limit) > atLeast(block, limit))) return true;
+  const mdBlocking = blockingComments(md);
+  const blockBlocking = blockingComments(block);
+  if (mdBlocking.length > blockBlocking.length) return true;
+  const theirs = [...block.findings, ...blockBlocking];
+  return [...md.findings, ...mdBlocking].some(
+    (item) =>
+      item.path !== null &&
+      !theirs.some((b) => b.path === item.path && b.line === item.line && rank(b) <= rank(item)),
+  );
+}
+
+// A blocking comment's rank among the severities (saysLess()): as a medium finding, which caps
+// the rating as it does; a finding as severe or more stands for it at its place.
+const RANK_BLOCKING = SEVERITIES.indexOf("medium");
 
 // The review from its items, its rating capped and its verdict decided (parseReview()): `said`,
 // the model's verdict (a block's `verdict`, unless given), reads `comment` when it asked for

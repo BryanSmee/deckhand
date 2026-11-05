@@ -582,8 +582,10 @@ items, in the sections above). A reply without the block (a repository's own pro
 from before it) is read from its markdown as above. A block that doesn't validate (not JSON, an
 unknown severity, a missing field, a path without its line) is logged, and the markdown read
 instead, with the review's own "request changes" (the block's or the markdown's) kept whatever
-the rest says. So is a block the markdown is stricter than: one without a finding or blocking
-comment the markdown blocks on, or that doesn't request changes where the markdown does.
+the rest says. So is a block that says less than its markdown: one that blocks less or doesn't
+request changes where the markdown does, rates the pull request higher, has fewer findings at
+any severity and above or fewer blocking comments, or has nothing as severe at the place of one
+of the markdown's findings or blocking comments.
 
 - **Claims and acceptance criteria first.** Before security, the review lists the
   acceptance criteria of the issue the pull request closes (and the decisions settled in

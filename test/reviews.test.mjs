@@ -4278,13 +4278,70 @@ test("parseReview: the verdict block read first, the same review as its markdown
   const highBlock = {
     ...notes,
     findings: [{ severity: "high", path: "a.mjs", line: 1, text: "bug." }],
+    rating: 4,
   };
   const agreed = parseReview(`${asked}\n\n${block(highBlock)}`, { log: (line) => same.push(line) });
   assert.deepEqual([agreed.verdict, agreed.findings.length, same], ["request-changes", 1, []]);
   const more = parseReview(`Fine.\n\nRating: 9/10\nVerdict: comment\n\n${block(highBlock)}`, {
     log: (line) => same.push(line),
   });
-  assert.deepEqual([more.verdict, more.rating, same], ["request-changes", 5, []]);
+  assert.deepEqual([more.verdict, more.rating, same], ["request-changes", 4, []]);
+  // Both blocking, but the block saying less than the markdown: read from the markdown, logged.
+  // A high finding the block has as a medium one elsewhere, or downgraded at its place; one of
+  // two blocking findings; a low finding or a better rating than the markdown's; a blocking
+  // comment the block lacks.
+  const sql = "- **high** `a.mjs:1`: SQL injection.";
+  const two = `${sql}\n- **high** \`c.mjs:3\`: another.\n\nRating: 4/10\nVerdict: request-changes`;
+  const finding = (severity, path, line) => ({ severity, path, line, text: "x." });
+  const less = [
+    [
+      asked.replace("bug.", "SQL injection."),
+      { findings: [finding("medium", "b.mjs", 2)], rating: 8 },
+    ],
+    [asked, { findings: [finding("medium", "a.mjs", 1)], rating: 4 }],
+    [two, { findings: [finding("high", "a.mjs", 1)], rating: 4 }],
+    [two, { findings: [finding("high", "a.mjs", 1), finding("high", "b.mjs", 9)], rating: 4 }],
+    [
+      "- **low** `a.mjs:1`: typo.\n\nRating: 4/10\nVerdict: comment",
+      { findings: [], rating: 4, verdict: "comment" },
+    ],
+    [
+      "## Must fix\n\nNone.\n\nRating: 4/10\nVerdict: comment",
+      { findings: [], rating: 10, verdict: "comment" },
+    ],
+    [
+      "## Must fix\n\nNone.\n\n## Comments\n\n- **blocking** `a.mjs:5`: why?\n\nRating: 8/10\nVerdict: request-changes",
+      {
+        findings: [],
+        rating: 8,
+        comments: [{ blocking: false, path: "a.mjs", line: 5, text: "why?" }],
+      },
+    ],
+  ];
+  for (const [markdown, data] of less) {
+    const said = [];
+    const review = parseReview(
+      `${markdown}\n\n${block({ ...notes, comments: [], verdict: "request-changes", ...data })}`,
+      { log: (line) => said.push(line) },
+    );
+    assert.deepEqual(
+      [review.verdict, review.findings, review.rating, said],
+      [
+        data.verdict ?? "request-changes",
+        parseReview(markdown).findings,
+        parseReview(markdown).rating,
+        ["the review's verdict block says less than its markdown: read from its markdown"],
+      ],
+      markdown,
+    );
+  }
+  // Saying more than the markdown, at the same places: the block's review, nothing logged.
+  const moreSaid = [];
+  const fuller = parseReview(
+    `${sql}\n\nRating: 4/10\nVerdict: request-changes\n\n${block({ ...notes, comments: [], findings: [finding("critical", "a.mjs", 1), finding("low", "d.mjs", 4)], rating: 3 })}`,
+    { log: (line) => moreSaid.push(line) },
+  );
+  assert.deepEqual([fuller.findings.length, fuller.rating, moreSaid], [2, 3, []]);
   // Markdown and block agreeing on request-changes over nothing blocking: comment, as either
   // alone reads, nothing logged. Tolerated medium findings, and Must fix None. with follow-ups.
   const quiet = [];
