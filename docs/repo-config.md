@@ -1709,6 +1709,8 @@ first (again after a push to its default branch).
 | `server:read`       | Server-wide (`repo: null`): the server's setup and grants.    |
 | `server:sync`       | Server-wide: Sync.                                            |
 
+<!-- onboarding: skip: Where each action is asked, its prefixes, roles and the operator's bindings are in docs/repo-config.md in Deckhand's source. -->
+
 **Where they are asked**: each dashboard route needs its action (the backlog, its counts in
 the repositories list and a discussion's thread `tasks:read`; starting, queueing or laying out work, the inbox, Analyze, a
 discussion, onboarding and a chat's creation and messages `runs:start:<mode>` for the mode they start (`chat` for a chat), wrapping a brainstorm up `runs:start:stop`; cancelling, rerunning,
@@ -1811,6 +1813,8 @@ or in a repository's `.deckhand/policy/`, for its own (`deny_access contains {"a
 "runs:start:work", "reason": "…"} if input.user.login != "release-bot"`). A repository's
 `allow_access` is ignored, a config check error, and its `.deckhand.yaml`'s `users` still
 narrows on its own.
+
+<!-- onboarding: end -->
 
 **What a repository may narrow**: only its own access, never give any. Its maintainers have two
 ways, both read from its default branch (so whoever may push there decides them):
