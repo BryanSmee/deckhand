@@ -1084,9 +1084,10 @@ branch, sha, ready }` (or `ask`). Before the run ends, the orchestrator checks i
   (`Closes #<n>`), and marks it ready with `ready`. A refusal (400, 409) writes nothing, and the
   run goes on. The pull request is the App's, so the review and its fix loop treat it as any
   of Deckhand's own: a fix round is the issue's task, which sticks to the machine. It is recorded
-  with `external: <owner>` (`pulls.mjs`), kept whatever later deliveries say, for the dashboard
+  with `external: <owner>` (`pulls.mjs`) once opened or found, before it is marked ready, kept whatever later deliveries say, for the dashboard
   and the policies' `pr.external`; the run's record gets the branch, and `lastPushAt` when its
-  head is a commit the pull request didn't have (its reviewers asked again).
+  head isn't the one the pull request had at the claim (its reviewers asked again), its
+  `synchronize` delivery recorded first or not.
 - **Interrupted**: `release`, a lease that runs out (no heartbeat for 2 minutes) or the machine
   removed end the run as `interrupted` (`interruptExternal()`): a comment on the issue says so,
   its comments go back first in the queue with their 👀, for that machine's next claim, which

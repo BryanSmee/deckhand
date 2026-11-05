@@ -381,6 +381,8 @@ export function createClaims(
       claimedAt: now(),
       leaseUntil: now() + leaseMs,
       resume,
+      // Its pull request's head as the run starts: what finish() tells a push of this run's by.
+      head: ctx.pulls?.get(key)?.head ?? null,
     };
     task.next = {};
     ctx.order?.drop(key);
@@ -585,7 +587,12 @@ export function createClaims(
     let pull = null;
     if (pushed) {
       const c = task.claim;
-      pull = await openPull(ctx, task, { ...pushed, owner: c.owner, machine: c.name });
+      pull = await openPull(ctx, task, {
+        ...pushed,
+        owner: c.owner,
+        machine: c.name,
+        since: c.head ?? null,
+      });
       // Its run ended meanwhile (a lease run out, a cancel): its pull request stays.
       task = going(owner, id, run);
       const { record } = task.live;

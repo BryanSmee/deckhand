@@ -40,10 +40,16 @@ Pushed from @${owner}'s machine ${machine} (a Deckhand machine run): its commits
 
 // The pull request of task `task`'s machine run, from `branch` at `sha` (the machine's push),
 // opened as the App, or the App's already open from it; marked ready for review with `ready`.
-// `owner` and `machine`: the machine's (claims.mjs). → { number, url, state, opened, moved }
-// (`moved`: its head is a commit it didn't have, a push this run made). Refused (400, 409) when
+// `owner` and `machine`: the machine's (claims.mjs); `since`: the pull request's head when the
+// run was claimed (null: none known). → { number, url, state, opened, moved } (`moved`: its
+// head isn't the one it had then, a push this run made, whether or not its `synchronize`
+// delivery came first). Refused (400, 409) when
 // a check fails, nothing written then. `ctx`: github, graphql, config, pulls, titles, log.
-export async function openPull(ctx, task, { branch, sha, ready = false, owner, machine }) {
+export async function openPull(
+  ctx,
+  task,
+  { branch, sha, ready = false, owner, machine, since = null },
+) {
   const { github } = ctx;
   const repo = task.repo;
   const number = task.number;
@@ -89,6 +95,9 @@ export async function openPull(ctx, task, { branch, sha, ready = false, owner, m
       if (!pr) {
         const said = await res.json().catch(() => ({}));
         const why = said.errors?.map((e) => e.message).find(Boolean) ?? said.message ?? "422";
+        if (/no commits between/i.test(why)) {
+          throw new Refused(409, `${branch} has no commits beyond ${base}: nothing to open.`);
+        }
         throw new Refused(
           409,
           `GitHub doesn't open the pull request: ${String(why).slice(0, 300)}`,
@@ -96,6 +105,10 @@ export async function openPull(ctx, task, { branch, sha, ready = false, owner, m
       }
     }
   }
+  // Marked as the machine's before anything else can fail: a mutation that throws mustn't leave
+  // the App's pull request unmarked, which machines.rego would then let auto-merge.
+  const { key } = pullEntry(repo, pr);
+  ctx.pulls?.record(key, { ...pullEntry(repo, pr).pr, head: sha, external: owner });
   let readyAt = null;
   if (ready && pr.draft) {
     await ctx.graphql(
@@ -106,10 +119,9 @@ export async function openPull(ctx, task, { branch, sha, ready = false, owner, m
     pr = { ...pr, draft: false };
     readyAt = Date.now();
   }
-  const { key, pr: entry } = pullEntry(repo, pr, readyAt);
-  const before = ctx.pulls?.get(key);
-  const moved = opened || before?.number !== pr.number || before?.head !== sha;
-  ctx.pulls?.record(key, { ...entry, head: sha, external: owner });
+  const { pr: entry } = pullEntry(repo, pr, readyAt);
+  if (readyAt) ctx.pulls?.record(key, { ...entry, head: sha, external: owner });
+  const moved = opened || since !== sha;
   return { number: pr.number, url: pr.html_url, state: entry.state, opened, moved };
 }
 

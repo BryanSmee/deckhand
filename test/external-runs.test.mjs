@@ -414,7 +414,8 @@ test("finish with a pushed branch: the App opens its pull request, a machine's, 
   const { ctx, said } = b;
   const branch = "issue-12-build-the-level";
   const sha = "a".repeat(40);
-  const gh = fakeGithub(b, { [branch]: sha, "issue-13-other": "b".repeat(40) });
+  const refs = { [branch]: sha, "issue-13-other": "b".repeat(40) };
+  const gh = fakeGithub(b, refs);
   const { desk, work } = await claimed(b);
   assert.equal(work.branch, branch);
   const finish = (pushed, outcome = "ok") =>
@@ -511,6 +512,80 @@ test("finish with a pushed branch: the App opens its pull request, a machine's, 
   assert.equal(b.run(fix.run).lastPushAt, null);
   assert.equal(gh.writes.length, 2, "nothing written again");
   assert.deepEqual(said.after.at(-1), ["fixed", 30, "ok"]);
+
+  // The next round pushes, and GitHub's `synchronize` delivery of it is recorded before its
+  // finish: still a push of this run's, by the head the pull request had at its claim.
+  await b.say("alice", "Once more.", { id: 104 });
+  b.ready();
+  const again = await ctx.claims.claim("alice", desk);
+  const pushed = "d".repeat(40);
+  refs[branch] = pushed;
+  gh.pulls[0].head.sha = pushed;
+  ctx.pulls.record(KEY, { number: 30, url: "u", state: "ready", readyAt: null, head: pushed });
+  const round = await ctx.claims.finish("alice", desk, again.run, {
+    outcome: "ok",
+    pushed: { branch, sha: pushed },
+  });
+  assert.equal(round.pull.moved, true);
+  assert.ok(b.run(again.run).lastPushAt);
+});
+
+test("finish with a pushed branch: the pull request is marked a machine's before marking it ready can fail", async (t) => {
+  const b = bench(t);
+  const { ctx } = b;
+  const branch = "issue-12-build-the-level";
+  const sha = "a".repeat(40);
+  const gh = fakeGithub(b, { [branch]: sha });
+  ctx.graphql = async () => {
+    throw new Error("GitHub GraphQL: 502");
+  };
+  const { desk, work } = await claimed(b);
+  await assert.rejects(
+    ctx.claims.finish("alice", desk, work.run, {
+      outcome: "ok",
+      pushed: { branch, sha, ready: true },
+    }),
+    /502/,
+  );
+  // Opened, and already the machine's: machines.rego holds whoever marks it ready.
+  assert.equal(gh.pulls.length, 1);
+  assert.equal(ctx.pulls.externalOf("org/repo", 30), "alice");
+  // Asked again: found, not opened twice.
+  ctx.graphql = async () => ({});
+  const done = await ctx.claims.finish("alice", desk, work.run, {
+    outcome: "ok",
+    pushed: { branch, sha, ready: true },
+  });
+  assert.deepEqual([done.pull.number, done.pull.opened, done.pull.state], [30, false, "ready"]);
+  assert.equal(gh.pulls.length, 1);
+});
+
+test("finish with a pushed branch: a branch with nothing beyond its base is said so", async (t) => {
+  const b = bench(t);
+  const { ctx } = b;
+  const branch = "issue-12-build-the-level";
+  const sha = "a".repeat(40);
+  fakeGithub(b, { [branch]: sha });
+  const github = ctx.github;
+  ctx.github = async (repo, method, path, body, expected) =>
+    method === "POST"
+      ? Response.json(
+          {
+            message: "Validation Failed",
+            errors: [{ message: "No commits between main and issue-12-build-the-level" }],
+          },
+          { status: 422 },
+        )
+      : github(repo, method, path, body, expected);
+  const { desk, work } = await claimed(b);
+  await assert.rejects(
+    ctx.claims.finish("alice", desk, work.run, { outcome: "ok", pushed: { branch, sha } }),
+    {
+      status: 409,
+      message: "issue-12-build-the-level has no commits beyond main: nothing to open.",
+    },
+  );
+  assert.equal(b.run(work.run).status, "running");
 });
 
 test("finish with a pushed branch: a pull request from it that isn't the App's, or closes another issue, is refused", async (t) => {
