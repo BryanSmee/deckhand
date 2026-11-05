@@ -4906,6 +4906,10 @@ allow_capabilities contains "read:pulls"
       onboarding: { "org/other": { issue: 3, at: 1 } },
       conflicts: { "org/repo#8": { pr: 9, head: "h", base: "b", at: 1 } },
       requested: { "org/repo#pr-9": { head: "h", at: Date.now() } },
+      // A task placed, its comments not queued at start (their author no longer allowed, say):
+      // its key goes as the orchestrator starts (order.keep()), before anything else writes the
+      // order.
+      order: { "org/repo#99": { key: "org/repo#99" } },
     };
     const ctx = await listen(t, {}, (dir, github) => {
       for (const [name, value] of Object.entries(legacy)) {
@@ -4934,7 +4938,11 @@ allow_capabilities contains "read:pulls"
     for (const name of Object.keys(legacy)) {
       assert.equal(existsSync(join(dir, `${name}.json`)), false, name);
       const expected =
-        name === "modes" ? { ...legacy.modes, "org/repo#3": "review" } : legacy[name];
+        name === "modes"
+          ? { ...legacy.modes, "org/repo#3": "review" }
+          : name === "order"
+            ? {}
+            : legacy[name];
       assert.deepEqual(await storedMap(dir, name), expected, name);
     }
     // Each item a file of its own, out of the state file every lease renewal writes (#691).
