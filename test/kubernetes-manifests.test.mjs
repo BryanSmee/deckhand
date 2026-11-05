@@ -164,7 +164,7 @@ const allows = (acl, command) =>
 
 // The services whose stores list their keys (keys(): SCAN, which Redis doesn't hold to a user's
 // key pattern): the others' users go without it.
-const SCANS = ["orchestrator"];
+const SCANS = ["orchestrator", "runner"];
 
 test("components/redis and setup.md: each user's ACL allows every command the store sends", () => {
   const commands = storeCommands();
