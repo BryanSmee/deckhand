@@ -402,7 +402,7 @@ export function unallowed(decision, doc, layer) {
 // How long a repository's grants (grants()) are kept for the same operator policies, and for how
 // many repositories at most.
 export const GRANTS_MS = 60_000;
-const MAX_GRANTS = 1000;
+export const MAX_GRANTS = 1000;
 
 // How much of a policy file's text the dashboard gets: its source view, not a download.
 export const MAX_TEXT = 20 * 1024;
