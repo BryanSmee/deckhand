@@ -11,11 +11,13 @@
 // repository's secrets in tool output: its readers are the dashboard's, nobody else. The write
 // tools (#483) call what the dashboard's work area does (work.mjs), with its checks and its App
 // comments: what it refuses is the tool's error, its message as the dashboard shows it.
+import { StringDecoder } from "node:string_decoder";
+
 import { Refused, readBody, send } from "../lib/http.mjs";
 import { agentFor } from "./agents/index.mjs";
 import { STATES } from "./board.mjs";
 import { parseKey } from "./events.mjs";
-import { reader } from "./runlog.mjs";
+import { reader, stampOf } from "./runlog.mjs";
 import { taskId } from "./spelling.mjs";
 
 // The versions of the protocol this server speaks, the newest first: a client asking for
@@ -38,6 +40,11 @@ const MAX_LINE_BYTES = 4 * 1024 * 1024;
 // How much a search for a line's start reads back first: twice as much each time after, up to a
 // page, since that line is most often short.
 const LINE_STEP = 4 * 1024;
+// What a page in the middle of a log reads of the run's preparation at once, at first: a log from
+// before phases needs its first lines only (readerAt()).
+const PRIMING_BYTES = 4 * 1024;
+// Enough for an `at` line (runlog.mjs writeEvent()), the one before a page's first line.
+const STAMP_BYTES = 128;
 
 export const READ = "deckhand:read";
 export const WORK = "deckhand:work";
@@ -329,7 +336,7 @@ export function createMcp({ source, version = "dev", now = Date.now, log = () =>
     // The newest page runs to the log's end, however far back it starts.
     const end = from === null ? size : Math.min(size, start + limit);
     const page = await readPage(run.id, start, end, size, !running);
-    const read = reader(agentFor(run.agent));
+    const read = await readerAt(run, page.from);
     const entries = page.text.split("\n").flatMap(read);
     const previous =
       page.from > 0
@@ -591,6 +598,38 @@ export function createMcp({ source, version = "dev", now = Date.now, log = () =>
       if (!more.length) return slice(data, from, end);
       data = Buffer.concat([data, more]);
     }
+  }
+
+  // A reader (runlog.mjs reader()) for the page of the run's log from byte `from`, a line's
+  // start, in the state reading the log from its start leaves it in there (#889): the chat its
+  // first line says it is, the phase and the image's steps in force, and the time an `at` line
+  // just before gives the page's first line. Only the run's preparation sets them, so only it is
+  // read, to the page at most (settled()): a page after it reads the log's first lines, not all
+  // before it.
+  async function readerAt(run, from) {
+    const read = reader(agentFor(run.agent));
+    if (from === 0) return read;
+    const decoder = new StringDecoder("utf8");
+    let rest = "";
+    for (let offset = 0, chunk = PRIMING_BYTES; offset < from && !read.settled();) {
+      const data = await readRange(run.id, offset, Math.min(from, offset + chunk));
+      if (!data.length) break;
+      offset += data.length;
+      chunk = Math.min(2 * chunk, PAGE_BYTES);
+      const lines = (rest + decoder.write(data)).split("\n");
+      rest = lines.pop();
+      for (const line of lines) if (!read.settled()) read(line);
+    }
+    // Read again when the priming got there: an `at` line only sets the time of the next one.
+    const start = Math.max(0, from - STAMP_BYTES);
+    const lines = (await readRange(run.id, start, from)).toString("utf8").split("\n");
+    lines.pop();
+    const before = lines.pop();
+    // Whole, not the end of a longer line cut where the read starts.
+    if (before !== undefined && (lines.length || start === 0) && stampOf(before) !== null) {
+      read(before);
+    }
+    return read;
   }
 
   // The start of the line holding byte `a - 1` (no new line), read back from it: `a` itself

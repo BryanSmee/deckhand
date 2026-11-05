@@ -787,6 +787,36 @@ test("reader: an image build's output comes as its steps", () => {
   assert.deepEqual(entries.at(-1), { kind: "phase", phase: "setup", at: 2000 });
 });
 
+// What a page read from the middle of a log (mcp.mjs) reads before it: up to the end of the
+// run's preparation, the setup and the image's build (#889).
+test("reader: settled once the run's preparation is over", () => {
+  const read = reader();
+  const steps = [
+    [line({ type: "listener", kind: "issue", message: "Go" }), false],
+    [phase("setup", 1), false],
+    ["Cloning into '/workspace'...", false],
+    [line({ type: "assistant", message: { content: [] } }), false],
+    [phase("image", 2), false],
+    ["#1 [internal] load build definition", false],
+    [phase("setup", 3), false],
+    [phase("work", 4), true],
+    [phase("image", 5), true],
+  ];
+  for (const [l, settled] of steps) {
+    read(l);
+    assert.equal(read.settled(), settled, l);
+  }
+  // A log from before phases: at its first line that isn't the listener's.
+  const old = reader();
+  old(line({ type: "listener", kind: "issue", message: "Go" }));
+  old(line({ type: "listener", event: "note", at: 1, message: "Hi" }));
+  assert.equal(old.settled(), false);
+  old("");
+  assert.equal(old.settled(), false);
+  old("Cloning into '/workspace'...");
+  assert.equal(old.settled(), true);
+});
+
 test("reader: only the image phase's lines are build steps; a step named again adds nothing", () => {
   const read = reader();
   assert.deepEqual(read("#3 [internal] load .dockerignore"), [

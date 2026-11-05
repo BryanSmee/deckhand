@@ -5,6 +5,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createHttp } from "../listener/http.mjs";
 import { Refused } from "../lib/http.mjs";
+import { agentFor } from "../listener/agents/index.mjs";
 import {
   MAX_PAGE_BYTES,
   MAX_TASKS_PAGE,
@@ -13,6 +14,7 @@ import {
   TASKS_PAGE,
 } from "../listener/mcp.mjs";
 import { createRepoApi } from "../listener/repos.mjs";
+import { reader } from "../listener/runlog.mjs";
 import { MEMBER, permissionsOf, serve, testConfig } from "./helpers.mjs";
 
 const line = (value) => `${JSON.stringify(value)}\n`;
@@ -555,6 +557,90 @@ test("MCP: get_run_log pages back over a line longer than a page, in the middle 
   // The newest page of the second: the long line itself, read whole.
   const newest = (await tool("get_run_log", { runId: "last", limit })).structuredContent;
   assert.deepEqual(newest.entries, [{ kind: "text", text: long }]);
+});
+
+// A page from the middle of a log reads as that part of the whole log does (#889): a chat's
+// messages, the image's build as its steps, a line timed by the `at` line before the page.
+test("MCP: get_run_log reads a page from the middle as the whole log reads there", async (t) => {
+  const id = "org-repo-1-1000";
+  const listener = (fields) => line({ type: "listener", ...fields });
+  const at = (ms) => listener({ event: "at", at: ms });
+  const setup = Array.from({ length: 50 }, (_, i) => `Setup line ${i}\n`).join("");
+  const build = Array.from({ length: 300 }, (_, i) => `#5 0.${i} npm output ${i}\n`).join("");
+  const work = Array.from({ length: 2000 }, (_, i) => text(`work ${i}`)).join("");
+  const call = line({
+    type: "assistant",
+    message: { content: [{ type: "tool_use", id: "t1", name: "Bash", input: { command: "ls" } }] },
+  });
+  const prepared =
+    listener({ mode: "start", kind: "chat", key: "org/repo#1" }) +
+    listener({ event: "phase", phase: "setup", at: 1000 }) +
+    setup +
+    listener({ event: "phase", phase: "image", at: 2000 }) +
+    at(7000) +
+    "#5 [stage 1/2] RUN npm ci\n" +
+    build +
+    "#5 DONE 3.0s\n" +
+    listener({ event: "phase", phase: "setup", at: 3000 }) +
+    listener({ event: "phase", phase: "work", at: 4000 });
+  const tail = at(9000) + call + listener({ event: "delivered", at: 9500, message: "Hi" });
+  const log = prepared + work + tail + work;
+  const { ctx, reads } = orchestrator({ runs: [runOf("org/repo#1", id)], logs: { [id]: log } });
+  const { tool } = await serveMcp(t, ctx);
+  const whole = log.split("\n").flatMap(reader(agentFor("claude")));
+
+  // Every page, small ones, back to the start: together, what the whole log reads as.
+  const pages = await pagesBack(tool, id, 2048);
+  assert.ok(pages.length > 20);
+  assert.deepEqual(
+    pages.flatMap((p) => p.entries),
+    JSON.parse(JSON.stringify(whole)),
+  );
+
+  const page = async (from) => (await tool("get_run_log", { runId: id, from })).structuredContent;
+  // In the build: its lines are its step's output, its end the step's, as started at 7000.
+  const inBuild = await page(Buffer.byteLength(prepared) - 3000);
+  assert.deepEqual(
+    inBuild.entries.find((e) => e.kind === "raw"),
+    {
+      kind: "raw",
+      step: 5,
+      text: inBuild.entries.find((e) => e.kind === "raw").text,
+    },
+  );
+  assert.match(inBuild.entries.find((e) => e.kind === "raw").text, /^npm output \d+$/);
+  assert.deepEqual(
+    inBuild.entries.filter((e) => e.kind === "step"),
+    [
+      {
+        kind: "step",
+        step: 5,
+        stage: "stage 1/2",
+        name: "RUN npm ci",
+        status: "done",
+        seconds: 3,
+        error: null,
+        at: 7000,
+      },
+    ],
+  );
+
+  // Right after an `at` line: the page's first line has its time; a chat's message is one.
+  const start = Buffer.byteLength(prepared + work + at(9000));
+  reads.length = 0;
+  const timed = await page(start);
+  assert.equal(timed.from, start);
+  assert.deepEqual(timed.entries.slice(0, 2), [
+    { kind: "tool", name: "Bash", text: "ls", id: "t1", at: 9000 },
+    { kind: "message", text: "Hi" },
+  ]);
+  // The preparation read, and the line before the page, not the work between them.
+  const skipped = [Buffer.byteLength(prepared) + PAGE_BYTES, start - 128];
+  assert.ok(skipped[1] - skipped[0] > PAGE_BYTES);
+  assert.ok(
+    reads.every((r) => r.offset + r.got <= skipped[0] || r.offset >= skipped[1]),
+    JSON.stringify(reads),
+  );
 });
 
 test("MCP: a running run gives what it has written, its last line once it is whole", async (t) => {
