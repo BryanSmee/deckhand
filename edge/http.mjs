@@ -14,7 +14,7 @@ import { quietPayload, verified } from "../listener/events.mjs";
 import { QUIET_EVENTS } from "../listener/github-app.mjs";
 import { serveAsset } from "../listener/static.mjs";
 import { drainable } from "../lib/drain.mjs";
-import { readBody } from "../lib/http.mjs";
+import { readBody, send } from "../lib/http.mjs";
 import { storable } from "../lib/store.mjs";
 import { ciWaitingKey, DELIVERIES } from "./internal.mjs";
 import { logContext, withRequest } from "../lib/log.mjs";
@@ -50,7 +50,8 @@ const MAX_API_BODY = 1024 * 1024;
 // An MCP client's call is smaller still: a tool's name and its arguments (../listener/mcp.mjs).
 const MAX_MCP_BODY = 64 * 1024;
 // But a machine's (deckhand:machine): post_events sends its agent's output, as the dashboard's
-// posts at most (../listener/mcp.mjs MAX_MACHINE_BODY).
+// posts at most (../listener/mcp.mjs MAX_MACHINE_BODY). A larger body is refused (413) once read
+// and dropped, up to 1 MB past its limit (2 MB here), and cut past that (readBody()).
 const MAX_MACHINE_BODY = MAX_API_BODY;
 // The most deliveries the stream keeps unread (far more than a handover leaves); one the
 // orchestrator acknowledged goes from it at once (internal.mjs).
@@ -307,7 +308,12 @@ export function createEdgeHttp({
       return await readBody(req, max);
     } catch (error) {
       if (error.status !== 413) throw error;
-      if (!res.headersSent) res.writeHead(413, { connection: "close" }).end();
+      // As the orchestrator's API refuses it (../listener/web.mjs apiRoute()): the dashboard
+      // shows its `error`.
+      if (!res.headersSent) {
+        res.setHeader("connection", "close");
+        send(res, 413, { error: `The request is over ${max} bytes.` });
+      }
       return null;
     }
   }
