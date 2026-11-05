@@ -213,7 +213,9 @@ export async function branchConfigReport(request, config, repo, number, policies
     }
   }
   if (policies) {
-    const checked = await policies.checkRepo(repo, branch);
+    const checked = await policies.checkRepo(repo, branch, {
+      modes: Object.keys(settings.modes),
+    });
     errors.push(...checked.errors.map((e) => `\`${POLICY_DIR}/\`: ${e}`));
     warnings.push(...checked.warnings.map((w) => `\`${POLICY_DIR}/\`: ${w}`));
     // A capability's name nobody knows (a misspelled deny denies nothing): only evaluating the
