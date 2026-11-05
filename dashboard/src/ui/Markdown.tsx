@@ -73,8 +73,7 @@ function parse(lines: string[]): Block[] {
       const body: string[] = [];
       i++;
       while (i < lines.length) {
-        const close = lines[i].trim();
-        if (close.startsWith(mark[0].repeat(mark.length)) && !close.replace(/^[`~]+/, "")) break;
+        if (closes(lines[i], mark)) break;
         body.push(lines[i].slice(Math.min(strip, indentOf(lines[i]))));
         i++;
       }
@@ -159,6 +158,47 @@ function parse(lines: string[]): Block[] {
   return blocks;
 }
 
+// Whether `body` ends inside a fenced code block still open.
+function openFence(body: string[]): boolean {
+  let open = "";
+  for (const line of body) {
+    const fence = FENCE.exec(line);
+    if (!open && fence) open = fence[1];
+    else if (open && closes(line, open)) open = "";
+  }
+  return !!open;
+}
+
+// Whether `line` closes a fence opened with `mark`: as many of its character or more, alone.
+const closes = (line: string, mark: string) => {
+  const close = line.trim();
+  return close.startsWith(mark[0].repeat(mark.length)) && !close.replace(/^[`~]+/, "");
+};
+
+// The text's lines, tabs in their indentation as spaces (to the next multiple of 4) for the
+// block structure, but none in a fence's lines: copied code keeps its tabs (a Makefile's).
+function linesOf(text: string): string[] {
+  let open = "";
+  return text
+    .replace(/\r\n?/g, "\n")
+    .split("\n")
+    .map((line) => {
+      if (open) {
+        if (closes(line, open)) open = "";
+        return line;
+      }
+      const expanded = line.replace(/^[ \t]+/, (ws) => {
+        let col = 0;
+        for (const ch of ws) col = ch === "\t" ? col + 4 - (col % 4) : col + 1;
+        return " ".repeat(col);
+      });
+      // In a list item or a quote, a fence is indented or after `>`: found loosely here.
+      const fence = /^[ >]*(`{3,}(?![^`]*`)|~{3,})/.exec(expanded);
+      if (fence) open = fence[1];
+      return expanded;
+    });
+}
+
 // A list from its first item at `i`, onto `blocks`; returns the line after it. A line indented
 // past its marker (by more than one space, as agents nest with two) belongs to the item above.
 function list(lines: string[], i: number, blocks: Block[]): number {
@@ -192,7 +232,8 @@ function list(lines: string[], i: number, blocks: Block[]): number {
         while (j < lines.length && blank(lines[j])) j++;
         if (j < lines.length && indentOf(lines[j]) > indent + 1) {
           body.push(...lines.slice(i, j).map(() => ""));
-          loose = true;
+          // A code block's blank lines are its own: they don't make the list loose.
+          if (!openFence(body)) loose = true;
           i = j;
           continue;
         }
@@ -264,8 +305,11 @@ const anchor = (url: string, children: ComponentChildren, key: number) => (
 );
 
 // A closing run of exactly `n` of `c` after `from`, not after a space; code spans skipped. With
-// `longer`, a longer run's last `n` close too: `**bold *it***` ends both at once.
+// `longer`, a longer run closes too: its last `n` after an inner opener (`**bold *it***` ends
+// both at once), else its first (`*foo**` is an em and a `*`).
 function closerAt(s: string, from: number, c: string, n: number, longer = false): number {
+  // A run of `c` met on the way: an inner opener, which a longer closer's first marks close.
+  let inner = false;
   for (let j = from; j < s.length; j++) {
     if (s[j] === "\\") j++;
     else if (s[j] === "`") {
@@ -278,7 +322,8 @@ function closerAt(s: string, from: number, c: string, n: number, longer = false)
       const after = s[k] ?? "";
       const fits = k - j === n || (longer && k - j > n);
       if (fits && !/\s/.test(s[j - 1]) && j > from && !(c === "_" && WORD.test(after)))
-        return k - n;
+        return inner ? k - n : j;
+      inner = true;
       j = k - 1;
     }
   }
@@ -456,13 +501,7 @@ function render(block: Block, key: number, tight = false): ComponentChildren {
 }
 
 export function Markdown({ text, class: className }: { text: string; class?: string }) {
-  const blocks = useMemo(
-    () => parse(text.replace(/\r\n?/g, "\n").replace(/\t/g, "    ").split("\n")),
-    [text],
-  );
-  return (
-    <div class={[styles.markdown, className].filter(Boolean).join(" ")}>
-      {blocks.map((b, k) => render(b, k))}
-    </div>
-  );
+  // Parsed and rendered once per text: a chat re-renders every reply as each entry streams in.
+  const children = useMemo(() => parse(linesOf(text)).map((b, k) => render(b, k)), [text]);
+  return <div class={[styles.markdown, className].filter(Boolean).join(" ")}>{children}</div>;
 }

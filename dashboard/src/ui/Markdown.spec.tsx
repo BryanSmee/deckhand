@@ -178,3 +178,25 @@ test("only a list from 1 interrupts a paragraph; a lone dash under one isn't an 
   expect(md.querySelector("ul")).toBeTruthy();
   expect(html("Title\n--").querySelector("h2")!.textContent).toBe("Title");
 });
+
+test("a code block keeps its tabs; tabs in indentation still nest", () => {
+  const md = html("```make\nall:\n\tgo build\n```\n\nRun `a\tb`.\n\n- a\n\t- b");
+  expect(md.querySelector("pre")!.textContent).toBe("all:\n\tgo build");
+  expect(md.querySelector("p code")!.textContent).toBe("a\tb");
+  expect(md.querySelector("ul ul")!.textContent).toBe("b");
+  const nested = html("1. Make:\n   ```make\n   all:\n   \tgo build\n   ```");
+  expect(nested.querySelector("pre")!.textContent).toBe("all:\n\tgo build");
+});
+
+test("blank lines in an item's code block don't make its list loose", () => {
+  const md = html("1. Run:\n   ```sh\n   a\n\n   b\n   ```\n2. Next");
+  expect(md.querySelector("li > p")).toBeNull();
+  expect(md.querySelector("pre")!.textContent).toBe("a\n\nb");
+  expect(md.querySelectorAll("ol > li").length).toBe(2);
+});
+
+test("a longer closing run with no inner opener gives up its first marks", () => {
+  const md = html("*foo**");
+  expect(md.querySelector("em")!.textContent).toBe("foo");
+  expect(md.textContent).toBe("foo*");
+});
