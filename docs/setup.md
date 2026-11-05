@@ -2058,9 +2058,11 @@ each `logs/<run>.live.json` left there to the store, tells the broker the tokens
 removes it; a `logs/<run>.queued.json` (a task's queue a run's end couldn't write to the store)
 is read with the queue and removed once the queue is written. A `logs/<run>.live.json` that
 isn't a run's state (unreadable, or missing its `id`, `task` or `record`) is no live run's: it
-is left where it is, logged at each start (`<file>: not a run's state, left there`) (and,
-before #619, that run's log was summarized and sent to the runner as an ended run's). Look at it,
-then remove it.
+is set aside as `logs/<run>.live.json.bad`, logged once (`<file>: not a run's state, set aside
+as <file>.bad`), then named at each start among what the volume holds that nothing reads any
+more, until it is removed (one already there is kept: the next is `.bad.2`, and so on). A file
+that can't be renamed stays where it is, logged at each start (`<file>: not a run's state, left
+there: <why>`). Look at it, then remove it.
 Nothing else to do, but:
 
 - **Update the broker with the orchestrator** (the same release, as compose and the manifests

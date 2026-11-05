@@ -7,7 +7,7 @@
 // which outlives it), follows their output from where
 // the previous one stopped, and posts each reply once.
 import { randomUUID } from "node:crypto";
-import { rmSync } from "node:fs";
+import { renameSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { agentFor } from "./agents/index.mjs";
 import { parseKey, taskKey } from "./events.mjs";
@@ -58,15 +58,14 @@ export const QUEUE_KEY = "queue";
 export const LIVE_PREFIX = "runs/";
 const liveKey = (id) => `${LIVE_PREFIX}${id}`;
 
-// The ids of the runs whose states are in the store, read before restoreRuns() (server.mjs:
-// their logs aren't summarized as ended ones). A key that holds no run's state isn't one:
-// restoreRuns() removes it.
-export async function liveRunIds(store) {
-  const ids = new Set();
-  for await (const [key, saved] of values(store, LIVE_PREFIX)) {
-    if (isRunState(saved)) ids.add(key.slice(LIVE_PREFIX.length));
-  }
-  return ids;
+// Where moveLive() sets aside a logs/<run>.live.json that holds no run's state, no move reading
+// it again: <file>.bad, or <file>.bad.<n> beside one the operator hasn't removed yet, which a
+// rename would overwrite.
+function asideName(dir, file) {
+  const taken = new Set(listDir(dir));
+  let name = `${file}.bad`;
+  for (let n = 2; taken.has(name); n++) name = `${file}.bad.${n}`;
+  return name;
 }
 
 // What tells a queued comment apart, given when it is accepted (tasks.mjs accept()): a comment
@@ -151,15 +150,23 @@ export function createRestart(ctx) {
   // Each logs/<run>.live.json written to the store without its tokens. A store that refuses the
   // write fails the start, the file kept: the queue can't be read either then. One whose run the
   // store has already (a copy that stopped before the broker service had its tokens) leaves the
-  // store's, newer, as it is: only its tokens are read. One that isn't a run's state is left
-  // where it is, logged.
+  // store's, newer, as it is: only its tokens are read. One that isn't a run's state is set
+  // aside as <run>.live.json.bad, logged once: left as it was, it would be logged at every
+  // start. The operator removes it (tidyData() names it, server.mjs); a rename that fails leaves
+  // it there, logged, for the next start to try again.
   async function moveLive() {
     const files = listDir(ctx.logDir).filter((f) => f.endsWith(".live.json"));
     for (const file of files) {
       const path = join(ctx.logDir, file);
       const saved = readJson(path);
       if (!isRunState(saved)) {
-        log(`${file}: not a run's state, left there`);
+        try {
+          const aside = asideName(ctx.logDir, file);
+          renameSync(path, join(ctx.logDir, aside));
+          log(`${file}: not a run's state, set aside as ${aside}`);
+        } catch (err) {
+          log(`${file}: not a run's state, left there: ${err.message}`);
+        }
         continue;
       }
       const { agentToken: agent, runTokens: issued, ...state } = saved;
