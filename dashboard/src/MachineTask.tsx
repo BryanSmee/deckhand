@@ -5,35 +5,35 @@
 import { useState } from "preact/hooks";
 import { postJson } from "./api";
 import { ago, machineName } from "./format";
+// `tr`: t() where the task is called `t`.
+import { t as tr } from "./i18n";
 import type { Task } from "./types";
 import { Button } from "./ui/Button";
 import styles from "./MachineTask.module.css";
 
-// "Runs on @alice's machines labelled unreal: waiting for one to claim it", "Claimed by
-// @alice's Desk".
+// "Runs on @alice's machines labelled unreal: none online", "… : on Desk".
 export function MachineFact({ task: t }: { task: Task }) {
   const m = t.machine;
   if (!m) return null;
-  const title = m.via === "label" ? `Its runs-on:${m.want} label` : "A /machine comment";
-  if (m.claimed)
+  const title =
+    m.via === "label" ? tr("machine.byLabel", { want: m.want }) : tr("machine.byComment");
+  if (m.claimed) {
     return (
       <span title={title}>
-        Claimed by @{m.owner}'s {machineName(m)}
+        {tr("machine.claimedBy", { owner: m.owner, machine: machineName(m) })}
       </span>
     );
+  }
   const asked = m.machine
-    ? `@${m.owner}'s ${m.machine}`
-    : `@${m.owner}'s machines ${m.via === "label" ? `labelled ${m.want}` : `(${m.want})`}`;
+    ? tr("machine.one", { owner: m.owner, machine: m.machine })
+    : tr(m.via === "label" ? "machine.labelled" : "machine.named", {
+        owner: m.owner,
+        want: m.want,
+      });
   const now = m.available
-    ? `waiting for ${m.machine ? "it" : "one of them"} to claim it`
-    : m.machine
-      ? "it is offline"
-      : "none of them is online";
-  return (
-    <span title={title}>
-      Runs on {asked}: {now}
-    </span>
-  );
+    ? tr(m.machine ? "machine.waitingIt" : "machine.waitingOne")
+    : tr(m.machine ? "machine.offline" : "machine.noneOnline");
+  return <span title={title}>{tr("machine.runsOn", { asked, now })}</span>;
 }
 
 interface Props {
@@ -63,24 +63,19 @@ export function HeldComments({ task: t, user, now, refresh }: Props) {
   }
 
   return (
-    <section class={styles.held} aria-label="Held comments">
-      <h3>
-        {held.length === 1 ? "1 comment held" : `${held.length} comments held`} for @{owner}
-      </h3>
-      <p class={styles.note}>
-        This task runs on @{owner}'s machines: other people's comments reach its runs once @{owner}{" "}
-        delivers them.
-      </p>
+    <section class={styles.held} aria-label={tr("held.label")}>
+      <h3>{tr("held.title", { count: held.length, owner })}</h3>
+      <p class={styles.note}>{tr("held.note", { owner })}</p>
       <ul>
         {held.map((c, i) => (
           <li key={i}>
             <span class={styles.who}>
               {c.url ? (
                 <a href={c.url} target="_blank" rel="noreferrer">
-                  @{c.author ?? "someone"}
+                  @{c.author ?? tr("held.someone")}
                 </a>
               ) : (
-                `@${c.author ?? "someone"}`
+                `@${c.author ?? tr("held.someone")}`
               )}
               {c.at !== null && ` · ${ago(c.at, now)}`}
             </span>
@@ -98,21 +93,21 @@ export function HeldComments({ task: t, user, now, refresh }: Props) {
           <Button
             size="small"
             pending={acting === "deliver"}
-            pendingLabel="Delivering…"
+            pendingLabel={tr("held.delivering")}
             disabled={acting !== null}
             onClick={() => void act("deliver")}
           >
-            Deliver
+            {tr("held.deliver")}
           </Button>
           <Button
             variant="ghost"
             size="small"
             pending={acting === "drop"}
-            pendingLabel="Dropping…"
+            pendingLabel={tr("held.dropping")}
             disabled={acting !== null}
             onClick={() => void act("drop")}
           >
-            Drop
+            {tr("held.drop")}
           </Button>
         </div>
       )}

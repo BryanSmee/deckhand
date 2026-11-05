@@ -336,8 +336,9 @@ export const machineName = (m: TaskMachine) => m.machine ?? m.want;
 function machineLabel(t: Pick<Task, "state" | "machine">): string | null {
   const m = t.machine;
   if (!m) return null;
-  if (t.state === "queued" && !m.claimed) return `Waiting for ${machineName(m)}`;
-  if (t.state === "working" && m.claimed) return `On ${machineName(m)}`;
+  if (t.state === "queued" && !m.claimed)
+    return tr("state.waitingFor", { machine: machineName(m) });
+  if (t.state === "working" && m.claimed) return tr("state.onMachine", { machine: machineName(m) });
   return null;
 }
 

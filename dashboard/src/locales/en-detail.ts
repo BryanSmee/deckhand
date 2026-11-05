@@ -3,6 +3,30 @@
 export const detail = {
   // Detail.tsx: the task page's header, actions, facts and tabs.
   "detail.pick": "Pick an issue or pull request",
+  // MachineTask.tsx: a machine task's route, and the comments held for its owner.
+  "machine.byLabel": "Its runs-on:{want} label",
+  "machine.byComment": "A /machine comment",
+  "machine.claimedBy": "Claimed by @{owner}'s {machine}",
+  "machine.runsOn": "Runs on {asked}: {now}",
+  "machine.one": "@{owner}'s {machine}",
+  "machine.labelled": "@{owner}'s machines labelled {want}",
+  "machine.named": "@{owner}'s machines ({want})",
+  "machine.waitingIt": "waiting for it to claim it",
+  "machine.waitingOne": "waiting for one of them to claim it",
+  "machine.offline": "it is offline",
+  "machine.noneOnline": "none of them is online",
+  "held.label": "Held comments",
+  "held.title": {
+    one: "{count} comment held for @{owner}",
+    other: "{count} comments held for @{owner}",
+  },
+  "held.note":
+    "This task runs on @{owner}'s machines: other people's comments reach its runs once @{owner} delivers them.",
+  "held.someone": "someone",
+  "held.deliver": "Deliver",
+  "held.delivering": "Delivering…",
+  "held.drop": "Drop",
+  "held.dropping": "Dropping…",
   "detail.logCopied": "Log copied.",
   "detail.copyFailed": "Couldn't copy the log: download it instead.",
   "detail.stoppingSent": "Stopping.",
