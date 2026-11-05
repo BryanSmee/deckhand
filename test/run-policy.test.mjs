@@ -695,14 +695,15 @@ test("Deckhand's defaults alone: GitHub failing to list the repo's policies agai
 
 test("Deckhand's defaults alone, with permissions: GitHub failing on the repository keeps what it last said (#785)", async (t) => {
   let clock = 0;
+  // false, or the status GitHub answers every path with.
   let down = false;
   const reads = [];
   const logs = [];
   const policies = createPolicies({
     config: {},
     github: async (repo, method, path) => {
-      if (path === "/repos/Org/Repo") reads.push(down ? 502 : 200);
-      if (down) return new Response("{}", { status: 502 });
+      if (path === "/repos/Org/Repo") reads.push(down || 200);
+      if (down) return new Response("{}", { status: down });
       if (path === "/repos/Org/Repo") {
         return Response.json({ full_name: "Org/Repo", private: true, default_branch: "main" });
       }
@@ -728,12 +729,17 @@ test("Deckhand's defaults alone, with permissions: GitHub failing on the reposit
   assert.equal(await allowed(work(), "work", "Org/Repo#12"), true);
   // Past what GitHub said of it (60 s) and the listing (10 minutes), GitHub fails: both hold.
   clock = 11 * 60_000;
-  down = true;
+  down = 502;
   assert.equal(await allowed(work(), "work", "Org/Repo#12"), true);
   assert.ok(await policies.can("alice", "Org/Repo", "logs:read"));
   assert.deepEqual(reads.slice(0, 2), [200, 502]);
   assert.ok(logs.some((l) => /Org\/Repo: reading the repository: .*last said kept/.test(l)));
   assert.deepEqual(replies, []);
+  // A 404 isn't a hiccup (deleted, or out of the App's reach): nothing.
+  down = 404;
+  assert.equal(await allowed(work(), "work", "Org/Repo#12"), false);
+  assert.match((await policies.access("alice", "Org/Repo")).error, /404/);
+  down = 502;
   // Past an hour: nothing, as every other decision.
   clock = 61 * 60_000;
   assert.equal(await allowed(work(), "work", "Org/Repo#12"), false);
@@ -742,7 +748,7 @@ test("Deckhand's defaults alone, with permissions: GitHub failing on the reposit
   down = false;
   assert.ok(await policies.can("alice", "Org/Repo", "logs:read"));
   policies.forget("Org/Repo");
-  down = true;
+  down = 502;
   assert.match((await policies.access("alice", "Org/Repo")).error, /can't be read/);
   // Nothing posted for any of it: a refused or undecided author gets no reply.
   assert.deepEqual(replies, []);

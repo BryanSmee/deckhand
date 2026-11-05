@@ -2144,9 +2144,11 @@ policy service away hides every repository within about 30 seconds, until it is 
 `access.rego` alone, with no repository policy, is decided without evaluating `opa`, but still
 needs the service's listing of its policies. GitHub isn't needed the same way: a decision on a
 repository reads what GitHub says of it (its default branch, whether it is private; kept 60
-seconds) and lists its policy folder, and when GitHub can't answer, it takes what it last said
-and the last listing, up to an hour old, as run decisions do (the log says when; a push forgets
-both): a short GitHub error refuses nothing. An orchestrator that hasn't read them in that hour,
+seconds) and lists its policy folder, and when GitHub can't answer (no answer, a 5xx, a rate
+limit), it takes what it last said and the last listing, up to an hour old, as run decisions do
+(the log says when; a push forgets both): a short GitHub error refuses nothing. Any other answer
+(a 404: the repository deleted, or out of the App's reach) gives no action at once, since its
+listing would read as no policy and drop its deny rules. An orchestrator that hasn't read them in that hour,
 since its start or since a push, gives no action.
 
 **When a change holds.** An edit of your policy files holds at the next decision (the answers
