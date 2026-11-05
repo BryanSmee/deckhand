@@ -10,9 +10,10 @@ import { useState } from "preact/hooks";
 import { useCan } from "./access";
 import type { RepoList } from "./api";
 import { ConfigPanel } from "./ConfigPanel";
-import { ago, isLive, plural, uptime, versionUrl } from "./format";
+import { ago, isLive, uptime, versionUrl } from "./format";
 import { useNow } from "./hooks";
-import { locale } from "./i18n";
+import { locale, t, tx } from "./i18n";
+import type { Plain } from "./locales";
 import { RepoBadge } from "./RepoBadge";
 import { type ConfigTab, formatRoute } from "./route";
 import type { AppLinks, Repo, RepoStatus, ServerInfo, Task } from "./types";
@@ -51,10 +52,10 @@ export function needingYou(repos: Repo[] | null, tasks: Task[]): number {
   return repos?.filter((r) => needsYou(r, tasks)).length ?? 0;
 }
 
-const STALLED: Partial<Record<Task["state"], string>> = {
-  error: "Its run failed: open it to run it again",
-  interrupted: "Its run was interrupted: open it to run it again",
-  cancelled: "Its run was stopped: open it to run it again",
+const STALLED: Partial<Record<Task["state"], Plain>> = {
+  error: "repos.runFailed",
+  interrupted: "repos.runInterrupted",
+  cancelled: "repos.runStopped",
 };
 
 // Adding or removing repositories: with a single installation, that installation's page;
@@ -87,19 +88,25 @@ function Version({ server, now }: { server: ServerInfo; now: number }) {
   const url = versionUrl(server);
   return (
     <p class={styles.version}>
-      Deckhand{" "}
-      {url ? (
-        <a href={url} target="_blank" rel="noreferrer">
-          {server.version}
-        </a>
-      ) : (
-        server.version
-      )}
-      {" · "}
-      <span title={`Since ${new Date(server.startedAt).toLocaleString(locale())}`}>
-        up {uptime(server.startedAt, now)}
-      </span>
-      {` · Node ${server.node.replace(/^v/, "")}`}
+      {tx("repos.version", {
+        version: url ? (
+          <a href={url} target="_blank" rel="noreferrer">
+            {server.version}
+          </a>
+        ) : (
+          server.version
+        ),
+        uptime: (
+          <span
+            title={t("repos.since", {
+              date: new Date(server.startedAt).toLocaleString(locale()),
+            })}
+          >
+            {t("repos.up", { time: uptime(server.startedAt, now) })}
+          </span>
+        ),
+        node: server.node.replace(/^v/, ""),
+      })}
     </p>
   );
 }
@@ -126,11 +133,11 @@ export function Repos({
     can.repo(repo, "repo:config:read") && can.start(repo, "onboarding");
   if (open && !can.repo(open, "repo:config:read")) {
     return (
-      <section aria-label={`${open} configuration`}>
+      <section aria-label={t("repos.configLabel", { repo: open })}>
         <p class={styles.empty}>
-          {open}'s config isn't yours to read: you don't have <code>repo:config:read</code> there.{" "}
+          {tx("repos.configDenied", { repo: open, permission: <code>repo:config:read</code> })}{" "}
           <Button size="small" variant="ghost" onClick={() => onOpen(null)}>
-            Back to the repositories
+            {t("repos.back")}
           </Button>
         </p>
       </section>
@@ -138,7 +145,7 @@ export function Repos({
   }
   if (open) {
     return (
-      <section aria-label={`${open} configuration`}>
+      <section aria-label={t("repos.configLabel", { repo: open })}>
         <ConfigPanel
           repo={open}
           tab={tab}
@@ -164,58 +171,49 @@ export function Repos({
         <Card as="section" class={styles.onboarding} aria-labelledby="onboarding-title">
           <div class={styles.onboardingHead}>
             <div class={styles.onboardingText}>
-              <h2 id="onboarding-title">
-                {waiting.length === 1
-                  ? "1 repository isn't onboarded"
-                  : `${waiting.length} repositories aren't onboarded`}
-              </h2>
-              <p>
-                Onboarding writes its <code>.deckhand.yaml</code> with you. Until then, nothing runs
-                there.
-              </p>
+              <h2 id="onboarding-title">{t("repos.notOnboarded", { count: waiting.length })}</h2>
+              <p>{tx("repos.onboardingIntro", { file: <code>.deckhand.yaml</code> })}</p>
             </div>
             {first && (
               <Button
                 variant="primary"
                 pending={starting === first.repo}
-                pendingLabel="Starting…"
+                pendingLabel={t("repos.starting")}
                 disabled={starting !== null && starting !== first.repo}
                 onClick={() => {
                   setFrom("card");
                   void onboard(first.repo);
                 }}
               >
-                Onboard {first.repo}
+                {t("repos.onboard", { repo: first.repo })}
               </Button>
             )}
             {from === "card" && failed && (
               <p class={styles.failed} role="alert">
-                Couldn't onboard {failed.repo}: {failed.error}
+                {t("repos.onboardFailed", { repo: failed.repo, error: failed.error })}
               </p>
             )}
           </div>
-          <ol class={styles.steps} aria-label="Onboarding steps">
+          <ol class={styles.steps} aria-label={t("repos.steps")}>
             <li>
               <span class={styles.num}>1</span>
               <span>
-                <b>Start onboarding</b>
-                <span>Deckhand opens an issue in the repository and starts a run on it.</span>
+                <b>{t("repos.stepStart")}</b>
+                <span>{t("repos.stepStartHelp")}</span>
               </span>
             </li>
             <li>
               <span class={styles.num}>2</span>
               <span>
-                <b>Answer its questions</b>
-                <span>
-                  The run reads the code, then asks what it can't guess: setup, tests, modes.
-                </span>
+                <b>{t("repos.stepAnswer")}</b>
+                <span>{t("repos.stepAnswerHelp")}</span>
               </span>
             </li>
             <li>
               <span class={styles.num}>3</span>
               <span>
-                <b>Merge its pull request</b>
-                <span>The config lands on the default branch; issues can start right away.</span>
+                <b>{t("repos.stepMerge")}</b>
+                <span>{t("repos.stepMergeHelp")}</span>
               </span>
             </li>
           </ol>
@@ -223,50 +221,52 @@ export function Repos({
       )}
       <Card as="section" class={styles.list} aria-labelledby="repos-title">
         <div class={styles.toolbar}>
-          <h2 id="repos-title">Repositories</h2>
+          <h2 id="repos-title">{t("repos.title")}</h2>
           <Field
             class={styles.filter}
-            label="Filter repositories"
+            label={t("repos.filter")}
             hideLabel
             size="small"
             lead={<Search size={14} />}
-            placeholder="Filter repositories"
+            placeholder={t("repos.filter")}
             value={filter}
             onInput={(e) => setFilter(e.currentTarget.value)}
           />
           <Segmented
-            label="Show"
+            label={t("repos.show")}
             value={show}
             onChange={setShow}
             options={[
               {
                 value: "all",
-                label: "All",
+                label: t("repos.showAll"),
                 extra: <span class={styles.segCount}>{all.length}</span>,
               },
               {
                 value: "needs",
-                label: "Needs you",
+                label: t("repos.showNeeds"),
                 extra: <span class={styles.segCount}>{needs.length}</span>,
               },
               {
                 value: "configured",
-                label: "Configured",
+                label: t("repos.showConfigured"),
                 extra: <span class={styles.segCount}>{configured.length}</span>,
               },
             ]}
           />
           <span class={styles.tools}>
-            {listedAt !== null && <span class={styles.read}>Listed {ago(listedAt, now)}</span>}
+            {listedAt !== null && (
+              <span class={styles.read}>{t("repos.listed", { ago: ago(listedAt, now) })}</span>
+            )}
             {can.server("server:sync") && (
               <Button
                 size="small"
                 icon={<Sync size={14} />}
                 pending={list.refreshing}
                 onClick={list.refresh}
-                title="List the installations' repositories and read every config again"
+                title={t("repos.refreshHelp")}
               >
-                Refresh
+                {t("repos.refresh")}
               </Button>
             )}
             {app && (
@@ -275,39 +275,39 @@ export function Repos({
                 href={reposUrl(app)}
                 target="_blank"
                 rel="noreferrer"
-                title={`Add or remove repositories on GitHub (${app.name})`}
+                title={t("repos.manageHelp", { app: app.name })}
               >
-                Manage the App
+                {t("repos.manage")}
                 <External size={13} />
               </a>
             )}
           </span>
           {list.refreshError && (
             <p class={styles.failed} role="alert">
-              Couldn't refresh ({list.refreshError})
+              {t("repos.refreshFailed", { error: list.refreshError })}
             </p>
           )}
         </div>
-        {error && <p class={styles.empty}>Can't list the repositories ({error}).</p>}
-        {!repos && !error && <p class={styles.empty}>Loading…</p>}
+        {error && <p class={styles.empty}>{t("repos.listFailed", { error })}</p>}
+        {!repos && !error && <p class={styles.empty}>{t("repos.loading")}</p>}
         {repos?.length === 0 && (
           <p class={styles.empty}>
-            The App isn't installed on any allowed repository yet.
+            {t("repos.noneInstalled")}
             {app && (
               <>
                 {" "}
                 <a href={app.installUrl} target="_blank" rel="noreferrer">
-                  Install the App on a repository
+                  {t("repos.install")}
                 </a>
               </>
             )}
           </p>
         )}
         {all.length > 0 && shown.length === 0 && (
-          <p class={styles.empty}>No repository here{filter.trim() && " matches the filter"}.</p>
+          <p class={styles.empty}>{t(filter.trim() ? "repos.noneMatch" : "repos.noneHere")}</p>
         )}
         {shown.length > 0 && (
-          <ul class={styles.rows} aria-label="Repositories">
+          <ul class={styles.rows} aria-label={t("repos.title")}>
             {shown.map((r) => (
               <Row
                 key={r.repo}
@@ -343,10 +343,10 @@ function Row({ r, list, task, now, onStart, failure }: RowProps) {
   const can = useCan();
   const reads = can.repo(r.repo, "repo:config:read");
   const onboards = reads && can.start(r.repo, "onboarding");
-  const config = (label: string, variant?: "primary") =>
+  const config = (label: Plain, variant?: "primary") =>
     reads ? (
       <a class={small(variant)} href={configOf(r.repo)}>
-        {label}
+        {t(label)}
       </a>
     ) : null;
   const small = (variant: "primary" | "secondary" | "ghost" = "secondary") =>
@@ -354,27 +354,26 @@ function Row({ r, list, task, now, onStart, failure }: RowProps) {
   const [detail, action] = ((): [string, ComponentChildren] => {
     switch (r.status) {
       case "invalid":
-        return [
-          "Its .deckhand.yaml has errors: no run starts until they are fixed",
-          config("Open config", "primary"),
-        ];
+        return [t("repos.invalid"), config("repos.openConfig", "primary")];
       case "onboarding": {
         const n = task?.questions?.items?.length;
         const state = asks(task)
           ? n
-            ? `${plural(n, "question")} ${n === 1 ? "is" : "are"} waiting for your answers`
-            : "Its questions are waiting for your answers"
-          : task && stalled(task)
-            ? (STALLED[task.state] ?? "Its run ended with no pull request: open it to run it again")
-            : task?.pr
-              ? "Its pull request is open: merge it to finish"
-              : task && isLive(task)
-                ? "Its run reads the code and proposes a config"
-                : task
-                  ? "Its run waits for a free slot"
-                  : "Its run reports on the issue";
+            ? t("repos.questionsWaiting", { count: n })
+            : t("repos.questionsWaitingAll")
+          : t(
+              task && stalled(task)
+                ? (STALLED[task.state] ?? "repos.runNoPr")
+                : task?.pr
+                  ? "repos.prOpen"
+                  : task && isLive(task)
+                    ? "repos.runReads"
+                    : task
+                      ? "repos.runWaits"
+                      : "repos.runReports",
+            );
         return [
-          r.issue ? `Issue #${r.issue.number} · ${state}` : state,
+          r.issue ? t("repos.issueState", { number: r.issue.number, state }) : state,
           <>
             {r.issue && (
               <a
@@ -382,7 +381,7 @@ function Row({ r, list, task, now, onStart, failure }: RowProps) {
                 href={r.issue.url}
                 target="_blank"
                 rel="noreferrer"
-                title={`The onboarding issue on GitHub`}
+                title={t("repos.issueHelp")}
               >
                 #{r.issue.number}
                 <External size={12} />
@@ -390,7 +389,7 @@ function Row({ r, list, task, now, onStart, failure }: RowProps) {
             )}
             {task && (asks(task) || stalled(task)) && (
               <a class={small()} href={formatRoute({ repo: task.repo, task: task.key, run: null })}>
-                {asks(task) ? "Answer" : "Open run"}
+                {t(asks(task) ? "repos.answer" : "repos.openRun")}
               </a>
             )}
           </>,
@@ -399,59 +398,59 @@ function Row({ r, list, task, now, onStart, failure }: RowProps) {
       case "not-onboarded":
         return r.issues
           ? [
-              "No .deckhand.yaml on its default branch",
+              t("repos.noConfig"),
               onboards && (
                 <Button
                   variant="primary"
                   size="small"
                   pending={starting === r.repo}
-                  pendingLabel="Starting…"
+                  pendingLabel={t("repos.starting")}
                   disabled={starting !== null && starting !== r.repo}
                   onClick={() => {
                     onStart();
                     void onboard(r.repo);
                   }}
                 >
-                  Start onboarding
+                  {t("repos.startOnboarding")}
                 </Button>
               ),
             ]
           : [
-              "Its issues are disabled on GitHub, so it can't be onboarded",
+              t("repos.issuesOff"),
               <a
                 class={small()}
                 href={`${r.url}/settings`}
                 target="_blank"
                 rel="noreferrer"
-                title="Its settings on GitHub: Features › Issues"
+                title={t("repos.issuesOffHelp")}
               >
-                Enable issues
+                {t("repos.enableIssues")}
                 <External size={12} />
               </a>,
             ];
       case "unknown":
-        return ["GitHub didn't answer: see the orchestrator's logs", config("Config")];
+        return [t("repos.unknown"), config("repos.config")];
       default:
-        return [r.readAt === null ? "Configured" : `Read ${ago(r.readAt, now)}`, config("Config")];
+        return [
+          r.readAt === null ? t("repos.configured") : t("repos.read", { ago: ago(r.readAt, now) }),
+          config("repos.config"),
+        ];
     }
   })();
   return (
     <li class={styles.row}>
       <span class={styles.name}>
         {reads ? (
-          <a href={configOf(r.repo)} title={`${r.repo}: its config`}>
+          <a href={configOf(r.repo)} title={t("repos.its", { repo: r.repo })}>
             {r.repo}
           </a>
         ) : (
           r.repo
         )}
-        {r.private && <span class={styles.flag}>private</span>}
+        {r.private && <span class={styles.flag}>{t("repos.private")}</span>}
         {r.autoMerge && (
-          <span
-            class={`${styles.flag} ${styles.danger}`}
-            title="Deckhand merges its own pull requests after its review: nobody reads them before they reach the default branch"
-          >
-            Auto-merge, no human review
+          <span class={`${styles.flag} ${styles.danger}`} title={t("repos.autoMergeHelp")}>
+            {t("repos.autoMerge")}
           </span>
         )}
       </span>

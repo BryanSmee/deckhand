@@ -16,6 +16,17 @@ test("placeholders filled, numbers written in the locale", () => {
   expect(number(1234567)).toBe("1,234,567");
 });
 
+test("an issue's or pull request's number after a #: as GitHub writes it, never grouped", () => {
+  expect(t("repos.issueState", { number: 1234, state: "open" })).toBe("Issue #1234 · open");
+  expect(t("policies.ofPr", { pr: 10000 })).toBe("of #10000");
+  expect(t("overview.onboardingOn", { number: 12345 })).toBe(
+    "Its onboarding runs on issue #12345.",
+  );
+  expect(t("app.notifyReadyBody", { repo: "acme/app", number: 1234 })).toBe(
+    "acme/app · pull request #1234",
+  );
+});
+
 test("English plurals: one and other", () => {
   expect(t("review.notes", { count: 1 })).toBe("1 note");
   expect(t("review.notes", { count: 0 })).toBe("0 notes");

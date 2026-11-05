@@ -4,9 +4,11 @@
 // deny rules; the policy files, Deckhand's and the operator's merged by name, the repo's apart;
 // each file's source, folded, its errors under their lines; and how to try them on a pull
 // request. Read with the config (api/repos/<repo>/config).
-import type { ComponentChildren } from "preact";
+import type { ComponentChildren, VNode } from "preact";
 import { useEffect, useState } from "preact/hooks";
-import { plural, type Tone } from "./format";
+import type { Tone } from "./format";
+import { t, tx } from "./i18n";
+import type { Plain } from "./locales";
 import { copyText } from "./logExport";
 import type { Policies, PolicyError, PolicyFile, RepoConfig } from "./types";
 import { Button, buttonClass } from "./ui/Button";
@@ -49,8 +51,8 @@ export function policyTrouble({ files, errors: all }: Policies): string | null {
   const errors = refusing(all);
   if (!errors.length) return null;
   const bad = files.filter((f) => errorsOf(errors, f).length).length;
-  if (!bad) return "Policy error";
-  return bad === 1 ? "1 policy doesn't compile" : `${bad} policies don't compile`;
+  if (!bad) return t("policyConfig.trouble");
+  return t("policyConfig.troubleFiles", { count: bad });
 }
 
 // Where each source's files are: Deckhand's image, the grants folder, the repo.
@@ -60,8 +62,18 @@ const FOLDERS = {
   repo: ".deckhand/policy",
 };
 const pathOf = (f: PolicyFile) => `${FOLDERS[f.source]}/${f.name}`;
-// Whose file a source's is, as the effects and the sources' notes say it.
-const OWNERS = { deckhand: "Deckhand's", operator: "the operator's", repo: "the repo's" };
+// Whose file a source's is, as the effects and the sources' notes say it; and its tag. Keys,
+// written when shown.
+const OWNERS: Record<PolicyFile["source"], Plain> = {
+  deckhand: "policyConfig.ownerDeckhand",
+  operator: "policyConfig.ownerOperator",
+  repo: "policyConfig.ownerRepo",
+};
+const TAGS: Record<PolicyFile["source"], Plain> = {
+  deckhand: "policyConfig.tagDeckhand",
+  operator: "policyConfig.tagOperator",
+  repo: "policyConfig.tagRepo",
+};
 // The source of the file that replaces `f` (the one evaluated in its place), when it is
 // replaced: Deckhand's by the operator's only, the repo's files being a layer of their own.
 const replacedBy = (files: PolicyFile[], f: PolicyFile) =>
@@ -76,11 +88,11 @@ const editUrl = (url: string) => url.replace("/blob/", "/edit/");
 
 // The decisions a policy is asked for (its rules are `allow_<decision>` and
 // `deny_<decision>`), what a denial does, and whether only built-in modes' runs make it (`builtIn`:
-// a repo's allow rule for it is ignored).
+// a repo's allow rule for it is ignored). Keys and functions: written when shown.
 const DECISIONS: {
   decision: string;
-  name: string;
-  denies: string;
+  name: Plain;
+  denies: Plain;
   refused: (until: string) => string;
   builtIn?: boolean;
   // Without a deny rule: what still refuses it, when its allow rules depend on the input
@@ -89,75 +101,64 @@ const DECISIONS: {
 }[] = [
   {
     decision: "run",
-    name: "Runs people start",
-    denies:
-      "A denial starts no run (a trigger comment, /mode, a comment that goes on in a mode, the dashboard, an inbox entry, a discussion): the reply quotes the messages.",
-    refused: (until) => `No run a person asks for starts ${until}.`,
+    name: "policyConfig.decisionRun",
+    denies: "policyConfig.deniesRun",
+    refused: (until) => t("policyConfig.refusedRun", { until }),
     // Deckhand's run.rego named only while it is the operator's layer's one allow_run.
     allows: (files) => {
       const allowing = files.filter(
         (f) => f.active && f.source !== "repo" && f.rules.includes("allow_run"),
       );
       const own = allowing.length === 1 && allowing[0].source === "deckhand";
-      return own
-        ? "Its allow rules decide where each mode runs: Deckhand's run.rego keeps brainstorms, /stop and onboarding on issues (a comment going on in a mode isn't refused)."
-        : "Its allow rules decide where each mode runs.";
+      return t(own ? "policyConfig.allowsRunOwn" : "policyConfig.allowsRun");
     },
   },
   {
     decision: "merge",
     builtIn: true,
-    name: "Auto-merge",
-    denies: "A denial keeps the pull request for a human: it isn't merged.",
-    refused: (until) => `Every auto-merge is refused ${until}.`,
+    name: "policyConfig.decisionMerge",
+    denies: "policyConfig.deniesMerge",
+    refused: (until) => t("policyConfig.refusedMerge", { until }),
   },
   {
     decision: "review",
     builtIn: true,
-    name: "Automatic review",
-    denies: "A denial skips the automatic review; /mode review still runs.",
-    refused: (until) => `Automatic reviews are skipped ${until}; /mode review still runs.`,
+    name: "policyConfig.decisionReview",
+    denies: "policyConfig.deniesReview",
+    refused: (until) => t("policyConfig.refusedReview", { until }),
   },
   {
     decision: "fix",
     builtIn: true,
-    name: "Fix run",
-    denies:
-      "A denial starts no fix run (a review's, a CI fix or a conflict's rebase); a comment on the pull request says why.",
-    refused: (until) => `Every fix run is refused ${until}.`,
+    name: "policyConfig.decisionFix",
+    denies: "policyConfig.deniesFix",
+    refused: (until) => t("policyConfig.refusedFix", { until }),
   },
   {
     decision: "link_branch",
-    name: "Linked branch",
-    denies:
-      "A denial links no branch to the issue as a work run starts; the run creates its branch itself.",
-    refused: (until) => `No branch is linked to an issue ${until}.`,
+    name: "policyConfig.decisionLinkBranch",
+    denies: "policyConfig.deniesLinkBranch",
+    refused: (until) => t("policyConfig.refusedLinkBranch", { until }),
   },
   {
     decision: "request_review",
-    name: "Reviewers",
-    denies:
-      "A denial requests no reviewer (review.request) on Deckhand's pull request; the listener's log says why.",
-    refused: (until) => `No reviewer is requested ${until}.`,
+    name: "policyConfig.decisionRequestReview",
+    denies: "policyConfig.deniesRequestReview",
+    refused: (until) => t("policyConfig.refusedRequestReview", { until }),
   },
   {
     decision: "github",
-    name: "GitHub writes and checks",
-    denies:
-      "A denial refuses a run's write to GitHub (REST or GraphQL), or its reads of CI's checks (read_checks, as gh pr checks and gh pr view make) and of projects (read_projects); gh prints the messages to the agent.",
-    refused: (until) =>
-      `Every run's write to GitHub, and every read of CI's checks and of projects, is refused ${until}.`,
-    allows: () =>
-      "Its allow rules decide what each mode writes: Deckhand's mode-<mode>.rego, one file per mode.",
+    name: "policyConfig.decisionGithub",
+    denies: "policyConfig.deniesGithub",
+    refused: (until) => t("policyConfig.refusedGithub", { until }),
+    allows: () => t("policyConfig.allowsGithub"),
   },
   {
     decision: "push",
-    name: "Pushes",
-    denies:
-      "A denial refuses a run's push of a branch (the whole push): git prints the messages for each ref.",
-    refused: (until) => `Every run's push is refused ${until}.`,
-    allows: () =>
-      "Its allow rules decide which modes push: Deckhand's mode-work.rego, work runs and the repo's own modes (with the repo's allow too).",
+    name: "policyConfig.decisionPush",
+    denies: "policyConfig.deniesPush",
+    refused: (until) => t("policyConfig.refusedPush", { until }),
+    allows: () => t("policyConfig.allowsPush"),
   },
 ];
 
@@ -181,9 +182,13 @@ function ordered(files: PolicyFile[]): PolicyFile[] {
 // What fails, as the banner and the cards say it: the files that don't compile, or the check.
 function failing(files: PolicyFile[], errors: PolicyError[]): string {
   const bad = files.filter((f) => errorsOf(errors, f).length).map((f) => f.name);
-  if (!bad.length) return "until the policies can be checked";
-  return `until ${bad.join(", ")} ${bad.length === 1 ? "compiles" : "compile"}`;
+  if (!bad.length) return t("policyConfig.untilChecked");
+  return t("policyConfig.untilCompiles", { files: bad.join(t("list.comma")), count: bad.length });
 }
+
+// Identifiers the model's paragraphs name, each in <code>, by its own name.
+const code = <N extends string>(...names: N[]) =>
+  Object.fromEntries(names.map((n) => [n, <code>{n}</code>])) as Record<N, VNode>;
 
 export function PolicyConfig({ config }: { config: RepoConfig }) {
   const { files, errors: all, warnings } = config.policies;
@@ -206,9 +211,11 @@ export function PolicyConfig({ config }: { config: RepoConfig }) {
     return (
       <div class={styles.page}>
         <p class={styles.none}>
-          <b>No policies: only the built-in gates decide.</b> A repository adds some as{" "}
-          <code>.deckhand/policy/*.rego</code> on <code>{config.base}</code>, the operator in their
-          grants folder.
+          <b>{t("policyConfig.none")}</b>{" "}
+          {tx("policyConfig.noneHelp", {
+            files: <code>.deckhand/policy/*.rego</code>,
+            base: <code>{config.base}</code>,
+          })}
         </p>
       </div>
     );
@@ -216,90 +223,91 @@ export function PolicyConfig({ config }: { config: RepoConfig }) {
   const rows = ordered(files);
   const from = (source: PolicyFile["source"]) => files.filter((f) => f.source === source).length;
   const counts = [
-    ...(from("deckhand") ? [`${from("deckhand")} from Deckhand`] : []),
-    `${from("operator")} from the operator`,
-    `${from("repo")} from the repo`,
-  ].join(", ");
+    ...(from("deckhand") ? [t("policyConfig.fromDeckhand", { count: from("deckhand") })] : []),
+    t("policyConfig.fromOperator", { count: from("operator") }),
+    t("policyConfig.fromRepo", { count: from("repo") }),
+  ].join(t("list.comma"));
   return (
     <div class={styles.page}>
       {errors.length > 0 && <Banner files={files} errors={errors} goLine={goLine} />}
       {warnings.length + ignored.length > 0 && (
-        <section class={styles.warnings} aria-label="Policy warnings">
+        <section class={styles.warnings} aria-label={t("policyConfig.warnings")}>
           <Warning size={16} />
           <ul>
             {ignored.map((e) => (
               <li key={e.text}>
-                <b>Ignored</b> · {e.text}
+                <b>{t("policyConfig.ignored")}</b> · {e.text}
               </li>
             ))}
             {warnings.map((w) => (
               <li key={w}>
-                <b>Warning</b> · {w}
+                <b>{t("policyConfig.warning")}</b> · {w}
               </li>
             ))}
           </ul>
         </section>
       )}
       <p class={styles.model}>
-        After Deckhand's own gates, a decision is allowed when an <b>allow</b> rule matches and no{" "}
-        <b>deny</b> rule does: a deny always wins. Deckhand's and the operator's files are one
-        layer, the operator's replacing Deckhand's of the same name: their allow rules are the
-        ceiling. The repo's files, read from <code>{config.base}</code>, are evaluated apart: their
-        deny rules apply to every run, their allow rules only to the repo's own <code>modes:</code>,
-        which need the operator's allow too.
+        {tx("policyConfig.model", {
+          allow: <b>allow</b>,
+          deny: <b>deny</b>,
+          base: <code>{config.base}</code>,
+          modes: <code>modes:</code>,
+        })}
       </p>
       <p class={styles.model}>
-        <code>allow_github</code> and <code>deny_github</code> read the write (<code>action</code>,{" "}
-        <code>target</code>, <code>change</code>), or a read of CI's checks or of projects (
-        <code>action</code> <code>read_checks</code>, <code>read_projects</code>, no{" "}
-        <code>target</code> or <code>change</code>), and the run: its <code>mode</code>,{" "}
-        <code>custom_mode</code> (one of the repo's <code>modes:</code>) and <code>reason</code> (
-        <code>review-fix</code>, <code>ci-fix</code>, <code>conflict</code>, or null).{" "}
+        {tx("policyConfig.githubInput", {
+          ...code("allow_github", "deny_github", "action", "target", "change", "read_checks"),
+          ...code("read_projects", "mode", "custom_mode", "reason", "conflict"),
+          modes: <code>modes:</code>,
+          review_fix: <code>review-fix</code>,
+          ci_fix: <code>ci-fix</code>,
+        })}{" "}
         <a href={GITHUB_INPUT} target="_blank" rel="noreferrer">
-          The GitHub input
+          {t("policyConfig.githubInputLink")}
         </a>
       </p>
       <p class={styles.model}>
-        <code>allow_push</code> and <code>deny_push</code> read each branch a run pushes, after the
-        git gateway's own checks: the run's fields, the <code>branch</code>, whether the push{" "}
-        <code>created</code> or <code>deleted</code> it, and the <code>default_branch</code>.{" "}
+        {tx(
+          "policyConfig.pushInput",
+          code("allow_push", "deny_push", "branch", "created", "deleted", "default_branch"),
+        )}{" "}
         <a href={PUSH_INPUT} target="_blank" rel="noreferrer">
-          The push input
+          {t("policyConfig.pushInputLink")}
         </a>
       </p>
       <p class={styles.model}>
-        <code>allow_run</code> and <code>deny_run</code> read the run a person asks for, before it
-        is queued: its <code>mode</code>, <code>custom_mode</code>, <code>trigger</code> (
-        <code>comment</code>, <code>dashboard</code>, <code>inbox</code>, <code>discussion</code>),{" "}
-        <code>sender</code> and the <code>target</code> its comment is on (<code>kind</code>,{" "}
-        <code>labels</code>, <code>author</code>).{" "}
+        {tx("policyConfig.runInput", {
+          ...code("allow_run", "deny_run", "mode", "custom_mode", "trigger", "comment"),
+          ...code("dashboard", "inbox", "discussion", "sender", "target", "kind", "labels"),
+          ...code("author"),
+        })}{" "}
         <a href={RUN_INPUT} target="_blank" rel="noreferrer">
-          The run input
+          {t("policyConfig.runInputLink")}
         </a>
       </p>
-      <section class={styles.decisions} aria-label="Decisions">
+      <section class={styles.decisions} aria-label={t("policyConfig.decisions")}>
         {DECISIONS.map((d) => (
           <DecisionCard key={d.decision} decision={d} files={files} errors={errors} />
         ))}
       </section>
       <section class={styles.card} aria-labelledby="policy-files">
         <div class={styles.cardHead}>
-          <h2 id="policy-files">Policy files</h2>
+          <h2 id="policy-files">{t("policyConfig.files")}</h2>
           <span class={styles.note}>
-            {plural(files.length, "file")} · {counts} · Deckhand's and the operator's merged by
-            name, the repo's apart
+            {t("policyConfig.filesNote", { count: files.length, counts })}
           </span>
         </div>
         {files.length > 0 && (
           <>
             <div class={`${styles.file} ${styles.fileHead}`} aria-hidden="true">
-              <span>File</span>
-              <span>From</span>
-              <span>Effect</span>
-              <span>Rules</span>
-              <span>Compiles</span>
+              <span>{t("policyConfig.columnFile")}</span>
+              <span>{t("policyConfig.columnFrom")}</span>
+              <span>{t("policyConfig.columnEffect")}</span>
+              <span>{t("policyConfig.columnRules")}</span>
+              <span>{t("policyConfig.columnCompiles")}</span>
             </div>
-            <ul class={styles.files} aria-label="Policy files">
+            <ul class={styles.files} aria-label={t("policyConfig.files")}>
               {rows.map((f) => (
                 <FileRow
                   key={keyOf(f)}
@@ -344,7 +352,6 @@ function Banner({
   // The file of its layer: a repo's and Deckhand's may share a name.
   const fileOf = (e: PolicyError) => files.find((f) => isOf(e, f)) ?? null;
   const at = (e: PolicyError) => `${e.file}${e.row !== null ? `:${e.row}` : ""}`;
-  const refuses = "every decision a policy is asked for refuses";
   const [first] = errors;
   const one = errors.length === 1;
   const lineLink = (e: PolicyError, label: ComponentChildren) => {
@@ -360,26 +367,15 @@ function Banner({
       <Alert size={18} />
       <div class={styles.bannerText}>
         <b>
-          {one && first.file ? (
-            <>
-              <code>{at(first)}</code> doesn't compile: {refuses}
-            </>
-          ) : one ? (
-            <>The policies can't be checked: {refuses}</>
-          ) : (
-            <>
-              {plural(errors.length, "policy error")}: {refuses}
-            </>
-          )}
+          {one && first.file
+            ? tx("policyConfig.fileFails", { file: <code>{at(first)}</code> })
+            : one
+              ? t("policyConfig.cantCheck")
+              : t("policyConfig.errors", { count: errors.length })}
         </b>
-        <span>
-          Policies fail closed, and each layer's files are checked together. Until{" "}
-          {one ? "it's" : "they're"} fixed, auto-merges, automatic reviews, fix runs and runs'
-          writes to GitHub here are all refused with “policy error”. Runs started by a comment still
-          start.
-        </span>
+        <span>{t("policyConfig.failClosed", { count: errors.length })}</span>
         {one && first.file ? (
-          lineLink(first, `Line ${first.row} ↓`)
+          lineLink(first, t("policyConfig.lineLink", { row: String(first.row) }))
         ) : (
           <ul class={styles.errors}>
             {errors.map((e, i) => (
@@ -391,7 +387,7 @@ function Banner({
                 ) : (
                   e.text
                 )}{" "}
-                {lineLink(e, `line ${e.row} ↓`)}
+                {lineLink(e, t("policyConfig.line", { row: String(e.row) }))}
               </li>
             ))}
           </ul>
@@ -427,44 +423,50 @@ function DecisionCard({
   const denying = [...defining("operator", deny), ...defining("repo", deny)];
   const repoAllowing = defining("repo", allow);
   const refused = errors.length > 0;
-  const [tone, label]: [Tone, string] = refused
-    ? ["err", "Refused"]
+  const [tone, label]: [Tone, Plain] = refused
+    ? ["err", "policyConfig.refused"]
     : !allowing.length
-      ? ["err", "Never allowed"]
+      ? ["err", "policyConfig.neverAllowed"]
       : denying.length
-        ? ["done", "Active"]
-        : ["idle", "No deny rule"];
+        ? ["done", "policyConfig.active"]
+        : ["idle", "policyConfig.noDenyRule"];
   const text = refused
     ? d.refused(failing(files, errors))
     : !allowing.length
-      ? d.refused("while no allow rule of the operator's matches it")
+      ? d.refused(t("policyConfig.untilAllowed"))
       : denying.length
-        ? d.denies
-        : (d.allows?.(files) ?? "Nothing denies it: only Deckhand's own gates decide.");
+        ? t(d.denies)
+        : (d.allows?.(files) ?? t("policyConfig.nothingDenies"));
   // A layer's rule as the note says it: its definitions, and their files.
   const said = (rule: string, list: PolicyFile[]) =>
     list.length
-      ? `${rule} ×${list.reduce((n, f) => n + definitions(f, rule), 0)} (${list.map((f) => f.name).join(", ")})`
-      : `no ${rule}`;
+      ? `${rule} ×${list.reduce((n, f) => n + definitions(f, rule), 0)} (${list.map((f) => f.name).join(t("list.comma"))})`
+      : t("policyConfig.noRule", { rule });
   const repoAllow = !repoAllowing.length
-    ? "no allow rule"
-    : d.builtIn
-      ? `${said(allow, repoAllowing)}: ignored, no mode of the repo's makes it`
-      : `${said(allow, repoAllowing)}, for its own modes`;
+    ? t("policyConfig.noAllowRule")
+    : t(d.builtIn ? "policyConfig.repoAllowIgnored" : "policyConfig.repoAllowOwn", {
+        said: said(allow, repoAllowing),
+      });
   return (
     <div class={styles.decision}>
       <span class={styles.decisionHead}>
         <span class={styles.key}>
-          {d.name} · <span class={styles.rule}>{breakable(d.decision)}</span>
+          {t(d.name)} · <span class={styles.rule}>{breakable(d.decision)}</span>
         </span>
-        <StatusBadge tone={tone} label={label} />
+        <StatusBadge tone={tone} label={t(label)} />
       </span>
       <span class={styles.text}>{text}</span>
       <span class={styles.note}>
-        Operator: {said(allow, allowing)} · {said(deny, defining("operator", deny))}
+        {t("policyConfig.operatorRules", {
+          allow: said(allow, allowing),
+          deny: said(deny, defining("operator", deny)),
+        })}
       </span>
       <span class={styles.note}>
-        Repo: {repoAllow} · {said(deny, defining("repo", deny))}
+        {t("policyConfig.repoRules", {
+          allow: repoAllow,
+          deny: said(deny, defining("repo", deny)),
+        })}
       </span>
     </div>
   );
@@ -472,9 +474,9 @@ function DecisionCard({
 
 // What a file does to the defaults: `by`, the source of the file that replaces it.
 function effectOf(f: PolicyFile, by: PolicyFile["source"] | null): string {
-  if (by) return `Replaced by ${OWNERS[by]}`;
-  if (f.replaces) return `Replaces ${OWNERS[f.replaces]}`;
-  return f.source === "repo" ? "Added" : "Default, kept";
+  if (by) return t("policyConfig.replacedBy", { owner: t(OWNERS[by]) });
+  if (f.replaces) return t("policyConfig.replaces", { owner: t(OWNERS[f.replaces]) });
+  return t(f.source === "repo" ? "policyConfig.added" : "policyConfig.kept");
 }
 
 // A file of the table: where it is, who brings it, what it does to the defaults, its rules,
@@ -494,10 +496,10 @@ function FileRow({
   const [tone, compiles]: [Tone, string] = !f.active
     ? ["idle", "—"]
     : own.length
-      ? ["err", "Error"]
+      ? ["err", t("policyConfig.compilesError")]
       : unknown
-        ? ["idle", "Unknown"]
-        : ["done", "Yes"];
+        ? ["idle", t("policyConfig.compilesUnknown")]
+        : ["done", t("policyConfig.compilesYes")];
   return (
     <li
       class={[styles.file, !f.active && styles.gone, own.length > 0 && styles.bad]
@@ -509,11 +511,15 @@ function FileRow({
         <span class={styles.path}>{pathOf(f)}</span>
       </span>
       <span class={styles.from}>
-        <span class={`${styles.tag} ${f.source === "repo" ? styles.repo : ""}`}>{f.source}</span>
+        <span class={`${styles.tag} ${f.source === "repo" ? styles.repo : ""}`}>
+          {t(TAGS[f.source])}
+        </span>
       </span>
       <span class={styles.effect}>{effect}</span>
       <span class={styles.rules}>
-        {f.rules.length ? f.rules.map((r) => `${r} ×${definitions(f, r)}`).join(", ") : "no rule"}
+        {f.rules.length
+          ? f.rules.map((r) => `${r} ×${definitions(f, r)}`).join(t("list.comma"))
+          : t("policyConfig.noRules")}
       </span>
       <span class={styles.compiles}>
         <StatusBadge tone={tone} label={compiles} />
@@ -543,11 +549,13 @@ function Source({
     if (e.row !== null) marks.set(e.row, [...(marks.get(e.row) ?? []), e.message]);
   }
   const meta = [
-    ...(f.replaces ? [`replaces ${OWNERS[f.replaces]} ${f.name}`] : []),
-    ...(by ? [`replaced by ${OWNERS[by]}: not evaluated`] : []),
-    plural(lines.length, "line"),
-    ...(f.truncated ? ["its first 20 KB"] : []),
-    ...(errors.length ? [plural(errors.length, "error")] : []),
+    ...(f.replaces
+      ? [t("policyConfig.sourceReplaces", { owner: t(OWNERS[f.replaces]), name: f.name })]
+      : []),
+    ...(by ? [t("policyConfig.sourceReplacedBy", { owner: t(OWNERS[by]) })] : []),
+    t("policyConfig.lines", { count: lines.length }),
+    ...(f.truncated ? [t("policyConfig.truncated")] : []),
+    ...(errors.length ? [t("policyConfig.sourceErrors", { count: errors.length })] : []),
   ].join(" · ");
   return (
     <details
@@ -569,7 +577,7 @@ function Source({
             target="_blank"
             rel="noreferrer"
           >
-            Edit on GitHub
+            {t("policyConfig.edit")}
             <External size={13} />
           </a>
         )}
@@ -586,15 +594,19 @@ function TryThem() {
   return (
     <section class={styles.try}>
       <div class={styles.tryText}>
-        <b>Try them on a pull request</b>
+        <b>{t("policyConfig.try")}</b>
         <span>
-          Comment <code class={styles.command}>{COMMAND}</code> on it: Deckhand replies with each
-          decision's result, what each layer's rules said, and the input they saw. Nothing is
-          reviewed, fixed or merged.
+          {tx("policyConfig.tryHelp", { command: <code class={styles.command}>{COMMAND}</code> })}
         </span>
       </div>
       <Button size="small" onClick={async () => setCopied(await copyText(COMMAND))}>
-        {copied === null ? "Copy the command" : copied ? "Copied" : "Couldn't copy"}
+        {t(
+          copied === null
+            ? "policyConfig.copy"
+            : copied
+              ? "policyConfig.copied"
+              : "policyConfig.copyFailed",
+        )}
       </Button>
     </section>
   );

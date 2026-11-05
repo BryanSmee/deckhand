@@ -40,6 +40,7 @@ import type {
   WorkResult,
 } from "./types";
 import { sameRepo } from "./format";
+import { t } from "./i18n";
 
 // What the listener answers, or why it refused: its `error`, else the status.
 export type Answer<T> = T & { error?: string };
@@ -431,7 +432,7 @@ export function useWorkArea(
   useEffect(() => setResult(null), [repo]);
 
   const act = async (action: WorkAction, answers?: Answers): Promise<WorkResult> => {
-    if (!repo) return { error: "No repository." };
+    if (!repo) return { error: t("app.noRepository") };
     const title = backlog?.issues.find((i) => i.number === action.number)?.title ?? null;
     const mine: Pending = { ...action, repo, title };
     setPending((all) => [...all, mine]);
@@ -501,7 +502,7 @@ export function useRunOrder(repo: string | null, refresh: () => Promise<void> = 
   const [moving, setMoving] = useState<OrderMove | null>(null);
   useEffect(() => setMoving(null), [repo]);
   const move = async (m: OrderMove): Promise<WorkResult> => {
-    if (!repo) return { error: "No repository." };
+    if (!repo) return { error: t("app.noRepository") };
     setMoving(m);
     const said = await postJson<WorkResult>(`api/repos/${repo}/order`, m);
     if (!said.error) await refresh();

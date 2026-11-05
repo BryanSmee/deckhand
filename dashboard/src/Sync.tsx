@@ -4,7 +4,7 @@
 // in the repos that opted in, then reads the board.
 import { useEffect, useState } from "preact/hooks";
 import { postJson } from "./api";
-import { plural } from "./format";
+import { t } from "./i18n";
 import type { SyncResult } from "./types";
 
 // How long what it did stays shown.
@@ -15,13 +15,13 @@ export function syncMessage({
   pulls,
   conflicts,
 }: Pick<SyncResult, "redelivered" | "pulls" | "conflicts">): string {
-  if (!redelivered && !pulls && !conflicts) return "Up to date with GitHub";
+  if (!redelivered && !pulls && !conflicts) return t("sync.upToDate");
   const done = [
-    redelivered && `${plural(redelivered, "missed delivery", "missed deliveries")} asked again`,
-    pulls && `${plural(pulls, "pull request")} updated`,
-    conflicts && `${plural(conflicts, "rebase run")} started`,
+    redelivered && t("sync.redelivered", { count: redelivered }),
+    pulls && t("sync.pulls", { count: pulls }),
+    conflicts && t("sync.conflicts", { count: conflicts }),
   ].filter(Boolean);
-  return `Synced: ${done.join(", ")}`;
+  return t("sync.synced", { done: done.join(t("list.comma")) });
 }
 
 // Its state: syncing, what it did (said for a few seconds), and the action. `recorded`: the
@@ -47,7 +47,8 @@ export function useSync(onSynced?: () => Promise<void>) {
     // Done, or failed and recorded as the last sync (its `at`): the state has it now. Refused
     // (synced a moment ago, signed out): nothing changed.
     const recorded = typeof body.at === "number";
-    if (body.error) setSaid({ text: `Couldn't sync (${body.error})`, failed: true, recorded });
+    if (body.error)
+      setSaid({ text: t("sync.failed", { error: body.error }), failed: true, recorded });
     else setSaid({ text: syncMessage(body), failed: false, recorded });
     if (recorded) await onSynced?.();
     setSyncing(false);

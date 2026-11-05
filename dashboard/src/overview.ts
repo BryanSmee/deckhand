@@ -2,16 +2,8 @@
 // on you across repositories, the totals, and each repository's tasks by tone and its lanes.
 import { graphOf } from "./graphModel";
 import { lanesOf } from "./lanes";
-import {
-  isReady,
-  isSettled,
-  plural,
-  readyStatus,
-  sameRepo,
-  type Tone,
-  taskTone,
-  toneOf,
-} from "./format";
+import { isReady, isSettled, readyStatus, sameRepo, type Tone, taskTone, toneOf } from "./format";
+import { t } from "./i18n";
 import type { Blocker, Edge, Task } from "./types";
 
 // Why a task waits on you, and the one action its row offers.
@@ -85,23 +77,24 @@ export function repoParts(tasks: Task[], now: number): Part[] {
     else if (t.state === "done") add("ended");
     else add("idle");
   }
-  const words: Record<string, (n: number) => string> = {
-    run: (n) => `${n} running`,
-    input: (n) => `${n} ${n === 1 ? "needs" : "need"} you`,
-    ready: (n) => `${n} ready`,
-    err: (n) => `${n} failed`,
-    queued: (n) => `${n} queued`,
-    idle: (n) => `${n} idle`,
-    ended: (n) => `${n} done this week`,
-    done: (n) => `${n} merged this week`,
-  };
-  const keys = ["run", "input", "ready", "err", "queued", "idle", "ended", "done"];
+  // Each takes its count, written when repoParts() runs: at render, in the language then.
+  const words = {
+    run: "overview.partRunning",
+    input: "overview.partInput",
+    ready: "overview.partReady",
+    err: "overview.partFailed",
+    queued: "overview.partQueued",
+    idle: "overview.partIdle",
+    ended: "overview.partEnded",
+    done: "overview.partMerged",
+  } as const;
+  const keys = ["run", "input", "ready", "err", "queued", "idle", "ended", "done"] as const;
   return keys
     .filter((k) => counts.get(k))
     .map((k) => ({
       tone: (k === "queued" || k === "ended" ? "idle" : k) as Tone,
       count: counts.get(k)!,
-      words: words[k](counts.get(k)!),
+      words: t(words[k], { count: counts.get(k)! }),
     }))
     .sort((a, b) => ORDER.indexOf(a.tone) - ORDER.indexOf(b.tone));
 }
@@ -120,8 +113,10 @@ export function backlogLine(
   lanes: number,
 ): string | null {
   const parts = [
-    backlog ? `Backlog ${backlog.count}${backlog.more ? "+" : ""}` : "",
-    lanes ? plural(lanes, "lane") : "",
+    backlog
+      ? t(backlog.more ? "overview.backlogMore" : "overview.backlog", { count: backlog.count })
+      : "",
+    lanes ? t("overview.lanes", { count: lanes }) : "",
   ].filter(Boolean);
   return parts.length ? parts.join(" · ") : null;
 }
@@ -129,8 +124,8 @@ export function backlogLine(
 // "now", "12 min", "5 h", "3 d": how long a row has waited.
 export function age(at: number, now: number): string {
   const min = Math.floor(Math.max(0, now - at) / 60000);
-  if (min < 1) return "now";
-  if (min < 60) return `${min} min`;
-  if (min < 24 * 60) return `${Math.floor(min / 60)} h`;
-  return `${Math.floor(min / (24 * 60))} d`;
+  if (min < 1) return t("overview.ageNow");
+  if (min < 60) return t("overview.ageMinutes", { n: min });
+  if (min < 24 * 60) return t("overview.ageHours", { n: Math.floor(min / 60) });
+  return t("overview.ageDays", { n: Math.floor(min / (24 * 60)) });
 }

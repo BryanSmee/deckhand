@@ -11,6 +11,8 @@ import { CHAT_STATES, chatState } from "./chatModel";
 import { ChatPermissions } from "./ChatPermissions";
 import { Conversation } from "./Conversation";
 import { ago, sameRepo } from "./format";
+import { t } from "./i18n";
+import type { Plain } from "./locales";
 import { formatRoute } from "./route";
 import type { Chat, Chats as ChatList } from "./types";
 import { Button, IconButton } from "./ui/Button";
@@ -38,16 +40,17 @@ const chatHref = (repo: string | null, id: string | null) =>
   formatRoute({ repo, task: null, run: null, page: "chats", chat: id });
 
 // "3 of 4": the chats kept against CHATS_PER_USER.
-export const keptText = (list: ChatList) => `${list.chats.length} of ${list.limit}`;
+export const keptText = (list: ChatList) =>
+  t("chats.kept", { kept: list.chats.length, limit: list.limit });
 
 // Why New chat can't go, or null.
 export function newChatProblem(list: ChatList | null): string | null {
-  if (!list) return "Loading…";
-  if (list.limit === 0) return "No chats here: CHATS_PER_USER is 0.";
+  if (!list) return t("chats.loading");
+  if (list.limit === 0) return t("chats.noneAllowed");
   if (list.chats.length >= list.limit) {
-    return `You keep ${keptText(list)} chats, the most you may: delete one to start another.`;
+    return t("chats.atLimit", { kept: list.chats.length, limit: list.limit });
   }
-  if (!list.repos.length) return "No repository lets you start a chat.";
+  if (!list.repos.length) return t("chats.noRepository");
   return null;
 }
 
@@ -68,7 +71,7 @@ export function Chats({ polled, repo, open, onOpen, now, touch }: Props) {
 
   return (
     <div class={`${styles.page} ${open ? styles.reading : ""}`}>
-      <aside class={styles.side} aria-label="Your chats">
+      <aside class={styles.side} aria-label={t("chats.yours")}>
         <ChatsList
           list={list}
           listed={listed}
@@ -99,11 +102,11 @@ export function Chats({ polled, repo, open, onOpen, now, touch }: Props) {
           <p class={styles.empty}>
             {open && list
               ? repo
-                ? `No such chat on ${repo}: it was deleted, or it isn't yours.`
-                : "No such chat: it was deleted, or it isn't yours."
+                ? t("chats.noSuchChatOn", { repo })
+                : t("chats.noSuchChat")
               : listed.length
-                ? "Pick a chat, or start a new one."
-                : "Start a chat to ask the agent about a repository, or to try things in a sandbox of its own. It can read the repository's issues and pull requests, but writes nothing on GitHub."}
+                ? t("chats.pick")
+                : t("chats.intro")}
           </p>
         )}
       </main>
@@ -148,9 +151,9 @@ function ChatsList({
     <div class={styles.list}>
       <div class={styles.listHead}>
         <h2 class={styles.heading}>
-          Your chats
+          {t("chats.yours")}
           {list && (
-            <span class={styles.kept} title="The chats you keep, of the most you may">
+            <span class={styles.kept} title={t("chats.keptTitle")}>
               {keptText(list)}
             </span>
           )}
@@ -163,18 +166,18 @@ function ChatsList({
           title={problem ?? undefined}
           onClick={onNew}
         >
-          New chat
+          {t("chats.newChat")}
         </Button>
       </div>
       {list && problem && <p class={styles.limit}>{problem}</p>}
       {error && (
         <p class={styles.failed} role="alert">
-          Can't read your chats ({error})
+          {t("chats.cantRead", { error })}
         </p>
       )}
-      {!list && !error && <p class={styles.limit}>Loading…</p>}
+      {!list && !error && <p class={styles.limit}>{t("chats.loading")}</p>}
       {list && !listed.length && (
-        <p class={styles.limit}>{repo ? `No chats on ${repo} yet.` : "No chats yet."}</p>
+        <p class={styles.limit}>{repo ? t("chats.noneOn", { repo }) : t("chats.none")}</p>
       )}
       <ul class={styles.items}>
         {listed.map((c) => {
@@ -186,8 +189,8 @@ function ChatsList({
                 href={chatHref(repo, c.id)}
                 aria-current={c.id === open ? "page" : undefined}
               >
-                <StatusDot tone={state.tone} pulse={state.tone === "run"} label={state.label} />
-                <span class={styles.itemTitle}>{c.title ?? "New chat"}</span>
+                <StatusDot tone={state.tone} pulse={state.tone === "run"} label={t(state.label)} />
+                <span class={styles.itemTitle}>{c.title ?? t("chats.newChat")}</span>
                 <span class={styles.itemMeta}>
                   {repo ? ago(c.lastActiveAt, now) : `${c.repo} · ${ago(c.lastActiveAt, now)}`}
                 </span>
@@ -219,21 +222,25 @@ function ChatView({
 }) {
   const state = CHAT_STATES[chatState(chat)];
   const [asking, setAsking] = useState<MenuPick | null>(null);
-  const picks = [chat.agent, chat.model, chat.effort && `${chat.effort} effort`].filter(Boolean);
+  const picks = [
+    chat.agent,
+    chat.model,
+    chat.effort && t("chats.effort", { effort: chat.effort }),
+  ].filter(Boolean);
   return (
-    <section class={styles.chat} aria-label={chat.title ?? "New chat"}>
+    <section class={styles.chat} aria-label={chat.title ?? t("chats.newChat")}>
       <header class={styles.chatHead}>
         {touch && (
           <IconButton
             variant="ghost"
             size="touch"
-            label="Back to your chats"
+            label={t("chats.back")}
             icon={<Icon.ChevronLeft size={20} />}
             onClick={onBack}
           />
         )}
         <div class={styles.chatTitle}>
-          <h2>{chat.title ?? "New chat"}</h2>
+          <h2>{chat.title ?? t("chats.newChat")}</h2>
           <span class={styles.context}>
             {chat.repo}
             {picks.length > 0 && ` · ${picks.join(" · ")}`}
@@ -241,9 +248,9 @@ function ChatView({
         </div>
         <StatusBadge
           tone={state.tone}
-          label={state.label}
+          label={t(state.label)}
           pulse={state.tone === "run"}
-          title={state.note}
+          title={t(state.note)}
         />
         <ChatMenu touch={touch} onPick={setAsking} />
       </header>
@@ -252,12 +259,12 @@ function ChatView({
         <Dialog
           wide
           // The panel has its own heading and explanation: the chat it is for, here.
-          title={chat.title ?? "New chat"}
+          title={chat.title ?? t("chats.newChat")}
           sub={chat.repo}
           onClose={() => setAsking(null)}
           actions={
             <Button variant="ghost" onClick={() => setAsking(null)}>
-              Close
+              {t("chats.close")}
             </Button>
           }
         >
@@ -315,14 +322,14 @@ function ChatMenu({ touch, onPick }: { touch?: boolean; onPick: (what: MenuPick)
       <IconButton
         variant="ghost"
         size={touch ? "touch" : "small"}
-        label="Chat menu"
+        label={t("chats.menu")}
         icon={<Icon.More size={touch ? 20 : 16} />}
         aria-haspopup="menu"
         aria-expanded={open}
         onClick={() => setOpen(!open)}
       />
       {open && (
-        <div class={styles.menu} role="menu" aria-label="Chat menu">
+        <div class={styles.menu} role="menu" aria-label={t("chats.menu")}>
           <button
             type="button"
             role="menuitem"
@@ -331,7 +338,7 @@ function ChatMenu({ touch, onPick }: { touch?: boolean; onPick: (what: MenuPick)
             onClick={() => pick("permissions")}
           >
             <Icon.Settings size={15} />
-            Permissions…
+            {t("chats.permissionsItem")}
           </button>
           <button
             type="button"
@@ -341,7 +348,7 @@ function ChatMenu({ touch, onPick }: { touch?: boolean; onPick: (what: MenuPick)
             onClick={() => pick("reset")}
           >
             <Icon.Reset size={15} />
-            Reset…
+            {t("chats.resetItem")}
           </button>
           <button
             type="button"
@@ -351,7 +358,7 @@ function ChatMenu({ touch, onPick }: { touch?: boolean; onPick: (what: MenuPick)
             onClick={() => pick("delete")}
           >
             <Icon.Trash size={15} />
-            Delete…
+            {t("chats.deleteItem")}
           </button>
         </div>
       )}
@@ -359,18 +366,19 @@ function ChatMenu({ touch, onPick }: { touch?: boolean; onPick: (what: MenuPick)
   );
 }
 
-const CONFIRM = {
+// Keys: written when shown.
+const CONFIRM: Record<"reset" | "delete", Record<"title" | "sub" | "action" | "pending", Plain>> = {
   reset: {
-    title: "Reset this chat?",
-    sub: "Its sandbox stops, and its clone of the repository and the agent's session are dropped: what the agent changed there and what it remembers of this conversation are lost. The chat stays, and your next message starts from a fresh clone.",
-    action: "Reset the chat",
-    pending: "Resetting…",
+    title: "chats.resetTitle",
+    sub: "chats.resetSub",
+    action: "chats.resetAction",
+    pending: "chats.resetting",
   },
   delete: {
-    title: "Delete this chat?",
-    sub: "Its sandbox stops, and the chat goes with its clone of the repository, the agent's session and the whole conversation. This can't be undone.",
-    action: "Delete the chat",
-    pending: "Deleting…",
+    title: "chats.deleteTitle",
+    sub: "chats.deleteSub",
+    action: "chats.deleteAction",
+    pending: "chats.deleting",
   },
 };
 
@@ -407,21 +415,21 @@ function ConfirmDialog({
     <Dialog
       alert
       icon={what === "reset" ? <Icon.Reset size={18} /> : <Icon.Trash size={18} />}
-      title={text.title}
-      sub={text.sub}
+      title={t(text.title)}
+      sub={t(text.sub)}
       onClose={onClose}
       actions={
         <>
           <Button variant="ghost" onClick={onClose}>
-            Cancel
+            {t("chats.cancel")}
           </Button>
           <Button
             variant="danger-solid"
             pending={pending}
-            pendingLabel={text.pending}
+            pendingLabel={t(text.pending)}
             onClick={() => void go()}
           >
-            {text.action}
+            {t(text.action)}
           </Button>
         </>
       }
@@ -472,23 +480,23 @@ function NewChatDialog({
   };
   return (
     <Dialog
-      title="New chat"
-      sub="A sandbox of its own on the repository, read-only on GitHub. It stops after a while without a message, and starts again with the next one."
+      title={t("chats.newChat")}
+      sub={t("chats.newSub")}
       onClose={onClose}
       onSubmit={() => void create()}
       actions={
         <>
           <Button variant="ghost" onClick={onClose}>
-            Cancel
+            {t("chats.cancel")}
           </Button>
           <Button
             variant="primary"
             disabled={!!problem}
             pending={pending}
-            pendingLabel="Starting…"
+            pendingLabel={t("chats.starting")}
             onClick={() => void create()}
           >
-            Start the chat
+            {t("chats.start")}
           </Button>
         </>
       }
@@ -497,7 +505,7 @@ function NewChatDialog({
         {problem && <p class={styles.limit}>{problem}</p>}
         <Field
           as="select"
-          label="Repository"
+          label={t("chats.repository")}
           value={form.repo}
           disabled={!list.repos.length}
           onChange={(e) => set({ repo: e.currentTarget.value })}
@@ -511,11 +519,11 @@ function NewChatDialog({
         <div class={styles.picks}>
           <Field
             as="select"
-            label="Agent"
+            label={t("chats.agent")}
             value={form.agent ?? ""}
             onChange={(e) => set({ agent: pick(e.currentTarget.value) })}
           >
-            <option value="">The repository's</option>
+            <option value="">{t("chats.repositoryDefault")}</option>
             {list.agents.map((a) => (
               <option key={a.name} value={a.name}>
                 {a.label}
@@ -524,11 +532,11 @@ function NewChatDialog({
           </Field>
           <Field
             as="select"
-            label="Model"
+            label={t("chats.model")}
             value={form.model ?? ""}
             onChange={(e) => set({ model: pick(e.currentTarget.value) })}
           >
-            <option value="">The repository's</option>
+            <option value="">{t("chats.repositoryDefault")}</option>
             {list.models.map((m) => (
               <option key={m} value={m}>
                 {m[0].toUpperCase() + m.slice(1)}
@@ -537,11 +545,11 @@ function NewChatDialog({
           </Field>
           <Field
             as="select"
-            label="Effort"
+            label={t("chats.effortLabel")}
             value={form.effort ?? ""}
             onChange={(e) => set({ effort: pick(e.currentTarget.value) })}
           >
-            <option value="">The repository's</option>
+            <option value="">{t("chats.repositoryDefault")}</option>
             {list.efforts.map((x) => (
               <option key={x} value={x}>
                 {x}
@@ -551,8 +559,8 @@ function NewChatDialog({
         </div>
         <Field
           as="textarea"
-          label="First message"
-          help="Optional: it starts the sandbox. Ctrl Enter starts the chat."
+          label={t("chats.firstMessage")}
+          help={t("chats.firstMessageHelp")}
           rows={4}
           value={form.message ?? ""}
           onInput={(e) => set({ message: e.currentTarget.value })}

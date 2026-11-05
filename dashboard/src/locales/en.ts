@@ -1,7 +1,20 @@
 // The English catalog: the source the others are checked against (locales/index.ts). A key is
 // where its text shows, then what it says. `{name}` is a placeholder t() fills; a plural is one
 // text per form Intl.PluralRules gives (`one`, `other`, and `zero`, `two`, `few`, `many` where a
-// language has them), its count in `{count}`.
+// language has them), its count in `{count}`. A number is written as the locale groups digits
+// ("1,234"), but not right after a `#`: keep `#{number}` together in a translation, so an issue's
+// or pull request's reads as GitHub writes it ("#1234"). A page's texts may sit in a file of
+// their own (en-<area>.ts), spread in below.
+import { app } from "./en-app";
+import { chats } from "./en-chats";
+import { config } from "./en-config";
+import { inbox } from "./en-inbox";
+import { overview } from "./en-overview";
+import { policies } from "./en-policies";
+import { repos } from "./en-repos";
+import { request } from "./en-request";
+import { ui } from "./en-ui";
+
 export const en = {
   // The language's own name, in its own language: Preferences › Language lists it so.
   "language.name": "English",
@@ -147,4 +160,14 @@ export const en = {
   "prefs.signedInHelp":
     "Through GitHub. The operator's ALLOWED_USERS lets you in. Signing out ends your sessions on every device, and your MCP clients'.",
   "prefs.signOut": "Sign out",
+
+  ...app,
+  ...overview,
+  ...inbox,
+  ...request,
+  ...chats,
+  ...repos,
+  ...config,
+  ...policies,
+  ...ui,
 } as const;

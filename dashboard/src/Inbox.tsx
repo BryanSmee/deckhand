@@ -7,6 +7,8 @@
 import { useLayoutEffect, useState } from "preact/hooks";
 import { sendToInbox, startDiscussion } from "./api";
 import { useSubmit } from "./hooks";
+import { t, tx } from "./i18n";
+import type { Plain } from "./locales";
 import type { Action } from "./NewRequest";
 import { formatRoute } from "./route";
 import type {
@@ -25,24 +27,25 @@ export const INBOX_DOCS =
 
 export type InboxKind = "idea" | "bug" | "discussion";
 
-const WORDS: Record<InboxKind, { send: string; title: string; details: string; what: string }> = {
+// Keys, not texts: written at render, in the language picked then.
+const WORDS: Record<InboxKind, { send: Plain; title: Plain; details: Plain; what: Plain }> = {
   idea: {
-    send: "Send idea",
-    title: "What you'd like, in a line",
-    details: "What you'd like, and why. Markdown works.",
-    what: "the comment",
+    send: "inbox.sendIdea",
+    title: "inbox.ideaTitle",
+    details: "inbox.ideaDetails",
+    what: "inbox.theComment",
   },
   bug: {
-    send: "Send bug report",
-    title: "What goes wrong, in a line",
-    details: "What goes wrong, and how to see it. Markdown works.",
-    what: "the comment",
+    send: "inbox.sendBug",
+    title: "inbox.bugTitle",
+    details: "inbox.bugDetails",
+    what: "inbox.theComment",
   },
   discussion: {
-    send: "Start discussion",
-    title: "The discussion's title",
-    details: "What you'd like to talk over. Markdown works.",
-    what: "the discussion",
+    send: "inbox.startDiscussion",
+    title: "inbox.discussionTitle",
+    details: "inbox.discussionDetails",
+    what: "inbox.theDiscussion",
   },
 };
 
@@ -99,21 +102,23 @@ export function InboxForm({
       ? start(entry.repo, { title: entry.title.trim(), body: entry.details.trim() })
       : submit(entry.repo, { kind: entry.kind, text: entryText(entry.title, entry.details) }),
   );
-  const taskOf = (key: string | null) => (key && tasks.find((t) => t.key === key)) || null;
+  const taskOf = (key: string | null) => (key && tasks.find((x) => x.key === key)) || null;
   const discussion = kind === "discussion";
   // A discussion needs both; an entry, a title or details.
   const ready = discussion ? !!title.trim() && !!details.trim() : !!entryText(title, details);
   const words = WORDS[kind];
+  const label = t(words.send);
 
-  // Before the paint: the footer's button says it with the form, not a frame later.
+  // Before the paint: the footer's button says it with the form, not a frame later. On its
+  // text, not its key: a change of language says it again.
   useLayoutEffect(() => {
     onAction({
-      label: words.send,
-      pendingLabel: discussion ? "Starting…" : "Sending…",
+      label,
+      pendingLabel: t(discussion ? "inbox.starting" : "inbox.sending"),
       disabled: !ready,
       pending: sending,
     });
-  }, [words.send, ready, sending]);
+  }, [label, ready, sending]);
 
   const send = async (e: Event) => {
     e.preventDefault();
@@ -133,16 +138,39 @@ export function InboxForm({
 
   const task = taskOf(sent?.task ?? null);
   const run = task?.runs[0] && task.runs[0].id !== sent?.before ? task.runs[0] : null;
-  const what = sent ? WORDS[sent.kind].what : "";
+  const what = sent ? t(WORDS[sent.kind].what) : "";
+
+  const link = sent?.url ? (
+    <a href={sent.url} target="_blank" rel="noreferrer">
+      {what}
+    </a>
+  ) : (
+    what
+  );
+  const taskLink = sent && task && (
+    <a
+      href={formatRoute({
+        repo: sent.repo,
+        task: task.key,
+        run: sent.kind === "discussion" ? null : (run?.id ?? null),
+      })}
+    >
+      {sent.kind === "discussion"
+        ? t("inbox.itsThread")
+        : run
+          ? t("inbox.itsRun", { status: run.status })
+          : t("inbox.inboxTask")}
+    </a>
+  );
 
   return (
-    <form id={id} class={styles.form} aria-label={WORDS[kind].send} onSubmit={send}>
+    <form id={id} class={styles.form} aria-label={label} onSubmit={send}>
       <fieldset class={styles.fields} disabled={sending}>
         <Field
-          label="Title"
+          label={t("inbox.title")}
           // Where focus starts: the kind and repo are picked already, most of the time.
           autofocus
-          placeholder={words.title}
+          placeholder={t(words.title)}
           maxLength={256}
           value={title}
           onInput={(e) => setTitle(e.currentTarget.value)}
@@ -150,21 +178,15 @@ export function InboxForm({
         <Field
           as="textarea"
           label={
-            discussion ? (
-              "Details"
-            ) : (
-              <>
-                Details <span class={styles.optional}>· optional</span>
-              </>
-            )
+            discussion
+              ? t("inbox.details")
+              : tx("inbox.detailsOptional", {
+                  optional: <span class={styles.optional}>{t("inbox.optional")}</span>,
+                })
           }
           rows={5}
-          placeholder={words.details}
-          help={
-            discussion
-              ? "Deckhand answers in the discussion."
-              : "The inbox run turns this into a ready-to-start issue, or asks you first. End a line with /effort high, /model or /agent to pick them for its run."
-          }
+          placeholder={t(words.details)}
+          help={discussion ? t("inbox.discussionHelp") : t("inbox.entryHelp")}
           value={details}
           onInput={(e) => setDetails(e.currentTarget.value)}
         />
@@ -176,32 +198,9 @@ export function InboxForm({
       )}
       {sent && (
         <p class={styles.said} role="status">
-          Sent:{" "}
-          {sent.url ? (
-            <a href={sent.url} target="_blank" rel="noreferrer">
-              {what}
-            </a>
-          ) : (
-            what
-          )}
-          {task && (
-            <>
-              {" · "}
-              <a
-                href={formatRoute({
-                  repo: sent.repo,
-                  task: task.key,
-                  run: sent.kind === "discussion" ? null : (run?.id ?? null),
-                })}
-              >
-                {sent.kind === "discussion"
-                  ? "its thread"
-                  : run
-                    ? `its run (${run.status})`
-                    : "the inbox's task"}
-              </a>
-            </>
-          )}
+          {task
+            ? tx("inbox.sentWithTask", { what: link, task: taskLink })
+            : tx("inbox.sent", { what: link })}
         </p>
       )}
     </form>

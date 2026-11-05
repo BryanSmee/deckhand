@@ -3,6 +3,7 @@
 // it (the page it opens is behind).
 import type { ComponentChildren } from "preact";
 import { useId, useRef } from "preact/hooks";
+import { t } from "../i18n";
 import { IconButton } from "./Button";
 import { Close } from "./icons";
 import { useFocusTrap } from "./modal";
@@ -43,7 +44,7 @@ export function Sheet({ title, onClose, children }: Props) {
           <IconButton
             variant="ghost"
             size="touch"
-            label="Close"
+            label={t("ui.close")}
             icon={<Close size={18} />}
             onClick={onClose}
           />

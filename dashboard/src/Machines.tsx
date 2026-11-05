@@ -5,6 +5,7 @@
 import { useState } from "preact/hooks";
 import { postJson, usePolled } from "./api";
 import { ago } from "./format";
+import { t } from "./i18n";
 import type { Machines as MachineList } from "./types";
 import { Button } from "./ui/Button";
 import { StatusBadge } from "./ui/Status";
@@ -32,23 +33,18 @@ export function Machines({ now = Date.now }: { now?: () => number }) {
 
   return (
     <section class={styles.group} aria-labelledby="machines">
-      <h2 id="machines">Your machines</h2>
-      <p class={styles.warning}>
-        An agent runs on these machines on its own, with your files, credentials and network.
-        Deckhand suggests settings for it and enforces none: what it may do there is up to you.
-      </p>
+      <h2 id="machines">{t("machines.title")}</h2>
+      <p class={styles.warning}>{t("machines.warning")}</p>
       {error && (
         <p class={styles.error} role="alert">
           {error}
         </p>
       )}
-      {list.error && !machines && <p class={styles.error}>Can't read the machines: {list.error}</p>}
-      {machines?.length === 0 && (
-        <p class={styles.empty}>
-          No machine is registered: a machine's driver registers it, signed in as you.
-        </p>
+      {list.error && !machines && (
+        <p class={styles.error}>{t("machines.unreadable", { error: list.error })}</p>
       )}
-      {!machines && !list.error && <p class={styles.empty}>Reading…</p>}
+      {machines?.length === 0 && <p class={styles.empty}>{t("machines.none")}</p>}
+      {!machines && !list.error && <p class={styles.empty}>{t("machines.reading")}</p>}
       {machines?.map((m) => (
         <div key={m.id} class={styles.client}>
           <span class={styles.text}>
@@ -56,19 +52,21 @@ export function Machines({ now = Date.now }: { now?: () => number }) {
               <b>{m.name}</b>
               <StatusBadge
                 tone={m.online ? "done" : "idle"}
-                label={m.online ? "Online" : "Offline"}
+                label={t(m.online ? "machines.online" : "machines.offline")}
               />
             </span>
             <span>
-              {m.labels.length ? m.labels.join(", ") : "No labels"}
-              {" · "}
-              {m.capacity === 1 ? "1 run at once" : `${m.capacity} runs at once`}
-              {" · "}
-              last seen {ago(m.seenAt, now())}
-              {m.version && ` · driver ${m.version}`}
+              {[
+                m.labels.length ? m.labels.join(t("list.comma")) : t("machines.noLabels"),
+                t("machines.capacity", { count: m.capacity }),
+                t("machines.seen", { ago: ago(m.seenAt, now()) }),
+                m.version && t("machines.driver", { version: m.version }),
+              ]
+                .filter(Boolean)
+                .join(" · ")}
             </span>
-            <span class={styles.redirect} title="The repositories it takes">
-              {m.repos.join(", ")}
+            <span class={styles.redirect} title={t("machines.repos")}>
+              {m.repos.join(t("list.comma"))}
             </span>
           </span>
           <Button
@@ -76,9 +74,9 @@ export function Machines({ now = Date.now }: { now?: () => number }) {
             pending={removing === m.id}
             disabled={removing !== null}
             onClick={() => void remove(m.id)}
-            aria-label={`Remove ${m.name}`}
+            aria-label={t("machines.removeOne", { name: m.name })}
           >
-            Remove
+            {t("machines.remove")}
           </Button>
         </div>
       ))}

@@ -4,12 +4,16 @@
 // them ("g o"). They never fire while typing in a field, while a dialog or a menu is open, or once
 // switched off (Preferences, kept in this browser).
 import { useEffect, useRef, useState } from "preact/hooks";
+import { t } from "./i18n";
+import type { Plain } from "./locales";
 import { getPref, setPref, usePref } from "./prefs";
 
+// The sheet's groups: ids, named at render (GROUP_NAMES).
 export type Group = "Everywhere" | "Tasks" | "Run log" | "Board";
 
 export interface Shortcut {
   group: Group;
+  // Its name, in the language now.
   label: string;
   // Any of them fires it; its handler gets which one.
   keys: readonly string[];
@@ -19,65 +23,84 @@ export interface Shortcut {
   drag?: boolean;
 }
 
-export const SHORTCUTS = {
-  help: { group: "Everywhere", label: "These shortcuts", keys: ["?"] },
-  palette: { group: "Everywhere", label: "Jump to a repo, task or action", keys: ["mod+k"] },
-  request: { group: "Everywhere", label: "New request", keys: ["n"] },
-  overview: { group: "Everywhere", label: "Overview", keys: ["g o"] },
-  tasks: { group: "Everywhere", label: "Tasks", keys: ["g t"] },
-  board: { group: "Everywhere", label: "Board", keys: ["g b"] },
-  settings: { group: "Everywhere", label: "Settings", keys: ["g s"] },
-  sidebar: { group: "Everywhere", label: "Collapse the sidebar", keys: ["\\"] },
-  theme: { group: "Everywhere", label: "Theme: system, light, dark", keys: ["shift+t"] },
-  back: { group: "Everywhere", label: "Close, or go back", keys: ["escape"] },
+// The table, each name a key of the catalog: written when read (SHORTCUTS), as the language
+// may change after this module loads.
+const TABLE = {
+  help: { group: "Everywhere", label: "app.shortcutHelp", keys: ["?"] },
+  palette: { group: "Everywhere", label: "app.shortcutPalette", keys: ["mod+k"] },
+  request: { group: "Everywhere", label: "app.shortcutRequest", keys: ["n"] },
+  overview: { group: "Everywhere", label: "app.shortcutOverview", keys: ["g o"] },
+  tasks: { group: "Everywhere", label: "app.shortcutTasks", keys: ["g t"] },
+  board: { group: "Everywhere", label: "app.shortcutBoard", keys: ["g b"] },
+  settings: { group: "Everywhere", label: "app.shortcutSettings", keys: ["g s"] },
+  sidebar: { group: "Everywhere", label: "app.shortcutSidebar", keys: ["\\"] },
+  theme: { group: "Everywhere", label: "app.shortcutTheme", keys: ["shift+t"] },
+  back: { group: "Everywhere", label: "app.shortcutBack", keys: ["escape"] },
 
-  search: { group: "Tasks", label: "Search tasks", keys: ["/"] },
-  nextTask: { group: "Tasks", label: "Next / previous task", keys: ["j", "k"], join: "or" },
+  search: { group: "Tasks", label: "app.shortcutSearch", keys: ["/"] },
+  nextTask: { group: "Tasks", label: "app.shortcutNextTask", keys: ["j", "k"], join: "or" },
   filter: {
     group: "Tasks",
-    label: "Filter: All … Error",
+    label: "app.shortcutFilter",
     keys: ["1", "2", "3", "4", "5", "6"],
     join: "to",
   },
-  github: { group: "Tasks", label: "Open on GitHub", keys: ["o"] },
-  answer: { group: "Tasks", label: "Answer its questions", keys: ["a"] },
-  rerun: { group: "Tasks", label: "Rerun a failed run", keys: ["r"] },
-  review: { group: "Tasks", label: "Review its pull request again", keys: ["shift+r"] },
-  fix: { group: "Tasks", label: "One more fix round", keys: ["shift+f"] },
-  stop: { group: "Tasks", label: "Stop the run (asks first)", keys: ["shift+s"] },
-  nextRun: { group: "Tasks", label: "Next / previous run", keys: ["]", "["], join: "or" },
+  github: { group: "Tasks", label: "app.shortcutGithub", keys: ["o"] },
+  answer: { group: "Tasks", label: "app.shortcutAnswer", keys: ["a"] },
+  rerun: { group: "Tasks", label: "app.shortcutRerun", keys: ["r"] },
+  review: { group: "Tasks", label: "app.shortcutReview", keys: ["shift+r"] },
+  fix: { group: "Tasks", label: "app.shortcutFix", keys: ["shift+f"] },
+  stop: { group: "Tasks", label: "app.shortcutStop", keys: ["shift+s"] },
+  nextRun: { group: "Tasks", label: "app.shortcutNextRun", keys: ["]", "["], join: "or" },
 
-  logSearch: { group: "Run log", label: "Search the log", keys: ["f"] },
+  logSearch: { group: "Run log", label: "app.shortcutLogSearch", keys: ["f"] },
   match: {
     group: "Run log",
-    label: "Next / previous match",
+    label: "app.shortcutMatch",
     keys: ["enter", "shift+enter"],
     join: "or",
   },
-  expand: { group: "Run log", label: "Expand all sections", keys: ["e"] },
-  collapse: { group: "Run log", label: "Collapse all sections", keys: ["shift+e"] },
-  error: { group: "Run log", label: "Next / previous error", keys: ["x", "shift+x"], join: "or" },
-  follow: { group: "Run log", label: "Follow live, jump to the end", keys: ["l"] },
-  copy: { group: "Run log", label: "Copy the log", keys: ["mod+shift+c"] },
+  expand: { group: "Run log", label: "app.shortcutExpand", keys: ["e"] },
+  collapse: { group: "Run log", label: "app.shortcutCollapse", keys: ["shift+e"] },
+  error: { group: "Run log", label: "app.shortcutError", keys: ["x", "shift+x"], join: "or" },
+  follow: { group: "Run log", label: "app.shortcutFollow", keys: ["l"] },
+  copy: { group: "Run log", label: "app.shortcutCopy", keys: ["mod+shift+c"] },
 
   move: {
     group: "Board",
-    label: "Move between cards",
+    label: "app.shortcutMove",
     keys: ["arrowleft", "arrowup", "arrowright", "arrowdown"],
   },
-  open: { group: "Board", label: "Open the card’s task", keys: ["enter"] },
-  start: { group: "Board", label: "Start the selected issue", keys: ["s"] },
-  queue: { group: "Board", label: "Queue it after…", keys: ["q"] },
-  brainstorm: { group: "Board", label: "Brainstorm it", keys: ["b"] },
-  view: { group: "Board", label: "Graph / lanes", keys: ["v"] },
-  closed: { group: "Board", label: "Show closed", keys: ["c"] },
-  zoom: { group: "Board", label: "Zoom in, out, fit", keys: ["+", "-", "0"] },
-  pan: { group: "Board", label: "Pan", keys: ["space"], drag: true },
-} as const satisfies Record<string, Shortcut>;
+  open: { group: "Board", label: "app.shortcutOpen", keys: ["enter"] },
+  start: { group: "Board", label: "app.shortcutStart", keys: ["s"] },
+  queue: { group: "Board", label: "app.shortcutQueue", keys: ["q"] },
+  brainstorm: { group: "Board", label: "app.shortcutBrainstorm", keys: ["b"] },
+  view: { group: "Board", label: "app.shortcutView", keys: ["v"] },
+  closed: { group: "Board", label: "app.shortcutClosed", keys: ["c"] },
+  zoom: { group: "Board", label: "app.shortcutZoom", keys: ["+", "-", "0"] },
+  pan: { group: "Board", label: "app.shortcutPan", keys: ["space"], drag: true },
+} as const satisfies Record<string, Omit<Shortcut, "label"> & { label: Plain }>;
+
+type Table = typeof TABLE;
+export const SHORTCUTS = Object.fromEntries(
+  Object.entries(TABLE).map(([id, s]) => [
+    id,
+    Object.defineProperty({ ...s }, "label", { get: () => t(s.label), enumerable: true }),
+  ]),
+) as unknown as { [K in keyof Table]: Omit<Table[K], "label"> & { readonly label: string } };
 
 export type ShortcutId = keyof typeof SHORTCUTS;
 
 export const GROUPS: readonly Group[] = ["Everywhere", "Tasks", "Run log", "Board"];
+export const GROUP_NAMES: Record<Group, Plain> = {
+  Everywhere: "app.shortcutsEverywhere",
+  Tasks: "app.shortcutsTasks",
+  "Run log": "app.shortcutsRunLog",
+  Board: "app.shortcutsBoard",
+};
+
+// The words between keys.
+const JOINS = { or: "app.keysOr", to: "app.keysTo" } as const satisfies Record<string, Plain>;
 
 export const isMac = () => /Mac|iPhone|iPad/.test(navigator.platform);
 
@@ -111,14 +134,14 @@ export function shownKeys(id: ShortcutId, which?: number): Shown {
         : s.keys;
   const out: Shown = [];
   keys.forEach((k, i) => {
-    if (i > 0 && s.join) out.push(s.join);
+    if (i > 0 && s.join) out.push(t(JOINS[s.join]));
     k.split(" ").forEach((chord, j) => {
-      if (j > 0) out.push("then");
+      if (j > 0) out.push(t("app.keysThen"));
       // "+" alone is the key.
       out.push(chord.split(/\+(?=.)/).map(keyName));
     });
   });
-  if (s.drag) out.push("+ drag");
+  if (s.drag) out.push(t("app.keysDrag"));
   return out;
 }
 
@@ -131,7 +154,7 @@ export const keyHint = (id: ShortcutId, which?: number) =>
 // A tooltip with the shortcut after it, "Stop the run (Shift S)", while shortcuts are on.
 export function withKey(title: string | undefined, id: ShortcutId | undefined, which?: number) {
   if (!id || !shortcutsOn()) return title;
-  return title ? `${title} (${keyHint(id, which)})` : keyHint(id, which);
+  return title ? t("app.withKey", { title, keys: keyHint(id, which) }) : keyHint(id, which);
 }
 
 // On or off: Settings › Preferences' Keyboard shortcuts (prefs.ts).
