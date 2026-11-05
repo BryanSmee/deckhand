@@ -507,18 +507,18 @@ for it: its tools register one of your own computers and claim the issues routed
 own, with your files, credentials and network: Deckhand suggests settings and enforces none
 there.
 
-| Tool                 | What it does                                                                                                                                                                                                                                                                                         |
-| -------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `register_machine`   | Registers a machine (`name`, unique among yours; `labels`; `capacity`, 1 by default; `repos`, `owner/name` or `owner/*`), or again under the same name: its id, and the repositories offered to it now                                                                                               |
-| `heartbeat`          | Says the machine (`machine`, its id) is there, every 30 s: it is online while its last heartbeat is under 90 s old, and its claims' leases (2 min) are renewed, those of `runs` alone when given; returns its claims                                                                                 |
-| `claim`              | Waits up to 25 s for the next task routed to the machine and claims it (`agent`, `model` and `effort`: what it runs, for the run's record): repository, issue, branch, mode, prompt and message (`resume`: its session goes on), or none. The claim is a run on the dashboard from then on           |
-| `post_events`        | Sends the claimed run's agent output (`lines`, its stream-json lines; `from`, how many it sent before): its log on the dashboard. At a result line, the comments waiting go to `next_message`, or its inbox closes                                                                                   |
-| `next_message`       | Waits up to 25 s for the comments that reach the run (`from`, how many it read): messages for its agent, or `closed` once no more will come                                                                                                                                                          |
-| `ask`                | Ends the run waiting for input: `question` posted on the issue as the App, the issue labelled, as a sandbox run that asks (`branch` and `sha`: as `finish`'s, its pull request left a draft)                                                                                                         |
-| `finish`             | Ends the run (`outcome` `ok`, `error` or `needs-input`): `reply` posted as the App, then what follows any run (the review's fix loop, a CI fix, the queue). `branch` and `sha`: the issue's branch you pushed and its head, whose draft pull request the App opens first (`ready`: ready for review) |
-| `approve_permission` | For Claude Code's `--permission-prompt-tool`: asks you whether the run's agent may make a tool call (`tool_name`, `input`, `tool_use_id`), on the dashboard and in a comment on the issue; waits up to 25 s for your answer (`pending`: ask again with the same `tool_use_id`)                       |
-| `release`            | Gives a claim (`run`) back: its run ends as interrupted, the issue told, and its comments wait again for this machine, as after a lease that runs out                                                                                                                                                |
-| `unregister_machine` | Removes the machine, as its **Remove** in Settings › MCP clients does: its claims end                                                                                                                                                                                                                |
+| Tool                 | What it does                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| -------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `register_machine`   | Registers a machine (`name`, unique among yours; `labels`; `capacity`, 1 by default; `repos`, `owner/name` or `owner/*`), or again under the same name: its id, and the repositories offered to it now                                                                                                                                                                                                                                                     |
+| `heartbeat`          | Says the machine (`machine`, its id) is there, every 30 s: it is online while its last heartbeat is under 90 s old, and its claims' leases (2 min) are renewed, those of `runs` alone when given; returns its claims                                                                                                                                                                                                                                       |
+| `claim`              | Waits up to 25 s for the next task routed to the machine and claims it (`agent`, `model` and `effort`: what it runs, for the run's record; `agentVersion`, `sandbox`, `permissionMode`, `suggestedSettings`: how, as the machine reports it): repository, issue, branch, mode, prompt and message (`resume`: its session goes on), the URL to clone and the hosts its agent's sandbox may reach, or none. The claim is a run on the dashboard from then on |
+| `post_events`        | Sends the claimed run's agent output (`lines`, its stream-json lines; `from`, how many it sent before): its log on the dashboard. At a result line, the comments waiting go to `next_message`, or its inbox closes                                                                                                                                                                                                                                         |
+| `next_message`       | Waits up to 25 s for the comments that reach the run (`from`, how many it read): messages for its agent, or `closed` once no more will come                                                                                                                                                                                                                                                                                                                |
+| `ask`                | Ends the run waiting for input: `question` posted on the issue as the App, the issue labelled, as a sandbox run that asks (`branch` and `sha`: as `finish`'s, its pull request left a draft)                                                                                                                                                                                                                                                               |
+| `finish`             | Ends the run (`outcome` `ok`, `error` or `needs-input`): `reply` posted as the App, then what follows any run (the review's fix loop, a CI fix, the queue). `branch` and `sha`: the issue's branch you pushed and its head, whose draft pull request the App opens first (`ready`: ready for review)                                                                                                                                                       |
+| `approve_permission` | For Claude Code's `--permission-prompt-tool`: asks you whether the run's agent may make a tool call (`tool_name`, `input`, `tool_use_id`), on the dashboard and in a comment on the issue; waits up to 25 s for your answer (`pending`: ask again with the same `tool_use_id`)                                                                                                                                                                             |
+| `release`            | Gives a claim (`run`) back: its run ends as interrupted, the issue told, and its comments wait again for this machine, as after a lease that runs out                                                                                                                                                                                                                                                                                                      |
+| `unregister_machine` | Removes the machine, as its **Remove** in Settings › MCP clients does: its claims end                                                                                                                                                                                                                                                                                                                                                                      |
 
 The run tools (`claim` and those after it) take the `protocol` the driver speaks (1 now): an
 update of Deckhand keeps taking the previous one, so a driver has an update's time to follow.
@@ -553,6 +553,98 @@ Each shows what your access shows you on the dashboard, nothing of the repositor
 see. A run's log can hold what its agent read (issues, command output, web pages): your
 client's model reads it as data, which the tool's description tells it, but treat a log as you
 would any text from the repository.
+
+### Your own machine
+
+A task can run on one of your own computers rather than in a sandbox: one with what a sandbox
+doesn't have (a game engine and its editor, a GPU, licensed tools, large local assets). Its
+driver, `deckhand-machine`, signs in as you, claims the issues routed to it and runs your own
+Claude Code there; Deckhand keeps the rest (the queue, the issue's comments, needs-input, the
+review loop, the dashboard).
+
+> **Warning**: an agent will run on this machine on its own, with your files, credentials and
+> network. Deckhand suggests settings for it and enforces none: what it may do there is up to
+> you. Give it a machine, or an account on one, that holds nothing you wouldn't hand it.
+
+It needs Node 20 or later, git (signed in to GitHub as you: the driver pushes with it) and
+Claude Code, signed in, on Windows, macOS or Linux. Claude Code's sandbox needs `bubblewrap` and
+`socat` on Linux and WSL2 (`apt install bubblewrap socat`); macOS has what it needs; native
+Windows has none (WSL2 has).
+
+1. The repository takes machines: the operator's `machines` grant
+   ([security.md](security.md#the-grants)) and a `machines:` block in its `.deckhand.yaml`
+   ([repo-config.md](repo-config.md#machines)).
+2. Download `deckhand-machine.mjs` (attached to each release; `machine/` in this repository) and
+   sign in, which shows the warning and waits for you to type `yes`, then opens your browser:
+
+   ```sh
+   node deckhand-machine.mjs login https://deckhand.example.com
+   ```
+
+3. Write `machine.yaml` in its folder (`~/.deckhand-machine`, or `DECKHAND_MACHINE_HOME`):
+
+   ```yaml
+   name: studio # unique among your machines
+   labels: [unreal, gpu] # what a repository's machines.labels and runs-on:<label> name
+   capacity: 1 # runs at once
+   repos: [acme/game] # "owner/name" or "owner/*"
+   workspace: ~/deckhand # its clones: <workspace>/<owner>/<repo>/issue-<n>, kept between runs
+   paths: # reachable by its agent besides its clone: read-only unless write
+     - path: C:\Program Files\Epic Games\UE_5.4
+     - path: D:\DerivedDataCache
+       write: true
+   deny: [~/clients] # unreadable too, with the usual credential stores
+   # claude: claude                # its command (on Windows, claude.exe's full path), or a list
+   # model: opus                   # effort: high
+   # permission_mode: acceptEdits  # dontAsk, plan…: never bypassPermissions
+   # sandbox: true                 # Claude Code's sandbox, where it has one
+   # suggested_settings: true      # false: your own Claude Code settings alone
+   # git_url: git@github.com:{repo}.git   # where to clone from: GitHub's https URL by default
+   ```
+
+4. Run it, in a terminal or as a service of your own (Ctrl-C gives its runs back):
+
+   ```sh
+   node deckhand-machine.mjs run
+   ```
+
+   Its first `run` shows the warning again and waits for `yes`. It registers the machine (it
+   shows in Settings › MCP clients), says it is there every 30 s and claims what is routed to it:
+   a `runs-on:<label>` label or a `/machine` comment
+   ([repo-config.md](repo-config.md#routing-an-issue-to-a-machine)).
+
+Each run fetches the repository into its clone, checks out the issue's branch (as it is on
+GitHub, or new from the base), and runs `claude -p` there, its output sent to Deckhand as the
+run's log and the comments that reach it written to its input; `--resume` goes on with the
+issue's session when the machine ran it before. Then the driver pushes the branch with your git
+and ends the run; Deckhand posts the reply and opens the pull request.
+
+**The suggested settings.** For each run the driver writes Claude Code settings
+(`runs/<run>.settings.json` in its folder, which says the Claude Code version they were checked
+against), passed with `--settings`: above your user and the repository's settings, whose deny
+rules still add up. They:
+
+- let it write in the run's clone, and reach `paths` (read-only unless `write`);
+- deny reading the usual credential stores (`~/.ssh`, `~/.aws`, `~/.azure`, `~/.kube`,
+  `~/.gnupg`, `~/.config/gh`, `~/.git-credentials`, `~/.netrc`, `~/.docker/config.json`,
+  Claude Code's own credentials file…), your browsers' profiles and keychains, the driver's
+  folder (its sign-in) and `deny`;
+- give its sandbox the hosts a sandbox run of the repository may reach as its only domains: the
+  agent's, GitHub's and the operator's grant;
+- turn its sandbox on where Claude Code has one, refusing to start without it
+  (`failIfUnavailable`), and `bypassPermissions` off: an unattended agent refuses what its
+  permission mode would ask you (part 6 relays those questions, #600).
+
+What they don't stop: they are Claude Code's to apply, not Deckhand's. The sandbox confines the
+commands it runs and their network, the permission rules its file tools; neither covers your
+MCP servers, hooks or plugins, git's credential helpers (a keychain), nor what you allow in your
+own settings. On Windows there is no sandbox: its commands run with your rights. With
+`suggested_settings: false`, only your own settings apply.
+
+**How it ran.** Each claim reports Claude Code's version, whether its sandbox is on, its
+permission mode and whether the suggested settings are used. The run's log, its page and its
+reply's footer say them ("on studio (v2.1.3, sandbox on, `acceptEdits`, Deckhand's settings, as it
+reports)"): what the machine reports, not something Deckhand checked.
 
 ## The server folder
 

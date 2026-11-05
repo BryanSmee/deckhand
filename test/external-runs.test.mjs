@@ -320,7 +320,12 @@ test("a claim's work says where to clone and which hosts to allow; how the machi
   const desk = b.register("alice", "Desk");
   await b.say("alice", "Deckhand\n/machine Desk\nBuild it.");
   b.ready();
-  const setup = { version: "2.1.3", sandbox: false, permissionMode: "acceptEdits", suggested: true };
+  const setup = {
+    version: "2.1.3",
+    sandbox: false,
+    permissionMode: "acceptEdits",
+    suggested: true,
+  };
   const work = await ctx.claims.claim("alice", desk, { reported: { agent: "claude", setup } });
   assert.equal(work.cloneUrl, "https://github.com/org/repo.git");
   // The agent's API, GitHub's and the grant's: what a sandbox run of the repository reaches.

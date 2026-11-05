@@ -70,7 +70,9 @@ export function setupText({ version, sandbox, permissionMode, suggested }) {
     version && `v${version.replace(/^v/i, "")}`,
     sandbox !== null && sandbox !== undefined && `sandbox ${sandbox ? "on" : "off"}`,
     permissionMode && `\`${permissionMode}\``,
-    suggested !== null && suggested !== undefined && (suggested ? "Deckhand's settings" : "its own settings"),
+    suggested !== null &&
+      suggested !== undefined &&
+      (suggested ? "Deckhand's settings" : "its own settings"),
   ]
     .filter(Boolean)
     .join(", ");

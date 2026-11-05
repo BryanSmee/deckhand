@@ -9,6 +9,8 @@ import { appendFileSync, writeFileSync } from "node:fs";
 import { createInterface } from "node:readline";
 
 const args = process.argv.slice(2);
+// Run as a test file of its own by `node --test` (its folder's files are): nothing to do.
+if (!args.length) process.exit(0);
 if (args[0] === "--version") {
   console.log("2.1.300 (Claude Code)");
   process.exit(0);

@@ -320,7 +320,8 @@ const TOOL_SPECS = [
         // the reply's footer say it, never checked.
         agentVersion: {
           type: "string",
-          description: "The agent's version (`claude --version`'s number: 2.1.3), for the run's record.",
+          description:
+            "The agent's version (`claude --version`'s number: 2.1.3), for the run's record.",
         },
         sandbox: {
           type: "boolean",
@@ -329,7 +330,8 @@ const TOOL_SPECS = [
         },
         permissionMode: {
           type: "string",
-          description: "The agent's permission mode (acceptEdits, dontAsk…), as the machine reports it.",
+          description:
+            "The agent's permission mode (acceptEdits, dontAsk…), as the machine reports it.",
         },
         suggestedSettings: {
           type: "boolean",

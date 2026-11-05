@@ -2340,8 +2340,10 @@ client, and no sandbox service, run token or git gateway is on the machine.
   may edit labels) ends a label route, as `/machine none` does: the task goes back to
   sandboxes, Deckhand's default, and the comments held for its owner are queued.
 - **What reaches the machine**: the work a sandbox run would get (the repository, the issue, its
-  branch's name, the mode, the prompt and the comments' text), no token, no secret of the
-  operator's. Only the owner's comments reach its runs: another user's are held on the task,
+  branch's name, the mode, the prompt and the comments' text), the URL to clone it from and the
+  hosts a sandbox run of the repository may reach (the agent's, GitHub's and the operator's grant:
+  names the egress proxy already allows, for the driver's suggested settings), no token, no
+  secret of the operator's. Only the owner's comments reach its runs: another user's are held on the task,
   shown on the dashboard to those who see the task, until the owner delivers or drops them
   (`POST /api/held/<repo>/<n>/deliver|drop`, the owner's alone). Deckhand's own items (a review's
   fix round, a CI fix, a rebase, and the review of the issue's own pull request, which is the
@@ -2401,6 +2403,21 @@ client, and no sandbox service, run token or git gateway is on the machine.
 - **What Deckhand doesn't enforce**: anything on the machine. An agent runs there on its own,
   with the owner's files, credentials and network; Deckhand suggests settings for it and
   enforces none. `register_machine`'s answer and the dashboard's list of machines say so.
+- **The suggested settings** (#599, `machine/deckhand-machine.mjs` `settingsFor()`): the driver
+  writes Claude Code settings for each run, passed with `--settings`: the run's clone writable,
+  the extra paths of its `machine.yaml` reachable (read-only unless it says `write`), the usual
+  credential stores, browser profiles and the driver's own tokens unreadable, the claim's hosts as
+  the only domains its sandbox reaches, its sandbox on where Claude Code has one (macOS, Linux,
+  WSL2: never native Windows) and refusing to start without it, `bypassPermissions` turned off.
+  Claude Code applies them; nothing of Deckhand's checks that they were, nor stops an owner who
+  edits the driver or its config. Its sandbox confines the commands it runs (Bash), its permission
+  rules its file tools; neither covers what the owner's MCP servers or hooks do, nor its git
+  credential helpers.
+- **How it ran, as reported**: a claim says the agent's version, whether its sandbox is on, its
+  permission mode and whether the suggested settings were used (`claim`'s `agentVersion`,
+  `sandbox`, `permissionMode`, `suggestedSettings`: a word each, checked as such, since the
+  reply's footer says them). The run's record, its log, the dashboard and the reply say them as
+  what the machine reports, never as something Deckhand checked.
 
 ## Edge's and the orchestrator's data
 

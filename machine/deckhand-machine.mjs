@@ -719,7 +719,15 @@ export function createDriver({
         await sleep(retryMs);
         continue;
       }
-      if (work && !stopping) startRun(work);
+      if (!work) continue;
+      // Claimed as it stopped: given back at once, rather than when its lease runs out.
+      if (stopping) {
+        await client
+          .call("release", { machine, run: work.run })
+          .catch((error) => log(`release: ${error.message}`));
+        break;
+      }
+      startRun(work);
     }
   }
 

@@ -1054,7 +1054,12 @@ state is asked for it (`runs.mjs` skips them for `live.external`).
   record of any run (mode, its agent, model and effort as the driver reports them, its
   machine's name in `record.machine`, `start` or `continue` as the claim resumes the session),
   its log's first line, the needs-input label off, its comments' 👀 kept; its state written
-  before the comments leave the queue (`restart.mjs` `take()`), the claim with them.
+  before the comments leave the queue (`restart.mjs` `take()`), the claim with them. The claim's
+  work names the URL to clone (`GITHUB_URL`'s) and the hosts a sandbox run of the repository
+  reaches (`egress.mjs` `operatorHosts()` with its grant, `ctx.grantOf()`), for the driver's
+  suggested settings (#599); how the machine says its agent runs (`claim`'s `agentVersion`,
+  `sandbox`, `permissionMode`, `suggestedSettings`, `mcp.mjs` `setupOf()`) is the record's
+  `setup`, a note in its log and its reply's footer (`footer.mjs` `setupText()`).
 - **Log**: `post_events { run, lines, from }` takes the agent's stream-json lines (1000 a
   call, 1 MB at most: edge's and `mcp.mjs`'s limit for a `deckhand:machine` call, 64 KB for the
   other tools), which the agent's `normalize()` reads as a sandbox's output (`externalLines()`):
@@ -1116,6 +1121,14 @@ branch, sha, ready }` (or `ask`). Before the run ends, the orchestrator checks i
   driver's next call finds its run. A run without its claim ends as interrupted; a claim without
   its run (a copy stopped before the run's state was written) gives its comments back to the
   queue.
+- **The driver** (`machine/deckhand-machine.mjs`, #599): one file, no dependency, attached to
+  each release, which runs on the owner's machine: `login` (edge's OAuth with
+  `deckhand:machine`, a loopback redirect), then `run`: `register_machine`, `heartbeat` every
+  30 s with the runs it has (one no longer listed is stopped), `claim` within its capacity. A
+  claim's run clones or fetches into `<workspace>/<owner>/<repo>/issue-<n>`, writes its settings
+  (`settingsFor()`) and runs `claude -p` with stream-json in and out, its lines batched to
+  `post_events`, `next_message`'s comments written to its input, its input closed once the
+  inbox is; then it pushes the branch with the owner's git and calls `finish`.
 - **Versions**: the run tools take a `protocol` (`claims.mjs` `MACHINE_PROTOCOL`, 1, which
   `claim`'s work says). A copy keeps taking the previous one through the update that moves to the
   next (`MACHINE_PROTOCOLS`), as an endpoint sandboxes call is kept through one update; a driver
