@@ -88,16 +88,28 @@ export const QUEUE_RETRY_MS = 5000;
 // How often a run's end that still waits for the store is logged again (endWait()).
 export const ENDING_LOG_MS = 10 * 60_000;
 
+// What a run's end may wait for the store to take (endWait()): its label, the
+// deckhand_runs_ending gauge's `what` (metrics.mjs endingRuns()), → its words, the status page's
+// and the log's.
+export const END_WAITS = {
+  summary: "its summary",
+  queue: "the queue",
+  state: "its state's removal",
+};
+
 // A run's end waiting for the store (#821): its summary (runs.mjs summarySaved()), or the queue
 // and its state's removal (removeLive()). Such a run holds its task and a parallel slot until
 // the store takes the write, which a store refusing it for good (a summary file it can't write,
 // a Redis ACL without the key) never does: the run is kept in `ctx.endsWaiting` (run id →
-// { key, what, since, tries, error }), which the orchestrator's /ready and its warnings on the
-// dashboard's status page say (endsWaitingWarnings()), and logged again every ENDING_LOG_MS.
+// { key, kind, what, since, tries, error }; `kind` one of END_WAITS), which the orchestrator's
+// /ready, its warnings on the dashboard's status page (endsWaitingWarnings()) and its metrics
+// (metrics.mjs endingRuns()) say, and logged again every ENDING_LOG_MS.
 // Not given up: a store away for an hour is the same refusal, and the run's summary is kept
 // nowhere else (#619). → { failed(error), done() }, failed() at each refusal, done() once the
 // write landed or the copy leaves the run to the next one.
-export function endWait(ctx, live, what) {
+export function endWait(ctx, live, kind) {
+  const what = END_WAITS[kind];
+  if (!what) throw new Error(`endWait: unknown wait ${kind}`);
   const now = () => (ctx.now ?? Date.now)();
   const waits = (ctx.endsWaiting ??= new Map());
   let entry = null;
@@ -105,7 +117,7 @@ export function endWait(ctx, live, what) {
     failed(error) {
       const at = now();
       if (!entry) {
-        entry = { key: live.key, what, since: at, tries: 0, error: null, loggedAt: at };
+        entry = { key: live.key, kind, what, since: at, tries: 0, error: null, loggedAt: at };
         waits.set(live.id, entry);
       }
       entry.tries++;
@@ -584,7 +596,7 @@ export function createRestart(ctx) {
       return new Promise((resolve) => setTimeout(() => resolve(true), retryMs).unref?.());
     };
     let said = false;
-    let wait = endWait(ctx, live, "the queue");
+    let wait = endWait(ctx, live, "queue");
     try {
       while (!(await saveQueue())) {
         if (!said)
@@ -594,7 +606,7 @@ export function createRestart(ctx) {
         if (!(await again("saving the queue"))) return false;
       }
       wait.done();
-      wait = endWait(ctx, live, "its state's removal");
+      wait = endWait(ctx, live, "state");
       for (;;) {
         try {
           await ctx.store.delete(liveKey(live.id));

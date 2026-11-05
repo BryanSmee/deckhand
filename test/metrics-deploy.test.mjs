@@ -49,6 +49,7 @@ test("the dashboard and the alerts name only metrics a service declares", () => 
     "deckhand_runs_finished_total",
     "deckhand_run_duration_seconds",
     "deckhand_runs_queued",
+    "deckhand_runs_ending",
     "deckhand_max_parallel",
     "deckhand_webhooks_received_total",
     "deckhand_github_rate_limit_remaining",

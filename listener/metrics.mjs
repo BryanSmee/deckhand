@@ -7,6 +7,7 @@ import { AGENTS, ENTRIES } from "./agents/index.mjs";
 import { repoAllowed } from "./config.mjs";
 import { APP_EVENTS } from "./github-app.mjs";
 import { BUILT_IN } from "./modes.mjs";
+import { END_WAITS } from "./restart.mjs";
 import { pickedTask } from "./tasks.mjs";
 import { leaseMetric, STATUS_LABELS, statusLabel } from "../lib/metrics.mjs";
 
@@ -24,6 +25,18 @@ export const KINDS = ["work", "light", "review", "fix", "ci-fix", "conflict", "a
 // takes no other slot), the pause that makes a burst one run, other issues ("/after"), the
 // answers to its issue's open questions once they are done.
 export const QUEUED = ["slot", "repo", "pickup", "pause", "after", "answers"];
+
+// What a run's end waits for the store to take (restart.mjs endWait(), #821): its summary, the
+// queue's write, its state's removal.
+export const ENDING = Object.keys(END_WAITS);
+
+// The runs whose end waits for the store, by what (`ends`: ctx.endsWaiting's values, each
+// with its END_WAITS `kind`): every label, at 0 too, so that an alert sees them go back to 0.
+export function endingRuns(ends) {
+  const counts = new Map(ENDING.map((what) => [what, 0]));
+  for (const { kind } of ends) counts.set(kind, (counts.get(kind) ?? 0) + 1);
+  return [...counts].map(([what, n]) => [{ what }, n]);
+}
 
 // What became of a delivery (deliveryResult()).
 export const DELIVERY_RESULTS = ["taken", "ignored", "refused"];
@@ -262,6 +275,17 @@ export function orchestratorMetrics(registry, { ctx }) {
       );
     },
   });
+  // A store refusing for good never ends them (#861): only /ready, the status page and the log
+  // said so, which no alert reads.
+  registry.gauge(
+    "deckhand_runs_ending",
+    "Runs whose end waits for the store (its summary, the queue, its state's removal), each holding its task and a parallel slot.",
+    {
+      labels: ["what"],
+      values: { what: ENDING },
+      collect: () => (acting() ? endingRuns(acting().endsWaiting?.values() ?? []) : []),
+    },
+  );
   registry.gauge("deckhand_max_parallel", "MAX_PARALLEL: the most runs going at once.", {
     collect: () => (acting() ? acting().config.maxParallel : []),
   });
