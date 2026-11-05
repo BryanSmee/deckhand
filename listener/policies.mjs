@@ -40,6 +40,7 @@ import {
   SET_FAMILIES,
 } from "../lib/policy-files.mjs";
 import { redact } from "../lib/redact.mjs";
+import { BUILT_IN } from "./modes.mjs";
 import { validRepo } from "./repo-config.mjs";
 import { ANY_REPO, GRANTS, ownerProbe, REPO_ONLY } from "./grants.mjs";
 
@@ -144,6 +145,17 @@ export function knownAction(action) {
   );
 }
 
+// Whether a `runs:start:` action (or a prefix of one ending in `*`) names a mode `modes` (a
+// repository's own, by name) or Deckhand's have: `runs:start:wrok` is known (runs:start:*
+// covers it) but starts nothing, and a deny of it takes nothing away (#837). Any other action,
+// and every one without `modes`, is true: knownAction() says those.
+export function knownMode(action, modes) {
+  const START = "runs:start:";
+  if (!modes || typeof action !== "string" || !action.startsWith(START)) return true;
+  if (action === `${START}*`) return true;
+  return [...BUILT_IN, ...modes].some((mode) => actionMatches(action, `${START}${mode}`));
+}
+
 // How many of ALLOWED_USERS' logins the access rules' check asks about at most (each costs three
 // inputs: server-wide, a repository private and public).
 export const MAX_CHECKED_LOGINS = 100;
@@ -151,6 +163,11 @@ export const MAX_CHECKED_LOGINS = 100;
 // What the config checks say of an action no rule should name (knownAction()).
 const unknownAction = (rule, action, layer) =>
   `\`${rule}\` of the ${layer === "repo" ? "repository's" : "operator's"} policies names \`${action}\`, which isn't an action Deckhand knows (${[...REPO_ACTIONS, ...SERVER_ACTIONS].map((a) => `\`${a}\``).join(", ")}, or a prefix of them ending in \`*\`): it ${rule.startsWith("deny_") ? "takes nothing away" : "gives nothing"}`;
+
+// What the config checks say of a `runs:start:` action no mode of the repository has
+// (knownMode()).
+const unknownMode = (action, modes) =>
+  `\`deny_access\` of the repository's policies names \`${action}\`, which starts no mode it has (${[...BUILT_IN, ...modes].map((m) => `\`${m}\``).join(", ")}): it takes nothing away`;
 
 // Deckhand's policy/access.rego's one rule: every action, for every login (access()'s shortcut).
 const EVERY_ACTION = /^allow_access\s+contains\s+"\*"\s*(?:#.*)?$/m;
@@ -783,8 +800,10 @@ export function createPolicies({
   // repository's allow rules are ignored (compile() says so): not read. Without `operator`, its
   // rules aren't asked, only the repository's. Each name said once; the policies failing,
   // nothing (the compile check says why). The service's operator layer not the one read:
-  // read again, once, as access() does.
-  async function accessActionWarnings(read, repo = null, { operator = true } = {}) {
+  // read again, once, as access() does. With `modes` (the repository's own, by name), its deny
+  // of a `runs:start:` action no mode has is said too (knownMode()): the operator's rules may name
+  // another repository's modes, not said.
+  async function accessActionWarnings(read, repo = null, { operator = true, modes = null } = {}) {
     const logins = [...new Set((config?.users ?? []).map((u) => String(u).toLowerCase()))].slice(
       0,
       MAX_CHECKED_LOGINS,
@@ -828,6 +847,7 @@ export function createPolicies({
         operator,
         where,
         logins,
+        modes,
       ]);
       const kept = actionsKept.get(key);
       if (kept && now() - kept.at < ACCESS_MS) return [...kept.said];
@@ -856,6 +876,9 @@ export function createPolicies({
           }
           for (const d of rules.deny) {
             if (!knownAction(d.action)) warnings.add(unknownAction("deny_access", d.action, layer));
+            else if (layer === "repo" && !knownMode(d.action, modes)) {
+              warnings.add(unknownMode(d.action, modes));
+            }
           }
         }
       }
@@ -867,9 +890,10 @@ export function createPolicies({
 
   // The actions `repo`'s policies on `ref` (its default branch) and the operator's name that
   // Deckhand doesn't have, on that repository and server-wide (accessActionWarnings()): what the
-  // config panel says beside describe()'s warnings (repos.mjs policyView()).
-  const accessNameWarnings = (repo, ref) =>
-    accessActionWarnings(() => policiesFor(repo, ref), repo);
+  // config panel says beside describe()'s warnings (repos.mjs policyView()). `modes`: its own, by
+  // name (its settings'), for the `runs:start:` actions its rules name.
+  const accessNameWarnings = (repo, ref, modes = null) =>
+    accessActionWarnings(() => policiesFor(repo, ref), repo, { modes });
 
   // grants()'s answers, by the operator's layer (its digest) and the repository: the same files
   // give the same answer, so an edit is asked again at once. GRANTS_MS bounds a rule reading the
@@ -1454,8 +1478,9 @@ export function createPolicies({
   }
 
   // A repo's policies on `ref` (a branch), checked on their own, as they are evaluated: what
-  // the onboarding pull request's reply says (onboarding.mjs branchConfigReport()).
-  async function checkRepo(repo, ref) {
+  // the onboarding pull request's reply says (onboarding.mjs branchConfigReport()). `modes`: the
+  // repo's own on `ref`, by name (its config's there), for the `runs:start:` actions it names.
+  async function checkRepo(repo, ref, { modes = null } = {}) {
     const own = await repoPolicies(repo, ref);
     if (!own.size) return { errors: [], warnings: [] };
     let under = new Map();
@@ -1472,7 +1497,7 @@ export function createPolicies({
       : await accessActionWarnings(
           async () => ({ operator: await defaults().catch(() => under), repo: own }),
           repo,
-          { operator: false },
+          { operator: false, modes },
         );
     return {
       errors: errors.map((e) => e.text),

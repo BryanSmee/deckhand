@@ -804,8 +804,8 @@ test("a repo's config: the access actions its rules name that nobody knows, unle
   let errors = [];
   const policies = {
     describe: async () => ({ files: [], errors, warnings: ["a.rego: said"], policies: new Map() }),
-    accessNameWarnings: async (repo, base) => {
-      asked.push([repo, base]);
+    accessNameWarnings: async (repo, base, modes) => {
+      asked.push([repo, base, modes]);
       return ["`deny_access` of the repository's policies names `logz:read`"];
     },
   };
@@ -815,7 +815,8 @@ test("a repo's config: the access actions its rules name that nobody knows, unle
     "a.rego: said",
     "deny_access of the repository's policies names logz:read",
   ]);
-  assert.deepEqual(asked, [["org/app", "main"]]);
+  // Its modes too, for the `runs:start:` actions its rules name (#837): none configured here.
+  assert.deepEqual(asked, [["org/app", "main", []]]);
   // An ignored rule compiles all the same: still asked.
   errors = [
     { file: "a.rego", row: 1, message: "ignored", text: "a.rego:1: ignored", ignored: true },

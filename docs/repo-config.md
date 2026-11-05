@@ -1672,8 +1672,12 @@ prefix of theirs) gives nothing, and a deny of it takes nothing away. The checks
 probably misspelled: Deckhand's log at start for the operator's rules, server-wide; a
 repository's config panel for both layers' rules on it; and the config check of a pull request's
 branch (onboarding's) for the repository's own. Each is asked of the first 100 `ALLOWED_USERS`
-logins. Only evaluating the rules says what they name, so a rule that holds for none of those
-inputs (a binding of a repository not checked, a login outside `ALLOWED_USERS`) isn't said.
+logins. A repository's deny of `runs:start:<mode>` for a mode it doesn't have (`runs:start:wrok`:
+`runs:start:*` covers it, but no run is in that mode) is said too, by its config panel (its
+default branch's `modes:`) and its branch's config check (that branch's): the operator's rules
+aren't checked so, as they may name another repository's modes. Only evaluating the rules says
+what they name, so a rule that holds for none of those inputs (a binding of a repository not
+checked, a login outside `ALLOWED_USERS`) isn't said.
 
 **Roles and bindings**: Deckhand's `access-roles.rego` defines four roles as action sets, and
 gives each login the actions of the `bindings` that match it:

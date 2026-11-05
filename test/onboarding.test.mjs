@@ -231,12 +231,15 @@ test("the onboarding branch's policies: their errors and warnings in the report"
   const branch = "issue-30-deckhand-config";
   const { request } = fakeRequest({
     "GET /repos/org/app/pulls?state=open&per_page=100": PULLS,
-    [`GET /repos/org/app/contents/.deckhand.yaml?ref=${branch}`]: file("setup: npm ci\n"),
+    [`GET /repos/org/app/contents/.deckhand.yaml?ref=${branch}`]: file(
+      "setup: npm ci\nmodes:\n  deploy:\n    instructions: deploy.md\n",
+    ),
+    [`GET /repos/org/app/contents/deploy.md?ref=${branch}`]: file("Deploy it.\n"),
   });
   const asked = [];
   const policies = {
-    checkRepo: async (repo, ref) => {
-      asked.push([repo, ref]);
+    checkRepo: async (repo, ref, { modes }) => {
+      asked.push([repo, ref, modes]);
       return {
         errors: ["policy error: a.rego:2: undefined function http.send"],
         warnings: [
@@ -246,7 +249,8 @@ test("the onboarding branch's policies: their errors and warnings in the report"
     },
   };
   const report = await branchConfigReport(request, config, "org/app", 30, policies);
-  assert.deepEqual(asked, [["org/app", branch]]);
+  // The branch's modes, for the `runs:start:` actions its policies name (#837).
+  assert.deepEqual(asked, [["org/app", branch, ["deploy"]]]);
   assert.match(report, /has errors/);
   assert.match(
     report,
