@@ -1701,6 +1701,9 @@ before access had rules. The grants folder's `policy/access.rego` replaces it, u
 bindings only: each login then has its bindings' actions, and nobody else anything. Bindings
 written in a file of another name leave Deckhand's `access.rego` in effect, and its `*` still
 gives every login every action: the config check warns of it (at start and on the Policies tab).
+So does an operator's `access.rego` that keeps the line `allow_access contains "*"` beside
+bindings (a copy of Deckhand's, bindings added below it): give that `*` a condition, or remove
+it.
 
 <!-- access.rego: test/access-rules.test.mjs evaluates this block with the real opa -->
 
