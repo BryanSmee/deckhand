@@ -703,7 +703,7 @@ export type Entry =
   | { kind: "message"; text: string; at?: number }
   | { kind: "meta"; text: string; at?: number }
   // Setup output; with `step`, the output of that image build step, without BuildKit's prefix.
-  // Its `at`: the last time the log said before it (its `at` lines come once a second at most).
+  // Its `at`: the last time said in its run of plain lines (listener/runlog.mjs reader()).
   | { kind: "raw"; text: string; step?: number; at?: number }
   // `id`: what pairs a call with its outputs, when the agent gives one (a call with one has an
   // output to come); `done`: it came whole, with no output to wait for (Codex's edits);

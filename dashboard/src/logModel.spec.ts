@@ -173,6 +173,9 @@ test("as text with timestamps: each line's time first, the others aligned", () =
       "",
     ].join("\n"),
   );
+  // A log with no time anywhere (from before them): as it was, times on or not.
+  const untimed = logSections([{ kind: "meta", text: "Started" }], 0, false);
+  expect(plainText(untimed, true)).toBe(plainText(untimed));
   // Off: as it was.
   expect(plainText(list)).toBe(
     "== Work ==\n› Started\n[Bash] ls\n    a\n    b\nDone in 1 min\nDone.\n",

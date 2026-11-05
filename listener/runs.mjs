@@ -29,6 +29,7 @@ import {
   saveSummary,
   summaryOf,
   needsStamp,
+  plainLine,
   writeEvent,
 } from "./runlog.mjs";
 import { endWait, logSent, QUEUE_RETRY_MS } from "./restart.mjs";
@@ -232,7 +233,7 @@ export function createRuns(ctx) {
       shots: null,
       lines: { out: 0, err: 0 }, // of its output read so far, so a restart skips them
       logPhase: null, // the part of the run its log is in (runlog.mjs PHASES, enterPhase())
-      stampedAt: null, // its log's last `at` line's time (output()), not kept through a restart
+      stampedAt: null, // its run of plain lines' last `at` line's time (output()), null: none
       result: null, // its last result, with the duration of all
       later: {}, // "/model", "/effort", "/speed"… that came too late for this run
       unanswered: [], // delivered since the agent's last result
@@ -540,10 +541,13 @@ export function createRuns(ctx) {
     // When a tool call, its output or a message came, for the dashboard's durations and
     // timestamps; setup's output once a second: a line of the listener's before it, so the
     // agent's line stays as it printed it (runlog.mjs reader()).
-    if (at !== null && fits(live, line) && needsStamp(line, events, at, live.stampedAt ?? null)) {
-      writeEvent(live.logFile, "at", { at });
-      live.stampedAt = at;
-    }
+    const stamped =
+      at !== null && fits(live, line) && needsStamp(line, events, at, live.stampedAt ?? null);
+    if (stamped) writeEvent(live.logFile, "at", { at });
+    // A run of plain lines (runlog.mjs reader()): any other line of the sandbox's ends it.
+    if (!plainLine(line, events)) {
+      if (line.trim()) live.stampedAt = null;
+    } else if (stamped) live.stampedAt = at;
     const kept = keep(task, line);
     live.lines.out++;
     ctx.saveLiveSoon?.(task);

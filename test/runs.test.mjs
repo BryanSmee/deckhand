@@ -151,8 +151,10 @@ test("a run's log: when each tool call, output and message came, before its line
   runner.out(text, 1000);
   runner.out(call, 2000);
   runner.out(output, 14000);
-  // Setup's output once a second at most (#719): the reader gives the next ones that time.
+  // Plain lines (#719): an `at` line as a run of them starts, the agent's last line in the
+  // same second, then once a second at most: the reader gives the next ones that time.
   runner.out("warn: deprecated", 14100);
+  runner.out("warn: deprecated", 14900);
   runner.out("warn: deprecated", 15000);
   // Without Docker's time (an older engine, say), none.
   runner.out(call, null);
@@ -162,7 +164,7 @@ test("a run's log: when each tool call, output and message came, before its line
     .split("\n")
     .filter((l) => !l.includes('"event":"phase"'));
   const at = (ms) => JSON.stringify({ type: "listener", event: "at", at: ms });
-  assert.deepEqual(lines.slice(-13), [
+  assert.deepEqual(lines.slice(-15), [
     at(500),
     "npm ci",
     "added 1 package",
@@ -172,6 +174,8 @@ test("a run's log: when each tool call, output and message came, before its line
     call,
     at(14000),
     output,
+    at(14100),
+    "warn: deprecated",
     "warn: deprecated",
     at(15000),
     "warn: deprecated",

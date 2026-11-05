@@ -11,6 +11,7 @@ import {
   loadRuns,
   minutes,
   moveSummaries,
+  endsPlain,
   needsStamp,
   openLog,
   outcome,
@@ -21,7 +22,6 @@ import {
   summaryKey,
   stream,
   summaryOf,
-  timeOf,
   writeEvent,
 } from "../listener/runlog.mjs";
 import { agentFor } from "../listener/agents/index.mjs";
@@ -262,9 +262,10 @@ test("format: Claude's lines", () => {
   assert.deepEqual(format("42"), []);
 });
 
-// The entries without the times #719 added to them (the listener's lines, setup's output,
-// the agent's messages): what the dashboard showed before them.
-const KINDS_TIMED_SINCE = new Set(["meta", "message", "raw", "text", "result"]);
+// The entries without the times #719 added to them (the listener's lines, the agent's
+// messages): what the dashboard showed before them. Setup's output in a log from before them
+// has none: no `at` line comes just before it there.
+const KINDS_TIMED_SINCE = new Set(["meta", "message", "text", "result"]);
 const untimed = (entries) =>
   entries.map(({ at, ...e }) =>
     at === undefined || KINDS_TIMED_SINCE.has(e.kind) ? e : { ...e, at },
@@ -723,8 +724,9 @@ test("reader: a log's phases in order, with when they started", () => {
       { kind: "phase", phase: "wrap-up", at: 3000 },
     ],
   );
-  // Setup's output: the time the log last said, its phase's start here.
-  assert.deepEqual(entries[2], { kind: "raw", text: "Cloning into '/workspace'...", at: 1000 });
+  // Setup's output with no `at` line before it (a log from before #719): no time, not its
+  // phase's.
+  assert.deepEqual(entries[2], { kind: "raw", text: "Cloning into '/workspace'..." });
 });
 
 test("reader: a log from before phases reads as format() did", () => {
@@ -796,7 +798,6 @@ test("reader: an image build's output comes as its steps", () => {
   assert.deepEqual(entries[1], {
     kind: "raw",
     text: '#0 building with "default" instance using docker driver',
-    at: 1000,
   });
   const rest = entries.filter((e) => e.kind === "raw" && e.step === undefined);
   assert.ok(rest.some((e) => e.text === "Dockerfile:7"));
@@ -844,7 +845,7 @@ test("reader: only the image phase's lines are build steps; a step named again a
   assert.deepEqual(read("#3 [internal] load .dockerignore"), []);
   assert.deepEqual(read("#3 CANCELED")[0].status, "cancelled");
   read(phase("setup", 2));
-  assert.deepEqual(read("#4 DONE 1.0s"), [{ kind: "raw", text: "#4 DONE 1.0s", at: 2 }]);
+  assert.deepEqual(read("#4 DONE 1.0s"), [{ kind: "raw", text: "#4 DONE 1.0s" }]);
   // A second build (a run that falls back, say) numbers its steps afresh.
   read(phase("image", 3));
   assert.equal(read("#3 [b 1/1] RUN true")[0].name, "RUN true");
@@ -928,14 +929,17 @@ test("reader: the time of an `at` line goes on the next line's calls and outputs
   );
 });
 
-// #719: the agent's messages and answers take the `at` line before them too; setup's output
-// takes the last time the log said, an `at` line's or one of the listener's, as its `at` lines
-// come once a second at most (needsStamp()); a reader told it skipped lines forgets it.
-test("reader: messages are timed, setup's output keeps the last time said", () => {
+// #719: the agent's messages and answers take the `at` line before them too. Setup's output
+// comes in runs of plain lines: one starts with an `at` line just before a plain line
+// (needsStamp() writes it), and its lines take the last time said in it, an `at` line's or a
+// listener's line's (as it is: another clock's may be earlier); the agent's next line ends it.
+// Plain lines with no `at` line before them (a log from before #719) get none, whatever the
+// log said before.
+test("reader: messages are timed, plain lines the last time said in their run", () => {
   const at = (ms) => line({ type: "listener", event: "at", at: ms });
   const text = line({ type: "assistant", message: { content: [{ type: "text", text: "Hm." }] } });
   const result = line({ type: "result", result: "Done.", duration_ms: 1000 });
-  const note = line({ type: "listener", event: "note", at: 3000, message: "Image x" });
+  const note = (ms) => line({ type: "listener", event: "note", at: ms, message: "Image x" });
   const read = reader();
   const entries = [
     "before any time",
@@ -943,11 +947,13 @@ test("reader: messages are timed, setup's output keeps the last time said", () =
     "npm ci",
     at(2000),
     "added 1 package",
+    "",
     "added 2 packages",
-    note,
+    note(1500),
     "done",
     at(4000),
     text,
+    "after the agent's line",
     at(5000),
     result,
   ].flatMap(read);
@@ -956,42 +962,49 @@ test("reader: messages are timed, setup's output keeps the last time said", () =
     [
       ["raw", undefined],
       ["phase", 1000],
-      ["raw", 1000],
+      ["raw", undefined],
       ["raw", 2000],
       ["raw", 2000],
-      ["meta", 3000],
-      ["raw", 3000],
+      ["meta", 1500],
+      ["raw", 1500],
       ["text", 4000],
+      ["raw", undefined],
       ["result", 5000],
     ],
   );
-  read.skipped();
-  assert.deepEqual(read("later"), [{ kind: "raw", text: "later" }]);
-});
-
-// What a page read from the middle looks back for (mcp.mjs lastTime()): the time the reader
-// gives the plain lines after it. A listener's line at an earlier time (another clock) sets it
-// back: the last one said, as the reader keeps it.
-test("timeOf: an `at` line's time, or one of the listener's lines', the reader's alike", () => {
-  const note = line({ type: "listener", event: "note", at: 1500, message: "Image x" });
-  assert.equal(timeOf(line({ type: "listener", event: "at", at: 2000 })), 2000);
-  assert.equal(timeOf(note), 1500);
-  assert.equal(timeOf(phase("work", 3000)), 3000);
-  assert.equal(timeOf("npm ci"), null);
-  assert.equal(timeOf(line({ type: "result", result: "Done.", duration_ms: 1 })), null);
-  // One that shows nothing says no time.
-  assert.equal(timeOf(line({ type: "listener", event: "session", at: 4000 })), null);
-  const read = reader();
-  const at = line({ type: "listener", event: "at", at: 2000 });
+  // An old log's: a tool call's `at` line, then plain lines (a push's output), untimed.
+  const old = reader();
+  const call = line({
+    type: "assistant",
+    message: { content: [{ type: "tool_use", id: "t1", name: "Bash", input: { command: "ls" } }] },
+  });
   assert.deepEqual(
-    [at, "a", note, "b"].flatMap(read).map((e) => e.at),
-    [2000, 1500, 1500],
+    [at(6000), call, "remote: done", note(7000), "pushed"].flatMap(old).map((e) => e.at),
+    [6000, undefined, 7000, undefined],
   );
-  read.skipped(7000);
-  assert.deepEqual(read("c"), [{ kind: "raw", text: "c", at: 7000 }]);
+  // A phase ends a run too.
+  const phased = reader();
+  assert.deepEqual(
+    [at(8000), "a", phase("wrap-up", 9000), "b"].flatMap(phased).map((e) => e.at),
+    [8000, 9000, undefined],
+  );
 });
 
-test("needsStamp: the agent's timed events always, setup's output once a second", () => {
+test("endsPlain: the agent's lines, whole or cut; not an `at` line, the listener's or a blank", () => {
+  const call = line({
+    type: "assistant",
+    message: { content: [{ type: "tool_use", id: "t1", name: "Bash", input: { command: "ls" } }] },
+  });
+  assert.equal(endsPlain(call), true);
+  assert.equal(endsPlain(line({ type: "system", subtype: "init" })), true);
+  assert.equal(endsPlain(call.slice(0, 60)), false);
+  assert.equal(endsPlain(line({ type: "listener", event: "at", at: 1 })), false);
+  assert.equal(endsPlain(line({ type: "listener", event: "note", at: 1, message: "x" })), false);
+  assert.equal(endsPlain("npm ci"), false);
+  assert.equal(endsPlain("  "), false);
+});
+
+test("needsStamp: the agent's timed events always, plain lines as a run starts and each second", () => {
   const tool = [{ type: "tool", name: "Bash", detail: "ls" }];
   const text = [{ type: "text", text: "Hm." }];
   const started = [{ type: "started" }];
@@ -1000,10 +1013,11 @@ test("needsStamp: the agent's timed events always, setup's output once a second"
   // An event of the agent's that shows no time, or a line of its with none.
   assert.equal(needsStamp("{}", started, 5000, 1000), false);
   assert.equal(needsStamp('{"type":"system"}', [], 5000, 1000), false);
-  // Setup's output: the first, then only once the second changed.
+  // Plain lines: the first of a run, then only once the second changed; blank ones never.
   assert.equal(needsStamp("npm ci", [], 1000, null), true);
   assert.equal(needsStamp("added 1", [], 1999, 1000), false);
   assert.equal(needsStamp("added 2", [], 2000, 1000), true);
+  assert.equal(needsStamp("", [], 3000, null), false);
 });
 
 test("buildOutput: whole lines, each step's first after when it came, the rest at the end", () => {

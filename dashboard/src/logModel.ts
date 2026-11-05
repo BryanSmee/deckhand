@@ -436,7 +436,8 @@ export function plainText(list: LogSection[], times = false): string {
   // An item's lines: its first after its time, the others (and all of one with none) after
   // blanks as wide.
   const add = (text: string, at?: number | null) => {
-    if (!times) return void lines.push(text);
+    // None anywhere (a log from before them): as it was.
+    if (!width) return void lines.push(text);
     const blank = " ".repeat(width + 1);
     const first = at == null ? blank : `${stampLabel(at).padEnd(width)} `;
     lines.push(text.replace(/^/gm, (_, i: number) => (i === 0 ? first : blank)));

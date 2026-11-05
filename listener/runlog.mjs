@@ -67,14 +67,19 @@ export function writeEvent(file, event, fields = {}, options = undefined) {
 const TIMED_EVENTS = new Set(["tool", "toolOutput", "text", "result"]);
 export const timed = (e) => TIMED_EVENTS.has(e.type);
 
+// A plain line of the sandbox's output: not JSON, nothing of the agent's in it (`events`, its
+// normalize()'s): setup's output, a push's. Blank lines are none.
+export const plainLine = (line, events) => !!line.trim() && !events.length && parse(line) === null;
+
 // When a line of the sandbox's output needs an `at` line before it (runs.mjs output()), at `at`
-// (ms) after the last one at `last` (null: none yet): one of the agent's timed events, always;
-// a line that isn't the agent's (setup's output), only when the second changed, as the reader
-// gives it the last stamp otherwise (#719): a noisy `npm ci` doesn't double the log.
-export function needsStamp(line, events, at, last) {
+// (ms): one of the agent's timed events, always; a plain line, when it starts a run of them
+// (`open`, the time of the run's last `at` line, is null) or the second changed (#719). The
+// reader gives the lines of a run the last time said in it (reader()): a noisy `npm ci`
+// doesn't double the log.
+export function needsStamp(line, events, at, open) {
   if (events.some(timed)) return true;
-  if (events.length || parse(line) !== null) return false;
-  return last === null || Math.floor(at / 1000) !== Math.floor(last / 1000);
+  if (!plainLine(line, events)) return false;
+  return open === null || Math.floor(at / 1000) !== Math.floor(open / 1000);
 }
 
 // An `at` line of the listener's (writeEvent()): when the next line came, or null.
@@ -99,6 +104,8 @@ export function enterPhase(live, phase) {
   if (live.record) live.record.phase = phase;
   if (live.logPhase === phase) return false;
   live.logPhase = phase;
+  // It ends a run of plain lines (reader()): the next one starts another, with an `at` line.
+  live.stampedAt = null;
   // A step of the run: the runner starts its log's next segment with it (../runner/logs.mjs).
   writeEvent(live.logFile, "phase", { phase }, { step: true });
   return true;
@@ -519,28 +526,29 @@ function buildEntries(line, steps, at = null) {
 
 // The entries that take the time of an `at` line before theirs: a tool call, an output, an
 // image build step as it starts, a message and an answer of the agent's. Setup's output
-// (`raw`) takes the last time the log said (an `at` line or one of the listener's), as its
-// `at` lines come once a second at most (needsStamp()).
+// (`raw`) takes the last time said in its run of plain lines (reader()), as its `at` lines
+// come once a second at most (needsStamp()).
 const STAMPED = new Set(["tool", "output", "step", "text", "result"]);
 
 // The phases of a run's preparation, the only ones whose lines reader() reads apart.
 const PREPARING = new Set(["setup", "image"]);
 
-// The time a log line says for setup's output after it (reader()): an `at` line's, or one of
-// the listener's own lines' (a note, a phase…), null for any other. What a page read from the
-// middle of a log (mcp.mjs) looks back for.
-export function timeOf(line, agent = agentFor()) {
-  const stamp = stampOf(line);
-  if (stamp !== null) return stamp;
-  if (parse(line)?.type !== "listener") return null;
-  return format(line, agent).findLast((e) => e.at !== undefined)?.at ?? null;
+// Whether a log line ends a run of plain lines (reader()): one of the agent's, whole or cut.
+// An `at` line, the listener's own lines and blank ones don't.
+export function endsPlain(line, agent = agentFor()) {
+  if (!line.trim() || stampOf(line) !== null) return false;
+  const e = parse(line);
+  if (e) return e.type !== "listener";
+  return agent.normalize(line).some((event) => agentEntry(event, agent));
 }
 
 // format() for a stream of a log's lines, in order: it follows the phase they are in, the
 // image build's lines come as its steps (buildEntries()), and a line after an `at` one gets
-// its time (`at`, ms), setup's output the last one said (STAMPED). Logs from before `at` lines
-// have none. Its `skipped(time)`: lines were left unread before the next one (mcp.mjs
-// readerAt()), the last of them that said a time (timeOf()) saying `time` (null: none known). Its `settled()`: whether the
+// its time (`at`, ms). Setup's output comes in runs of plain lines, from an `at` line just
+// before one (needsStamp() writes it) to the next of the agent's lines (endsPlain()) or phase: each
+// takes the last time said in its run, an `at` line's or one of the listener's own lines'.
+// Logs from before `at` lines, and plain lines that don't follow one (a log from before #719),
+// have none. Its `settled()`: whether the
 // run's preparation is over (a phase after it, or an agent's line in a log from before phases),
 // after which the lines read so far change how no later one reads but through an `at` line:
 // where a page read from the middle of a log (mcp.mjs) stops reading what comes before it.
@@ -549,6 +557,7 @@ export function reader(agent = agentFor()) {
   let phase = null;
   let steps = new Map();
   let at = null;
+  // The run of plain lines in progress: the last time said in it (null: none).
   let last = null;
   let settled = false;
   const read = (line) => {
@@ -571,13 +580,13 @@ export function reader(agent = agentFor()) {
     const entries = read(line);
     if (!settled)
       settled = phase === null ? parse(line)?.type !== "listener" : !PREPARING.has(phase);
-    if (at !== null) last = at;
+    if (endsPlain(line, agent) || entries.some((e) => e.kind === "phase")) last = null;
+    else if (at !== null && entries.some((e) => e.kind === "raw")) last = at;
     for (const e of entries) {
-      // A line's own time (the listener's lines: timeOf()), as it is, even before the last
-      // one (another clock's): a second at most. A build step's later status keeps when it
-      // started: not a time said now.
+      // A listener's line's own time, in a run: as it is, even before the last one (another
+      // clock's), a second at most.
       if (e.at !== undefined) {
-        if (e.kind !== "step") last = e.at;
+        if (last !== null && e.kind !== "step") last = e.at;
       } else if (at !== null && STAMPED.has(e.kind)) e.at = at;
       else if (last !== null && e.kind === "raw") e.at = last;
     }
@@ -585,9 +594,6 @@ export function reader(agent = agentFor()) {
     return entries;
   };
   reading.settled = () => settled;
-  reading.skipped = (time = null) => {
-    last = time;
-  };
   return reading;
 }
 

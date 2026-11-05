@@ -590,6 +590,7 @@ test("MCP: get_run_log reads a page from the middle as the whole log reads there
   const prepared =
     listener({ mode: "start", kind: "chat", key: "org/repo#1" }) +
     listener({ event: "phase", phase: "setup", at: 1000 }) +
+    at(1500) +
     setup +
     listener({ event: "phase", phase: "image", at: 2000 }) +
     at(7000) +
@@ -604,7 +605,15 @@ test("MCP: get_run_log reads a page from the middle as the whole log reads there
   const pushed = (second) =>
     at(second * 1000) +
     Array.from({ length: 200 }, (_, i) => `remote: line ${second}.${i}\n`).join("");
-  const wrapUp = listener({ event: "phase", phase: "wrap-up", at: 9100 }) + pushed(10) + pushed(11);
+  // Then plain lines with no `at` line after the agent's (as in a log from before #719): none,
+  // not the time the preparation's last ones had.
+  const untimed = Array.from({ length: 100 }, (_, i) => `old line ${i}\n`).join("");
+  const wrapUp =
+    listener({ event: "phase", phase: "wrap-up", at: 9100 }) +
+    pushed(10) +
+    pushed(11) +
+    text("bye") +
+    untimed;
   const log = prepared + work + tail + work + wrapUp;
   const { ctx, reads } = orchestrator({ runs: [runOf("org/repo#1", id)], logs: { [id]: log } });
   const { tool } = await serveMcp(t, ctx);
@@ -620,11 +629,17 @@ test("MCP: get_run_log reads a page from the middle as the whole log reads there
   const plain = whole.filter((e) => e.kind === "raw" && e.text.startsWith("remote:"));
   assert.equal(plain.length, 400);
   assert.deepEqual(new Set(plain.map((e) => e.at)), new Set([10000, 11000]));
+  const old = whole.filter((e) => e.kind === "raw" && e.text.startsWith("old line"));
+  assert.equal(old.length, 100);
+  assert.ok(old.every((e) => e.at === undefined));
+  assert.ok(whole.some((e) => e.kind === "raw" && e.text === "Setup line 0" && e.at === 1500));
   // A page from the middle of a second's lines: the `at` line well before it, read back for.
-  const from = Buffer.byteLength(log) - 3000;
+  const from = Buffer.byteLength(log) - Buffer.byteLength(text("bye") + untimed) - 3000;
   const inPush = (await tool("get_run_log", { runId: id, from })).structuredContent;
-  assert.ok(inPush.entries.length > 50);
-  assert.ok(inPush.entries.every((e) => e.at === 11000));
+  const pushing = inPush.entries.filter((e) => e.text?.startsWith("remote:"));
+  assert.ok(pushing.length > 50);
+  assert.ok(pushing.every((e) => e.at === 11000));
+  assert.ok(inPush.entries.some((e) => e.text === "old line 0" && e.at === undefined));
 
   const page = async (from) => (await tool("get_run_log", { runId: id, from })).structuredContent;
   // In the build: its lines are its step's output, its end the step's, as started at 7000.
@@ -635,7 +650,6 @@ test("MCP: get_run_log reads a page from the middle as the whole log reads there
       kind: "raw",
       step: 5,
       text: inBuild.entries.find((e) => e.kind === "raw").text,
-      at: 7000,
     },
   );
   assert.match(inBuild.entries.find((e) => e.kind === "raw").text, /^npm output \d+$/);
