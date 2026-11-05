@@ -31,9 +31,11 @@ ENV DECKHAND_SOURCE=$DECKHAND_SOURCE
 # 8082: the egress policy (the proxy's). 8083: the other services' calls (the runner's, edge's).
 # Nothing is published.
 EXPOSE 8082 8083
-# Not root (#536): it holds no Docker socket. Its data volume and the screenshots' (/data/shots)
-# made the node user's when new; one from an earlier release is root's, which it refuses to
-# start on, saying the one-time chown (docs/setup.md#upgrading-the-orchestrator-runs-as-node-536).
-RUN mkdir -p /data/shots && chown -R node:node /data
+# Not root (#536). Its data volume, with the file store (/data/store): the node user's when new,
+# as Docker copies this folder's owner into an empty volume. With Redis as the store, no volume
+# (#619): nothing is written in its read-only root, this folder stays empty. One from a release
+# before #536 is root's, which it refuses to start on, saying the one-time chown
+# (docs/setup.md#upgrading-the-orchestrator-runs-as-node-536).
+RUN mkdir /data && chown node:node /data
 USER node
 CMD ["node", "orchestrator/server.mjs"]

@@ -7,7 +7,7 @@
 // which outlives it), follows their output from where
 // the previous one stopped, and posts each reply once.
 import { randomUUID } from "node:crypto";
-import { existsSync, readdirSync, rmSync } from "node:fs";
+import { rmSync } from "node:fs";
 import { join } from "node:path";
 import { agentFor } from "./agents/index.mjs";
 import { parseKey, taskKey } from "./events.mjs";
@@ -15,7 +15,7 @@ import { RESEARCH } from "./modes.mjs";
 import { addRun, isRunState, writeEvent } from "./runlog.mjs";
 import { runLogContext } from "./runs.mjs";
 import { ambiguous, githubNames, respelled, spellings } from "./spelling.mjs";
-import { readJson } from "../lib/files.mjs";
+import { listDir, readJson } from "../lib/files.mjs";
 import { newLogContext } from "../lib/log.mjs";
 import { storable, values } from "../lib/store.mjs";
 import { countRun, newTask, noLongerAllowed } from "./tasks.mjs";
@@ -114,9 +114,6 @@ export function logSent(live, ms = LOG_SENT_MS) {
 // (lib/store.mjs) keeps the queue.
 export function createRestart(ctx) {
   const { config, log, tasks } = ctx;
-  // Where a listener from before the store saved its queue, on SIGTERM only: read once, then
-  // in the store.
-  const queuePath = join(config.dataDir, "queue.json");
   // spelled(repo) (spelling.mjs): set by unifySpellings(), or by restoreRuns() without GitHub's names.
   let spelled = null;
 
@@ -157,7 +154,7 @@ export function createRestart(ctx) {
   // store's, newer, as it is: only its tokens are read. One that isn't a run's state is left
   // where it is, logged.
   async function moveLive() {
-    const files = readdirSync(ctx.logDir).filter((f) => f.endsWith(".live.json"));
+    const files = listDir(ctx.logDir).filter((f) => f.endsWith(".live.json"));
     for (const file of files) {
       const path = join(ctx.logDir, file);
       const saved = readJson(path);
@@ -176,19 +173,18 @@ export function createRestart(ctx) {
     }
   }
 
-  // The queue a previous listener left: the store's, and queue.json's from before it. Read once,
-  // by unifySpellings() or loadQueue(), whichever comes first.
+  // The queue a previous copy left, the store's. Read once, by unifySpellings() or loadQueue(),
+  // whichever comes first.
   let leftQueue = null;
   // And the files a listener of the release before left, a run's end the queue couldn't be
   // written for (logs/<run>.queued.json): read with it, removed once it is written.
   const keptFiles = () =>
-    readdirSync(ctx.logDir)
+    listDir(ctx.logDir)
       .filter((f) => f.endsWith(".queued.json"))
       .map((f) => join(ctx.logDir, f));
   function readQueue() {
     leftQueue ??= ctx.store.get(QUEUE_KEY).then((stored) => {
-      const files = [queuePath, ...keptFiles()];
-      const legacy = files.flatMap((path) => {
+      const legacy = keptFiles().flatMap((path) => {
         const saved = readJson(path);
         return Array.isArray(saved) ? saved : [];
       });
@@ -270,9 +266,8 @@ export function createRestart(ctx) {
     return waiting;
   }
 
-  // Files whose comments are only safe once the queue is written with them (a queue.json from
-  // before the store, a .queued.json of the release before): removed after the next write that
-  // succeeds, whichever it is.
+  // Files whose comments are only safe once the queue is written with them (a .queued.json of a
+  // release before #617): removed after the next write that succeeds, whichever it is.
   const removeOnSave = new Set();
   function removeOnceSaved(path) {
     removeOnSave.add(path);
@@ -427,9 +422,9 @@ export function createRestart(ctx) {
       // Its run began before: these comments weren't checked against the repo's users then.
       else ctx.track(ctx.dropRefused(task).then(() => ctx.deliverLater(task, dueAt)));
     }
-    // In the store as it is now (one spelling, without what was dropped); queue.json and the
-    // kept files no more, once their comments are there (this write, or the next that succeeds).
-    for (const path of [queuePath, ...keptFiles()]) if (existsSync(path)) removeOnceSaved(path);
+    // In the store as it is now (one spelling, without what was dropped); the kept files no more,
+    // once their comments are there (this write, or the next that succeeds).
+    for (const path of keptFiles()) removeOnceSaved(path);
     await saveQueue();
   }
 
@@ -794,8 +789,8 @@ export function createRestart(ctx) {
     const { handled } = task.live;
     task.live.record.status = "interrupted";
     task.pending.unshift(...handled);
-    await ctx.teardown(task);
-    ctx.startLater(task);
+    // Left to the next copy when this one stops first.
+    if (await ctx.teardown(task)) ctx.startLater(task);
   }
 
   return {

@@ -11,18 +11,18 @@
 // the store acts (consumes the streams, arms the timers, starts runs), with the lease's epoch on
 // every call to the github service, the runner and the broker, which refuse an older one. The
 // other waits for the lease, and takes it at once when the first releases it on SIGTERM (or
-// once it expires after a crash), then rebuilds its state from the store and the files it
-// shares (the data volume). A copy that loses its lease without stopping exits: it never acts
-// on a stale epoch.
+// once it expires after a crash), then rebuilds its state from the store alone: it keeps no
+// file of its own (#619), so a copy on another node takes over as well, with Redis as the store.
+// A copy that loses its lease without stopping exits: it never acts on a stale epoch.
 //
 // This file only wires it together: its settings, the shared state (`ctx`) and the modules
 // that act on it, then the servers, and what a previous copy left. How a comment becomes a
 // run, and which module does what: ../docs/architecture.md. No dependencies: node:http,
 // node:crypto.
 import { createHash, randomUUID } from "node:crypto";
-import { mkdirSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { rmdirSync } from "node:fs";
 import { fingerprint, fingerprintRedactor } from "../lib/fingerprints.mjs";
-import { join } from "node:path";
+import { join, relative, resolve, sep } from "node:path";
 import { createAnalysis } from "../listener/analysis.mjs";
 import { planWarning } from "../listener/agents/credentials.mjs";
 import { AGENT_SECRETS } from "../listener/agents/index.mjs";
@@ -43,19 +43,20 @@ import {
   loadConfig,
   modelsServiceUrl,
   readConfigFile,
+  inData,
   unwritableData,
   withModelCredentials,
 } from "../listener/config.mjs";
 import { activePassive } from "../lib/active.mjs";
 import { drain } from "../lib/drain.mjs";
-import { pathToFileURL } from "node:url";
-import { freshKeys, openStore } from "../lib/store.mjs";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { openStore } from "../lib/store.mjs";
 import { storeMaps } from "../lib/store-map.mjs";
-import { readJson } from "../lib/files.mjs";
+import { listDir } from "../lib/files.mjs";
 import { createLogger, deliveryContext, withLogContext } from "../lib/log.mjs";
 import { createRegistry, leaseMetric, startMetrics } from "../lib/metrics.mjs";
 import { createEdgeClient } from "../edge/client.mjs";
-import { checkAppSettings, loadCredentials, saveCredentials } from "../listener/github-app.mjs";
+import { checkAppSettings } from "../listener/github-app.mjs";
 import { hasLabel, pullEntry, taskKey } from "../listener/events.mjs";
 import {
   createGitHub,
@@ -92,10 +93,10 @@ import { createRepoCheck } from "../listener/repo-check.mjs";
 import { readRepoFile } from "../listener/repo-config.mjs";
 import { createRepoSettings } from "../listener/repo-settings.mjs";
 import { createRepoApi, createRepoList } from "../listener/repos.mjs";
-import { createRestart, liveRunIds } from "../listener/restart.mjs";
+import { createRestart } from "../listener/restart.mjs";
 import { createReviewers, openerOf } from "../listener/reviewers.mjs";
 import { createReviews, stepsGoing } from "../listener/reviews.mjs";
-import { loadRuns, moveLogs, moveSummaries, saveSummary, SUMMARIES } from "../listener/runlog.mjs";
+import { loadRuns, moveSummaries, saveSummary, SUMMARIES } from "../listener/runlog.mjs";
 import { networkCallers } from "../lib/service-token.mjs";
 import { createRunnerClient } from "../runner/client.mjs";
 import { createServicesHttp } from "../listener/services-http.mjs";
@@ -216,20 +217,35 @@ try {
   log.error(error.message);
   process.exit(1);
 }
+// Its store: a folder of its data volume by default (file:), or Redis, with no volume at all
+// (#619). Nothing else is written there: what a release before kept beside it is moved to the
+// store at the first start after the update (below), then removed.
+const storeUrl = env.STORE_URL || pathToFileURL(join(config.dataDir, "store")).href;
+// The store's folder in the data volume (`store`), or null: none there.
+const storeTop = inData(storeUrl, config.dataDir)
+  ? relative(resolve(config.dataDir), fileURLToPath(storeUrl)).split(sep)[0]
+  : null;
 // Not root (#536): a data volume it can't write would fail run after run, so it doesn't start.
-const unwritable = unwritableData(config.dataDir);
-if (unwritable.length) {
-  for (const line of unwritable) log.error(line);
-  process.exit(1);
+// The whole volume while a release before left something beside the store, which its moves
+// remove; else the store's folder alone, the rest of the volume never written (#619). Nothing
+// with no volume: an empty folder of its read-only image, the store elsewhere.
+{
+  const left = listDir(config.dataDir).some((name) => name !== storeTop);
+  const checked = left ? config.dataDir : storeTop && join(config.dataDir, storeTop);
+  const unwritable = checked ? unwritableData(checked) : [];
+  if (unwritable.length) {
+    for (const line of unwritable) log.error(line);
+    process.exit(1);
+  }
 }
+// What a release before kept there: the runs' summaries and states (logs/), the screenshots
+// (shots/), moved to the store and the broker, never written.
 const logDir = join(config.dataDir, "logs");
-mkdirSync(logDir, { recursive: true });
-// The screenshots a release before #609 kept here: moved to the broker (below), never written.
 const shotsDir = join(config.dataDir, "shots");
 
-// The orchestrator's state through the store's interface (lib/store.mjs), in the data volume:
-// the queue (restart.mjs), its lease, the deliveries it handled, the rest as the services take
-// it over (#499). Its two copies share it. The operator's secrets are refused in it
+// The orchestrator's state through the store's interface (lib/store.mjs), all of it (#613): the
+// queue (restart.mjs), its lease, the deliveries it handled, its maps, the live runs' states, the
+// runs' summaries. Its two copies share it. The operator's secrets are refused in it
 // (lib/store.mjs), once `ctx` can say them. The runs' summaries, thousands, are a file each with
 // the file backend: out of the state file every lease renewal writes. So is each item of its maps
 // (below, MAPS): a title changed writes its own file, not the whole state again (#691).
@@ -254,7 +270,7 @@ const MAPS = {
   decisions: {},
   picks: {},
 };
-const store = openStore(env.STORE_URL || pathToFileURL(join(config.dataDir, "store")).href, {
+const store = openStore(storeUrl, {
   password: env.REDIS_PASSWORD,
   secrets: () => storeSecrets(),
   apart: [SUMMARIES, ...Object.keys(MAPS).map((name) => `${name}/`)],
@@ -473,6 +489,7 @@ const ctx = {
   config,
   log,
   skip,
+  // Where a release before kept the runs' states (restart.mjs moveLive()).
   logDir,
   // Null until /setup has stored an App: webhooks are refused meanwhile.
   app: null,
@@ -481,7 +498,6 @@ const ctx = {
   // key ("org/repo#12") → task (tasks.mjs).
   tasks: new Map(),
   // The dashboard's runs, newest first (runlog.mjs), and by id; pruned daily (history.mjs).
-  // Listed once the logs kept here moved to the runner (below).
   runs: [],
   runsById: new Map(),
   // Runs with a sandbox, for the parallel cap.
@@ -545,80 +561,6 @@ async function persist(what, fn) {
   }
 }
 
-// A listener's App, kept in the data volume this orchestrator took over: its key handed to the
-// github service, then the rest (the webhook secret, the OAuth client's) to edge with the
-// sessions' key and sign-outs; then removed here, where nothing secret stays. The first GitHub
-// calls at start wait for the key a while (below).
-let handedOver = Promise.resolve();
-{
-  const credentials = loadCredentials(config.dataDir);
-  if (credentials) {
-    const { pem, ...kept } = credentials;
-    // As edge gives them (../edge/app.mjs publicPart()): its names, nothing secret.
-    const names = ["id", "slug", "owner", "html_url", "bot_id", "public_url"];
-    useApp(Object.fromEntries(names.filter((k) => kept[k] != null).map((k) => [k, kept[k]])));
-    let keyTaken = !pem;
-    const key = !pem
-      ? Promise.resolve()
-      : githubService.persist("handing over the App's key", async () => {
-          try {
-            await githubService.setup.handOver(credentials);
-            keyTaken = true;
-          } catch (error) {
-            // Refused for good, another App's key there (409) or none in what it was sent (400):
-            // asking again changes nothing. Anything else (a service not up yet, its keys not
-            // read: 401, 503) is asked again.
-            if (error.status !== 409 && error.status !== 400) throw error;
-            log.error(
-              `The GitHub App's key: the github service refused it (${error.message}). It stays in /data/app.json until resolved by hand: remove the github service's app.json (its github-key volume) to take this App's, or this one's key from /data/app.json to keep the service's (docs/setup.md#the-github-service)`,
-            );
-          }
-        });
-    handedOver = key.then(async () => {
-      if (!keyTaken) return;
-      if (pem) {
-        saveCredentials(config.dataDir, kept);
-        log("The GitHub App's key: handed over to the github service, removed from app.json");
-      }
-      await handOverToEdge(kept);
-    });
-  }
-}
-
-// The listener's webhook secret, OAuth client and sessions, to edge (#506): once it took them,
-// none of them stays in the orchestrator's volume.
-async function handOverToEdge(kept) {
-  const read = (name) => {
-    try {
-      return readFileSync(join(config.dataDir, name));
-    } catch {
-      return null;
-    }
-  };
-  const sessionKey = read("session.key");
-  const taken = await persist("Edge: handing over the App's credentials", async () => {
-    try {
-      await edge.handOver({
-        credentials: kept,
-        sessionKey: sessionKey?.toString("base64") ?? null,
-        epochs: readJson(join(config.dataDir, "sessions.json"), null),
-      });
-      return true;
-    } catch (error) {
-      if (error.status !== 409 && error.status !== 400) throw error;
-      log.error(
-        `The GitHub App's credentials: edge refused them (${error.message}). They stay in /data/app.json until resolved by hand: remove edge's app.json (its edge-data volume) to take this App's, or /data/app.json to keep edge's (docs/setup.md#from-the-listener)`,
-      );
-      return false;
-    }
-  });
-  if (!taken) return;
-  for (const name of ["app.json", "session.key", "sessions.json", "redeliveries.json"]) {
-    rmSync(join(config.dataDir, name), { force: true });
-  }
-  log("The GitHub App's credentials and the sessions: handed over to edge, removed from /data");
-}
-
 // Events and permissions the App's settings miss (without `issues`, open questions get no
 // label), and who owns it, which the link to its settings needs. Read at start and with each
 // listing of the repositories (repos.mjs), each warning logged only when it is new. Resolves to
@@ -657,24 +599,8 @@ function publicUrl() {
 // The App's calls as the repo's installation, REST and GraphQL (github.mjs).
 const { github, graphql } = createGitHub(() => ctx.app);
 
-// The logs this listener kept before the runner kept them go to it, while it goes on; the runs
-// are listed from their summaries in the store, where those a release before #618 kept in
-// logs/ go first (runlog.mjs).
-// The live runs' ids first, from their states in the store (restart.mjs): their logs aren't
-// summarized as ended ones.
-const liveIds = await liveRunIds(store);
-// And the runs summarized in the store, whose logs aren't read again (#697): listed only while
-// a log is left here.
-const summarized = new Set();
-if (readdirSync(logDir).some((f) => f.endsWith(".log"))) {
-  for await (const keys of freshKeys(store, SUMMARIES)) {
-    for (const key of keys) summarized.add(key.slice(SUMMARIES.length));
-  }
-}
-const moved = moveLogs(logDir, runnerClient.logs, { log, live: liveIds, summarized });
-ctx.logsMoving = moved.moving;
-// A log on its way there is read once it arrived (a digest, the dashboard's live view).
-ctx.logMoved = (id) => moved.moving.get(id) ?? Promise.resolve();
+// The runs are listed from their summaries in the store, where those a release before #618 kept
+// in logs/ go first (runlog.mjs).
 await moveSummaries(logDir, store, { log, secrets: storeSecrets() });
 ctx.runs = await loadRuns(store, { log });
 for (const run of ctx.runs) ctx.runsById.set(run.id, run);
@@ -1041,7 +967,7 @@ ctx.analysis = createAnalysis({
   runs: () => ctx.runs.filter((r) => !r.chat),
   secrets: () => operatorSecrets(ctx),
   // From the runner, which keeps the logs.
-  readLog: async (id) => (await ctx.logMoved(id), runnerClient.logs.text(id)),
+  readLog: (id) => runnerClient.logs.text(id),
 });
 
 // What signs the dashboard's posts as their users' (discussions.mjs fromLine()): a run posts
@@ -1125,7 +1051,7 @@ await ctx.chats.load();
 // --- Servers -------------------------------------------------------------------------------
 
 // The App as edge has it, before what needs it at start. Edge away a while: the start goes on
-// without it (or with a listener's from the data volume), and it comes with the next ask.
+// without it, and it comes with the next ask.
 const appAsked = refreshApp().catch((error) => log(`Edge: the App (${error.message ?? error})`));
 await Promise.race([appAsked, new Promise((resolve) => setTimeout(resolve, 15_000).unref())]);
 let appTimer = null;
@@ -1325,9 +1251,30 @@ ctx.reviews.start();
 ctx.autoPickup.start();
 // After restoreRuns() and loadQueue(): what they bring back is kept.
 const history = createHistory(ctx);
-// Once the logs and screenshots kept here are at the runner and the broker: one removed before it
-// arrives would arrive after its summary went, and stay there for good.
-Promise.all([moved.done, shotsMoved]).then(() => ctx.stopping || history.start());
+// Once the screenshots kept here are at the broker: one removed before it arrives would arrive
+// after its summary went, and stay there for good.
+shotsMoved.then(() => ctx.stopping || (history.start(), tidyData()));
+
+// What a release before kept in the data volume, once moved (#619): its emptied folders go, and
+// what nothing reads any more is named, for the operator to remove (or, with Redis as the store,
+// the volume itself: docs/setup.md#upgrading-the-orchestrator-without-a-volume-619). A folder
+// not empty yet (a run's state whose tokens the broker hasn't taken) goes at a later start.
+function tidyData() {
+  for (const dir of [logDir, shotsDir]) {
+    try {
+      rmdirSync(dir);
+    } catch {
+      // Not there, not empty, or a volume of its own mounted there.
+    }
+  }
+  const moving = new Set(["logs", "shots", ...Object.keys(MAPS).map((name) => `${name}.json`)]);
+  const left = listDir(config.dataDir).filter((name) => name !== storeTop && !moving.has(name));
+  if (left.length) {
+    log.warn(
+      `${config.dataDir} holds ${left.join(", ")}, which no longer is read: remove ${left.length > 1 ? "them" : "it"} (docs/setup.md#upgrading-the-orchestrator-without-a-volume-619)`,
+    );
+  }
+}
 // How the runner's sandboxes ended (runner/events.mjs).
 const runEvents = createRunEvents({
   events: runnerClient.events,
@@ -1344,34 +1291,29 @@ const runEvents = createRunEvents({
         return (file ??= runnerClient.logs.open(id, { size: null }));
       },
       // Once it has one: its end writes it, with this, or not yet.
-      save: () =>
-        record.finishedAt && saveSummary(store, record, { log, secrets: storeSecrets(), logDir }),
+      save: () => record.finishedAt && saveSummary(store, record, { log, secrets: storeSecrets() }),
     };
   },
   log,
 });
 runEvents.start();
-// The App's key at the github service first, should this copy be the one handing it over (30 s
-// at most): what follows needs it there. Not waited for here: the SIGTERM handler below is.
-Promise.race([handedOver, new Promise((resolve) => setTimeout(resolve, 30_000).unref())]).then(
-  () => {
-    if (ctx.stopping || !ctx.app) return;
-    checkApp();
-    // Pull requests that changed while no copy acted, or whose delivery was lost; the
-    // deliveries GitHub couldn't hand over, asked again by edge.
-    ctx.sync(null);
-    // The repositories listed at start (without their configs): the listing also warns about
-    // the permissions an installation hasn't accepted (repos.mjs).
-    const listed = repoList.names();
-    // Labels added or removed while no copy acted.
-    if (config.needsInputLabel) {
-      listed
-        .then((repos) => inputs.sync(repos))
-        .then((found) => titles.seed(found))
-        .catch((error) => log(`Issues waiting for input: ${error.message ?? error}`));
-    } else listed.catch((error) => log(`Listing the repositories: ${error.message ?? error}`));
-  },
-);
+// What changed while no copy acted, once the App is known.
+if (!ctx.stopping && ctx.app) {
+  checkApp();
+  // Pull requests that changed while no copy acted, or whose delivery was lost; the deliveries
+  // GitHub couldn't hand over, asked again by edge.
+  ctx.sync(null);
+  // The repositories listed at start (without their configs): the listing also warns about the
+  // permissions an installation hasn't accepted (repos.mjs).
+  const listed = repoList.names();
+  // Labels added or removed while no copy acted.
+  if (config.needsInputLabel) {
+    listed
+      .then((repos) => inputs.sync(repos))
+      .then((found) => titles.seed(found))
+      .catch((error) => log(`Issues waiting for input: ${error.message ?? error}`));
+  } else listed.catch((error) => log(`Listing the repositories: ${error.message ?? error}`));
+}
 
 // `docker compose up`, `restart` or an update stops the orchestrator with SIGTERM, and kills it
 // after the stop grace period. Sandboxes go on: no run starts any more, edge's requests and

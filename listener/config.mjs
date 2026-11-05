@@ -2,7 +2,8 @@
 // networks come from here so nothing in the listener is tied to one deployment. What the
 // operator grants one repo (hosts, mounts, limits) is in its grants folder instead (grants.mjs).
 import { accessSync, constants, existsSync, readdirSync } from "node:fs";
-import { join } from "node:path";
+import { isAbsolute, join, relative, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   AGENT_SECRETS,
   AGENTS,
@@ -301,6 +302,14 @@ export function readConfigFile(env, read) {
     parse: parseConfigFile,
     ...(read && { read }),
   });
+}
+
+// Whether `storeUrl` (STORE_URL) is a folder in the data volume `dir`: the orchestrator's
+// default, file://<dir>/store. One elsewhere, or Redis, needs no volume (#619).
+export function inData(storeUrl, dir) {
+  if (!String(storeUrl).startsWith("file:")) return false;
+  const path = relative(resolve(dir), fileURLToPath(storeUrl));
+  return !path.startsWith("..") && !isAbsolute(path);
 }
 
 // The screenshots' folder of the data volume: one folder per run, which the orchestrator makes

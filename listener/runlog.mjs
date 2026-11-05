@@ -3,20 +3,7 @@
 // once it ended (`summaries/<run>` in the orchestrator's store, #618), the list rebuilt from the
 // summaries after a restart, and the entries the dashboard shows for each line. The agent's
 // lines are read through its normalize() (agents/), so a log keeps what the agent wrote.
-import {
-  appendFileSync,
-  closeSync,
-  existsSync,
-  openSync,
-  readdirSync,
-  readFileSync,
-  readSync,
-  renameSync,
-  rmSync,
-  statSync,
-} from "node:fs";
-import { open } from "node:fs/promises";
-import { randomUUID } from "node:crypto";
+import { appendFileSync, existsSync, rmSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import { idOf } from "./agents/common.mjs";
@@ -24,8 +11,7 @@ import { agentFor, entryName } from "./agents/index.mjs";
 import { entryLabel } from "./agents/select.mjs";
 import { kindOf } from "./modes.mjs";
 import { asksInput, replyQuestions, withoutMarker } from "./questions.mjs";
-import { readJson, writeJsonAtomic } from "../lib/files.mjs";
-import { partEnd, redact } from "../lib/redact.mjs";
+import { listDir, readJson } from "../lib/files.mjs";
 import { storable, values } from "../lib/store.mjs";
 
 // "ok", "needs-input" or "error" for an agent's `result` event (null: no result).
@@ -149,21 +135,21 @@ export async function loadRuns(store, { log = console.error } = {}) {
   return runs.sort((a, b) => b.startedAt - a.startedAt);
 }
 
-// Where saveSummary() keeps a summary the store didn't take.
+// Where a release before #619 kept a summary the store didn't take, at a run's end.
 const KEPT = ".summary.json";
 const NOT_SUMMARIES = [".live.json", ".queued.json", KEPT];
 
-// The summaries a release before #618 kept in logs/<run>.json (and those moveLogs() writes
-// there for the logs it finds): each written to the store, then removed. A key already there
-// wins: a start that stopped before removing the file wrote it, and the run may have changed
-// since. Those saveSummary() kept there when the store failed (<run>.summary.json) are newer
-// than the store's, and go after them, over it. `secrets`: as saveSummary()'s. A file that isn't
-// a summary stays, logged at each start, as loadRuns() left it out; one the store didn't take
-// stays for the next start. The run states (.live.json) and queues (.queued.json) the release
-// before kept beside them, which restart.mjs moves to the store, aren't summaries. → how many
+// The summaries a release before #618 kept in logs/<run>.json: each written to the store, then
+// removed. A key already there wins: a start that stopped before removing the file wrote it, and
+// the run may have changed since. Those a release before #619 kept there when the store failed
+// (<run>.summary.json) are newer than the store's, and go after them, over it. `secrets`: as
+// saveSummary()'s. A file that isn't a summary stays, logged at each start, as loadRuns() left it
+// out; one the store didn't take stays for the next start. The run states (.live.json) and
+// queues (.queued.json) the release before kept beside them, which restart.mjs moves to the
+// store, aren't summaries. No `logDir` (an orchestrator with no volume, #619): none. → how many
 // moved.
 export async function moveSummaries(logDir, store, { log = console.error, secrets = [] } = {}) {
-  const all = readdirSync(logDir);
+  const all = listDir(logDir);
   const older = all.filter(
     (f) => f.endsWith(".json") && !NOT_SUMMARIES.some((end) => f.endsWith(end)),
   );
@@ -207,235 +193,18 @@ const MOVE_BATCH = 50;
 // task or record can't be restored (a write cut short, a hand edit).
 export const isRunState = (saved) => Boolean(saved?.id && saved.task && saved.record);
 
-// The logs a listener kept itself (logs/<run>.log), before the runner kept them (#503): each
-// summarized now when its run has no summary (a log from before summaries, or of a listener
-// that died mid-run) and isn't live, so that loadRuns() lists it (moveSummaries() takes it to
-// the store); then sent to the runner
-// (`logs`: ../runner/client.mjs's) and removed, while the listener goes on: a runner away
-// doesn't keep it from starting. A log whose summary can't be written stays here, as does one
-// the runner doesn't take, and is sent at the next start.
-//
-// A run's summary is in logs/ or in the store (`summarized`: the ids of those there): once
-// moveSummaries() moved it, logs/ has none, and a log the runner didn't take would be read
-// again at every start, for a summary setIfAbsent() discards (#697).
-//
-// A live run's log (its state in the store, `live`: their ids, or a .live.json of the release
-// before that is a run's state: one that isn't, which restart.mjs leaves where it is, is no live
-// run's, #695) is written on at the runner once its move is over
-// (restart.mjs): those go first, on a chain of their own, so that a live run waits for its own
-// log, never the history's. A live run's move that fails is tried again until it is done: its
-// writer would otherwise go on after a part of it, and the rest, sent at the next start, land
-// after its new lines. Only a runner's copy longer than the file (which no try can fix) ends it.
-//
-// → { moving: run id → its move (true once moved), done: all of them, how many moved }.
-export function moveLogs(
-  logDir,
-  logs,
-  {
-    max = READ_MAX,
-    log = console.error,
-    sleep = unrefSleep,
-    retryMs = 5000,
-    live: liveIds = new Set(),
-    summarized = new Set(),
-  } = {},
-) {
-  const all = readdirSync(logDir);
-  // The copies a start that stopped midway left (redactedCopy()): an hour old, no other copy
-  // moving the same log still writes them.
-  for (const f of all.filter((f) => f.endsWith(".redacted"))) {
-    try {
-      const at = join(logDir, f);
-      if (Date.now() - statSync(at).mtimeMs > 60 * 60_000) rmSync(at, { force: true });
-    } catch {
-      // Gone already, or left for the next start.
-    }
-  }
-  const files = all.filter((f) => f.endsWith(".log"));
-  const moving = new Map();
-  if (!files.length) return { moving, done: Promise.resolve(0) };
-  log(`Run logs: ${files.length} kept here, sent to the runner`);
-  const notSent = (file, error) =>
-    log(`Run logs: ${file} not sent to the runner (${error.message}), again at the next start`);
-  const live = [];
-  const ended = [];
-  for (const file of files) {
-    const id = file.slice(0, -4);
-    try {
-      const isLive = liveIds.has(id) || isRunState(readJson(join(logDir, `${id}.live.json`)));
-      if (!isLive && !summarized.has(id) && readJson(summaryPath(logDir, id))?.id !== id) {
-        // Not saveSummary(), which logs a failure and goes on: without its summary, a log
-        // sent and removed would leave its run listed nowhere.
-        writeJsonAtomic(summaryPath(logDir, id), runOf(logDir, file, max, log));
-      }
-      (isLive ? live : ended).push(file);
-    } catch (error) {
-      notSent(file, error);
-    }
-  }
-  let count = 0;
-  async function send(file, isLive) {
-    const id = file.slice(0, -4);
-    const path = join(logDir, file);
-    for (let wait = retryMs; ; wait = Math.min(wait * 2, 60_000)) {
-      try {
-        const clean = await redactedCopy(path);
-        if (clean) {
-          // What the runner holds of it, from an earlier try, is of the file as it was: the
-          // file is sent again whole.
-          try {
-            await logs.remove(id);
-          } catch (error) {
-            rmSync(clean, { force: true });
-            throw error;
-          }
-          renameSync(clean, path);
-        }
-        // An ended run's is written on no more: its last segment closed (#664).
-        await logs.upload(id, path, { close: !isLive });
-        rmSync(path, { force: true });
-        count++;
-        return true;
-      } catch (error) {
-        if (!isLive || error.code === "LOG_LONGER") {
-          notSent(file, error);
-          return false;
-        }
-        log(
-          `Run logs: ${file}, a live run's, not sent yet (${error.message}): again in ${wait / 1000} s`,
-        );
-        await sleep(wait);
-      }
-    }
-  }
-  const chain = (list, isLive) => {
-    let last = Promise.resolve();
-    for (const file of list) {
-      const moved = last.then(() => send(file, isLive));
-      moving.set(file.slice(0, -4), moved);
-      last = moved;
-    }
-    return last;
-  };
-  const done = Promise.all([chain(live, true), chain(ended, false)]).then(() => {
-    log(`Run logs: ${count} of ${files.length} sent to the runner`);
-    return count;
-  });
-  return { moving, done };
-}
-
-// A log a listener kept may hold a GitHub token or a run token: it was written before
-// lib/redact.mjs knew their every shape. The runner refuses an append holding one rather than
-// redact it (its offsets are the writer's, lib/store.mjs appendBlobAt), and checks each part
-// ../runner/client.mjs upload() sends (4 MB at most), so such a log would be refused at every
-// start. Redacted here first, with no secrets (the runner's store knows none, only their
-// shapes), line by line as runs.mjs redacts a run's output, a line longer than a read in parts
-// that end where upload()'s do (partEnd()). Read a part at a time, between which the listener
-// goes on. A copy, `<file>.<uuid>.redacted`, is written only from the first token found, the bytes
-// before it copied then: → its path, or null when the log holds none (most do). Bytes as
-// latin1, as the store's blobs: one character per byte, so the bytes around a token come back
-// as they were.
-const REDACT_READ = 4 * 1024 * 1024;
-// A run of token bytes longer than this, with no place to end a part, is redacted in parts
-// anyway: a string can't hold a log's every byte. A token across such a cut stays, and the
-// runner may refuse the log (upload() cuts a run over 4 MB elsewhere, and a part of it that
-// starts at a run token's `eyJ…` matches): a base64url run of megabytes with no separator,
-// which no agent's output has, accepted.
-const REDACT_PART_MAX = 64 * 1024 * 1024;
-async function redactedCopy(path) {
-  // Its own name: the copy that stops during a handover may still be moving the same log.
-  const out = `${path}.${randomUUID()}.redacted`;
-  const input = await open(path, "r");
-  let output = null;
-  try {
-    const buffer = Buffer.alloc(REDACT_READ);
-    let carry = Buffer.alloc(0);
-    let read = 0; // the file's bytes read
-    let done = 0; // and handled
-    for (;;) {
-      const { bytesRead } = await input.read(buffer, 0, buffer.length, read);
-      read += bytesRead;
-      const data = Buffer.concat([carry, buffer.subarray(0, bytesRead)]);
-      // At the file's end, all that is left.
-      let end = data.length;
-      if (bytesRead) {
-        end = partEnd(data);
-        if (!end && data.length < REDACT_PART_MAX) {
-          carry = data;
-          continue;
-        }
-        end ||= data.length;
-      }
-      const text = data.toString("latin1", 0, end);
-      carry = data.subarray(end);
-      const clean = text
-        .split(/(?<=\n)/)
-        .map((line) => redact(line, []))
-        .join("");
-      if (clean !== text && !output) {
-        output = await open(out, "w");
-        for (let at = 0; at < done;) {
-          const { bytesRead: n } = await input.read(
-            buffer,
-            0,
-            Math.min(buffer.length, done - at),
-            at,
-          );
-          if (!n) throw new Error(`${path} got shorter while it was read`);
-          await output.write(buffer.subarray(0, n));
-          at += n;
-        }
-      }
-      if (output) await output.write(Buffer.from(clean, "latin1"));
-      done += end;
-      if (!bytesRead) break;
-    }
-  } catch (error) {
-    await output?.close();
-    output = null;
-    rmSync(out, { force: true });
-    throw error;
-  } finally {
-    await input.close();
-  }
-  if (!output) return null;
-  await output.close();
-  return out;
-}
-
-// A wait that keeps no process up: a listener stopping doesn't wait for a retry.
-const unrefSleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms).unref?.());
-
-// Where moveLogs() writes the summary of a log it finds, for moveSummaries() to move.
-const summaryPath = (logDir, id) => join(logDir, `${id}.json`);
-const keptPath = (logDir, id) => join(logDir, `${id}${KEPT}`);
-
 // What loadRuns() lists a finished run with, in the store: without the operator's `secrets`, a
 // GitHub token or a private key its text may hold (lib/store.mjs storable()), rather than
-// refused whole. A store that fails (Redis away a moment) leaves it in `logDir`, for
-// moveSummaries() at the next start: the run's live state goes after this, and the run would be
-// listed nowhere then. Its next save there removes it. → whether the store took it.
-export async function saveSummary(
-  store,
-  record,
-  { log = console.error, secrets = [], logDir = null } = {},
-) {
-  const value = storable(record, secrets);
+// refused whole. A store that fails (Redis away a moment) is logged: the caller tries again, as
+// the orchestrator keeps nothing anywhere else (#619). → whether the store took it.
+export async function saveSummary(store, record, { log = console.error, secrets = [] } = {}) {
   try {
-    await store.set(summaryKey(record.id), value);
-    if (logDir) rmSync(keptPath(logDir, record.id), { force: true });
+    await store.set(summaryKey(record.id), storable(record, secrets));
     return true;
   } catch (error) {
     log(`${record.key}: saving the summary of ${record.id}: ${error.message}`);
+    return false;
   }
-  if (!logDir) return false;
-  try {
-    writeJsonAtomic(keptPath(logDir, record.id), value);
-    log(`${record.key}: the summary of ${record.id} kept in ${logDir}, for the next start`);
-  } catch (error) {
-    log(`${record.key}: keeping the summary of ${record.id}: ${error.message}`);
-  }
-  return false;
 }
 
 // What the dashboard lists for a run (runs.mjs): `title` its task's as known, `agent` the
@@ -507,138 +276,6 @@ export function addRun(ctx, record) {
   if (at >= 0) ctx.runs[at] = record;
   else ctx.runs.unshift(record);
   ctx.runsById.set(record.id, record);
-}
-
-// How writeEvent() starts a `session` event's line (runs.mjs reopen()), and the `sandbox` one it
-// writes just before the sandbox starts (runs.mjs launch()).
-const SESSION_EVENT = '{"type":"listener","event":"session"';
-const SANDBOX_EVENT = '{"type":"listener","event":"sandbox"';
-// The record modes a `session` event may say (runs.mjs reopenedMode()).
-const RECORD_MODES = new Set(["start", "continue", "restore", "wrap-up"]);
-
-// What a run's start decided (runs.mjs reopen()), from its log's `lines`: { mode, its record's as
-// its capabilities corrected it (null: none a record has), capabilities (null: not said) }, or
-// null. The first `session` event only: the listener writes one for every run before anything of
-// the run's own goes in the log raw (its image's build, its agent's install, its sandbox's
-// output), so a line of theirs that looks like one always comes after it. And only before the
-// `sandbox` marker: a log without one (its sandbox never started, or a listener from before) has
-// none.
-export function sessionEventOf(lines) {
-  let event;
-  for (const line of lines.slice(1)) {
-    if (line.startsWith(SANDBOX_EVENT)) return event ?? null;
-    if (event !== undefined || !line.startsWith(SESSION_EVENT)) continue;
-    const said = parse(line);
-    const caps = said?.capabilities;
-    event = {
-      mode: RECORD_MODES.has(said?.mode) ? said.mode : null,
-      capabilities: Array.isArray(caps) && caps.every((c) => typeof c === "string") ? caps : null,
-    };
-  }
-  return null;
-}
-
-// Its record mode alone (sessionEventOf()).
-export const sessionModeOf = (lines) => sessionEventOf(lines)?.mode ?? null;
-
-// The most of a log moveLogs() reads whole: a string can't hold much more than 512 MB, and
-// older logs had no cap (RUN_LOG_MAX_MB). Past it, its first and last ENDS bytes.
-const READ_MAX = 64 * 1024 * 1024;
-const ENDS = 4 * 1024 * 1024;
-
-// A log's lines, or for one over `max` bytes, the first (the listener's, what the run is) and
-// those of its last bytes (its result, a cancel), the line cut there dropped.
-function logLines(logPath, max, log) {
-  const size = statSync(logPath).size;
-  if (size <= max) return readFileSync(logPath, "utf8").split("\n");
-  log(`${logPath}: ${Math.round(size / 1024 / 1024)} MB, only its first line and its end read`);
-  const ends = Math.min(ENDS, max);
-  const fd = openSync(logPath, "r");
-  try {
-    const read = (at, length) => {
-      const buffer = Buffer.alloc(length);
-      return buffer.toString("utf8", 0, readSync(fd, buffer, 0, length, at));
-    };
-    const [first, ...head] = read(0, ends).split("\n");
-    // A correction of the first line's record, written before its sandbox started
-    // (sessionModeOf()): kept with the marker that bounds it.
-    const early = head
-      .slice(0, -1)
-      .filter((l) => l.startsWith(SESSION_EVENT) || l.startsWith(SANDBOX_EVENT));
-    const tail = read(size - ends, ends)
-      .split("\n")
-      .slice(1);
-    return [first, ...early, ...tail];
-  } finally {
-    closeSync(fd);
-  }
-}
-
-function runOf(logDir, file, max = READ_MAX, log = console.error) {
-  const logPath = join(logDir, file);
-  const lines = logLines(logPath, max, log);
-  const header = parse(lines[0])?.type === "listener" ? parse(lines[0]) : {};
-  const session = sessionEventOf(lines);
-  const meta = session?.mode ? { ...header, mode: session.mode } : header;
-  // Logs from before agents had names are Claude Code's.
-  const agent = agentFor(meta.agent);
-  const result = lastResult(lines, agent);
-  const stopper = cancelledBy(lines);
-  const id = file.slice(0, -4);
-  return {
-    id,
-    agent: agent.name,
-    // Its provider, and why when it is a fallback's (agents/select.mjs entryFor()): a later run of the
-    // task sticks to it. None in logs from before fallbacks.
-    provider: meta.provider ?? null,
-    // The provider's credential its entry named (`claude@anthropic:key`); null: the default.
-    credential: meta.credential ?? null,
-    // The credential it ran on (agents/select.mjs authOf()); null in logs from before it.
-    auth: meta.auth ?? null,
-    fallback: meta.fallback ?? null,
-    // Whether `/agent` picked it (or a previous run's `/agent`: sticky): it doesn't fall back.
-    picked: meta.picked ?? null,
-    light: meta.light ?? null,
-    key: meta.key ?? id.replace(/-\d+$/, ""),
-    kind: meta.kind ?? null,
-    title: meta.title ?? null,
-    repo: meta.repo ?? null,
-    replyTo: meta.replyTo ?? null,
-    mode: meta.mode ?? null,
-    // What its start decided it gets (capabilities.mjs): an analysis leaves out a run that had the
-    // open internet. None in logs from before capabilities.
-    capabilities: session?.capabilities ?? null,
-    taskMode: meta.taskMode ?? null,
-    reason: meta.reason ?? null,
-    // Auto-picked, or following such a run (newRecord()): what follows it after a restart too.
-    ...(meta.autoPickup && { autoPickup: true }),
-    round: meta.round ?? null,
-    rounds: meta.rounds ?? null,
-    // Logs from before runs kept them have none: those runs can't run again.
-    items: meta.items ?? null,
-    model: meta.model ?? null,
-    effort: meta.effort ?? null,
-    // "fast" in Claude Code's fast mode, which costs more (agents/select.mjs speedFor()), and
-    // why it didn't get the speed or model asked for. None in logs from before speeds.
-    speed: meta.speed ?? null,
-    speedNote: meta.speedNote ?? null,
-    startedAt: meta.startedAt ?? Number(id.match(/-(\d+)$/)?.[1] ?? 0),
-    finishedAt: statSync(logPath).mtimeMs,
-    // Unfinished and not ours: the listener restarted during the run.
-    status: stopper ? "cancelled" : result ? outcome(result) : "interrupted",
-    summary: stopper ? `Stopped by @${stopper}` : summaryOf(result),
-    questions: questionsOf(result),
-  };
-}
-
-// Who cancelled the run (runs.mjs cancel()), from its log, or null.
-function cancelledBy(lines) {
-  for (let i = lines.length - 1; i > 0; i--) {
-    if (!lines[i].includes('"cancelled"')) continue;
-    const e = parse(lines[i]);
-    if (e?.type === "listener" && e.event === "cancelled") return e.by ?? "?";
-  }
-  return null;
 }
 
 // A run as the dashboard gets it: without where its log was on disk (summaries from before

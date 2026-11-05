@@ -5,7 +5,7 @@
 import assert from "node:assert/strict";
 import { generateKeyPairSync } from "node:crypto";
 import { EventEmitter } from "node:events";
-import { readFileSync, writeFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { test } from "node:test";
@@ -16,7 +16,6 @@ import { createLogger, withLogContext } from "../lib/log.mjs";
 import { EPOCH_HEADER } from "../lib/service-client.mjs";
 import { networkCallers, signServiceToken } from "../lib/service-token.mjs";
 import { fileStore } from "../lib/store-file.mjs";
-import { withoutSecrets } from "../lib/store.mjs";
 import { keyId } from "../lib/tokens.mjs";
 import { createDockerRunner } from "../listener/runner/docker.mjs";
 import { SANDBOX_USER } from "../listener/sandbox-spec.mjs";
@@ -1064,21 +1063,6 @@ test("a chat's session volumes: removed for a chat's key and sandbox only, once 
   assert.equal(models.status, 403);
 });
 
-test("a log file uploaded: parts end where its redaction's did, so the store finds no token it didn't", async (t) => {
-  // The runner's store, refusing a part holding a token's shape (lib/store.mjs).
-  const store = withoutSecrets(fileStore(), () => []);
-  const a = await copy(t, { store, backend: host() });
-  const { logs } = client(a.url);
-  // A run token's claims after letters: none in the line, but the whole of one in a part that
-  // starts at its `e`, where a cut every 4 MB (runner/client.mjs APPEND_MAX) falls.
-  const run = `eyJ2ZXIiOjEsInN1YiI6InJ1biJ9.${"z".repeat(40)}`;
-  const text = `x\n${"a".repeat(4 * 1024 * 1024 - 2)}${run}\n`;
-  const file = join(tempDir(t), "dh-o-a-1-1.log");
-  writeFileSync(file, text);
-  await logs.upload("dh-o-a-1-1", file);
-  assert.equal(await logs.text("dh-o-a-1-1"), text);
-});
-
 // Two copies during a handover (a lease that expired on a stalled one), both reading the log's
 // size before either appends: the same chunk, sent to each, lands once.
 test("logs: the same append through two copies at once is written once", async () => {
@@ -1131,23 +1115,13 @@ test("a run's log through the client: a step starts a segment, the run's end clo
   assert.equal(await store.blobSize(`logs/${id}/0`), null);
 });
 
-// A run's end the orchestrator never sent (#664): the log of a run that ended before the runner
-// kept logs, uploaded, and a run's sandbox removed with its last segment open.
-test("a log's last segment closes once an ended run's file is uploaded, and when its sandbox goes", async (t) => {
+// A run's end the orchestrator never sent (#664): a run's sandbox removed with its last segment
+// open.
+test("a log's last segment closes when its sandbox goes", async (t) => {
   const store = fileStore();
   const a = await copy(t, { store, backend: host() });
   const { logs, runner } = client(a.url);
   const index = (id) => store.get(`logs/${id}/index`);
-  const file = join(tempDir(t), "dh-o-a-2-1.log");
-  writeFileSync(file, "an ended run\n");
-  await logs.upload("dh-o-a-2-1", file, { close: true });
-  assert.deepEqual(await index("dh-o-a-2-1"), {
-    segments: [{ at: 0, size: 13, where: "store" }],
-    open: 13,
-  });
-  // A live run's: written on.
-  await logs.upload("dh-o-a-3-1", file);
-  assert.equal(await index("dh-o-a-3-1"), null);
   // An orchestrator stopped before its close went: the sandbox's removal closes it.
   await runner.start(SPEC);
   const run = logs.open(SPEC.run);

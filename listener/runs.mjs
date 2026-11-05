@@ -28,7 +28,7 @@ import {
   timed,
   writeEvent,
 } from "./runlog.mjs";
-import { logSent } from "./restart.mjs";
+import { logSent, QUEUE_RETRY_MS } from "./restart.mjs";
 import { sandboxSpec, sessionName, sessionOf } from "./sandbox-spec.mjs";
 import { countRun, isChat, noLongerAllowed, pickedTask } from "./tasks.mjs";
 import { startAction } from "./permissions.mjs";
@@ -354,10 +354,10 @@ export function createRuns(ctx) {
           : await ctx.runner.hasSession(sessionOf(task.name, task.live), agentOf(task));
       const changed = reopenedMode({ mode, restored, started, now });
       if (changed !== null) record.mode = changed;
-      // The log's first line already has the record: what the dashboard reads after a restart is
-      // this event's, the first of the log (runlog.mjs sessionModeOf()). Written for every run,
-      // before anything of the run's own (its image's build, its agent's install) goes in the
-      // log, so that no line of theirs can come first.
+      // The log's first line already has the record: what its start decided goes after it, for
+      // whoever reads the log. Written for every run, before anything of the run's own (its
+      // image's build, its agent's install) goes in the log, so that no line of theirs can come
+      // first.
       writeEvent(logFile, "session", { mode: record.mode, capabilities: task.live.capabilities });
       if (changed === null) return null;
       note?.(
@@ -445,8 +445,8 @@ export function createRuns(ctx) {
         message,
         { ...prepared, ...access, engine, ca, digest },
       );
-      // What the log has from here may be the sandbox's own: a `session` event counts only
-      // before this (runlog.mjs sessionModeOf()).
+      // What the log has from here may be the sandbox's own: a `session` event is the
+      // listener's only before this.
       writeEvent(live.logFile, "sandbox");
       const started = await ctx.runner.start(spec);
       if (started?.engine) note(engineNote(started.engine, engine));
@@ -986,8 +986,25 @@ export function createRuns(ctx) {
     }
   }
 
+  // Whether the run's summary is in the store, tried again every QUEUE_RETRY_MS until it is, or
+  // this copy stops.
+  async function summarySaved(live) {
+    const retryMs = ctx.queueRetryMs ?? QUEUE_RETRY_MS;
+    while (!(await saveSummary(ctx.store, live.record, { log, secrets: ctx.storeSecrets?.() }))) {
+      if (ctx.stopping || !(ctx.held?.() ?? true)) {
+        log(
+          `${live.key}: its summary not saved as this copy stops: the run stays for the next one`,
+        );
+        return false;
+      }
+      await new Promise((resolve) => setTimeout(resolve, retryMs).unref?.());
+    }
+    return true;
+  }
+
   // A run's end, however it ends (cleanUp(), restart.mjs requeue()): its record's summary
-  // saved, its token, sandbox and saved state gone, its slot free.
+  // saved, its token, sandbox and saved state gone, its slot free. → false when this copy stops
+  // before its summary is saved: the run is left to the next one.
   async function teardown(task) {
     const live = task.live;
     live.record.phase = null;
@@ -1001,11 +1018,10 @@ export function createRuns(ctx) {
     const revoked = ctx.broker.revoke(live.id);
     await Promise.race([revoked, new Promise((resolve) => setTimeout(resolve, 5000).unref())]);
     live.record.finishedAt = Date.now();
-    await saveSummary(ctx.store, live.record, {
-      log,
-      secrets: ctx.storeSecrets?.(),
-      logDir: ctx.logDir,
-    });
+    // Its summary before anything of the run goes: tried again while the store is away, as the
+    // orchestrator keeps it nowhere else (#619). A copy that stops meanwhile leaves the run as it
+    // is, its sandbox and its state, for the next copy to end again.
+    if (!(await summarySaved(live))) return false;
     // What it wrote last, at the runner before its state goes, and its last segment closed
     // there after it (../runner/logs.mjs).
     await logSent(live);
@@ -1021,6 +1037,7 @@ export function createRuns(ctx) {
     task.live = null;
     task.running = false;
     countRun(ctx, task, -1);
+    return true;
   }
 
   // The run is over (teardown()), its comments get their outcome's reaction, and the task's
@@ -1028,7 +1045,7 @@ export function createRuns(ctx) {
   async function cleanUp(task) {
     const live = task.live;
     const { key, mode, light, record, reviewed } = live;
-    await teardown(task);
+    if (!(await teardown(task))) return;
     // A review that requests changes may start a fix run, and one with nothing blocking may
     // merge (reviews.mjs settle()), now that the review's own run no longer makes the task
     // busy. Not waited for: its GitHub calls mustn't hold the slot this run freed, and

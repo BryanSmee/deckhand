@@ -44,7 +44,8 @@ import { createRegistry } from "../lib/metrics.mjs";
 import { createProxy, egressPolicy, relayTarget } from "../proxy/proxy.mjs";
 import { networkCallers } from "../lib/service-token.mjs";
 import { keyFolder } from "../lib/tokens.mjs";
-import { AGENT_SECRETS } from "../listener/agents/index.mjs";
+import { AGENT_SECRETS, agentFor } from "../listener/agents/index.mjs";
+import { lastResult, outcome, questionsOf, summaryOf } from "../listener/runlog.mjs";
 import { createBrokerService as createBrokerClient } from "../listener/broker-service.mjs";
 import {
   ConfigError,
@@ -424,6 +425,42 @@ function summary(dir) {
   } catch {
     return null;
   }
+}
+
+// What a run's summary has from its log's first line (runlog.mjs newRecord()).
+const RUN_FIELDS = [
+  ...["provider", "credential", "auth", "fallback", "picked", "light", "kind", "title", "repo"],
+  ...["replyTo", "mode", "capabilities", "taskMode", "reason", "round", "rounds", "items"],
+  ...["model", "effort", "speed", "speedNote"],
+];
+
+// A run that ended before the test's orchestrator starts: its log at the runner (`lines`, the
+// first the listener's: one blob of the runner's store, as a log from before segments reads),
+// its summary in the orchestrator's store, a file of its own (the file store's `keys/`).
+function pastRun(dir, id, lines) {
+  const text = lines.map((l) => `${JSON.stringify(l)}\n`).join("");
+  const blobs = join(dir, "runner-store", "blobs");
+  mkdirSync(blobs, { recursive: true });
+  writeFileSync(join(blobs, fileName(`logs/${id}`)), text);
+  const [meta] = lines;
+  const result = lastResult(text.split("\n"), agentFor(meta.agent));
+  const record = {
+    id,
+    agent: agentFor(meta.agent).name,
+    ...Object.fromEntries(RUN_FIELDS.map((name) => [name, meta[name] ?? null])),
+    key: meta.key,
+    ...(meta.autoPickup && { autoPickup: true }),
+    startedAt: meta.startedAt,
+    // Now: retention keeps it.
+    finishedAt: Date.now(),
+    status: result ? outcome(result) : "interrupted",
+    summary: summaryOf(result),
+    questions: questionsOf(result),
+  };
+  const keys = join(dir, "store", "keys");
+  mkdirSync(keys, { recursive: true });
+  const key = `summaries/${id}`;
+  writeFileSync(join(keys, fileName(key)), JSON.stringify({ key, value: record }));
 }
 
 // The dashboard's API at edge's `port`, as alice (in ALLOWED_USERS), signed in: path → its JSON.
@@ -877,51 +914,42 @@ test(
   },
 );
 
-// Past the maps, before it is up (edge, which it asks about the App, doesn't answer): a title's
-// write (seeded from a run's summary; the maps' read, a SCAN of `titles/*`, goes through) and
-// the App's key's handover to the github service tried again (a 500: a 503, the service's
-// client asks again on its own, lib/service-client.mjs). The stop gives both up: a map's write
-// carries no epoch, and would land over what the next copy wrote.
-test(
-  "a stop before the orchestrator is up gives up the maps' writes and the github service's calls",
-  stopsEarly,
-  async (t) => {
-    const stopped = await stoppedEarly(t, {
-      refuses: (args) => (args.some((arg) => /:k:titles\/[^*]/.test(arg)) ? "a title" : null),
-      expect: ["a title", "the App's key"],
-      env: async ({ fail, dir, store }) => {
-        await store.set("summaries/org-repo-5-1", {
-          id: "org-repo-5-1",
-          key: "org/repo#5",
-          repo: "org/repo",
-          title: "Five",
-          startedAt: 1,
-        });
-        writeFileSync(
-          join(dir, "app.json"),
-          JSON.stringify({ id: 1, slug: "deckhand", owner: "org", pem: "not a key" }),
-        );
-        const github = createServer((req, res) => {
-          if (req.method === "PUT" && req.url === "/app") fail("the App's key");
-          res.writeHead(500).end("{}");
-        });
-        // Never answers: the orchestrator waits for it, 15 s at most, before it goes on.
-        const edge = createServer(() => {});
-        for (const server of [github, edge]) {
-          await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
-          t.after(() => (server.closeAllConnections(), server.close()));
-        }
-        return {
-          GITHUB_SERVICE_URL: `http://127.0.0.1:${github.address().port}`,
-          EDGE_URL: `http://127.0.0.1:${edge.address().port}`,
-        };
-      },
-    });
-    assert.equal(stopped.code, 0, stopped.output);
-    assert.deepEqual(stopped.late, []);
-    assert.ok(stopped.leaseFree, stopped.output);
-  },
-);
+// Past the maps (edge has no App yet): a title's write (seeded from a run's summary; the maps'
+// read, a SCAN of `titles/*`, goes through) and the operator's credentials' fingerprints, sent to
+// the github service, tried again (a 500: a 503, the service's client asks again on its own,
+// lib/service-client.mjs). The stop gives both up: a map's write carries no epoch, and would land
+// over what the next copy wrote.
+test("a stop gives up the maps' writes and the github service's calls", stopsEarly, async (t) => {
+  const stopped = await stoppedEarly(t, {
+    refuses: (args) => (args.some((arg) => /:k:titles\/[^*]/.test(arg)) ? "a title" : null),
+    expect: ["a title", "the fingerprints"],
+    env: async ({ fail, store }) => {
+      await store.set("summaries/org-repo-5-1", {
+        id: "org-repo-5-1",
+        key: "org/repo#5",
+        repo: "org/repo",
+        title: "Five",
+        startedAt: 1,
+      });
+      const github = createServer((req, res) => {
+        if (req.method === "PUT" && req.url === "/fingerprints") fail("the fingerprints");
+        res.writeHead(500).end("{}");
+      });
+      const edge = createServer((req, res) => res.end(JSON.stringify({ configured: false })));
+      for (const server of [github, edge]) {
+        await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+        t.after(() => (server.closeAllConnections(), server.close()));
+      }
+      return {
+        GITHUB_SERVICE_URL: `http://127.0.0.1:${github.address().port}`,
+        EDGE_URL: `http://127.0.0.1:${edge.address().port}`,
+      };
+    },
+  });
+  assert.equal(stopped.code, 0, stopped.output);
+  assert.deepEqual(stopped.late, []);
+  assert.ok(stopped.leaseFree, stopped.output);
+});
 
 // Each test runs its own listener, fake GitHub and fake Docker in its own temp dir, on ports
 // the OS picks, and mostly waits on them: they run side by side, two per core (eight at most).
@@ -987,8 +1015,7 @@ describe("listener", options, () => {
       keysDir: join(dir, "keys"),
       ...(opa && { opa }),
     });
-    // The App's credentials, the key with them: a listener's from before the github service,
-    // which hands its key over at start; the github service holds the same App already.
+    // The App's credentials: its key the github service's, the rest edge's.
     const credentials = {
       id: 5,
       client_id: "Iv1.x",
@@ -998,9 +1025,6 @@ describe("listener", options, () => {
       webhook_secret: SECRET,
       pem: PEM,
     };
-    writeFileSync(join(dir, "app.json"), JSON.stringify(credentials));
-    // Edge holds the same App, but its key: the orchestrator hands the listener's over to it all
-    // the same, which edge takes (the same App), and removes it from its volume.
     const edgeDir = join(dir, "edge");
     mkdirSync(edgeDir);
     const { pem: _pem, ...edgeApp } = credentials;
@@ -1100,8 +1124,11 @@ describe("listener", options, () => {
       log: (line) => (modelsOut += `${line}\n`),
     });
     // The listener holds none of them (the models service does): those in `settings` go there.
-    const listenerEnv = (env) =>
-      Object.fromEntries(Object.entries(env).filter(([name]) => !AGENT_SECRETS.includes(name)));
+    // ORCHESTRATOR_DATA_DIR: its data folder, apart from the others' (the test's folder).
+    const listenerEnv = ({ ORCHESTRATOR_DATA_DIR: own, ...env }) => ({
+      ...Object.fromEntries(Object.entries(env).filter(([name]) => !AGENT_SECRETS.includes(name))),
+      ...(own && { DATA_DIR: own }),
+    });
     // The runner: the same settings (those it reads), its own port and store, the broker
     // service's keys, the listener's services port as its orchestrator and github service.
     // Started once the listener's is known.
@@ -1256,24 +1283,6 @@ describe("listener", options, () => {
     };
   }
 
-  test("a listener's App: its key to the github service, the rest to edge, nothing left in its volume", async (t) => {
-    const { dir, listener } = await listen(t);
-    await listener.until("handed over to the github service, removed from app.json");
-    await listener.until("handed over to edge, removed from /data");
-    // The orchestrator keeps none of it.
-    for (const name of ["app.json", "session.key", "sessions.json"]) {
-      assert.equal(existsSync(join(dir, name)), false, name);
-    }
-    // What edge keeps: the webhook secret, the OAuth client's; never the key.
-    const kept = JSON.parse(readFileSync(join(dir, "edge", "app.json"), "utf8"));
-    assert.equal(kept.pem, undefined);
-    assert.equal(kept.webhook_secret, SECRET);
-    assert.equal(kept.client_secret, "cs");
-    const held = JSON.parse(readFileSync(join(dir, "github-service", "app.json"), "utf8"));
-    assert.equal(held.pem, PEM);
-    assert.equal(held.webhook_secret, undefined);
-  });
-
   test("a delivery whose handling throws is logged, and the next one is still handled", async (t) => {
     const { listener, send } = await listen(t);
     assert.equal((await send(null)).status, 202);
@@ -1376,9 +1385,8 @@ describe("listener", options, () => {
     assert.ok(!body.includes(agentToken));
     await until(() => !liveStates(dir).length, "the run's state to go");
     // Its summary and its log, the runner's, and the orchestrator's store.
-    const kept = readdirSync(join(dir, "logs")).map((f) =>
-      readFileSync(join(dir, "logs", f), "utf8"),
-    );
+    const keys = join(dir, "store", "keys");
+    const kept = readdirSync(keys).map((f) => readFileSync(join(keys, f), "utf8"));
     kept.push(readFileSync(join(dir, "store", "state.json"), "utf8"));
     for (const log of [...kept, ...runLogs(dir).values()]) {
       assert.ok(!log.includes(secret) && !log.includes(credential));
@@ -1810,8 +1818,9 @@ describe("listener", options, () => {
     }
     assert.equal(served.status, 200);
     assert.deepEqual(Buffer.from(await served.arrayBuffer()), png);
-    // The one kept before, moved to the broker at start, its folder removed: its link still works.
-    await until(() => readdirSync(join(dir, "shots")).length === 0, "the screenshots moved");
+    // The one kept before, moved to the broker at start, its folder removed, then shots/ itself
+    // (#619): its link still works.
+    await until(() => !existsSync(join(dir, "shots")), "the screenshots moved");
     const old = await fetch(`http://127.0.0.1:${port}/shots/${before}/old.png`);
     assert.deepEqual(Buffer.from(await old.arrayBuffer()), kept);
     // Out through the egress proxy only, the broker directly.
@@ -2088,9 +2097,8 @@ mounts:
     }
   }
 
-  // Temporary files of state writes, in the data volume and its logs.
-  const leftovers = (dir) =>
-    [...readdirSync(dir), ...readdirSync(join(dir, "logs"))].filter((f) => f.endsWith(".tmp"));
+  // Temporary files of state writes, in the data volume.
+  const leftovers = (dir) => readdirSync(dir).filter((f) => f.endsWith(".tmp"));
 
   const replies = (github) =>
     github.requests.filter(
@@ -2932,12 +2940,39 @@ mounts:
       assert.equal(before.length, 2);
       await ctx.handOver({ signal });
       assert.deepEqual(await history(), before);
-      assert.deepEqual(
-        readdirSync(join(dir, "logs")).filter((f) => f.endsWith(".json")),
-        [],
-      );
+      // Nothing written beside the store (#619).
+      assert.equal(existsSync(join(dir, "logs")), false);
     });
   }
+
+  // The orchestrator keeps nothing but its store (#619): a data folder it can't write but the
+  // store's folder (for root, which writes anywhere, the folder as it is after), a run through a
+  // handover, its reply once, and nothing beside the store.
+  test("nothing written but the store: a data folder it can't write but its store's, a run through a handover", async (t) => {
+    let data;
+    const ctx = await holding(t, undefined, (dir) => {
+      data = join(dir, "orchestrator-data");
+      mkdirSync(join(data, "store"), { recursive: true });
+      chmodSync(data, 0o555);
+      // Writable again for the temp dir's removal.
+      t.after(() => chmodSync(data, 0o755));
+      return { ORCHESTRATOR_DATA_DIR: data };
+    });
+    const { github } = ctx;
+    await ctx.handOver();
+    writeFileSync(join(ctx.dir, "go"), "");
+    await ctx.listener.until("done (ok)");
+    await settled(github, [99]);
+    assert.equal(replies(github).length, 1);
+    assert.match(JSON.parse(replies(github)[0].body).body, /^All done\./);
+    // Its summary in the store, the dashboard's history.
+    const keys = join(data, "store", "keys");
+    const summaries = readdirSync(keys).filter((f) => f.startsWith("summaries%2F"));
+    assert.equal(summaries.length, 1);
+    assert.equal(JSON.parse(readFileSync(join(keys, summaries[0]), "utf8")).value.status, "ok");
+    assert.deepEqual(readdirSync(data), ["store"]);
+    assert.doesNotMatch(ctx.listener.output(), /no longer is read/);
+  });
 
   test("a listener killed mid-run: Claude answers meanwhile, the next one replies once", async (t) => {
     const ctx = await holding(t);
@@ -4035,9 +4070,8 @@ allow_capabilities contains "read:pulls"
   test("the dashboard shows a repo's tasks and logs to its own users, once they are known", async (t) => {
     const files = { ".deckhand.yaml": "users: [bob]\n" };
     const { dir, port, send, listener } = await listen(t, files, (dir, github) => {
-      mkdirSync(join(dir, "logs"));
       const meta = { type: "listener", key: "org/repo#pr-3", repo: "org/repo", startedAt: 1000 };
-      writeFileSync(join(dir, "logs", "org-repo-pr-3-1000.log"), `${JSON.stringify(meta)}\n`);
+      pastRun(dir, "org-repo-pr-3-1000", [meta]);
       return { GITHUB_URL: github.url };
     });
     const base = `http://127.0.0.1:${port}`;
@@ -4056,12 +4090,7 @@ allow_capabilities contains "read:pulls"
       (await (await get("/api/state", session)).json()).tasks.map((task) => task.key);
     // The repo's users aren't known yet: ALLOWED_USERS decides.
     assert.deepEqual(await keys(), ["org/repo#pr-3"]);
-    // Its summary, made from its log, in the store (#618): none left in logs/.
     assert.equal(summary(dir)?.id, "org-repo-pr-3-1000");
-    assert.deepEqual(
-      readdirSync(join(dir, "logs")).filter((f) => f.endsWith(".json")),
-      [],
-    );
     const open = await get("/api/runs/org-repo-pr-3-1000/stream", session);
     assert.equal(open.status, 200);
     await open.body.cancel();
@@ -4070,43 +4099,6 @@ allow_capabilities contains "read:pulls"
     await listener.until("done (ok)");
     assert.deepEqual(await keys(), []);
     assert.equal((await get("/api/runs/org-repo-pr-3-1000/stream", session)).status, 404);
-  });
-
-  test("a log left in logs/ whose run the store summarized isn't summarized again (#697)", async (t) => {
-    const id = "org-repo-pr-4-1000";
-    const { dir, port, listener } = await listen(t, {}, (dir, github) => {
-      mkdirSync(join(dir, "logs"));
-      const meta = { type: "listener", key: "org/repo#pr-4", repo: "org/repo", startedAt: 1000 };
-      writeFileSync(join(dir, "logs", `${id}.log`), `${JSON.stringify(meta)}\n`);
-      // Its summary in the store already, as a start before moved it there (file backend).
-      mkdirSync(join(dir, "store", "keys"), { recursive: true });
-      const saved = {
-        id,
-        key: "org/repo#pr-4",
-        repo: "org/repo",
-        // Recent: older than the history's 90 days, it would be removed.
-        startedAt: Date.now() - 60_000,
-        finishedAt: Date.now(),
-        status: "ok",
-        summary: "Kept.",
-      };
-      writeFileSync(
-        join(dir, "store", "keys", fileName(`summaries/${id}`)),
-        JSON.stringify({ key: `summaries/${id}`, value: saved }),
-      );
-      return { GITHUB_URL: github.url };
-    });
-    await listener.until("Run logs: 1 of 1 sent to the runner");
-    // Listed: the start moved logs/' summaries to the store before.
-    const api = await dashboardApi(port);
-    assert.deepEqual(
-      (await api("/api/state")).tasks.map((task) => task.key),
-      ["org/repo#pr-4"],
-    );
-    // Not read again: a summary made from it would be moved (and discarded by setIfAbsent()).
-    assert.doesNotMatch(listener.own(), /Run summaries: \d+ moved/);
-    assert.equal(summary(dir)?.summary, "Kept.");
-    assert.deepEqual(readdirSync(join(dir, "logs")), []);
   });
 
   test("access (#731): a login with no action sees nothing, starts nothing, its routes 404 and 403", async (t) => {
@@ -4480,30 +4472,24 @@ allow_capabilities contains "read:pulls"
     const secret = "sk-ant-api03-0123456789abcdef";
     const { dir, github, port, listener } = await listen(t, {}, (dir, github) => {
       writeFileSync(join(dir, "hold"), "");
-      mkdirSync(join(dir, "logs"));
       const log = (id, repo, text) =>
-        writeFileSync(
-          join(dir, "logs", `${id}.log`),
-          [
-            { type: "listener", key: `${repo}#5`, repo, taskMode: "work", startedAt: 1000 },
-            { type: "listener", event: "note", at: 1, message: "Image deckhand-private-note" },
-            {
-              type: "assistant",
-              message: {
-                content: [{ type: "tool_use", id: "t1", name: "Bash", input: { command: "make" } }],
-              },
+        pastRun(dir, id, [
+          { type: "listener", key: `${repo}#5`, repo, taskMode: "work", startedAt: 1000 },
+          { type: "listener", event: "note", at: 1, message: "Image deckhand-private-note" },
+          {
+            type: "assistant",
+            message: {
+              content: [{ type: "tool_use", id: "t1", name: "Bash", input: { command: "make" } }],
             },
-            {
-              type: "user",
-              message: {
-                content: [{ type: "tool_result", content: "private output", is_error: true }],
-              },
+          },
+          {
+            type: "user",
+            message: {
+              content: [{ type: "tool_result", content: "private output", is_error: true }],
             },
-            { type: "result", is_error: true, result: text, duration_ms: 6000 },
-          ]
-            .map((l) => JSON.stringify(l))
-            .join("\n") + "\n",
-        );
+          },
+          { type: "result", is_error: true, result: text, duration_ms: 6000 },
+        ]);
       log("org-repo-5-1000", "org/repo", `The tests fail with ${secret}.`);
       log("org-other-5-1000", "org/other", "Another repo's failure.");
       return { ANTHROPIC_API_KEY: secret, GITHUB_URL: github.url };
@@ -4576,7 +4562,6 @@ allow_capabilities contains "read:pulls"
     const asked =
       "<!-- needs-input -->\n## Needs your input\n\n1. **Name**: which one?\n   - [ ] A";
     const { dir, port, send, listener } = await listen(t, {}, (dir, github) => {
-      mkdirSync(join(dir, "logs"));
       for (const [id, key] of [
         ["org-repo-5-1000", "org/repo#5"],
         ["org-repo-pr-6-1000", "org/repo#pr-6"],
@@ -4584,23 +4569,18 @@ allow_capabilities contains "read:pulls"
         ["org-repo-12-1000", "org/repo#12"],
         ["org-repo-13-1000", "org/repo#13"],
       ]) {
-        writeFileSync(
-          join(dir, "logs", `${id}.log`),
-          [
-            // #5 and #9 auto-picked: their close ends the pick (picks.json).
-            {
-              type: "listener",
-              key,
-              repo: "org/repo",
-              taskMode: "work",
-              startedAt: 1000,
-              ...(["org/repo#5", "org/repo#9"].includes(key) && { autoPickup: true }),
-            },
-            { type: "result", result: asked, duration_ms: 6000 },
-          ]
-            .map((l) => JSON.stringify(l))
-            .join("\n") + "\n",
-        );
+        pastRun(dir, id, [
+          // #5 and #9 auto-picked: their close ends the pick (picks.json).
+          {
+            type: "listener",
+            key,
+            repo: "org/repo",
+            taskMode: "work",
+            startedAt: 1000,
+            ...(["org/repo#5", "org/repo#9"].includes(key) && { autoPickup: true }),
+          },
+          { type: "result", result: asked, duration_ms: 6000 },
+        ]);
       }
       return { GITHUB_URL: github.url };
     });
@@ -4707,23 +4687,17 @@ allow_capabilities contains "read:pulls"
       "<!-- needs-input -->\n## Needs your input\n\n1. **Name**: which one?\n   - [ ] A";
     const files = {};
     const { dir, port, listener, send } = await listen(t, files, (dir, github) => {
-      mkdirSync(join(dir, "logs"));
       for (const n of [5, 8, 11, 14]) {
-        writeFileSync(
-          join(dir, "logs", `org-repo-${n}-1000.log`),
-          [
-            {
-              type: "listener",
-              key: `org/repo#${n}`,
-              repo: "org/repo",
-              taskMode: "work",
-              startedAt: 1000,
-            },
-            { type: "result", result: asked, duration_ms: 6000 },
-          ]
-            .map((l) => JSON.stringify(l))
-            .join("\n") + "\n",
-        );
+        pastRun(dir, `org-repo-${n}-1000`, [
+          {
+            type: "listener",
+            key: `org/repo#${n}`,
+            repo: "org/repo",
+            taskMode: "work",
+            startedAt: 1000,
+          },
+          { type: "result", result: asked, duration_ms: 6000 },
+        ]);
       }
       // Both known closed. #5 closed after its run asked; #8 before (a comment on a closed issue
       // started its run), so its questions still wait.
@@ -4871,22 +4845,16 @@ allow_capabilities contains "read:pulls"
         join(dir, "store", "state.json"),
         JSON.stringify({ keys: { "modes/org/repo#3": { value: "review", expiresAt: null } } }),
       );
-      mkdirSync(join(dir, "logs"));
-      writeFileSync(
-        join(dir, "logs", "org-repo-9-1000.log"),
-        [
-          {
-            type: "listener",
-            key: "org/repo#9",
-            repo: "org/repo",
-            taskMode: "work",
-            startedAt: 1000,
-          },
-          { type: "result", is_error: true, result: "It failed.", duration_ms: 6000 },
-        ]
-          .map((l) => JSON.stringify(l))
-          .join("\n") + "\n",
-      );
+      pastRun(dir, "org-repo-9-1000", [
+        {
+          type: "listener",
+          key: "org/repo#9",
+          repo: "org/repo",
+          taskMode: "work",
+          startedAt: 1000,
+        },
+        { type: "result", is_error: true, result: "It failed.", duration_ms: 6000 },
+      ]);
       return { DEBOUNCE_MS: "60000", GITHUB_URL: github.url };
     });
     const { dir, port, send } = ctx;
@@ -5106,13 +5074,9 @@ allow_capabilities contains "read:pulls"
       mkdirSync(join(dist, "assets"), { recursive: true });
       writeFileSync(join(dist, "index.html"), "<title>Deckhand</title>");
       writeFileSync(join(dist, "assets", "app-1a2b.js"), "export {}");
-      mkdirSync(join(dir, "logs"));
       const meta = { type: "listener", key: "org/repo#pr-3", repo: "org/repo", startedAt: 1000 };
       const result = { type: "result", result: "## Fixed\n\nThe typo.", duration_ms: 6000 };
-      writeFileSync(
-        join(dir, "logs", "org-repo-pr-3-1000.log"),
-        `${JSON.stringify(meta)}\n${JSON.stringify(result)}\n`,
-      );
+      pastRun(dir, "org-repo-pr-3-1000", [meta, result]);
       // A run that stopped to ask.
       const asked = {
         type: "result",
@@ -5120,10 +5084,7 @@ allow_capabilities contains "read:pulls"
           "<!-- needs-input -->\n## Needs your input\n\n1. **Name**: which one?\n   - [ ] A (recommended)\n   - [ ] B",
         duration_ms: 6000,
       };
-      writeFileSync(
-        join(dir, "logs", "org-repo-pr-4-500.log"),
-        `${JSON.stringify({ ...meta, key: "org/repo#pr-4", startedAt: 500 })}\n${JSON.stringify(asked)}\n`,
-      );
+      pastRun(dir, "org-repo-pr-4-500", [{ ...meta, key: "org/repo#pr-4", startedAt: 500 }, asked]);
       // An operator policy: its text goes to the config endpoint only (repos.test.mjs), never
       // to api/state.
       mkdirSync(join(dir, "grants", "policy"), { recursive: true });
