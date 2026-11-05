@@ -394,6 +394,13 @@ test("which deliveries refresh the list", () => {
   // A repository's own change: the whole list (its name may be another), no default branch moved.
   assert.equal(refreshFor("repository", { action: "privatized", repository }, refresh), false);
   assert.deepEqual(calls, ["*", "org/app", "org/app", "*"]);
+  // Another branch made the default in its settings: the default branch moved (#876).
+  const edited = (changes) =>
+    refreshFor("repository", { action: "edited", changes, repository }, refresh);
+  assert.equal(edited({ default_branch: { from: "master" } }), true);
+  assert.equal(edited({ description: { from: "" } }), false);
+  assert.equal(edited(undefined), false);
+  assert.deepEqual(calls, ["*", "org/app", "org/app", "*", "*", "*", "*"]);
 });
 
 test("which deliveries forget a repository's policies' state (#855)", () => {

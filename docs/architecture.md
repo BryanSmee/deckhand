@@ -767,7 +767,8 @@ than at a run's end.
 
 The `pull_request` webhook doesn't fire when a base branch moves, so `conflicts.mjs` polls,
 and checks a repo soon (`soon()`) when its default branch moved: a pull request merged into it
-or a push to it (`repos.mjs` `refreshFor()`, the deliveries that also refresh the repository
+or a push to it, or another branch made the default in the repository's settings (a
+`repository` `edited` delivery with `changes.default_branch`) (`repos.mjs` `refreshFor()`, the deliveries that also refresh the repository
 list), or Deckhand's own auto-merge, which no delivery precedes. After
 `CONFLICT_MERGE_DELAY_MS` (30 s), while GitHub computes `mergeable` again, the repo is due
 whatever its interval and a pass runs, after the one under way if any; every trigger during
