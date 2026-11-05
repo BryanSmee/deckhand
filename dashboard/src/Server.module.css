@@ -1,5 +1,5 @@
 /* Settings › Server (docs/design/dashboard-redesign.md › Pages › Settings › Server): the status,
-   Runs and GitHub App cards. */
+   Runs, GitHub App and GitHub status cards. */
 .page {
   display: flex;
   flex-direction: column;
@@ -179,6 +179,58 @@
 
 .env {
   color: var(--text-3);
+}
+
+/* The status card's note of a GitHub outage, in its tone. */
+.githubNote {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 4px;
+  color: var(--s-fg);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.githubNote svg {
+  flex: none;
+}
+
+.warn {
+  color: var(--warn);
+}
+
+/* GitHub status: its indicator, a dot in its tone. */
+.indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--s-fg);
+  font-weight: 600;
+}
+
+.dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--s-solid);
+}
+
+.incidents {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.incidents li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 10px;
 }
 
 @media (max-width: 760px) {

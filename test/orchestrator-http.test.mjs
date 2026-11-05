@@ -83,6 +83,7 @@ test("access (#731): api/state, /status and the server's views follow the login'
     },
     models: { plans: () => [{ name: "claude", used: 1 }] },
     serverSetup: () => ({ grants: "all of them" }),
+    githubStatus: async () => ({ watched: true, indicator: "minor" }),
     status: (shows = () => true) => ({
       reasons: runs.filter((r) => shows(r.repo)).map((r) => r.key),
     }),
@@ -129,6 +130,12 @@ test("access (#731): api/state, /status and the server's views follow the login'
   assert.equal(mine.plans, undefined);
   assert.deepEqual((await get("/api/server", "bob"))[0], 403);
   assert.deepEqual(await get("/api/server", "alice"), [200, { grants: "all of them" }]);
+  // GitHub's status (#681): server:read's too, as the github service last read it.
+  assert.deepEqual((await get("/api/github-status", "bob"))[0], 403);
+  assert.deepEqual(await get("/api/github-status", "alice"), [
+    200,
+    { watched: true, indicator: "minor" },
+  ]);
   // A decision that fails: said, not a refusal.
   const [status, body] = await get("/api/server", "dave");
   assert.equal(status, 503);

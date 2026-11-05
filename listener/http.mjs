@@ -424,6 +424,7 @@ export function createHttp(ctx) {
     // (a 503), as apiRoute() does; the plans in api/state are just left out then.
     if (
       url.pathname === "/api/server" ||
+      url.pathname === "/api/github-status" ||
       url.pathname === "/api/access" ||
       (url.pathname === "/api/health" && ctx.health)
     ) {
@@ -438,6 +439,16 @@ export function createHttp(ctx) {
     }
     // Read when Settings › Server opens, not at each poll: it scans the grants folder.
     if (url.pathname === "/api/server") return sendJson(res, ctx.serverSetup());
+    // GitHub's own status (#681), githubstatus.com's as the github service last read it.
+    if (url.pathname === "/api/github-status" && ctx.githubStatus) {
+      return ctx.githubStatus().then(
+        (status) => sendJson(res, status),
+        (error) => {
+          log(`api/github-status: ${error.message ?? error}`);
+          sendJson(res, { error: "The github service couldn't be asked: try again." }, 502);
+        },
+      );
+    }
     // Settings › Access (#732): who has what, each of ALLOWED_USERS on each listed repo.
     if (url.pathname === "/api/access") return sendJson(res, await accessReport());
     // The services' health (health.mjs), probed at most every 10 s whoever asks: no URL in it.

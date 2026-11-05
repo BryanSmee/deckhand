@@ -740,7 +740,9 @@ tells its callers by (`SERVICE_NETWORKS`: `github-orchestrator`, `github-edge`,
 `github-proxy`, `github-runner`), its own to the broker (`broker-github`) and to the policy
 service (`policy-github`), and its way out to GitHub, `github-out`, which nothing else is on:
 on a network its callers are on too, its name would resolve there, and their calls would arrive
-on no caller's network.
+on no caller's network. Beyond GitHub's API and git, it reads one public page there:
+githubstatus.com's summary, every 5 minutes, with no token nor anything of Deckhand's in the
+call (`github/status.mjs`, #681), for the Server page.
 
 **The key.** A new App's key never reaches edge: /setup has the service convert the manifest's code
 (`POST /app/manifest`, edge alone), which keeps the key and answers with the rest. GitHub
