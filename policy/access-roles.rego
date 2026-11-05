@@ -101,3 +101,14 @@ access_actions(binding) := access_role(binding) | {a | some a in object.get(bind
 default access_role(_) := set()
 
 access_role(binding) := access_roles[binding.role]
+
+# For the config checks alone (#836): a binding whose `role` access_roles doesn't name gives none
+# of a role's actions, unseen otherwise. Their input of its own (`check: "roles"`, which access()
+# never sends) gets an action per such role, whoever and wherever its binding is for:
+# listener/policies.mjs accessActionWarnings() says them.
+allow_access contains sprintf("deckhand:unknown-role:%v", [role]) if {
+  input.check == "roles"
+  some binding in data.deckhand.bindings
+  role := binding.role
+  not access_roles[role]
+}

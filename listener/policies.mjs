@@ -169,6 +169,14 @@ const unknownAction = (rule, action, layer) =>
 const unknownMode = (action, modes) =>
   `\`deny_access\` of the repository's policies names \`${action}\`, which starts no mode it has (${[...BUILT_IN, ...modes].map((m) => `\`${m}\``).join(", ")}): it takes nothing away`;
 
+// What Deckhand's access-roles.rego gives the config checks' own input (`check: "roles"`) for each
+// binding whose role it doesn't define (#836), the role after it: never an action.
+const UNKNOWN_ROLE = "deckhand:unknown-role:";
+
+// What the config checks say of such a role.
+const unknownRole = (role) =>
+  `\`bindings\` of the operator's policies give the role \`${role}\`, which \`access_roles\` doesn't define: its bindings give nothing but their own \`actions\``;
+
 // Deckhand's policy/access.rego's one rule: every action, for every login (access()'s shortcut).
 const EVERY_ACTION = /^allow_access\s+contains\s+"\*"\s*(?:#.*)?$/m;
 
@@ -802,7 +810,8 @@ export function createPolicies({
   // nothing (the compile check says why). The service's operator layer not the one read:
   // read again, once, as access() does. With `modes` (the repository's own, by name), its deny
   // of a `runs:start:` action no mode has is said too (knownMode()): the operator's rules may name
-  // another repository's modes, not said.
+  // another repository's modes, not said. And the bindings' roles access-roles.rego doesn't
+  // define (#836), with the operator's layer, from an input of their own (UNKNOWN_ROLE).
   async function accessActionWarnings(read, repo = null, { operator = true, modes = null } = {}) {
     const logins = [...new Set((config?.users ?? []).map((u) => String(u).toLowerCase()))].slice(
       0,
@@ -824,6 +833,16 @@ export function createPolicies({
             repo: at,
           };
         }
+      }
+      // And the bindings' roles, whoever they are for (access-roles.rego): server-wide, as only
+      // the operator's layer names them. Its key no login has.
+      if (server && operator) {
+        inputs["@roles"] = {
+          decision: "access",
+          user: { login: logins[0] },
+          repo: null,
+          check: "roles",
+        };
       }
       return inputs;
     };
@@ -871,7 +890,11 @@ export function createPolicies({
           if (!rules) continue;
           if (layer === "operator") {
             for (const action of rules.allow.keys()) {
-              if (!knownAction(action)) warnings.add(unknownAction("allow_access", action, layer));
+              if (action.startsWith(UNKNOWN_ROLE)) {
+                warnings.add(unknownRole(action.slice(UNKNOWN_ROLE.length)));
+              } else if (!knownAction(action)) {
+                warnings.add(unknownAction("allow_access", action, layer));
+              }
             }
           }
           for (const d of rules.deny) {
