@@ -436,7 +436,8 @@ export function createPolicies({
   const listings = new Map();
   // The reads of GitHub in flight (listing(), repoOf()), by the repo's name in lower case → a Set
   // of { forgotten }: forget() marks them, so that an answer read before it is neither kept after
-  // it nor replaced by what was kept before it (#875). Each read removes itself when done.
+  // it nor replaced by what was kept before it (#875). Each read removes itself when done (a
+  // `finally`), so it holds the reads in flight alone: no MAX_ACCESS bound needed.
   const reading = new Map();
   function started(key) {
     const read = { forgotten: false };

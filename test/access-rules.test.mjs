@@ -1295,3 +1295,32 @@ test("access: a GitHub hiccup on a read forget() ran during fails closed, not on
   info.release();
   assert.match((await pending).error, /can't be read/);
 });
+
+test("access: a GitHub hiccup on a listing forget() ran during fails closed, not on the last listing (#875)", async (t) => {
+  const repos = { "acme/api": {} };
+  const { github } = fakeGithub(repos);
+  const engine = policyEngineOf(t, { readOperator: () => new Map() });
+  const clock = { now: 1_000 };
+  const listing = holding(github, /^\/repos\/acme\/api\/contents\//);
+  let first = true;
+  // The first listing goes through; the one held is the next.
+  const policies = createPolicies({
+    config: {},
+    github: (...args) => (first ? ((first = false), github(...args)) : listing.github(...args)),
+    service: localService(engine),
+    now: () => clock.now,
+  });
+  // With its default branch: no GET /repos/{repo}, the listing alone.
+  const listed = repo("acme/api");
+  assert.equal((await policies.access("bob", listed)).error, null);
+  // Past the listing's 10 minutes, GitHub down: the last listing would do, unless forgotten
+  // meanwhile.
+  clock.now += 11 * 60_000;
+  assert.ok(clock.now - 1_000 < STALE_LISTING_MS);
+  repos["acme/api"].down = true;
+  const pending = policies.access("bob", listed);
+  await listing.reached;
+  policies.forget("acme/api");
+  listing.release();
+  assert.match((await pending).error, /can't be read/);
+});
