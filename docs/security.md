@@ -3096,6 +3096,39 @@ grants). On a user's own machine (a chat there is #601), Deckhand enforces nothi
 profile would only narrow the Claude Code settings the driver suggests, and the panel would say
 it is advisory there.
 
+**Asking for more** (#479). A chat's agent that hits a wall asks its owner rather than only
+saying so: `deckhand-permissions` in the sandbox, an MCP server with one tool,
+`request_permission { kind: host | github | engine | mount, value, reason }` (a CLI of the same
+name for an agent without MCP, which the chat's prompt mentions), added for a chat's run alone.
+It holds no token: it calls the broker with the run token, as `deckhand-inbox` does.
+
+- **Only a chat's run asks.** The broker takes `POST /run/permissions` from a run whose token
+  says `mode: "chat"` alone (another run is refused with a `403`: an issue's run has no profile
+  to widen, its capabilities are decided at its start), from its own sandbox, at most 50 times a
+  run; its answer is read with the same run's token only (another run's gets a `404`). The
+  orchestrator answers it (`PUT /runs/:id/permissions/:request`), nobody else.
+- **Never beyond the ceiling.** The orchestrator (`listener/requests.mjs`) checks each request
+  against the chat's ceiling of the moment (`profiles.mjs` `requestVerdict()`). What the
+  policies, the repository's config or your grants don't give it (a host you don't grant the
+  repository, the engine without its grant, a mount it isn't granted, a GitHub write) is refused
+  at once, without asking anyone, the reason told to the agent: you widen it, in the grants
+  folder, by hand. What the sandbox has already is granted at once; so is what its profile
+  allows but its sandbox lacks (a profile changed since it started).
+- **The owner answers the rest.** It shows in the conversation as a card (what, the agent's
+  reason, when it applies) with Approve once, Approve for this chat and Deny, for the chat's
+  owner alone (`POST /api/chats/<id>/requests/<request>`). An approval is checked against the
+  ceiling again first. "For this chat" saves it in the profile (within the ceiling, as a save
+  from the panel); "once" keeps it for the sandbox going, or for its next start alone. Nobody
+  answering within `CHAT_PERMISSION_TIMEOUT` (10 minutes, at most 60) denies it, and so does the
+  run ending. At most 3 of a run's requests wait at once.
+- **When it applies.** An approved host is added to the run's hosts at once: the egress proxy
+  asks the orchestrator about every connection, so the next one reaches it, without a restart.
+  The engine and a mount are in the sandbox's spec: they apply when it starts again, which the
+  answer tells the agent (the owner restarts it from the chat's panel, its session kept).
+- **The reason is shown, not trusted.** What the agent writes in `reason` is put on one line,
+  cut to 200 characters and redacted (your agents' credentials, token shapes), as the
+  policies' messages are, and the dashboard shows it as text: never HTML, never Markdown.
+
 ## Research runs
 
 A run in the research mode (`/mode research`, [Per-repo config](repo-config.md#research))

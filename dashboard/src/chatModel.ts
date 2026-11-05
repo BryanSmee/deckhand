@@ -178,10 +178,14 @@ export function chatState(chat: Chat): ChatState {
 }
 
 // What the composer's line says of the chat now: a stopped chat with no run since its reset (or
-// none at all) starts from a fresh clone.
+// none at all) starts from a fresh clone; an agent at work may wait for your answer to its
+// request for more permissions.
 export function chatNote(chat: Chat, state: ChatState = chatState(chat)): string {
   if (state === "stopped" && !runsSinceReset(chat).length) {
     return "No sandbox now: your next message starts it, from a fresh clone of the repository.";
+  }
+  if (state === "working" && chat.requests.length) {
+    return "The agent waits for your answer to its request above.";
   }
   return CHAT_STATES[state].note;
 }

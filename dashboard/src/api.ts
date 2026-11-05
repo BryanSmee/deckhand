@@ -28,6 +28,8 @@ import type {
   OrderMove,
   Onboarded,
   Pending,
+  PermissionAnswer,
+  PermissionRequest,
   Repo,
   RepoConfig,
   Repos,
@@ -599,3 +601,9 @@ export const sendChatMessage = (id: string, text: string) =>
   postJson<{ chat: Chat }>(chatUrl(id, "/messages"), { text });
 export const resetChat = (id: string) => postJson<{ chat: Chat }>(chatUrl(id, "/reset"));
 export const deleteChat = (id: string) => deleteJson<{ message: string }>(chatUrl(id));
+// The owner's answer to its agent's request for more permissions (#479).
+export const answerRequest = (id: string, request: string, answer: PermissionAnswer) =>
+  postJson<{ request: PermissionRequest; chat: Chat }>(
+    chatUrl(id, `/requests/${encodeURIComponent(request)}`),
+    { answer },
+  );

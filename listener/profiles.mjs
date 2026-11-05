@@ -260,9 +260,11 @@ const plain = (text) => String(text).replaceAll("`", "");
 // container engine or one of the repository's granted mounts.
 export const REQUEST_KINDS = ["host", "github", "engine", "mount"];
 
-// What the operator alone can change, for the agent to say: beyond the ceiling, a request is
-// refused without asking the chat's owner (#479's decision), who couldn't approve it anyway.
-const OPERATOR = "Only Deckhand's operator can change that, in their grants folder";
+// What the agent is told of a request beyond the ceiling: refused without asking the chat's
+// owner (#479's decision), who couldn't approve it anyway. Only the operator's grants folder
+// (and the policies, the repository's config) widen it.
+const BEYOND =
+  "That is beyond what this chat may get: only Deckhand's operator widens it, in their grants folder";
 
 // A request `{ kind, value }` of a chat's run, against `ceiling` (ceilingOf()'s, now), the chat's
 // saved `profile` (null for the default) and what its sandbox has (`live`: { hosts, mounts,
@@ -336,7 +338,7 @@ const given = (why) => ({ verdict: "given", message: `Granted: ${why}.` });
 // `key`: the grants file's key that would give it, said to the agent.
 const beyond = (why, key = null) => ({
   verdict: "beyond",
-  message: `Refused: ${why}. ${OPERATOR}${key ? ` (\`${key}\`)` : ""}: tell the user if it matters, and carry on without it.`,
+  message: `Refused: ${why}. ${BEYOND}${key ? ` (\`${key}\`)` : ""}. Don't ask again: tell the user if it matters, and carry on without it.`,
 });
 
 // `name` and the capabilities it needs, that the ceiling allows, in the catalogue's order.

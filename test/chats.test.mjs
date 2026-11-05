@@ -8,6 +8,7 @@ import { test } from "node:test";
 import { runInput } from "../listener/capabilities.mjs";
 import { chatKey, createChats } from "../listener/chats.mjs";
 import { DEFAULT_PROFILE } from "../listener/profiles.mjs";
+import { createRequests } from "../listener/requests.mjs";
 import { createRepoCheck } from "../listener/repo-check.mjs";
 import { parseRepoConfig } from "../listener/repo-config.mjs";
 import { summaryKey } from "../listener/runlog.mjs";
@@ -784,4 +785,115 @@ test("GET /api/chats: the limit, the repositories New chat offers and the agents
   );
   ctx.tasks.get(chatKey(chat)).pending.splice(0);
   assert.deepEqual((await chats.listed("alice")).chats[0].pending, []);
+});
+
+// --- Its agent's requests for more permissions (#479) ----------------------------------------
+
+test("requests: decided against the chat's ceiling, approved into its sandbox and profile through the API, refused beyond it", async (t) => {
+  const { chats, ctx, clock, store } = await setup(t, {
+    env: { GRANTS_DIR: grantsFolder(t, "hosts: [registry.npmjs.org, pypi.org]\n") },
+    policies: capabilityPolicies(),
+    yaml: "setup: npm ci\n",
+  });
+  const told = [];
+  ctx.brokerService = { answerPermission: async (run, id, a) => told.push({ id, ...a }) };
+  ctx.broker = { runOf: () => null };
+  ctx.requests = createRequests(ctx, {
+    now: clock.now,
+    setTimer: clock.setTimer,
+    clearTimer: clock.clearTimer,
+  });
+  const chat = await chats.create("alice", { repo: "org/repo", message: "hi" });
+  await chats.setPermissions("alice", chat.id, { profile: { hosts: [] } });
+  const task = ctx.tasks.get(chatKey(chat));
+  const saved = [];
+  ctx.saveLive = (t) => saved.push(t.name);
+  Object.assign(task, { running: true });
+  task.live = {
+    id: "run-1",
+    key: chatKey(chat),
+    open: true,
+    hosts: ["github.com"],
+    trusted: ["github.com"],
+    mounts: [],
+    engine: false,
+  };
+  const ask = (n, kind, value) =>
+    ctx.requests.received({ run: "run-1", id: `${n}`.repeat(16), kind, value, reason: "npm ci" });
+  const settled = () => new Promise((resolve) => setImmediate(resolve));
+
+  // Beyond the ceiling, each kind: refused, nobody asked.
+  await ask(1, "host", "evil.example");
+  await ask(2, "engine", "");
+  await ask(3, "mount", "/srv/data");
+  await ask(4, "github", "comment");
+  await settled();
+  assert.deepEqual(
+    told.map((a) => a.state),
+    ["refused", "refused", "refused", "refused"],
+  );
+  assert.match(told[0].message, /evil\.example isn't among the hosts the operator grants/);
+  assert.match(told[1].message, /the container engine: /);
+  assert.match(told[2].message, /\/srv\/data isn't among the repository's granted mounts/);
+  assert.match(told[3].message, /GitHub comment: chats only read GitHub for now/);
+
+  // Within it: shown in the chat, for its owner alone.
+  await ask(5, "host", "pypi.org");
+  const [request] = (await chats.list("alice"))[0].requests;
+  assert.equal(request.what, "pypi.org");
+  assert.equal(request.live, true);
+  const { url } = await serve(t, (req, res) => {
+    if (!chats.handle(req, res, req.headers["x-user"] ?? null)) res.writeHead(404).end();
+  });
+  const answer = (user, body) =>
+    fetch(`${url}/api/chats/${chat.id}/requests/${request.id}`, {
+      method: "POST",
+      headers: { "x-user": user, origin: url, "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  assert.equal((await answer("bob", { answer: "chat" })).status, 404);
+  assert.equal((await answer("alice", { answer: "always" })).status, 400);
+  const res = await answer("alice", { answer: "chat" });
+  assert.equal(res.status, 200);
+  const body = await res.json();
+  assert.equal(body.request.state, "granted");
+  assert.deepEqual(body.chat.requests, []);
+  // The egress proxy reaches it at once; the profile keeps it, in the store too.
+  assert.deepEqual(task.live.hosts, ["github.com", "pypi.org"]);
+  assert.deepEqual(task.live.trusted, ["github.com", "pypi.org"]);
+  assert.deepEqual(saved, [task.name]);
+  assert.deepEqual((await store.get("chats"))[chat.id].profile.hosts, ["pypi.org"]);
+  await settled();
+  assert.equal(
+    told.at(-1).message,
+    "Granted by alice for this chat: pypi.org. It applies to this sandbox now: no restart needed.",
+  );
+  // Now the sandbox has it: granted at once.
+  await ask(6, "host", "pypi.org");
+  await settled();
+  assert.match(told.at(-1).message, /^Granted: pypi\.org is reachable from this sandbox already/);
+  ctx.requests.stop();
+});
+
+test("requests: what is approved once for a start goes to the next one alone (startProfile())", async (t) => {
+  const { chats, ctx } = await setup(t, {
+    env: { GRANTS_DIR: grantsFolder(t, "hosts: []\n") },
+    policies: capabilityPolicies(),
+    yaml: "setup: npm ci\n",
+  });
+  const chat = await chats.create("alice", { repo: "org/repo", message: "hi" });
+  await chats.setPermissions("alice", chat.id, { profile: { capabilities: ["pull"] } });
+  const task = ctx.tasks.get(chatKey(chat));
+  task.live = { id: "run-1", hosts: [], mounts: [], engine: false };
+  const decided = await chats.decideRequest(task, { kind: "engine", value: "" });
+  assert.equal(decided.verdict, "beyond");
+  const record = { kind: "setup", what: "setup", adds: { capabilities: ["setup"] }, live: false };
+  const applies = await chats.grantRequest(task, record, "once", decided.ceiling);
+  assert.match(applies, /^It applies when this chat's sandbox starts again/);
+  // Its saved profile unchanged; the next start gets it once.
+  assert.deepEqual(chats.profileOf(task).capabilities, ["pull"]);
+  assert.deepEqual(chats.startProfile(task).capabilities, ["pull", "setup"]);
+  assert.deepEqual(chats.startProfile(task).capabilities, ["pull"]);
+  // Another run's task has no chat to ask.
+  assert.equal(chats.subjectOf({ kind: "issue", id: "12" }), null);
 });

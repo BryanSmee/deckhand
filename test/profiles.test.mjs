@@ -9,6 +9,8 @@ import {
   DEFAULT_PROFILE,
   leftOut,
   narrowProfile,
+  requestVerdict,
+  widened,
 } from "../listener/profiles.mjs";
 
 // The outcome of a `chat` run whose policies allow `names` (the operator's layer), with the
@@ -197,4 +199,107 @@ test("a capability whose need is never on in a chat isn't offered: `image:branch
     /^`image:branch`: it needs push/,
   );
   assert.ok(!narrowProfile(null, c).capabilities.includes("image:branch"));
+});
+
+// --- Requests for more (#479) ----------------------------------------------------------------
+
+// A chat's ceiling with the engine allowed (its policies, config and grant all give it).
+const withEngine = () =>
+  ceiling([...CHAT, "docker"], { setup: "npm ci", docker: true }, { ...GRANT, allowDocker: true });
+// What a sandbox started with the default profile has: the granted hosts with the mandatory ones,
+// both mounts, no engine.
+const LIVE = { hosts: ["api.anthropic.com", "github.com"], mounts: [], engine: false };
+const verdict = (request, { c = ceiling(), profile = null, live = LIVE } = {}) =>
+  requestVerdict(request, { ceiling: c, profile, live });
+
+test("a host: beyond the grant refused for the operator to change; within it asked, or granted when the sandbox or the profile has it", () => {
+  const beyond = verdict({ kind: "host", value: "evil.example" });
+  assert.equal(beyond.verdict, "beyond");
+  assert.match(beyond.message, /^Refused: evil\.example isn't among the hosts the operator grants/);
+  assert.match(
+    beyond.message,
+    /only Deckhand's operator widens it, in their grants folder \(`hosts`\)\. Don't ask again/,
+  );
+  // Granted, but turned off in the profile: asked; an approval adds the grant's entry.
+  const narrowed = { ...DEFAULT_PROFILE, hosts: [] };
+  assert.deepEqual(verdict({ kind: "host", value: "Registry.npmjs.org." }, { profile: narrowed }), {
+    verdict: "ask",
+    what: "registry.npmjs.org",
+    adds: { hosts: ["registry.npmjs.org"] },
+    live: true,
+  });
+  // Through a wildcard of the grant: its entry is what an approval adds, and the card says so.
+  const wild = verdict({ kind: "host", value: "cdn.example.org" }, { profile: narrowed });
+  assert.equal(wild.what, "cdn.example.org (granted as *.example.org)");
+  assert.deepEqual(wild.adds, { hosts: ["*.example.org"] });
+  // The profile has it, the sandbox not (changed since it started): no question.
+  assert.equal(verdict({ kind: "host", value: "registry.npmjs.org" }).verdict, "saved");
+  // The sandbox reaches it already (a mandatory host, or the open internet).
+  assert.equal(verdict({ kind: "host", value: "github.com" }).verdict, "given");
+  const open = { ...LIVE, hosts: ["*"] };
+  assert.equal(verdict({ kind: "host", value: "evil.example" }, { live: open }).verdict, "given");
+  // Not a host: refused, nothing asked.
+  for (const value of ["", "*", "a b", "https://x.example/"]) {
+    assert.equal(verdict({ kind: "host", value }).verdict, "invalid", value);
+  }
+});
+
+test("GitHub: reading is given, a write beyond what a chat gets is refused", () => {
+  assert.equal(verdict({ kind: "github", value: "read" }).verdict, "given");
+  const push = verdict({ kind: "github", value: "push" });
+  assert.equal(push.verdict, "beyond");
+  assert.match(push.message, /^Refused: GitHub push: chats only read GitHub for now/);
+  assert.equal(verdict({ kind: "github", value: "admin" }).verdict, "invalid");
+});
+
+test("the engine: refused without the policies' and the operator's grant, asked within it, for the next start", () => {
+  const without = verdict({ kind: "engine", value: "" });
+  assert.equal(without.verdict, "beyond");
+  assert.match(
+    without.message,
+    /^Refused: the container engine: no allow rule of the operator's policies gives it\./,
+  );
+  const c = withEngine();
+  const off = { ...DEFAULT_PROFILE, capabilities: ["pull", "setup"] };
+  assert.deepEqual(verdict({ kind: "engine" }, { c, profile: off }), {
+    verdict: "ask",
+    what: "a container engine",
+    adds: { capabilities: ["pull", "docker"] },
+    live: false,
+  });
+  assert.equal(verdict({ kind: "engine" }, { c }).verdict, "saved");
+  assert.equal(
+    verdict({ kind: "engine" }, { c, live: { ...LIVE, engine: true } }).verdict,
+    "given",
+  );
+});
+
+test("a mount: only the repository's granted ones, read-only, for the next start", () => {
+  const beyond = verdict({ kind: "mount", value: "/etc" });
+  assert.equal(beyond.verdict, "beyond");
+  assert.match(beyond.message, /\(`mounts`\)/);
+  const none = { ...DEFAULT_PROFILE, mounts: [] };
+  assert.deepEqual(verdict({ kind: "mount", value: "/srv/rw/" }, { profile: none }), {
+    verdict: "ask",
+    what: "/srv/rw (read-only)",
+    adds: { mounts: [{ target: "/srv/rw", readOnly: true }] },
+    live: false,
+  });
+  assert.equal(verdict({ kind: "mount", value: "/srv/ro" }).verdict, "saved");
+  const mounted = { ...LIVE, mounts: ["/srv/ro"] };
+  assert.equal(verdict({ kind: "mount", value: "/srv/ro" }, { live: mounted }).verdict, "given");
+  assert.equal(verdict({ kind: "mount", value: "srv" }).verdict, "invalid");
+  assert.equal(verdict({ kind: "root", value: "/" }).verdict, "invalid");
+});
+
+test("widened(): an approval grows a list, `everything` stays null, and the result holds to the ceiling", () => {
+  const c = withEngine();
+  const profile = { ...DEFAULT_PROFILE, capabilities: ["pull"], hosts: [], mounts: null };
+  const grown = widened(profile, { capabilities: ["pull", "docker"], hosts: ["pypi.org"] });
+  assert.deepEqual(grown.capabilities, ["pull", "docker"]);
+  assert.deepEqual(grown.hosts, ["pypi.org"]);
+  assert.equal(widened(profile, { mounts: [{ target: "/srv/ro", readOnly: true }] }).mounts, null);
+  assert.deepEqual(widened(null, { hosts: ["x"] }), DEFAULT_PROFILE);
+  const within = checkProfile(widened(profile, { capabilities: ["pull", "docker"] }), c);
+  assert.deepEqual(within.errors, []);
 });

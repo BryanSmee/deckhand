@@ -1,0 +1,70 @@
+/* A request for more permissions, waiting for the chat's owner: a card among the turns, set
+   apart by the warning tone, the agent's reason as plain text. */
+.card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 14px;
+  border: 1px solid var(--warn);
+  border-left-width: 3px;
+  border-radius: 10px;
+  background: var(--warn-soft);
+}
+
+.card p {
+  margin: 0;
+}
+
+.title {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 20px;
+  color: var(--text);
+}
+
+.title > svg {
+  flex: none;
+  margin-top: 2px;
+  color: var(--warn);
+}
+
+.what {
+  font-family: var(--mono);
+  font-size: 13px;
+  font-weight: 500;
+  overflow-wrap: anywhere;
+}
+
+/* The agent's words: quoted, never markup. */
+.reason {
+  padding-left: 10px;
+  border-left: 2px solid var(--border-strong);
+  color: var(--text-2);
+  font-size: 13.5px;
+  line-height: 20px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.meta {
+  color: var(--text-3);
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.failed {
+  padding: 6px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--err-bg);
+  color: var(--err);
+  font-size: 13px;
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
