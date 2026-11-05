@@ -194,7 +194,7 @@ const frozen = ({ actions, denied, files, error }) =>
 // How long access()'s answers are kept for the same layers, login and repository (as grants()'s:
 // GRANTS_MS bounds a rule reading the time), and for how many at most.
 export const ACCESS_MS = 60_000;
-const MAX_ACCESS = 5000;
+export const MAX_ACCESS = 5000;
 
 // `deny_merge`, `allow_merge` or `merge` → "merge".
 export const decisionOf = (rule) => rule.replace(/^(?:allow|deny)_/, "");
@@ -421,7 +421,8 @@ export function createPolicies({
   // "org/repo" (lower case) → its default branch → { at, listed }: its POLICY_DIR there, as last
   // listed (null: none), so a repo without policies costs no call per decision. By branch: a
   // default branch just moved is asked on both for a while (the dashboard's filters on the
-  // repos as last listed, #783), and neither should drop the other's.
+  // repos as last listed, #783), and neither should drop the other's. MAX_ACCESS repos at most,
+  // the one listed longest ago dropped first: a repo never asked again would stay for good.
   const listings = new Map();
   // Deckhand's own policies as the service last gave them (name → text): what
   // onlyBuiltInAllowing() knows them by, and the defaults of each decision's operator layer.
@@ -509,6 +510,9 @@ export function createPolicies({
       const refs = listings.get(key) ?? new Map();
       // The branches too old even for `stale` go first, so a repo keeps a few at most.
       for (const [r, entry] of refs) if (now() - entry.at > STALE_LISTING_MS) refs.delete(r);
+      // Moved last, so that the oldest listing is first to go.
+      listings.delete(key);
+      if (listings.size >= MAX_ACCESS) listings.delete(listings.keys().next().value);
       listings.set(key, refs.set(ref, { at: now(), listed }));
     }
     return listed;
