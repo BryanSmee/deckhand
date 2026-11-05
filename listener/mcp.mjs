@@ -17,7 +17,7 @@ import { StringDecoder } from "node:string_decoder";
 
 import { Refused, readBody, send } from "../lib/http.mjs";
 import { agentFor } from "./agents/index.mjs";
-import { STATES } from "./board.mjs";
+import { STATES, byPlace, placeOf } from "./board.mjs";
 import { parseKey } from "./events.mjs";
 import { AGENTS } from "./agents/index.mjs";
 import { CLAIM_WAIT_MS, LEASE_MS, MACHINE_PROTOCOL, MACHINE_PROTOCOLS } from "./claims.mjs";
@@ -153,14 +153,13 @@ const TOOL_SPECS = [
   {
     name: "list_tasks",
     title: "List tasks",
-    description: `The dashboard's tasks, a page at a time: each issue or pull request Deckhand worked on or has queued, with its state ("working", "queued", "waiting", "needs-input", "done", "error"…), how many runs it had and how its last one ended. The most recent first, the live ones on top; \`next\` is the next page's \`offset\`. list_runs gives a task's runs and their summaries.`,
+    description: `The dashboard's tasks, a page at a time: each issue or pull request Deckhand worked on or has queued, with its state ("working", "queued", "waiting", "needs-input", "done", "error"…), how many runs it had and how its last one ended. The live ones on top, then the most recent first; \`next\` is the next page's \`cursor\`, which goes on after the last task this page gave even when tasks start or move meanwhile (one that moves above it shows on a new first page). list_runs gives a task's runs and their summaries.`,
     inputSchema: object({
       repo: REPO,
       state: { type: "string", enum: STATES, description: "Only the tasks in this state." },
-      offset: {
-        type: "integer",
-        minimum: 0,
-        description: "How many tasks to skip: an earlier page's `next`. None: the first page.",
+      cursor: {
+        type: "string",
+        description: "Where the page starts: an earlier page's `next`. None: the first page.",
       },
       limit: {
         type: "integer",
@@ -560,7 +559,8 @@ export function createMcp({ source, version = "dev", now = Date.now, log = () =>
     if (state !== null && !STATES.includes(state)) {
       throw new BadArguments(`\`state\` is one of ${STATES.join(", ")}.`);
     }
-    const offset = optionalInteger(args, "offset", 0, Number.MAX_SAFE_INTEGER) ?? 0;
+    const cursor = optionalString(args, "cursor");
+    const after = cursor === null ? null : placeFrom(cursor);
     const limit = optionalInteger(args, "limit", 1, MAX_TASKS_PAGE) ?? TASKS_PAGE;
     const said = await source.state(user);
     // How many runs each task had, all of them (list_runs's), not the board's newest.
@@ -571,11 +571,14 @@ export function createMcp({ source, version = "dev", now = Date.now, log = () =>
     const shown = said.tasks
       .filter((t) => repo === null || taskId(t.repo) === taskId(repo))
       .filter((t) => state === null || t.state === state);
-    const tasks = shown
-      .slice(offset, offset + limit)
-      .map((t) => taskView(t, counts.get(taskId(t.key)) ?? t.runs.length));
+    // The tasks after the cursor's place rather than after a count of them, so that a task
+    // starting, or moving to the top, between two pages doesn't shift the next one (#906).
+    const start = after ? shown.findIndex((t) => byPlace(placeOf(t), after) > 0) : 0;
+    const offset = start === -1 ? shown.length : start;
+    const page = shown.slice(offset, offset + limit);
+    const tasks = page.map((t) => taskView(t, counts.get(taskId(t.key)) ?? t.runs.length));
     const total = shown.length;
-    const next = offset + tasks.length < total ? offset + tasks.length : null;
+    const next = offset + page.length < total ? cursorOf(placeOf(page.at(-1))) : null;
     const lines = tasks.map((t) => {
       const last = t.lastRun ? `, last run ${t.lastRun.status}` : "";
       return (
@@ -583,11 +586,37 @@ export function createMcp({ source, version = "dev", now = Date.now, log = () =>
       );
     });
     const range = tasks.length ? `, ${offset + 1}–${offset + tasks.length} here` : "";
-    const more = next === null ? "" : ` More: offset=${next}.`;
+    const more = next === null ? "" : ` More: cursor=${next}.`;
     return result({ tasks, total, offset, next }, [
       `${count(total, "task")}${range}.${more}`,
       ...lines,
     ]);
+  }
+
+  // list_tasks's cursor: the place (board.mjs placeOf()) of a page's last task, as base64url
+  // JSON, which the client hands back as it was.
+  function cursorOf({ live, updatedAt, key }) {
+    return Buffer.from(JSON.stringify([live, updatedAt, key])).toString("base64url");
+  }
+
+  function placeFrom(cursor) {
+    let place;
+    try {
+      place = JSON.parse(Buffer.from(cursor, "base64url").toString());
+    } catch {
+      place = null;
+    }
+    const [live, updatedAt, key] = Array.isArray(place) ? place : [];
+    if (
+      !Array.isArray(place) ||
+      place.length !== 3 ||
+      typeof live !== "boolean" ||
+      !Number.isFinite(updatedAt) ||
+      typeof key !== "string"
+    ) {
+      throw new BadArguments("`cursor` is an earlier page's `next`, as it gave it.");
+    }
+    return { live, updatedAt, key };
   }
 
   // Every run of the task the orchestrator keeps, not only the board's newest (board.mjs
