@@ -57,7 +57,7 @@ import { sendJson } from "../lib/http.mjs";
 import { createLogger, REQUEST_HEADER } from "../lib/log.mjs";
 import { metricsPort, startMetrics } from "../lib/metrics.mjs";
 import { ENGINE_PROXY_PORT, SANDBOX_URLS } from "../lib/services.mjs";
-import { untilReached } from "./wait.mjs";
+import { AskAgain, untilReached } from "./wait.mjs";
 
 // Where they were first: the tests import them from here.
 export { blockedAddress, v6Bytes } from "./addresses.mjs";
@@ -95,7 +95,8 @@ export function target(authority) {
 
 // Asks the orchestrator: { allowed, private, cache, decrypt, relay, source, reason }. Fails
 // closed: no `decrypt`, a tunnel; no answer, refused (`reason` "policy_error"). An orchestrator
-// restarting is waited for (wait.mjs; `wait`: its clock, in the tests), unless the client left
+// restarting is waited for (wait.mjs; `wait`: its clock, in the tests), and so is one that
+// answers 503 (it can't tell yet who asks: the runner away, #936), unless the client left
 // (`gone()`). `forward`: the host is a service's name, whose plain HTTP the proxy forwards
 // (SANDBOX_URLS): the policy allows it for the runs' sandboxes and engines only. `engine`: it
 // came in on the engines' port (ENGINE_PROXY_PORT), so it is the engine's of the run at that
@@ -110,7 +111,12 @@ export function egressPolicy(url, timeoutMs = 5000, wait = {}) {
         ...(engine && { engine: "1" }),
       });
       const res = await untilReached(
-        () => fetch(`${url}?${query}`, { signal: AbortSignal.timeout(timeoutMs) }),
+        async () => {
+          const res = await fetch(`${url}?${query}`, { signal: AbortSignal.timeout(timeoutMs) });
+          if (res.status !== 503) return res;
+          await res.body?.cancel();
+          throw new AskAgain("the egress policy can't tell yet");
+        },
         { ...wait, ...(gone && { gone }) },
       );
       if (!res.ok) return { allowed: false, reason: "policy_error" };

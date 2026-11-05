@@ -80,6 +80,14 @@ const PROVIDER_ERRORS = [
     "invalid credentials",
   ],
 ];
+// Deckhand's own refusals, which only look like a provider's (an agent shows "API Error: 403
+// Deckhand's egress proxy: …"): its egress proxy's (proxy/proxy.mjs), and the models service's
+// for the run's agent token (models/runs.mjs check()). Another credential wouldn't get past
+// them, so none is a reason to fall back (#936). The models service's word that the operator's
+// login can't be used (upstream.mjs credentialFailure()) is the provider's credential failing:
+// not among them.
+const DECKHAND_REFUSALS =
+  /Deckhand's egress proxy|Deckhand: (?:unknown or finished run|this run token is refused|this run's token only works from its own sandbox)/i;
 const API_STATUS = /\b(?:API Error|status(?: code)?)[: ]+(\d{3})\b/i;
 
 function statusReason(status) {
@@ -93,10 +101,12 @@ function statusReason(status) {
 
 // Why the provider failed a run, or null: what decides a fallback (FALLBACKS). From the
 // agent's result when it isn't ok (null: the agent gave none), then the last answer the
-// listener's endpoint got from the provider (`status`, anthropic.mjs and openai.mjs).
+// listener's endpoint got from the provider (`status`, anthropic.mjs and openai.mjs). None when
+// the result is Deckhand's own refusal (DECKHAND_REFUSALS): the provider wasn't asked.
 export function providerError(result, status = null) {
   if (result?.ok) return null;
   const text = result?.text ?? "";
+  if (DECKHAND_REFUSALS.test(text)) return null;
   const code = Number(API_STATUS.exec(text)?.[1]);
   const found = PROVIDER_ERRORS.find(([pattern]) => pattern.test(text));
   if (found) return code ? `${found[1]} (${code})` : found[1];

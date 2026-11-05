@@ -1324,7 +1324,8 @@ proxy's next questions are refused and waited for rather than cut.
 
 The egress proxy waits for the next copy meanwhile (`proxy/wait.mjs`): a connection the
 orchestrator refused (a waiting copy refuses them all), or that failed before it was made (reset
-while connecting, its name unknown while its container is gone), never reached it, so the proxy
+while connecting, its name unknown while its container is gone), never reached it, and a `503`
+(the policy can't tell yet who asks: the runner away, #936) decided nothing, so the proxy
 tries again, with a growing delay (0.25 s doubling up to 5 s), for up to 5 minutes before it
 refuses the host. With one copy of each (compose), the next orchestrator only starts once the
 previous one has exited; with two, both are on the proxy's network under the name
@@ -1463,8 +1464,11 @@ store for one node, Redis for copies on several (`STORE_URL`, docs/setup.md, The
 runs' inboxes are files of its own volume (`runner-data`'s `runs/` folder), which it copies to the
 broker service as they change (the broker serves them): two copies on several nodes need that
 folder shared. With Docker Compose, one copy runs: an update is a wait
-of the runner's calls, which the orchestrator waits for (30 minutes for a run's, 10 s, then the last
-answer, for the egress policy's questions about a sandbox's address).
+of the runner's calls, which the orchestrator waits for (30 minutes for a run's, 3 s, then the last
+answer, for the egress policy's questions about a sandbox's address and the proxy's). With no last
+answer (an orchestrator copy that took over while the runner was away), the egress policy
+answers `503` rather than "no run there", and the proxy asks again, as for an orchestrator
+restarting (#936).
 
 ### The github service
 

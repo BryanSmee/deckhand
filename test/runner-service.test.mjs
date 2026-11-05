@@ -20,7 +20,7 @@ import { keyId } from "../lib/tokens.mjs";
 import { markerName } from "../listener/runner/deployment.mjs";
 import { createDockerRunner } from "../listener/runner/docker.mjs";
 import { SANDBOX_USER } from "../listener/sandbox-spec.mjs";
-import { createRunnerClient } from "../runner/client.mjs";
+import { createRunnerClient, RunnerAway } from "../runner/client.mjs";
 import { createEvents } from "../runner/events.mjs";
 import { createLogs } from "../runner/logs.mjs";
 import { createRunnerService, ROUTES } from "../runner/service.mjs";
@@ -974,7 +974,7 @@ test("run events: an end said once, with its exit code, across the copies' looks
   );
 });
 
-test("the egress policy's questions fall back on the runner's last answer while it is away", async (t) => {
+test("the egress policy's questions fall back on the runner's last answer while it is away, and say it is away without one", async (t) => {
   const store = fileStore();
   const backend = host();
   const a = await copy(t, { store, backend });
@@ -986,7 +986,8 @@ test("the egress policy's questions fall back on the runner's last answer while 
   await a.service.stop({ graceMs: 100 });
   assert.deepEqual(await runner.locate("10.1.0.2"), at);
   assert.deepEqual(await runner.proxyAddresses({ fresh: true }), ["10.0.0.3"]);
-  assert.equal(await runner.locate("10.1.0.99"), null);
+  // An address it has no answer for: unknown, not "no sandbox there" (#936).
+  await assert.rejects(runner.locate("10.1.0.99"), RunnerAway);
   assert.equal(await runner.installing("dh-o-a-1"), null);
 });
 

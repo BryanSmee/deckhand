@@ -480,6 +480,23 @@ test("providerError: a provider's failure, from the result or the endpoint's las
     null,
   );
   assert.equal(providerError({ ok: true, text: "Done: added a rate limit." }, 429), null);
+  // Deckhand's own refusals, which read as a 403 or a 401 (#936): the provider wasn't asked.
+  const proxy =
+    "Failed to authenticate. API Error: 403 Deckhand's egress proxy: only a running sandbox reaches the models service";
+  assert.equal(providerError(failed(proxy)), null);
+  assert.equal(providerError(failed(proxy), 401), null);
+  for (const refused of [
+    "unknown or finished run",
+    "this run token is refused: expired",
+    "this run's token only works from its own sandbox",
+  ]) {
+    const text = `API Error: 401 {"type":"error","error":{"type":"authentication_error","message":"Deckhand: ${refused}"}}`;
+    assert.equal(providerError(failed(text)), null, refused);
+  }
+  // The operator's login the models service couldn't use is the provider's credential failing.
+  const login =
+    'API Error: 503 {"type":"error","error":{"type":"api_error","message":"Deckhand: the operator\'s login for Claude can\'t be used: see the models service\'s log"}}';
+  assert.equal(providerError(failed(login), 401), "server error (503)");
   // The Antigravity CLI's eligibility check: a refused login is, an unreachable avatar isn't.
   const eligibility = "Eligibility check failed: ";
   assert.equal(
