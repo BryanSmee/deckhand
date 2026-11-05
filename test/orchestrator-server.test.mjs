@@ -4177,13 +4177,37 @@ allow_capabilities contains "read:pulls"
     assert.equal((await get("/api/runs/org-repo-pr-3-1000/stream", session)).status, 404);
   });
 
-  test("MCP (#482): a client signed in through edge lists the tasks and reads a run's log", async (t) => {
-    const { port } = await listen(t, {}, (dir, github) => {
-      const meta = { type: "listener", key: "org/repo#pr-3", repo: "org/repo", startedAt: 1000 };
-      const result = { type: "result", result: "## Fixed\n\nThe typo.", duration_ms: 6000 };
-      pastRun(dir, "org-repo-pr-3-1000", [meta, result]);
-      return { GITHUB_URL: github.url };
-    });
+  test("MCP (#482, #480): a client signed in through edge lists the repos, reads a log, reruns a failed run", async (t) => {
+    const issue = JSON.stringify({ number: 12, title: "Fix the build", state: "open" });
+    const repo = { full_name: "org/repo", html_url: "https://github.com/org/repo" };
+    const installed = JSON.stringify({ repositories: [repo] });
+    const { dir, github, port } = await listen(
+      t,
+      { "issue:12": issue, installed },
+      (dir, github) => {
+        const meta = { type: "listener", key: "org/repo#pr-3", repo: "org/repo", startedAt: 1000 };
+        const result = { type: "result", result: "## Fixed\n\nThe typo.", duration_ms: 6000 };
+        pastRun(dir, "org-repo-pr-3-1000", [meta, result]);
+        // Issue #12's work run, which failed.
+        const items = [{ text: "@deckhand fix it" }];
+        const failed = {
+          ...meta,
+          key: "org/repo#12",
+          kind: "issue",
+          taskMode: "work",
+          items,
+          startedAt: 2000,
+        };
+        const error = {
+          type: "result",
+          is_error: true,
+          result: "The tests fail.",
+          duration_ms: 60,
+        };
+        pastRun(dir, "org-repo-12-2000", [failed, error]);
+        return { GITHUB_URL: github.url };
+      },
+    );
     const base = `http://127.0.0.1:${port}`;
     const get = (path, cookie) =>
       fetch(base + path, { redirect: "manual", headers: cookie ? { cookie } : {} });
@@ -4193,7 +4217,18 @@ allow_capabilities contains "read:pulls"
     // Without a token: where to sign in.
     const none = await post("/mcp", "{}");
     assert.equal(none.status, 401);
-    assert.match(none.headers.get("www-authenticate"), /resource_metadata=/);
+    const metadata = /resource_metadata="([^"]+)"/.exec(none.headers.get("www-authenticate"))[1];
+    // The client's discovery, as the MCP authorization spec has it: the resource's metadata
+    // names its authorization server, whose own names its endpoints. They are the public URL's;
+    // the test reaches them at edge's port.
+    const local = (url) => new URL(url).pathname;
+    const protectedResource = await (await get(local(metadata))).json();
+    const { resource } = protectedResource;
+    assert.equal(resource, "https://hooks.example.com/mcp");
+    const [issuer] = protectedResource.authorization_servers;
+    const server = await (
+      await get(`/.well-known/oauth-authorization-server${local(issuer).replace(/\/$/, "")}`)
+    ).json();
     // alice signs in with GitHub, and allows a client, as `claude mcp add` gets her to.
     const login = await get("/auth/login");
     const to = new URL(login.headers.get("location"));
@@ -4206,7 +4241,7 @@ allow_capabilities contains "read:pulls"
     const redirect = "http://127.0.0.1:9/cb";
     const verifier = "v".repeat(50);
     const registered = await post(
-      "/oauth/register",
+      local(server.registration_endpoint),
       JSON.stringify({ client_name: "Claude Code", redirect_uris: [redirect] }),
       { "content-type": "application/json" },
     );
@@ -4217,11 +4252,14 @@ allow_capabilities contains "read:pulls"
       redirect_uri: redirect,
       code_challenge: createHash("sha256").update(verifier).digest("base64url"),
       code_challenge_method: "S256",
+      resource,
     });
-    const page = await (await get(`/oauth/authorize?${query}`, session)).text();
+    const page = await (
+      await get(`${local(server.authorization_endpoint)}?${query}`, session)
+    ).text();
     const request = /name="request" value="([^"]+)"/.exec(page)[1];
     const allowed = await post(
-      "/oauth/authorize",
+      local(server.authorization_endpoint),
       new URLSearchParams({ request, decision: "allow" }).toString(),
       { ...form, cookie: session, origin: "https://hooks.example.com" },
     );
@@ -4232,8 +4270,10 @@ allow_capabilities contains "read:pulls"
       client_id,
       redirect_uri: redirect,
       code_verifier: verifier,
+      resource,
     });
-    const { access_token } = await (await post("/oauth/token", exchange.toString(), form)).json();
+    const token = await post(local(server.token_endpoint), exchange.toString(), form);
+    const { access_token } = await token.json();
     let id = 0;
     const rpc = async (method, params) => {
       const res = await post("/mcp", JSON.stringify({ jsonrpc: "2.0", id: ++id, method, params }), {
@@ -4250,7 +4290,21 @@ allow_capabilities contains "read:pulls"
     // The read tools and the write ones (#483): a client gets both scopes by default.
     assert.equal(tools.length, 7);
     const call = (name, args) => rpc("tools/call", { name, arguments: args });
-    const tasks = await call("list_tasks", {});
+    const repos = await call("list_repos", {});
+    assert.deepEqual(
+      repos.structuredContent.repos.map((r) => r.repo),
+      ["org/repo"],
+    );
+    // The failed task, as the client sees it before it reruns it.
+    const listed = await call("list_tasks", {});
+    assert.deepEqual(
+      listed.structuredContent.tasks.map((task) => [task.key, task.state, !!task.rerunnable]),
+      [
+        ["org/repo#12", "error", true],
+        ["org/repo#pr-3", "done", false],
+      ],
+    );
+    const tasks = await call("list_tasks", { state: "done" });
     assert.deepEqual(
       tasks.structuredContent.tasks.map((task) => [task.key, task.state]),
       [["org/repo#pr-3", "done"]],
@@ -4267,6 +4321,16 @@ allow_capabilities contains "read:pulls"
     const rerun = await call("rerun", { runId: "nope" });
     assert.equal(rerun.isError, true);
     assert.equal(rerun.content[0].text, "No run nope among those you see.");
+    // The failed run again, as the dashboard's Rerun: the App's comment, then the run.
+    const again = await call("rerun", { runId: "org-repo-12-2000" });
+    assert.equal(again.isError, undefined, again.content[0].text);
+    assert.equal(again.content[0].text, "Rerun of #12 queued.");
+    const posted = await github.waitFor(
+      (r) => r.method === "POST" && r.path === "/repos/org/repo/issues/12/comments",
+    );
+    assert.match(JSON.parse(posted.body).body, /^Rerun from the dashboard by @alice.*failed\./);
+    await until(() => exists(join(dir, "run-env")), "#12's rerun");
+    assert.match(readFileSync(join(dir, "run-env"), "utf8"), /^TASK_ISSUE=12$/m);
   });
 
   test("access (#731): a login with no action sees nothing, starts nothing, its routes 404 and 403", async (t) => {
