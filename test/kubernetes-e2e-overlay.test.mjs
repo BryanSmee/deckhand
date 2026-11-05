@@ -4,24 +4,17 @@
 // skipped by kustomize without a word). Needs kustomize on the PATH, which CI's kubernetes job
 // installs and where a skip fails the job; elsewhere these tests skip.
 import assert from "node:assert/strict";
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
-import { parseYaml } from "../lib/yaml.mjs";
+import { documents, onPath } from "./helpers.mjs";
 
 const repo = join(import.meta.dirname, "..");
 const overlay = join(repo, "deploy", "kubernetes-e2e");
-const skip =
-  spawnSync("kustomize", ["version"], { stdio: "ignore" }).error && "no kustomize on the PATH";
+const skip = !onPath("kustomize") && "no kustomize on the PATH";
 
-function render() {
-  const out = execFileSync("kustomize", ["build", overlay]).toString();
-  return out
-    .split(/^---$/m)
-    .map((part) => parseYaml(part))
-    .filter(Boolean);
-}
+const render = () => documents(execFileSync("kustomize", ["build", overlay]).toString());
 
 // run.sh's guard: the namespaces and the one cluster-scoped binding it checks before it touches
 // them, and deletes at the end.

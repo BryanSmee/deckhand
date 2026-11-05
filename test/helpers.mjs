@@ -2,7 +2,7 @@
 // their test, a config, a fake GitHub's fetch. `node --test` loads it as a file of its own too
 // (everything under test/ matches its patterns), where it finds no test.
 import assert from "node:assert/strict";
-import { execFileSync, spawn } from "node:child_process";
+import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { createHash, generateKeyPairSync, randomUUID } from "node:crypto";
 import {
   existsSync,
@@ -45,22 +45,28 @@ import { createPolicyService, ROUTES } from "../policy-service/service.mjs";
 import { openLog } from "../listener/runlog.mjs";
 import { overlaps } from "../lib/subnets.mjs";
 import { signer } from "../lib/s3.mjs";
+import { parseYaml } from "../lib/yaml.mjs";
 
 // Whether the real `opa` is on the PATH (the listener's image has it): the tests that evaluate
 // Deckhand's policies as written skip without it, the fakes cover the listener's side. Asked
 // once, by those tests only: the other files importing this one don't start a process for it.
 let opaFound;
 export function hasOpa() {
-  if (opaFound === undefined) {
-    try {
-      execFileSync("opa", ["version"], { stdio: "ignore" });
-      opaFound = true;
-    } catch {
-      opaFound = false;
-    }
-  }
+  opaFound ??= onPath("opa");
   return opaFound;
 }
+
+// Whether `tool` runs from the PATH (`<tool> version`): the tests that need a binary CI installs
+// (kustomize, helm) skip without it.
+export const onPath = (tool) => !spawnSync(tool, ["version"], { stdio: "ignore" }).error;
+
+// A multi-document YAML text's documents (`kustomize build`'s, a manifest's), as lib/yaml.mjs
+// reads them, the empty ones left out.
+export const documents = (text) =>
+  text
+    .split(/^---$/m)
+    .map((part) => parseYaml(part))
+    .filter(Boolean);
 
 // Listens on 127.0.0.1, on a port the OS picks; resolves to that port.
 export async function listening(server) {
