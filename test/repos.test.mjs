@@ -329,7 +329,11 @@ test("cached: a page load doesn't read every config again; deliveries refresh it
 
 test("infoOf: what GitHub said of a repo when last listed, for the access filters (#783)", async () => {
   const { list } = setup({
-    first: [info("org/app", { default_branch: "trunk", private: false }), info("org/lib")],
+    first: [
+      info("org/app", { default_branch: "trunk", private: false }),
+      info("org/lib"),
+      info("org/odd", { default_branch: null }),
+    ],
   });
   assert.equal(list.infoOf("org/app"), null);
   await list.list();
@@ -340,6 +344,8 @@ test("infoOf: what GitHub said of a repo when last listed, for the access filter
   });
   assert.equal(list.infoOf("org/lib").private, true);
   assert.equal(list.infoOf("org/other"), null);
+  // GitHub gave no default branch: none, never guessed (access() reads it then).
+  assert.equal(list.infoOf("org/odd"), null);
   assert.equal(list.infoOf(null), null);
 });
 

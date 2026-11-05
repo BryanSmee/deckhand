@@ -150,13 +150,17 @@ export function createPermissions({ policies = null, usersOf = () => null, infoO
 
   // The repositories among `repos` (names) where `login` may do `action` (null: visible()), by
   // their names in lower case: one decision each, asked together, for a filter that can't wait
-  // (http.mjs state()), each repository as last listed (answerOf()'s `listed`).
-  async function which(login, repos, action = null) {
+  // (http.mjs state()). `listed`: each repository as last listed (answerOf()'s), for a filter
+  // over what the dashboard shows; never for a check that guards something on its own (a log
+  // stream), which reads it as a single decision does.
+  async function which(login, repos, action = null, { listed = false } = {}) {
     const names = new Map();
     for (const repo of repos) if (repo) names.set(repo.toLowerCase(), repo);
     const said = await Promise.all(
       [...names].map(async ([key, repo]) => {
-        const ok = action ? await can(login, repo, action, true) : await visible(login, repo, true);
+        const ok = action
+          ? await can(login, repo, action, listed)
+          : await visible(login, repo, listed);
         return ok && key;
       }),
     );

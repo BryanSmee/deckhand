@@ -434,6 +434,8 @@ export function createRepoApi({
       (await permissions.which(
         user,
         all.map((r) => r.repo),
+        null,
+        { listed: true },
       ));
     const rows = seen ? all.filter((r) => seen.has(r.repo.toLowerCase())) : all;
     const configured = rows.filter((r) => r.status === "configured").map((r) => r.repo);

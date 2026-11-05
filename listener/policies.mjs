@@ -375,8 +375,10 @@ export function createPolicies({
   // A file's text by its blob sha: the same policy is fetched once.
   const blobs = new Map();
   const MAX_BLOBS = 500;
-  // "org/repo" (lower case) → { ref, at, listed }: its default branch's POLICY_DIR, as last
-  // listed (null: none), so a repo without policies costs no call per decision.
+  // "org/repo" (lower case) → its default branch → { at, listed }: its POLICY_DIR there, as last
+  // listed (null: none), so a repo without policies costs no call per decision. By branch: a
+  // default branch just moved is asked on both for a while (the dashboard's filters on the
+  // repos as last listed, #783), and neither should drop the other's.
   const listings = new Map();
   // Deckhand's own policies as the service last gave them (name → text): what
   // onlyBuiltInAllowing() knows them by, and the defaults of each decision's operator layer.
@@ -445,8 +447,8 @@ export function createPolicies({
   // doesn't refuse the comments of a repo that had no policy.
   async function listing(repo, ref, cached, stale = false) {
     const key = repo.toLowerCase();
-    const kept = listings.get(key);
-    if (cached && kept?.ref === ref && now() - kept.at < LISTING_MS) return kept.listed;
+    const kept = listings.get(key)?.get(ref);
+    if (cached && kept && now() - kept.at < LISTING_MS) return kept.listed;
     let listed;
     try {
       listed = await getJson(
@@ -456,11 +458,16 @@ export function createPolicies({
         [404],
       );
     } catch (error) {
-      if (!stale || kept?.ref !== ref || now() - kept.at > STALE_LISTING_MS) throw error;
+      if (!stale || !kept || now() - kept.at > STALE_LISTING_MS) throw error;
       log(`${repo}: listing its policies: ${error.message ?? error}; the last listing kept`);
       return kept.listed;
     }
-    if (cached) listings.set(key, { ref, at: now(), listed });
+    if (cached) {
+      const refs = listings.get(key) ?? new Map();
+      // The branches too old even for `stale` go first, so a repo keeps a few at most.
+      for (const [r, entry] of refs) if (now() - entry.at > STALE_LISTING_MS) refs.delete(r);
+      listings.set(key, refs.set(ref, { at: now(), listed }));
+    }
     return listed;
   }
 
