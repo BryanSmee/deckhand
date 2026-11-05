@@ -73,6 +73,8 @@ interface Common {
   chats?: Chats | null;
   // The services' health (api/health): a dot by Deckhand's name when one is down or starting.
   health?: Health | null;
+  // On Chats, the open chat's repository (App.tsx): the title shown, as on its own pages.
+  chatRepo?: string | null;
 }
 
 interface SidebarProps extends Common {
@@ -402,6 +404,8 @@ export function PageHeader({
   needs = 0,
   state = null,
   chats = null,
+  chatRepo = null,
+  origin = null,
   children,
 }: {
   route: Route;
@@ -410,12 +414,17 @@ export function PageHeader({
   state?: State | null;
   // api/chats: Chats among the views, with how many the user keeps of the most they may.
   chats?: Chats | null;
+  // On Chats: the open chat's repository, the title and views'; else the repository shown
+  // before Chats (null: All), where the list's Tasks go back.
+  chatRepo?: string | null;
+  origin?: string | null;
   children?: ComponentChildren;
 }) {
   const can = useCan();
   const settings = route.page === "settings";
   const chatting = route.page === "chats";
-  const repo = settings || chatting ? null : route.repo;
+  const repo = settings ? null : chatting ? chatRepo : route.repo;
+  const back = chatting && !repo ? origin : null;
   // The board is one repository's: All has the Overview instead.
   const views: Segment<"overview" | "tasks" | "board" | "chats">[] = repo
     ? [
@@ -446,7 +455,7 @@ export function PageHeader({
           value: "tasks",
           label: "Tasks",
           icon: <Icon.Tasks size={14} />,
-          href: allTasks,
+          href: back ? tasksOf(back) : allTasks,
           title: withKey("Tasks", "tasks"),
         },
       ];
@@ -474,7 +483,7 @@ export function PageHeader({
   return (
     <header class={`${styles.header} ${settings ? styles.tabbed : ""}`}>
       <div class={styles.title}>
-        <h1>{settings ? "Settings" : chatting ? "Chats" : (repo ?? "All repositories")}</h1>
+        <h1>{settings ? "Settings" : (repo ?? "All repositories")}</h1>
         {repo && (
           <a
             class={styles.github}
@@ -513,15 +522,14 @@ interface TopBarProps extends Common {
 // then the run slots and the user; Search on the Tasks page, and New request. Under it, the
 // listener's error, if any: the sidebar's run slots say it on a wide screen.
 export function TopBar(props: TopBarProps) {
-  const { state, route, error, onRequest, onSearch, health = null } = props;
+  const { state, route, error, onRequest, onSearch, health = null, chatRepo = null } = props;
   const requests = menuRequests(useCan());
   const [sheet, setSheet] = useState(false);
-  const counts = repoCounts(state?.tasks ?? [], route.repo);
   const settings = route.page === "settings";
-  const chatting = route.page === "chats";
-  const current =
-    settings || chatting ? null : counts.repos.find((c) => sameRepo(c.repo, route.repo));
-  const label = settings ? "Settings" : chatting ? "Chats" : (current?.repo ?? "All repositories");
+  const shown = settings ? null : route.page === "chats" ? chatRepo : route.repo;
+  const counts = repoCounts(state?.tasks ?? [], shown);
+  const current = shown ? counts.repos.find((c) => sameRepo(c.repo, shown)) : null;
+  const label = settings ? "Settings" : (current?.repo ?? "All repositories");
   return (
     <>
       <header class={styles.topbar}>

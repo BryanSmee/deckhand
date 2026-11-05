@@ -141,6 +141,8 @@ export function Dashboard({ state, error, repos, refresh, onOverview }: Props) {
   const [phoneView, setPhoneView] = usePref("phoneBoard");
   // The last repo open here, which All doesn't clear: the phone's Tasks and Board go there.
   const [lastRepo, setLastRepo] = useState(() => stored("repo") || null);
+  // The repo shown before Chats or Settings, null for All: the Chats list's Tasks go back there.
+  const [origin, setOrigin] = useState(() => stored("tab") || null);
   // New request's dialog, and the kind it opened on: an idea or a bug report for a repo's
   // inbox, or a run that reviews a repo's recent runs; Ctrl K's may have its title typed.
   const [request, setRequest] = useState<{ kind: Request; title?: string } | null>(null);
@@ -178,6 +180,9 @@ export function Dashboard({ state, error, repos, refresh, onOverview }: Props) {
   // The user's chats: polled often on their page, else now and then for the sidebar's count,
   // or read once for a user who may start none (api.ts useChats()).
   const chats = useChats(onChats, canFrom(state?.access).anywhere("chat"));
+  // The open chat's repository: the header's, as on that repository's own pages.
+  const chatRepo =
+    (onChats && route.chat && chats.data?.chats.find((c) => c.id === route.chat)?.repo) || null;
   const overview = isOverview(route);
   useEffect(() => onOverview?.(overview), [overview]);
   // The address takes the sidebar's spelling, so links copied from it are the canonical ones.
@@ -190,7 +195,10 @@ export function Dashboard({ state, error, repos, refresh, onOverview }: Props) {
   }, [wide, overview, route.page, route.task, first?.key]);
   // The repo shown is the one to come back to (Tasks and Board on a phone, an empty address).
   useEffect(() => {
-    if (!onSettings && !onChats) store("tab", route.repo ?? "");
+    if (!onSettings && !onChats) {
+      store("tab", route.repo ?? "");
+      setOrigin(route.repo);
+    }
     if (route.repo) {
       store("repo", route.repo);
       setLastRepo(route.repo);
@@ -221,11 +229,13 @@ export function Dashboard({ state, error, repos, refresh, onOverview }: Props) {
     syncer,
     health: health.data,
     chats: chats.data,
+    chatRepo,
     onRequest: (kind: Request) => setRequest({ kind }),
   };
   const railed = onBoard ? boardRail : rail;
   const onTasks = !overview && !onBoard && !onSettings && !onChats;
-  const shownRepo = onSettings ? null : route.repo;
+  // On Chats: the open chat's repository, else the one the list was opened from.
+  const shownRepo = onSettings ? null : onChats ? (chatRepo ?? origin) : route.repo;
   const page = (next: Partial<Route>) => go({ repo: null, task: null, run: null, ...next });
 
   // The lane Ctrl K picked, once the board shows it: the one with any of its issues (a pending
@@ -320,6 +330,8 @@ export function Dashboard({ state, error, repos, refresh, onOverview }: Props) {
               needs={needingYou(repos?.repos ?? null, tasks)}
               state={state}
               chats={chats.data}
+              chatRepo={chatRepo}
+              origin={origin}
             />
           )}
           {overview ? (

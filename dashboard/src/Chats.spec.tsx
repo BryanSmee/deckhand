@@ -52,7 +52,6 @@ test("the list: the chats with how many the user keeps, Chats among the views, a
   show(makeChats([makeChat(), makeChat({ id: "fedcba9876543210", title: "Try the build" })]));
   const views = await screen.findByRole("group", { name: "View" });
   const nav = await within(views).findByRole("link", { name: /Chats\s*2 of 4/ });
-  expect(screen.getByRole("heading", { name: "Chats", level: 1 })).toBeTruthy();
   expect(nav.getAttribute("aria-current")).toBe("page");
   const list = screen.getByRole("complementary", { name: "Your chats" });
   expect(within(list).getByRole("heading", { name: /Your chats\s*2 of 4/ })).toBeTruthy();
@@ -61,6 +60,57 @@ test("the list: the chats with how many the user keeps, Chats among the views, a
   const chat = await screen.findByRole("region", { name: "Try the build" });
   expect(within(chat).getByText("acme/app")).toBeTruthy();
   expect(within(chat).getByText("Stopped")).toBeTruthy();
+});
+
+test("the header: All's on the list, the open chat's repository with its GitHub link", async () => {
+  show(makeChats([makeChat()]));
+  const views = await screen.findByRole("group", { name: "View" });
+  await within(views).findByRole("link", { name: /Chats/ });
+  // The list's: All, with no GitHub link, and All's views (no repository came before it).
+  expect(screen.getByRole("heading", { name: "All repositories", level: 1 })).toBeTruthy();
+  expect(screen.queryByRole("link", { name: /on GitHub$/ })).toBeNull();
+  expect(within(views).getByRole("link", { name: "Tasks" }).getAttribute("href")).toBe("#/tasks");
+  fireEvent.click(await screen.findByRole("link", { name: /What does run\(\) do\?/ }));
+  await waitFor(() =>
+    expect(screen.getByRole("heading", { name: "acme/app", level: 1 })).toBeTruthy(),
+  );
+  const github = screen.getByRole("link", { name: "acme/app on GitHub" });
+  expect(github.getAttribute("href")).toBe("https://github.example.com/acme/app");
+  // Chats still the page shown; Tasks and Board the chat's repository's.
+  const open = screen.getByRole("group", { name: "View" });
+  expect(within(open).getByRole("link", { name: /Chats/ }).getAttribute("aria-current")).toBe(
+    "page",
+  );
+  expect(within(open).getByRole("link", { name: "Tasks" }).getAttribute("href")).toBe("#/acme/app");
+  expect(within(open).getByRole("link", { name: "Board" }).getAttribute("href")).toBe(
+    "#/acme/app/board",
+  );
+});
+
+test("the list opened from a repository: its Tasks go back to that repository", async () => {
+  history.replaceState(null, "", "#/acme/api");
+  show(makeChats([makeChat()]));
+  const views = await screen.findByRole("group", { name: "View" });
+  fireEvent.click(await within(views).findByRole("link", { name: /Chats/ }));
+  await waitFor(() => expect(location.hash).toBe("#/chats"));
+  await screen.findByRole("heading", { name: "All repositories", level: 1 });
+  const tasks = within(screen.getByRole("group", { name: "View" })).getByRole("link", {
+    name: "Tasks",
+  });
+  expect(tasks.getAttribute("href")).toBe("#/acme/api");
+  fireEvent.click(tasks);
+  await waitFor(() => expect(location.hash).toMatch(/^#\/acme\/api/));
+});
+
+test("a phone's top bar names the open chat's repository", async () => {
+  vi.stubGlobal("matchMedia", () => ({
+    matches: false,
+    addEventListener() {},
+    removeEventListener() {},
+  }));
+  history.replaceState(null, "", "#/chats/0123456789abcdef");
+  show(makeChats([makeChat()]));
+  expect(await screen.findByRole("button", { name: "acme/app: switch repository" })).toBeTruthy();
 });
 
 test("the limit: New chat disabled past it, with the reason", async () => {
