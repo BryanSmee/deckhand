@@ -13,7 +13,12 @@
 //   - the cluster's DNS (the runner's own nameservers), TCP and UDP 53: sandboxes get none, but
 //     one reached by its IP could carry data out in its lookups;
 //   - the API server (the `kubernetes` Service, KUBERNETES_SERVICE_HOST);
-//   - a public address (PUBLIC).
+//   - a public address (PUBLIC);
+//   - another pod labelled as a sandbox (#754): a peer pod the runner starts first, which
+//     listens on PEER_PORT and is Ready once it answers there, asked from inside it. A plugin
+//     that kept the services out of reach but let one pod of the namespace reach another would
+//     pass every other target. A second container in the probe pod wouldn't do: it shares the
+//     pod's network, and no policy applies to a pod reaching itself.
 //
 // Every one has to fail, and the egress proxy's Service has to answer: a pod with no network at
 // all doesn't pass as isolated. It tries them once its network gate (kube-gate.mjs) has seen
@@ -48,8 +53,16 @@ export { CONNECT_MS };
 // An address of the internet that answers on 443 (Cloudflare's resolver).
 export const PUBLIC = { host: "1.1.1.1", port: 443 };
 
-// The annotation that sets the probe pod apart from the sandboxes, whose labels it shares.
+// The annotation that sets the probe pod and its peer apart from the sandboxes, whose labels
+// they share.
 export const PROBE = "deckhand.probe";
+
+// The port the peer pod listens on, and what it runs: a TCP server that closes each connection.
+export const PEER_PORT = 8080;
+const PEER_SCRIPT = `require("node:net").createServer((s) => s.end()).listen(${PEER_PORT});`;
+// Its readiness, asked on its loopback: a kubelet's TCP probe would come from the node, which
+// some plugins let through as any other address. Ready, a refusal from it is a policy's.
+const PEER_READY = `require("node:net").connect(${PEER_PORT}, "127.0.0.1").on("connect", () => process.exit(0)).on("error", () => process.exit(1));`;
 
 const POLL_MS = 2000;
 const NETWORKING = "/apis/networking.k8s.io/v1/namespaces";
@@ -107,13 +120,53 @@ export const probeMissed = (targets, reached) => targets.filter((t, i) => t.reac
 // ServiceAccount token, Service links or DNS. `pullSecret`: the registry's, for the kubelet to
 // pull the base image with, never mounted. `gate`: kube-gate.mjs's init container.
 export function probePod({ pod, image, labels, targets, pullSecret = null, gate = null }) {
+  return sandboxLike({
+    pod,
+    labels,
+    kind: "network",
+    pullSecret,
+    gate,
+    container: {
+      name: "probe",
+      image,
+      command: [
+        "node",
+        "-e",
+        PROBE_SCRIPT,
+        JSON.stringify(targets.map(({ what, reach, ...t }) => t)),
+      ],
+    },
+  });
+}
+
+// The probe's peer: the probe pod's labels and spec, listening on PEER_PORT, Ready once it
+// answers there. `deadlineMs`: how long it may live, should the runner stop before removing it.
+export function peerPod({ pod, image, labels, pullSecret = null, gate = null, deadlineMs }) {
+  return sandboxLike({
+    pod,
+    labels,
+    kind: "peer",
+    pullSecret,
+    gate,
+    activeDeadlineSeconds: Math.ceil(deadlineMs / 1000),
+    container: {
+      name: "peer",
+      image,
+      command: ["node", "-e", PEER_SCRIPT],
+      readinessProbe: { exec: { command: ["node", "-e", PEER_READY] }, periodSeconds: 1 },
+    },
+  });
+}
+
+function sandboxLike({ pod, labels, kind, pullSecret, gate, container, ...more }) {
   const resources = { cpu: "100m", memory: "128Mi" };
   return {
     apiVersion: "v1",
     kind: "Pod",
-    metadata: { name: pod, labels, annotations: { [PROBE]: "network" } },
+    metadata: { name: pod, labels, annotations: { [PROBE]: kind } },
     spec: {
       restartPolicy: "Never",
+      ...more,
       automountServiceAccountToken: false,
       enableServiceLinks: false,
       terminationGracePeriodSeconds: 0,
@@ -129,14 +182,7 @@ export function probePod({ pod, image, labels, targets, pullSecret = null, gate 
       ...(gate ? { initContainers: [gate] } : {}),
       containers: [
         {
-          name: "probe",
-          image,
-          command: [
-            "node",
-            "-e",
-            PROBE_SCRIPT,
-            JSON.stringify(targets.map(({ what, reach, ...t }) => t)),
-          ],
+          ...container,
           resources: { limits: resources, requests: resources },
           securityContext: restrictedContainer(),
         },
@@ -251,70 +297,137 @@ export function createNetworkProbe({
     return list;
   }
 
-  // Probe pods older than any probe lasts: a runner's that stopped mid-probe. A younger one may
-  // be the other copy's, still probing during a handover: each probe's pod has a name of its own.
-  async function removeLeftovers(waitMs) {
+  // Probe and peer pods older than any probe lasts: a runner's that stopped mid-probe. A younger
+  // one may be the other copy's, still probing during a handover: each probe's pods have names of
+  // their own.
+  async function removeLeftovers(olderMs) {
     const selector = Object.entries(labels)
       .map(([k, v]) => `${k}=${v}`)
       .join(",");
     const { items = [] } = await api.get("pods", { labelSelector: selector });
     for (const left of items) {
       const born = Date.parse(left.metadata?.creationTimestamp ?? "");
-      if (!left.metadata?.annotations?.[PROBE] || !(now() - born > waitMs)) continue;
+      if (!left.metadata?.annotations?.[PROBE] || !(now() - born > olderMs)) continue;
       await api
         .remove(`pods/${left.metadata.name}`, { gracePeriodSeconds: 0 })
         .catch((error) => log(`Network probe: removing ${left.metadata.name}: ${error.message}`));
     }
   }
 
-  // Runs the probe pod once: its problem, or null. Throws when it couldn't tell.
+  // Polls `podPath` until `done(pod)`, `waitMs` at most: that pod. Throws when it's gone or late
+  // (`whose` didn't `what`).
+  async function waitFor(podPath, { whose, what = "end" }, done, waitMs) {
+    const deadline = now() + waitMs;
+    for (;;) {
+      const found = await api.find(podPath);
+      if (!found) throw new Error(`${whose} was removed before it ended`);
+      if (done(found)) return found;
+      if (now() >= deadline) {
+        const waiting = found.status?.containerStatuses?.[0]?.state?.waiting;
+        throw new Error(
+          `${whose} didn't ${what} within ${Math.round(waitMs / 60000)} min (${found.status?.phase}${waiting?.reason ? `, ${waiting.reason}` : ""})`,
+        );
+      }
+      await sleep(POLL_MS);
+    }
+  }
+
+  // What a pod's failed network gate says: its problem when it still reached what it mustn't
+  // (a verdict), undefined when it didn't fail. Throws when it couldn't tell.
+  async function gateVerdict(podPath, found, whose) {
+    const gated = failedGate(found);
+    if (gated === null) return undefined;
+    const res = await api.stream(
+      `${podPath}/log`,
+      { container: GATE_CONTAINER },
+      AbortSignal.timeout(30_000),
+    );
+    const said = (await res.text()).trim().split("\n").at(-1);
+    // Its policies never kept it from the API server or the DNS: they aren't enforced.
+    if (gated === LEAK) return `a pod labelled as a sandbox ${said}${UNENFORCED}`;
+    if (gated === CLOSED) {
+      throw new Error(`${whose} ${said}, which sandboxes go out through: is it ready?`);
+    }
+    throw new Error(`${whose}'s ${gateProblem(gated, said)}`);
+  }
+
+  // Runs the probe once, its peer first: its problem, or null. Throws when it couldn't tell.
   async function probe() {
     const list = await targets();
     const egress = list[0];
-    // As long as a sandbox may stay Pending (KUBERNETES_PENDING_MINUTES), and a minute to run.
+    const proxyAt = { host: egress.host, port: egress.port };
+    // As long as a sandbox may stay Pending (KUBERNETES_PENDING_MINUTES), and a minute to run:
+    // each of its two pods, one after the other.
     const waitMs = config.kubernetes.pendingMs + 60_000;
-    await removeLeftovers(waitMs);
-    const deadline = now() + waitMs;
-    const pod = kubeName(`${config.prefix}-network-probe-${randomBytes(4).toString("hex")}`);
+    await removeLeftovers(2 * waitMs);
+    const id = randomBytes(4).toString("hex");
+    const secret = await pullSecret.forPods();
+    const peer = kubeName(`${config.prefix}-network-peer-${id}`);
+    const peerPath = `pods/${peer}`;
+    await api.create(
+      "pods",
+      peerPod({
+        pod: peer,
+        image: config.image,
+        labels,
+        pullSecret: secret,
+        gate: gate.container({ proxy: proxyAt }),
+        deadlineMs: 2 * waitMs,
+      }),
+    );
+    try {
+      const ready = (pod) =>
+        Boolean(pod.status?.podIP) &&
+        (pod.status?.conditions ?? []).some((c) => c.type === "Ready" && c.status === "True");
+      const ended = (pod) => ["Succeeded", "Failed"].includes(pod.status?.phase);
+      const listening = await waitFor(
+        peerPath,
+        { whose: "its peer pod", what: "get ready" },
+        (pod) => ready(pod) || ended(pod),
+        waitMs,
+      );
+      if (!ready(listening)) {
+        const gated = await gateVerdict(peerPath, listening, "its peer pod");
+        if (gated !== undefined) return gated;
+        throw new Error(`its peer pod ended ${listening.status.phase} before it was ready`);
+      }
+      list.push({
+        what: "another pod labelled as a sandbox",
+        host: listening.status.podIP,
+        port: PEER_PORT,
+        proto: "tcp",
+        reach: false,
+      });
+      return await probeWith(list, id, secret, proxyAt, waitMs);
+    } finally {
+      await api
+        .remove(peerPath, { gracePeriodSeconds: 0 })
+        .catch((error) => log(`Network probe: removing its peer pod: ${error.message}`));
+    }
+  }
+
+  // Runs the probe pod on `list`: its problem, or null. Throws when it couldn't tell.
+  async function probeWith(list, id, secret, proxyAt, waitMs) {
+    const pod = kubeName(`${config.prefix}-network-probe-${id}`);
     const podPath = `pods/${pod}`;
     const spec = probePod({
       pod,
       image: config.image,
       labels,
       targets: list,
-      pullSecret: await pullSecret.forPods(),
-      gate: gate.container({ proxy: { host: egress.host, port: egress.port } }),
+      pullSecret: secret,
+      gate: gate.container({ proxy: proxyAt }),
     });
     await api.create("pods", spec);
     try {
-      let found;
-      for (;;) {
-        found = await api.find(podPath);
-        if (!found) throw new Error("its probe pod was removed before it ended");
-        if (["Succeeded", "Failed"].includes(found.status?.phase)) break;
-        if (now() >= deadline) {
-          const waiting = found.status?.containerStatuses?.[0]?.state?.waiting;
-          throw new Error(
-            `its probe pod didn't end within ${Math.round(waitMs / 60000)} min (${found.status?.phase}${waiting?.reason ? `, ${waiting.reason}` : ""})`,
-          );
-        }
-        await sleep(POLL_MS);
-      }
-      const gated = failedGate(found);
-      if (gated !== null) {
-        const res = await api.stream(
-          `${podPath}/log`,
-          { container: GATE_CONTAINER },
-          AbortSignal.timeout(30_000),
-        );
-        const said = (await res.text()).trim().split("\n").at(-1);
-        // Its policies never kept it from the API server or the DNS: they aren't enforced.
-        if (gated === LEAK) return `a pod labelled as a sandbox ${said}${UNENFORCED}`;
-        if (gated === CLOSED) {
-          throw new Error(`its probe pod ${said}, which sandboxes go out through: is it ready?`);
-        }
-        throw new Error(`its probe pod's ${gateProblem(gated, said)}`);
-      }
+      const found = await waitFor(
+        podPath,
+        { whose: "its probe pod" },
+        (p) => ["Succeeded", "Failed"].includes(p.status?.phase),
+        waitMs,
+      );
+      const gated = await gateVerdict(podPath, found, "its probe pod");
+      if (gated !== undefined) return gated;
       const res = await api.stream(
         `${podPath}/log`,
         { container: "probe" },
