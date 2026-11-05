@@ -223,6 +223,7 @@ services:
       # its last message or answer before it stops (30), and how many run at once, apart from MAX_PARALLEL (2).
       CHATS_PER_USER: ${CHATS_PER_USER:-}
       CHAT_IDLE_MINUTES: ${CHAT_IDLE_MINUTES:-}
+      CHAT_PERMISSION_TIMEOUT: ${CHAT_PERMISSION_TIMEOUT:-}
       MAX_RUNNING_CHATS: ${MAX_RUNNING_CHATS:-}
       # No value: passed only when .env sets it, where empty means no label.
       NEEDS_INPUT_LABEL:

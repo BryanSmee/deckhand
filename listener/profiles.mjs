@@ -9,6 +9,7 @@
 // runner then enforce (preparation.mjs); on a user's own machine (#601), it would narrow the
 // settings the driver suggests, advisory there. Format: ../docs/security.md#chats.
 import { CAPABILITIES } from "./capabilities.mjs";
+import { hostProblem, matchHost } from "./egress.mjs";
 
 // The GitHub levels, least first. Read only for now (#478's decision): a chat writes nothing to
 // GitHub, whatever the policies allow it.
@@ -252,3 +253,145 @@ export function leftOut(effective, ceiling) {
 
 // The outcome's reasons are Markdown (`setup`…): the dashboard shows them as text.
 const plain = (text) => String(text).replaceAll("`", "");
+
+// --- Requests for more (#479, requests.mjs) ------------------------------------------------
+
+// What a chat's agent may ask for (../sandbox/deckhand-permissions): a host, a GitHub level, the
+// container engine or one of the repository's granted mounts.
+export const REQUEST_KINDS = ["host", "github", "engine", "mount"];
+
+// What the agent is told of a request beyond the ceiling: refused without asking the chat's
+// owner (#479's decision), who couldn't approve it anyway. Only the operator's grants folder
+// (and the policies, the repository's config) widen it.
+const BEYOND =
+  "That is beyond what this chat may get: only Deckhand's operator widens it, in their grants folder";
+
+// A request `{ kind, value }` of a chat's run, against `ceiling` (ceilingOf()'s, now), the chat's
+// saved `profile` (null for the default) and what its sandbox has (`live`: { hosts, mounts,
+// engine }, as its start gave it them, its approved hosts since) →
+//   { verdict: "invalid" | "beyond", message }  refused at once, `message` for the agent;
+//   { verdict: "given", message }                its sandbox has it already;
+//   { verdict: "saved", what, adds, live }       its profile has it, its sandbox not (a profile
+//                                                changed since it started): no question asked;
+//   { verdict: "ask", what, adds, live }         for its owner to answer.
+// `what`: how the request is named to them; `adds`: what an approval adds to a profile
+// ({ hosts } of the ceiling's entries, { capabilities }, { mounts }: widened()); `live`: whether
+// it applies to the sandbox going (a host: the egress proxy reads the run's hosts on each
+// connection) rather than at its next start. Pure.
+export function requestVerdict({ kind, value }, { ceiling, profile, live }) {
+  const saved = { ...DEFAULT_PROFILE, ...profile };
+  const text = typeof value === "string" ? value.trim() : "";
+  if (kind === "host") {
+    const host = text.toLowerCase().replace(/\.$/, "");
+    if (!host || host === "*" || hostProblem(host)) {
+      return invalid("a host is a name such as registry.npmjs.org");
+    }
+    const reached = live.hosts ? matchHost(host, live.hosts) : null;
+    if (reached === "exact" || reached === "wildcard") {
+      return given(`${host} is reachable from this sandbox already`);
+    }
+    // Through the open internet's `*` alone (a chat with `internet`): its public addresses only,
+    // never a private one, whatever the grants say (preparation.mjs openHosts()).
+    if (reached === "any") {
+      return given(
+        `${host} is reachable from this sandbox already at its public addresses; with the open internet, a host's private addresses stay out of reach, whatever is approved`,
+      );
+    }
+    // The narrowest entry that covers it: the host itself, the longest `*.domain`, `*` last.
+    const entry =
+      ceiling.hosts.find((h) => h === host) ??
+      ceiling.hosts
+        .filter((h) => h !== "*" && matchHost(host, [h]) !== null)
+        .sort((x, y) => y.length - x.length)[0] ??
+      (ceiling.hosts.includes("*") ? "*" : undefined);
+    if (!entry) {
+      return beyond(`${host} isn't among the hosts the operator grants this repository`, "hosts");
+    }
+    const what =
+      entry === host
+        ? host
+        : entry === "*"
+          ? `${host} (granted as *: an approval opens every public host)`
+          : `${host} (granted as ${entry})`;
+    const adds = { hosts: [entry] };
+    const has = saved.hosts === null || saved.hosts.includes(entry);
+    return { verdict: has ? "saved" : "ask", what, adds, live: true };
+  }
+  if (kind === "github") {
+    const level = ceiling.github.find((l) => l.level === text);
+    if (!level) return invalid(`a GitHub level is one of ${LEVELS.join(", ")}`);
+    if (!level.allowed) return beyond(`GitHub ${text}: ${level.reason}`);
+    return given("this sandbox reads GitHub already");
+  }
+  if (kind === "engine") {
+    const row = ceiling.capabilities.find((c) => c.name === "docker");
+    if (!row?.allowed) return beyond(`the container engine: ${row?.reason ?? "not offered"}`);
+    if (live.engine) return given("this sandbox has a container engine already");
+    // Granted, but the deployment has none: no start would give it (access.mjs engineFor()).
+    if (live.engines === false) {
+      return beyond(
+        "the container engine: the operator hasn't set SANDBOX_ENGINE, so no run gets one",
+      );
+    }
+    const adds = { capabilities: withNeeds("docker", ceiling) };
+    const has =
+      saved.capabilities === null || adds.capabilities.every((c) => saved.capabilities.includes(c));
+    return { verdict: has ? "saved" : "ask", what: "a container engine", adds, live: false };
+  }
+  if (kind === "mount") {
+    const target = text.replace(/(?<=.)\/+$/, "");
+    if (!target.startsWith("/")) return invalid("a mount is the absolute path it is mounted at");
+    const row = ceiling.mounts.find((m) => m.target === target);
+    // A run with the open internet gets no host mount, whatever is approved (preparation.mjs):
+    // the profile's `internet` off first, which its owner may do.
+    if (row && live.internet) {
+      return {
+        verdict: "invalid",
+        message: `Refused: this chat reaches the open internet, and a run that does gets no host mount (what the operator mounts could leave through it). Tell the user: with \`internet\` turned off in the chat's permissions, ${target} can be asked for. Don't ask again until then.`,
+      };
+    }
+    if (!row) {
+      return beyond(
+        `${target} isn't among the repository's granted mounts (its .deckhand.yaml asks for them, the operator grants them)`,
+        "mounts",
+      );
+    }
+    if ((live.mounts ?? []).includes(target)) return given(`${target} is mounted already`);
+    const adds = { mounts: [{ target, readOnly: true }] };
+    const has = saved.mounts === null || saved.mounts.some((m) => m.target === target);
+    return { verdict: has ? "saved" : "ask", what: `${target} (read-only)`, adds, live: false };
+  }
+  return invalid(`a request's kind is one of ${REQUEST_KINDS.join(", ")}`);
+}
+
+const invalid = (why) => ({ verdict: "invalid", message: `Refused: ${why}.` });
+const given = (why) => ({ verdict: "given", message: `Granted: ${why}.` });
+// `key`: the grants file's key that would give it, said to the agent.
+const beyond = (why, key = null) => ({
+  verdict: "beyond",
+  message: `Refused: ${why}. ${BEYOND}${key ? ` (\`${key}\`)` : ""}. Don't ask again: tell the user if it matters, and carry on without it.`,
+});
+
+// `name` and the capabilities it needs, that the ceiling allows, in the catalogue's order.
+function withNeeds(name, ceiling) {
+  const all = new Set([name]);
+  // A Set iterates over what is added meanwhile: needs' needs too.
+  for (const n of all) for (const need of BY_NAME.get(n)?.needs ?? []) all.add(need);
+  return ceiling.capabilities.filter((c) => all.has(c.name) && c.allowed).map((c) => c.name);
+}
+
+// `profile` with `adds` (requestVerdict()'s) in it: a list grows, null (everything the ceiling
+// allows) stays null. Pure; checkProfile() holds the result to the ceiling.
+export function widened(profile, adds) {
+  const saved = { ...DEFAULT_PROFILE, ...profile };
+  const out = { ...saved };
+  if (adds?.capabilities && saved.capabilities) {
+    out.capabilities = [...new Set([...saved.capabilities, ...adds.capabilities])];
+  }
+  if (adds?.hosts && saved.hosts) out.hosts = [...new Set([...saved.hosts, ...adds.hosts])];
+  if (adds?.mounts && saved.mounts) {
+    const kept = saved.mounts.filter((m) => !adds.mounts.some((a) => a.target === m.target));
+    out.mounts = [...kept, ...adds.mounts];
+  }
+  return out;
+}

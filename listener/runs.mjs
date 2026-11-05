@@ -857,6 +857,8 @@ export function createRuns(ctx) {
     live.trusted = null;
     live.cached = null;
     live.uncached = null;
+    // Its agent's requests for more permissions still waiting: denied, its agent gone (#479).
+    ctx.requests?.ended(live.id);
     // Its output at the runner first: the dashboard's live view reads it to its end once the
     // run's status changes (runlog.mjs stream()).
     await logSent(live);

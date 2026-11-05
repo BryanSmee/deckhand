@@ -2,7 +2,8 @@
 // your messages and the agent's answers as bubbles, its tool calls folded between them with the
 // run log's own items (Log.tsx ItemView), each run's sandbox starting as a fold of its own. Then
 // your messages on their way (queued while the sandbox starts or resumes, or waits for a slot),
-// what the chat does now, and the composer: Enter sends, Shift Enter adds a line. It follows the
+// what the chat does now, its agent's requests for more permissions waiting for you
+// (PermissionCard.tsx), and the composer: Enter sends, Shift Enter adds a line. It follows the
 // end as turns come, until you scroll up. A reset is marked where it dropped the session. Only
 // the last RUNS_SHOWN runs stream their logs at first (a stream each): the earlier ones on
 // demand.
@@ -20,6 +21,7 @@ import {
 } from "./chatModel";
 import { dayTime, plural } from "./format";
 import { ItemView } from "./Log";
+import { PermissionCard } from "./PermissionCard";
 import { PHASE_TITLES, shortDuration } from "./logModel";
 import type { Chat, Run } from "./types";
 import { Button, IconButton } from "./ui/Button";
@@ -85,7 +87,10 @@ export function Conversation({ chat, now, touch, onChat }: Props) {
   const state = chatState(chat);
 
   // The end in view as turns come, while following.
-  const size = all.length + all.reduce((n, t) => n + ("items" in t ? t.items.length : 0), 0);
+  const size =
+    all.length +
+    chat.requests.length +
+    all.reduce((n, t) => n + ("items" in t ? t.items.length : 0), 0);
   useLayoutEffect(() => {
     const el = scroller.current;
     if (el && following) el.scrollTop = el.scrollHeight;
@@ -163,6 +168,15 @@ export function Conversation({ chat, now, touch, onChat }: Props) {
           )}
           {all.map((turn) => (
             <TurnView key={turn.id} turn={turn} isOpen={isOpen} toggle={toggle} />
+          ))}
+          {chat.requests.map((request) => (
+            <PermissionCard
+              key={request.id}
+              chatId={chat.id}
+              request={request}
+              now={now}
+              onChat={onChat}
+            />
           ))}
         </div>
       </div>

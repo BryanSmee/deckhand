@@ -24,7 +24,9 @@
 //   came from (`x-deckhand-sandbox`, as the listener's egress policy told it) and passes their
 //   run token on in `x-deckhand-run-token`: renewal (POST /run/token), the inbox (GET
 //   /run/inbox?from=<byte>), the CA and digest (GET /run/ca, /run/digest), screenshots (PUT
-//   /run/shots/<file>).
+//   /run/shots/<file>), a chat's requests for more permissions and their answers (POST
+//   /run/permissions, GET /run/permissions/<id>: permissions.mjs, #479), which the
+//   orchestrator answers (PUT /runs/:id/permissions/:request).
 import { createServer } from "node:http";
 import { drainable } from "../lib/drain.mjs";
 import { readBody, readJsonBody, Refused, sendJson } from "../lib/http.mjs";
@@ -34,6 +36,7 @@ import { issueServiceTokens, serviceGuard } from "../lib/service-token.mjs";
 import { IMAGE_TYPES, SHOT_NAME } from "../lib/shots.mjs";
 import { FILES } from "./files.mjs";
 import { NO_METRICS } from "./metrics.mjs";
+import { createPermissions } from "./permissions.mjs";
 import { runFields, STREAM } from "./runs.mjs";
 
 // The headers the proxy sets on a sandbox's call: whatever the sandbox sent in them was
@@ -60,6 +63,9 @@ export const ROUTES = {
   "POST /runs/:id/secrets": ["orchestrator"],
   "POST /runs/:id/inbox": RUNNER,
   "PUT /runs/:id/files/:name": RUNNER,
+  // The answer to a run's request for more permissions (#479): the orchestrator's, which
+  // checked it against the run's ceiling, and asked the run's owner.
+  "PUT /runs/:id/permissions/:request": ["orchestrator"],
   "GET /events": ["orchestrator"],
   "POST /events/ack": ["orchestrator"],
   // Edge serves them (#609). The orchestrator's GET and DELETE of one are the release before's,
@@ -76,6 +82,7 @@ export const ROUTES = {
   "GET /run/ca": SANDBOX,
   "GET /run/digest": SANDBOX,
   "PUT /run/shots/:name": SANDBOX,
+  "POST /run/permissions": SANDBOX,
   // A file the run has none of: 404, which the sandbox's deckhand-files doesn't ask again.
   "GET /run/*": SANDBOX,
 };
@@ -116,6 +123,8 @@ export function createBrokerHandler({
   // What GET /health says: when it started, its version (../lib/health.mjs).
   health = healthInfo(),
   metrics = NO_METRICS,
+  // permissions.mjs createPermissions()'s: by default over `store`.
+  permissions = createPermissions({ store, now, sleep }),
 }) {
   const guard = serviceGuard({
     service: "broker",
@@ -174,6 +183,22 @@ export function createBrokerHandler({
       const data = await files.getFile(record.id, name);
       if (data === null) return sendJson(res, { message: `this run has no ${name}` }, 404);
       return res.writeHead(200, { "content-type": "application/octet-stream" }).end(data);
+    }
+    if (req.method === "POST" && path === "/run/permissions") {
+      const { status, body } = await permissions.ask(record, await readJsonBody(req, BODY_MAX));
+      return sendJson(res, body, status);
+    }
+    const request = /^\/run\/permissions\/([^/]+)$/.exec(path)?.[1];
+    if (req.method === "GET" && request) {
+      // A sandbox that goes away stops waiting.
+      const gone = new AbortController();
+      res.on("close", () => gone.abort());
+      const found = await permissions.answerOf(record.id, decoded(request), {
+        signal: gone.signal,
+      });
+      if (found === undefined) return sendJson(res, { message: "no such request" }, 404);
+      if (found === null) return res.writeHead(204).end();
+      return sendJson(res, found);
     }
     const shot = /^\/run\/shots\/([^/]+)$/.exec(path)?.[1];
     if (req.method === "PUT" && shot) {
@@ -234,6 +259,7 @@ export function createBrokerHandler({
     if (req.method === "DELETE" && run && path === `/runs/${id}`) {
       const had = await runs.end(run);
       await files.remove(run);
+      await permissions.forget(run);
       return sendJson(res, { ended: had });
     }
     if (req.method === "POST" && run && path === `/runs/${id}/tokens`) {
@@ -257,6 +283,12 @@ export function createBrokerHandler({
       const data = await readBody(req, INBOX_MAX);
       const answer = await files.appendInbox(run, offset, data);
       return sendJson(res, answer, answer.gap ? 409 : 200);
+    }
+    const request = /^\/runs\/[^/]+\/permissions\/([^/]+)$/.exec(path)?.[1];
+    if (req.method === "PUT" && run && request) {
+      const body = await readJsonBody(req, BODY_MAX);
+      const found = await permissions.answer(run, decoded(request), body);
+      return found ? res.writeHead(204).end() : sendJson(res, { message: "no such request" }, 404);
     }
     const file = /^\/runs\/[^/]+\/files\/([^/]+)$/.exec(path)?.[1];
     if (req.method === "PUT" && run && file) {

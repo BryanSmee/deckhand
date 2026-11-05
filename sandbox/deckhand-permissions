@@ -1,0 +1,210 @@
+#!/usr/bin/env node
+// A chat's agent asks its user for a permission its sandbox lacks (#479): a host the egress
+// proxy refuses, a GitHub level, a container engine, one of the repository's granted mounts.
+// Two ways in, the same request:
+//
+//   deckhand-permissions mcp                              a stdio MCP server, with one tool,
+//                                                         request_permission (entrypoint.sh adds
+//                                                         it to the agent for a chat's run)
+//   deckhand-permissions request <kind> [value] <reason>  the same from a shell, for an agent
+//                                                         whose tools don't list it
+//
+// Each asks the broker (TASK_PERMISSIONS, its URL for them: ../broker/permissions.mjs) with the
+// run token (deckhand-token), then waits for the answer there: the user's, through the
+// dashboard, a refusal at once for what Deckhand's operator doesn't allow, or a denial once the
+// orchestrator's CHAT_PERMISSION_TIMEOUT passes. It holds no token of its own.
+"use strict";
+const { execFileSync } = require("node:child_process");
+const { randomBytes } = require("node:crypto");
+const { createInterface } = require("node:readline");
+
+const BASE = process.env.TASK_PERMISSIONS || "";
+const KINDS = ["host", "github", "engine", "mount"];
+// Past the orchestrator's longest timeout (an hour): a request no answer ever reaches.
+const GIVE_UP_MS = 65 * 60_000;
+
+const DESCRIPTION = `Ask the user of this chat for a permission this sandbox lacks, when something you need is refused: a host the network refuses (kind "host", value its name, such as registry.npmjs.org), GitHub beyond reading (kind "github", value "comment" or "push": a chat only reads GitHub for now, so these are refused), a container engine (kind "engine", no value), or one of the repository's granted host mounts (kind "mount", value the path it is mounted at). It waits for their answer, which may take minutes; no answer in time denies it. What Deckhand's operator doesn't allow the repository is refused at once, with the reason: don't ask for it again. A host approved is reachable at once; the rest apply when the sandbox starts again, which the answer says.`;
+
+const TOOL = {
+  name: "request_permission",
+  description: DESCRIPTION,
+  inputSchema: {
+    type: "object",
+    properties: {
+      kind: { type: "string", enum: KINDS, description: "What you ask for." },
+      value: {
+        type: "string",
+        description:
+          'host: its name; github: "comment" or "push"; engine: empty; mount: the path it is mounted at.',
+      },
+      reason: {
+        type: "string",
+        description: "Why you need it, in one sentence the user reads (200 characters are shown).",
+      },
+    },
+    required: ["kind", "reason"],
+    additionalProperties: false,
+  },
+};
+
+// The run token for each request, from deckhand-token, which renews it every few minutes.
+const headers = () => ({
+  authorization: execFileSync("deckhand-token", ["--header"], { encoding: "utf8" }).trim(),
+  "content-type": "application/json",
+});
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+async function message(res) {
+  const text = await res.text();
+  try {
+    return JSON.parse(text).message ?? text;
+  } catch {
+    return text;
+  }
+}
+
+// One request, then its answer: { state, message }. A broker away (the services restarting) is
+// asked again, a little later each time; a refusal of the request itself is its answer.
+async function ask(kind, value, reason) {
+  if (!BASE) {
+    return {
+      state: "refused",
+      message: "Refused: this run can't ask for permissions (not a chat).",
+    };
+  }
+  // Its key: the same request when it is sent again (an answer lost on the way back).
+  const key = randomBytes(16).toString("hex");
+  const body = JSON.stringify({ kind, value: value ?? "", reason: reason ?? "", key });
+  let id = null;
+  let pause = 500;
+  const until = Date.now() + GIVE_UP_MS;
+  for (;;) {
+    try {
+      const res = await fetch(BASE, { method: "POST", headers: headers(), body });
+      if (res.status === 202) id = (await res.json()).id;
+      else if (res.status < 500) {
+        return { state: "refused", message: `Refused: ${await message(res)}.` };
+      } else process.stderr.write(`deckhand-permissions: the broker answered ${res.status}\n`);
+    } catch (error) {
+      process.stderr.write(`deckhand-permissions: ${error.cause?.code ?? error.message}\n`);
+    }
+    if (id) break;
+    if (Date.now() > until)
+      return { state: "denied", message: "Denied: the broker didn't answer." };
+    await sleep(pause);
+    pause = Math.min(pause * 2, 10_000);
+  }
+  pause = 500;
+  while (Date.now() < until) {
+    try {
+      const res = await fetch(`${BASE}/${id}`, {
+        headers: headers(),
+        signal: AbortSignal.timeout(60_000),
+      });
+      if (res.status === 200) return await res.json();
+      if (res.status === 204) {
+        pause = 500;
+        continue;
+      }
+      // Its record gone at the broker (expired, lost): no answer, which isn't a denial.
+      if (res.status === 404) {
+        return {
+          state: "unanswered",
+          message: "No answer could be read (the request is gone at the broker): ask again.",
+        };
+      }
+      process.stderr.write(`deckhand-permissions: the broker answered ${res.status}\n`);
+    } catch (error) {
+      process.stderr.write(`deckhand-permissions: ${error.cause?.code ?? error.message}\n`);
+    }
+    await sleep(pause);
+    pause = Math.min(pause * 2, 10_000);
+  }
+  return { state: "denied", message: "Denied: no answer came." };
+}
+
+// --- MCP over stdio: JSON-RPC 2.0, one message per line ------------------------------------
+
+const VERSIONS = ["2024-11-05", "2025-03-26", "2025-06-18"];
+
+function reply(id, result, error) {
+  const out = error ? { jsonrpc: "2.0", id, error } : { jsonrpc: "2.0", id, result };
+  process.stdout.write(`${JSON.stringify(out)}\n`);
+}
+
+async function handle(msg) {
+  const { id, method, params } = msg;
+  // A notification (initialized, cancelled): nothing to answer.
+  if (id === undefined || id === null) return;
+  if (method === "initialize") {
+    const asked = params?.protocolVersion;
+    return reply(id, {
+      protocolVersion: VERSIONS.includes(asked) ? asked : VERSIONS.at(-1),
+      capabilities: { tools: {} },
+      serverInfo: { name: "deckhand-permissions", version: "1.0.0" },
+    });
+  }
+  if (method === "ping") return reply(id, {});
+  if (method === "tools/list") return reply(id, { tools: [TOOL] });
+  if (method === "tools/call") {
+    if (params?.name !== TOOL.name) {
+      return reply(id, null, { code: -32602, message: `no tool ${params?.name}` });
+    }
+    const { kind, value = "", reason = "" } = params.arguments ?? {};
+    if (!KINDS.includes(kind)) {
+      return reply(id, {
+        content: [{ type: "text", text: `kind: one of ${KINDS.join(", ")}` }],
+        isError: true,
+      });
+    }
+    const answer = await ask(kind, String(value), String(reason));
+    // A refusal or a denial is the tool's error: the agent stops there rather than asking again.
+    return reply(id, {
+      content: [{ type: "text", text: answer.message || answer.state }],
+      ...(answer.state !== "granted" && { isError: true }),
+    });
+  }
+  reply(id, null, { code: -32601, message: `no method ${method}` });
+}
+
+function serve() {
+  const lines = createInterface({ input: process.stdin });
+  lines.on("line", (line) => {
+    if (!line.trim()) return;
+    let msg;
+    try {
+      msg = JSON.parse(line);
+    } catch {
+      return reply(null, null, { code: -32700, message: "not JSON" });
+    }
+    // Each on its own: a tool call waits for the user, the rest go on meanwhile.
+    handle(msg).catch((error) =>
+      reply(msg.id ?? null, null, { code: -32603, message: String(error.message ?? error) }),
+    );
+  });
+}
+
+async function cli(args) {
+  const [kind, ...rest] = args;
+  // An engine has no value: its reason follows the kind.
+  const [value, ...words] = kind === "engine" ? ["", ...rest] : rest;
+  const reason = words.join(" ");
+  if (!KINDS.includes(kind) || !reason) {
+    process.stderr.write(
+      `usage: deckhand-permissions request <${KINDS.join("|")}> [value] <reason>\n`,
+    );
+    process.exit(2);
+  }
+  const answer = await ask(kind, value, reason);
+  process.stdout.write(`${answer.message || answer.state}\n`);
+  process.exit(answer.state === "granted" ? 0 : 1);
+}
+
+const [command, ...args] = process.argv.slice(2);
+if (command === "mcp") serve();
+else if (command === "request") cli(args);
+else {
+  process.stderr.write("usage: deckhand-permissions mcp | request <kind> [value] <reason>\n");
+  process.exit(2);
+}

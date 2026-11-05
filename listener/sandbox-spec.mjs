@@ -204,6 +204,9 @@ export function sandboxEnv(
     // broker for its run token and files, the github service for its pushes.
     DECKHAND_BROKER_URL: SANDBOX_URLS.broker,
     DECKHAND_GIT_URL: SANDBOX_URLS.github,
+    // Where its agent asks for more permissions (#479, ../sandbox/deckhand-permissions): a
+    // chat's run only, as the broker allows (../broker/permissions.mjs PERMISSION_MODES).
+    TASK_PERMISSIONS: mode === "chat" ? `${SANDBOX_URLS.broker}/run/permissions` : "",
     // Which of ../sandbox/agents/ runs, and its version.
     SANDBOX_AGENT: agent.name,
     SANDBOX_PROVIDER: provider,

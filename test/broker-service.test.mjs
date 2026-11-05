@@ -10,6 +10,7 @@ import { pathToFileURL } from "node:url";
 import { accountCallers, createCallers } from "../broker/callers.mjs";
 import { createFiles, wholeLines } from "../broker/files.mjs";
 import { SHOT_PART } from "../broker/http.mjs";
+import { ANSWER_WAIT_MS, createPermissions, REQUESTS_MAX } from "../broker/permissions.mjs";
 import { RECORD_TTL_MS, RENEW_GRACE_MS } from "../broker/runs.mjs";
 import { createBroker } from "../broker/server.mjs";
 import { createSeal } from "../broker/seal.mjs";
@@ -947,4 +948,95 @@ test("its metrics: the tokens signed, renewed and refused, the live runs, the in
     '{reason="run_over"}': 2,
     '{reason="expired"}': 2,
   });
+});
+
+test("a chat's requests for more permissions: asked from its sandbox, said on the stream, answered by the orchestrator alone (#479)", async (t) => {
+  const { copies } = await brokers(t);
+  const [broker] = copies;
+  const orchestrator = await client(broker, "orchestrator");
+  const proxy = await client(broker, "proxy");
+  const work = (await started(orchestrator, "run-a")).token;
+  const chat = (await started(orchestrator, "run-c", { mode: "chat", sandbox: "net-c" })).token;
+  const json = { "content-type": "application/json" };
+  const ask = (token, sandbox, body) =>
+    sandboxCall(proxy, "POST", "/run/permissions", token, sandbox, { body, headers: json });
+  const request = { kind: "host", value: "pypi.org", reason: "pip install" };
+
+  // Only a chat's run may ask, with its own token from its own sandbox.
+  const refused = await ask(work, "net-a", request);
+  assert.equal(refused.status, 403);
+  assert.match(refused.json.message, /only a chat's may/);
+  assert.equal((await ask(chat, "net-a", request)).status, 403);
+  assert.equal((await ask(chat, "net-c", { ...request, kind: "sudo" })).status, 400);
+  assert.equal((await ask(chat, "net-c", { ...request, value: "x".repeat(300) })).status, 400);
+  const asked = await ask(chat, "net-c", request);
+  assert.equal(asked.status, 202);
+  const { id } = asked.json;
+  assert.match(id, /^[0-9a-f]{16}$/);
+
+  // On the stream, for the orchestrator.
+  const { events } = (await orchestrator("GET", "/events")).json;
+  const said = events.map((e) => e.event).find((e) => e.type === "permission");
+  assert.deepEqual({ ...said, at: 0 }, { type: "permission", run: "run-c", at: 0, id, ...request });
+
+  // Another run's token never reads it; the proxy never answers it.
+  const read = (token, sandbox) =>
+    sandboxCall(proxy, "GET", `/run/permissions/${id}`, token, sandbox);
+  assert.equal((await read(work, "net-a")).status, 404);
+  const answer = (caller, rid, body) =>
+    caller("PUT", `/runs/run-c/permissions/${rid}`, { body, headers: json });
+  assert.equal((await answer(proxy, id, { state: "granted", message: "ok" })).status, 403);
+  assert.equal((await answer(orchestrator, id, { state: "maybe" })).status, 400);
+  assert.equal((await answer(orchestrator, "ffffffffffffffff", { state: "denied" })).status, 404);
+  assert.equal((await answer(orchestrator, id, { state: "granted", message: "ok" })).status, 204);
+  // The first answer stays.
+  assert.equal((await answer(orchestrator, id, { state: "denied", message: "no" })).status, 204);
+  const got = await read(chat, "net-c");
+  assert.equal(got.status, 200);
+  assert.deepEqual(got.json, { state: "granted", message: "ok" });
+});
+
+test("a request's answer: waited for, a run asking in a loop stopped at REQUESTS_MAX", async () => {
+  const clock = { now: 0 };
+  const store = openStore("memory:", { now: () => clock.now });
+  const permissions = createPermissions({
+    store,
+    now: () => clock.now,
+    sleep: async (ms) => (clock.now += ms),
+  });
+  const record = { id: "run-c", mode: "chat" };
+  const { body } = await permissions.ask(record, { kind: "engine", reason: "docker build" });
+  // No answer within the wait: null (the sandbox asks again), then the answer once it came.
+  assert.equal(await permissions.answerOf("run-c", body.id), null);
+  assert.equal(clock.now, ANSWER_WAIT_MS);
+  assert.equal(await permissions.answerOf("run-x", body.id), undefined);
+  await permissions.answer("run-c", body.id, { state: "denied", message: "Denied by alice." });
+  assert.deepEqual(await permissions.answerOf("run-c", body.id), {
+    state: "denied",
+    message: "Denied by alice.",
+  });
+  // Sent again with its key (its 202 lost): the same request, said again, counted once.
+  const key = "0123456789abcdef0123456789abcdef";
+  const first = await permissions.ask(record, { kind: "engine", key });
+  const said = async () =>
+    (await store.read("runs", "orchestrator", { count: 1000 })).filter(
+      (e) => e.event.id === first.body.id,
+    ).length;
+  for (let i = 0; i < 20; i++) {
+    const again = await permissions.ask(record, { kind: "engine", key });
+    assert.equal(again.body.id, first.body.id);
+  }
+  // Said once on the stream every run shares, however often it is sent again.
+  assert.equal(await said(), 1);
+  assert.equal((await permissions.ask(record, { kind: "engine", key: "nope" })).status, 400);
+  await permissions.answer("run-c", first.body.id, { state: "granted", message: "ok" });
+  assert.equal((await permissions.ask(record, { kind: "engine", key })).body.state, "answered");
+  for (let i = 2; i < REQUESTS_MAX; i++) await permissions.ask(record, { kind: "engine" });
+  const over = await permissions.ask(record, { kind: "engine" });
+  assert.equal(over.status, 429);
+  // For the run's whole life, not a few hours: its count goes as the run ends.
+  clock.now += 24 * 60 * 60_000;
+  assert.equal((await permissions.ask(record, { kind: "engine" })).status, 429);
+  await permissions.forget("run-c");
+  assert.equal((await permissions.ask(record, { kind: "engine" })).status, 202);
 });
