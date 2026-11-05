@@ -10,8 +10,6 @@
 // failure: lib/service-client.mjs tries again. The egress policy's questions wait less, and fall
 // back on the runner's last answer: a sandbox's calls go on while the runner updates.
 import { randomBytes } from "node:crypto";
-import { closeSync, openSync, readSync, statSync } from "node:fs";
-import { partEnd } from "../lib/redact.mjs";
 import { serviceClient } from "../lib/service-client.mjs";
 import { LOGIN_REFRESH_MARGIN_MS, MIN_REFRESH_MS } from "../lib/services.mjs";
 
@@ -20,7 +18,7 @@ import { LOGIN_REFRESH_MARGIN_MS, MIN_REFRESH_MS } from "../lib/services.mjs";
 const RUN_WAIT_MS = 30 * 60_000;
 // The egress policy's lookups, which a sandbox's connection waits on.
 const POLICY_WAIT_MS = 10_000;
-// A log append's most, and the parts a log is sent in when it moves (upload()).
+// A log append's most.
 const APPEND_MAX = 4 * 1024 * 1024;
 // After a failed append, the next try.
 const APPEND_RETRY_MS = 5000;
@@ -351,12 +349,12 @@ export function createRunnerClient({
   // What the orchestrator writes a run's log through (../listener/runlog.mjs openLog()'s
   // shape): write() at once, in order, sent as it can be; `size` what it holds, the writes
   // not sent yet counted. `size: null`: a log written before (a run picked up after a
-  // restart), its size asked first (ready), once `after` is done (its move to the runner,
-  // runlog.mjs moveLogs()). flushed(): once what was written is sent, or its try failed.
+  // restart), its size asked first (ready). flushed(): once what was written is sent, or its try
+  // failed.
   // write(text, { step: true }): a step of the run starts with it (a phase's line), sent at the
   // start of an append of its own, so that the runner's segment closes before it. close(): the
   // run is over, its last segment closed once what was written is sent.
-  function openRemote(id, { size = 0, after = null } = {}) {
+  function openRemote(id, { size = 0 } = {}) {
     let sent = size ?? 0; // what the runner holds
     let queued = [];
     let pending = 0;
@@ -366,9 +364,7 @@ export function createRunnerClient({
     let retrying = null;
     const ready =
       size === null
-        ? Promise.resolve(after)
-            .catch(() => {})
-            .then(() => readLog(id, { offset: 0, length: 1, caller: orchestrator }))
+        ? readLog(id, { offset: 0, length: 1, caller: orchestrator })
             .then((found) => (sent = found.size))
             .catch((error) => log(`The log of ${id}: ${error.message}`))
         : Promise.resolve();
@@ -450,38 +446,6 @@ export function createRunnerClient({
     };
   }
 
-  // A log written before the runner kept them (a file of the listener's): sent in parts, from
-  // where the runner's copy ends, should a previous try have sent some of it. A runner's copy
-  // longer than the file is no try's to fix: LOG_LONGER. Each part ends where the file was
-  // redacted by (partEnd(), ../listener/runlog.mjs moveLogs()): the runner's store finds no
-  // token in one that the file's redaction didn't, but for a run of token bytes over 4 MB, cut
-  // anywhere (runlog.mjs REDACT_PART_MAX says why that is accepted). `close`: a log of a run
-  // that is over, its last segment closed once all of it is sent (../runner/logs.mjs, #664).
-  const longer = (id, file) =>
-    Object.assign(new Error(`the runner's log of ${id} is longer than ${file}`), {
-      code: "LOG_LONGER",
-    });
-  async function upload(id, file, { close = false } = {}) {
-    const total = statSync(file).size;
-    let at = (await readLog(id, { offset: 0, length: 1, caller: orchestrator })).size;
-    if (at > total) throw longer(id, file);
-    const fd = openSync(file, "r");
-    try {
-      while (at < total) {
-        const data = Buffer.alloc(Math.min(APPEND_MAX, total - at));
-        const n = readSync(fd, data, 0, data.length, at);
-        const end = at + n < total ? partEnd(data.subarray(0, n)) || n : n;
-        const after = await append(id, at, data.subarray(0, end));
-        const now = typeof after === "number" ? after : after.conflict;
-        if (now > total) throw longer(id, file);
-        at = now;
-      }
-    } finally {
-      closeSync(fd);
-    }
-    if (close) await append(id, at, Buffer.alloc(0), { close: true });
-  }
-
   const removeLog = async (id) => (await orchestrator.json("DELETE", `/logs/${path(id)}`)).removed;
 
   // --- Run events, the Antigravity login -----------------------------------------------------
@@ -538,7 +502,7 @@ export function createRunnerClient({
       info,
       egressFor,
     },
-    logs: { open: openRemote, read: readLog, text: logText, upload, remove: removeLog },
+    logs: { open: openRemote, read: readLog, text: logText, remove: removeLog },
     events,
     refreshLogin,
     info,

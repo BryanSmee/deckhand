@@ -221,15 +221,7 @@ test("the listener's reactions: claimed before GitHub is asked, on any comment, 
   assert.equal(discussions.listenerReacted("org/repo", "issue_comment:7", "eyes"), false);
 });
 
-test("the listener's reactions with the github service: noted there before GitHub is asked, reactions.json handed over", async (t) => {
-  const dir = tempDir(t);
-  const { existsSync, writeFileSync } = await import("node:fs");
-  const { join } = await import("node:path");
-  // What a listener from before the github service saved.
-  writeFileSync(
-    join(dir, "reactions.json"),
-    JSON.stringify({ "org/repo issue_comment:3 rocket": 1 }),
-  );
+test("the listener's reactions with the github service: noted there before GitHub is asked", async () => {
   const order = [];
   const shared = async (repo, subject, content, held) => {
     order.push(["claim", repo, subject, content, held]);
@@ -239,11 +231,7 @@ test("the listener's reactions with the github service: noted there before GitHu
     if (method === "DELETE") return new Response(null, { status: 204 });
     return Response.json({ id: 40, content: "eyes" }, { status: 201 });
   };
-  const comments = createComments({ config: { dataDir: dir }, github, shared, log: () => {} });
-  // The old ones go to the service, then the file goes.
-  await new Promise((resolve) => setTimeout(resolve, 20));
-  assert.deepEqual(order.shift(), ["claim", "org/repo", "issue_comment:3", "rocket", true]);
-  assert.equal(existsSync(join(dir, "reactions.json")), false);
+  const comments = createComments({ config: {}, github, shared, log: () => {} });
   const item = { repo: "Org/Repo", comment: { id: 5 } };
   comments.received(item);
   await item.eyes;

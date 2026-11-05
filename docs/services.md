@@ -210,6 +210,12 @@ holds no key); a redeliveries' scan, for the dashboard's Sync.
 **The orchestrator** (`orchestrator/server.mjs`) owns the rest: intake (deliveries to tasks,
 `/mode`, `/after`, the dashboard's actions), the tasks and the queue, a run's life, what it
 starts by itself (reviews, fixes, CI fixes, auto-merge, reviewers, conflicts, onboarding), what the dashboard shows, restarts. It holds no secret and has no way out.
+Its state is all in its store, nothing on disk beside it (#613, #619): the queue (`queue`), its
+lease and epoch (`orchestrator`), the deliveries it handled (`deliveries/handled/<guid>`), its
+maps (`<map>/<key>`: titles, waits, reviews, brainstorms…), the live runs' states (`runs/<id>`,
+without their tokens, which it asks the broker for), the runs' summaries (`summaries/<run>`).
+With the file store its `data` volume holds the store's folder alone; with Redis it has no
+volume at all, its root read-only, and a copy on any node takes over.
 Its two copies are active/passive:
 
 1. **One acts**, the one holding the `orchestrator` lease in its store (`lib/active.mjs`, 15 s,

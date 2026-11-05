@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { constants, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 import {
   ConfigError,
   loadConfig,
@@ -9,6 +10,9 @@ import {
   parseConfigFile,
   readConfigFile,
   repoAllowed,
+  dataToCheck,
+  leftInData,
+  storeFolder,
   unwritableData,
   withCredentialFiles,
 } from "../listener/config.mjs";
@@ -755,6 +759,8 @@ test("the data volume: the orchestrator says what it can't write, anywhere in it
       entry("queue.json", "file"),
       entry("x", "link"),
       entry("shots"),
+      // The filesystem's own (ext4 on a claim's block storage), root's: never checked.
+      entry("lost+found"),
     ],
     [at("logs")]: [entry("r1.json", "file")],
     [at("store")]: [entry("state.json", "file"), entry("streams")],
@@ -794,6 +800,7 @@ test("the data volume: the orchestrator says what it can't write, anywhere in it
     [at("store"), constants.W_OK | constants.X_OK],
   );
   assert.ok(!asked.some(([path]) => path === at("x")));
+  assert.ok(!asked.some(([path]) => path === at("lost+found")));
 
   // shots/: its first level only. A run's screenshot folder is checked (made and deleted
   // through it), not the screenshots in it: 90 days of them aren't read at every start. logs/'s
@@ -1005,4 +1012,78 @@ test("RUNNER_URL: http(s) URLs only, each of its copies'", () => {
   );
   const both = "http://a:8080,http://b:8080";
   assert.equal(loadConfig({ ALLOWED_USERS, RUNNER_URL: both }).runnerUrl, both);
+});
+
+// Where the orchestrator's store is in its data volume (#619): its folder, the volume itself, or
+// nowhere (another folder, Redis).
+test("storeFolder: the store's folder in the data volume, the volume itself, or none", () => {
+  const dir = resolve("data-619");
+  const url = (...parts) => pathToFileURL(join(dir, ...parts)).href;
+  assert.equal(storeFolder(url("store"), dir), "store");
+  assert.equal(storeFolder(url("state", "store"), dir), "state");
+  assert.equal(storeFolder(url(), dir), "");
+  assert.equal(storeFolder(pathToFileURL(resolve("elsewhere", "store")).href, dir), null);
+  assert.equal(storeFolder(pathToFileURL(`${dir}-2`).href, dir), null);
+  assert.equal(storeFolder(pathToFileURL(dirname(dir)).href, dir), null);
+  // A folder whose name starts with "..", in it.
+  assert.equal(storeFolder(url("..store"), dir), "..store");
+  assert.equal(storeFolder("redis://deckhand@redis:6379", dir), null);
+  assert.equal(storeFolder("memory:", dir), null);
+});
+
+// #536's check, narrowed (#619): the whole volume only while a release before left something in
+// it, or while the store's folder isn't there yet; the store's folder alone otherwise; nothing
+// with no volume.
+test("dataToCheck: the whole volume, the store's folder alone, or nothing", () => {
+  const dir = resolve("data-619");
+  const store = join(dir, "store");
+  const check = (entries, folder, exists = true) =>
+    dataToCheck(dir, folder, { list: () => entries, exists: () => exists });
+  // Something a release before left beside the store: the moves remove it.
+  assert.equal(check(["store", "logs"], "store"), dir);
+  assert.equal(check(["titles.json"], null), dir);
+  // The store alone: its folder alone, the rest never written.
+  assert.equal(check(["store"], "store"), store);
+  // A new volume, or an empty one a root orchestrator made: the store's folder made in it.
+  assert.equal(check([], "store", false), dir);
+  // Redis, or a store elsewhere, and nothing left: no volume to check (a read-only image's).
+  assert.equal(check([], null), null);
+  // The store at the volume's root: all of it is the store's.
+  assert.equal(check(["state.json", "keys"], ""), dir);
+  // The filesystem's own lost+found (ext4 on a claim's block storage): no release's.
+  assert.equal(check(["lost+found", "store"], "store"), store);
+  assert.equal(check(["lost+found"], null), null);
+});
+
+test("leftInData: what nothing reads any more, never the store's nor what is still moving", () => {
+  const dir = resolve("data-619");
+  const moving = new Set(["logs", "shots", "titles.json"]);
+  const entries = {
+    [dir]: ["store", "logs", "shots", "titles.json", "run-token.key", "queue.json"],
+    // What no move reads any more (a run log from before the runner service) beside what they do.
+    [join(dir, "logs")]: [
+      "a-1.log",
+      "a-1.json",
+      "b-2.summary.json",
+      "c-3.live.json",
+      "d.queued.json",
+    ],
+  };
+  const list = (path) => entries[path] ?? [];
+  assert.deepEqual(leftInData(dir, "store", moving, { list }), [
+    "run-token.key",
+    "queue.json",
+    "logs/a-1.log",
+  ]);
+  assert.deepEqual(leftInData(dir, null, moving, { list }), [
+    "store",
+    "run-token.key",
+    "queue.json",
+    "logs/a-1.log",
+  ]);
+  // The store at the volume's root: its own files, never named.
+  assert.deepEqual(leftInData(dir, "", moving, { list: () => ["state.json", "keys"] }), []);
+  // The filesystem's own lost+found: never named, at every start of a claim on ext4.
+  const ext4 = (path) => (path === dir ? ["lost+found", "store"] : []);
+  assert.deepEqual(leftInData(dir, "store", moving, { list: ext4 }), []);
 });

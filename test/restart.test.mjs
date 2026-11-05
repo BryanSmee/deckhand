@@ -15,7 +15,7 @@ import {
 } from "../listener/restart.mjs";
 import { createTasks, newTask } from "../listener/tasks.mjs";
 import { ambiguous, respellMap, respelled, spellings } from "../listener/spelling.mjs";
-import { openLog } from "../listener/runlog.mjs";
+import { openLog, SUMMARIES, summaryKey } from "../listener/runlog.mjs";
 import { createRuns } from "../listener/runs.mjs";
 import { fileStore } from "../lib/store-file.mjs";
 import { openStore, values } from "../lib/store.mjs";
@@ -268,7 +268,7 @@ function twoSpellings(t, { live, newest }) {
   );
   // The same task queued under both: one task once loaded.
   writeFileSync(
-    join(dir, "queue.json"),
+    join(dir, "r0.queued.json"),
     JSON.stringify([
       { repo: "storywake/storywake", id: "4", kind: "issue", pending: [], next: { model: "x" } },
       {
@@ -900,23 +900,6 @@ test("a comment both in the queue and in a run's saved state is the run's alone"
   assert.deepEqual(await store.get(QUEUE_KEY), {});
 });
 
-test("a queue.json a listener from before the store left: loaded once, then in the store", async (t) => {
-  const dir = tempDir(t);
-  const store = fileStore();
-  writeFileSync(
-    join(dir, "queue.json"),
-    JSON.stringify([{ ...queued("7"), pending: [{ ...queued("7"), eyes: 5 }], next: {} }]),
-  );
-  const ctx = queueContext(t, dir, store);
-  await ctx.loadQueue();
-  // Saved before deadlines were: its pause starts again.
-  assert.deepEqual(ctx.armed, [["7", undefined]]);
-  assert.throws(() => readFileSync(join(dir, "queue.json")), { code: "ENOENT" });
-  const saved = await store.get(QUEUE_KEY);
-  assert.deepEqual(Object.keys(saved), ["org/repo#7"]);
-  assert.equal(saved["org/repo#7"].pending[0].eyes, 5);
-});
-
 test("a run's output read is saved with it once a second, and nothing once it is over", async (t) => {
   const dir = tempDir(t);
   const ctx = queueContext(t, dir, fileStore());
@@ -1144,13 +1127,13 @@ test("a run's state that couldn't be written: its comments stay in the queue unt
   assert.deepEqual(await ids(), []);
 });
 
-test("a queue.json whose comments the store didn't take stays for the next start", async (t) => {
+test("a .queued.json whose comments the store didn't take stays for the next start", async (t) => {
   const dir = tempDir(t);
   const store = fileStore();
   store.set = async () => {
     throw new Error("the store is down");
   };
-  const path = join(dir, "queue.json");
+  const path = join(dir, "r0.queued.json");
   writeFileSync(path, JSON.stringify([{ ...queued("7"), pending: [queued("7")], next: {} }]));
   const ctx = queueContext(t, dir, store);
   await ctx.loadQueue();
@@ -1241,9 +1224,10 @@ test("a comment holding a token or a private key: the queue is saved without the
 });
 
 // A run ending (runs.mjs teardown()) while the store refuses every write (until `down.on` is
-// false), `item` put back in its task's queue by its end. Its state as saveLive() wrote it last.
-// → once its end waits for the store, with `ended`, its end's promise.
-async function endWhileStoreDown(t) {
+// false) but its summary's (all of them with `summary`), `item` put back in its task's queue by
+// its end. Its state as saveLive() wrote it last. → once its end waits for the store, with
+// `ended`, its end's promise.
+async function endWhileStoreDown(t, { summary = false } = {}) {
   const dir = tempDir(t);
   const store = fileStore();
   const lines = [];
@@ -1251,10 +1235,12 @@ async function endWhileStoreDown(t) {
   Object.assign(ctx, {
     shotsDir: dir,
     broker: { revoke: () => {}, secretsOf: () => [] },
-    runner: { remove: async () => {} },
+    runner: { remove: async () => removed.push("r1") },
     queueRetryMs: 10,
     stopping: false,
   });
+  // The sandboxes removed.
+  const removed = [];
   const { teardown } = createRuns(ctx);
   const item = queued("1", { queueId: "q-1", eyes: Promise.resolve(3) });
   await saveRun(
@@ -1270,8 +1256,10 @@ async function endWhileStoreDown(t) {
   const { set, delete: remove } = store;
   // `refused`: how many writes it refused.
   const down = { on: true, refused: 0 };
-  store.set = (...args) =>
-    down.on ? (down.refused++, Promise.reject(new Error("disk full"))) : set(...args);
+  store.set = (key, ...args) =>
+    down.on && (summary || !key.startsWith(SUMMARIES))
+      ? (down.refused++, Promise.reject(new Error("disk full")))
+      : set(key, ...args);
   store.delete = (...args) => (down.on ? Promise.reject(new Error("disk full")) : remove(...args));
   const task = newTask({ ...queued("1"), name: "deckhand-org-repo-1" });
   task.live = {
@@ -1287,10 +1275,11 @@ async function endWhileStoreDown(t) {
   ctx.tasks.set("org/repo#1", task);
   task.pending.push(item);
   const ended = teardown(task);
-  await until(() => lines.some((line) => /its state stays until the queue is saved/.test(line)), {
+  const waits = summary ? /saving the summary of r1/ : /its state stays until the queue is saved/;
+  await until(() => lines.some((line) => waits.test(line)), {
     what: "the end to wait for the store",
   });
-  return { dir, store, ctx, down, task, ended };
+  return { dir, store, ctx, down, task, ended, removed, lines };
 }
 
 test("a run's end the queue couldn't be written for: tried again until it lands, then its state goes, its task held meanwhile", async (t) => {
@@ -1344,6 +1333,34 @@ test("a copy that stops while its run's end can't write the queue: the next has 
   );
 });
 
+// Nothing is kept beside the store (#619): a summary it doesn't take is tried again, the run
+// left as it is meanwhile, its sandbox and its state.
+test("a run's end whose summary the store doesn't take: tried again, its sandbox and state kept until it lands, or for the next copy", async (t) => {
+  const first = await endWhileStoreDown(t, { summary: true });
+  const before = first.down.refused;
+  await until(() => first.down.refused >= before + 2, { what: "two more tries of the summary" });
+  assert.deepEqual(first.removed, []);
+  assert.ok(await savedRun(first.store, "r1"));
+  assert.equal(first.task.running, true);
+  first.down.on = false;
+  await first.ended;
+  // Its first failure said, and the try that landed: not each one in between.
+  const said = first.lines.filter((line) => /summary/.test(line));
+  assert.equal(said.length, 2, said.join("\n"));
+  assert.match(said[1], /its summary saved, at try \d+/);
+  assert.equal((await first.store.get(summaryKey("r1"))).id, "r1");
+  assert.deepEqual(first.removed, ["r1"]);
+  assert.equal(await savedRun(first.store, "r1"), null);
+  // A copy that stops meanwhile: nothing of the run goes, for the next copy to end it again.
+  const second = await endWhileStoreDown(t, { summary: true });
+  second.ctx.stopping = true;
+  assert.equal(await second.ended, false);
+  second.down.on = false;
+  assert.deepEqual(second.removed, []);
+  assert.ok(await savedRun(second.store, "r1"));
+  assert.equal(await second.store.get(summaryKey("r1")), null);
+});
+
 test("a task's queue a listener of the release before kept in logs/<run>.queued.json: loaded, then removed once in the store", async (t) => {
   const dir = tempDir(t);
   const store = fileStore();
@@ -1368,7 +1385,7 @@ test("comments saved before queueIds get one as they come back", async (t) => {
   const dir = tempDir(t);
   const store = fileStore();
   writeFileSync(
-    join(dir, "queue.json"),
+    join(dir, "r0.queued.json"),
     JSON.stringify([{ ...queued("7"), pending: [queued("7")], next: {} }]),
   );
   const ctx = queueContext(t, dir, store);
@@ -1378,13 +1395,13 @@ test("comments saved before queueIds get one as they come back", async (t) => {
   assert.equal((await store.get(QUEUE_KEY))["org/repo#7"].pending[0].queueId, item.queueId);
 });
 
-test("a queue.json the first write didn't take: removed after the next that succeeds", async (t) => {
+test("a .queued.json the first write didn't take: removed after the next that succeeds", async (t) => {
   const dir = tempDir(t);
   const store = fileStore();
   const set = store.set;
   let down = true;
   store.set = (...args) => (down ? Promise.reject(new Error("disk full")) : set(...args));
-  const path = join(dir, "queue.json");
+  const path = join(dir, "r0.queued.json");
   writeFileSync(path, JSON.stringify([{ ...queued("7"), pending: [queued("7")], next: {} }]));
   const ctx = queueContext(t, dir, store);
   await ctx.loadQueue();

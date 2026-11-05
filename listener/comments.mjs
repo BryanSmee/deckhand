@@ -1,11 +1,8 @@
 // What the listener writes on GitHub for a run: its reply (a comment, or in a discussion's
 // thread), the reactions on the comments it handled, and the needs-input label.
-import { rmSync } from "node:fs";
-import { join } from "node:path";
 import { hasLabel, MARKER } from "./events.mjs";
 import { getJson } from "./github.mjs";
 import { reactionSubject } from "./github-writes.mjs";
-import { readJson } from "../lib/files.mjs";
 
 // GitHub's reactions have no ✅: 🚀 reads as "shipped" and isn't mistaken for a manual 👍.
 // A wrap-up ("/stop") and a cancelled run's comments only lose their 👀; a `/cancel` gets 👍.
@@ -148,21 +145,7 @@ export function createComments({
   // A run's reactions are the same bot's: GitHub keeps one per user and content, so where the
   // run's came first, the listener's POST answers with it, and the run never removes these
   // (github-writes.mjs listenerReacted). Kept by the github service, whose gateway reads them
-  // (`shared`); those a listener from before it saved in reactions.json go there at start, and
-  // the file goes once they are there.
-  const legacy = config.dataDir ? join(config.dataDir, "reactions.json") : null;
-  if (shared && legacy) {
-    const all = Object.keys(readJson(legacy, {}) ?? {});
-    Promise.all(all.map((key) => shared(...key.split(" "), true)))
-      .then(() => {
-        rmSync(legacy, { force: true });
-        if (!all.length) return;
-        log(
-          `The listener's ${all.length} reaction(s) from reactions.json: the github service has them`,
-        );
-      })
-      .catch((error) => log(`The listener's reactions: not handed over (${error.message})`));
-  }
+  // (`shared`).
   const claimKey = (repo, comment, content) => {
     const reacted = { id: comment.id, type: comment.review ? "review" : "issue" };
     return `${String(repo).toLowerCase()} ${reactionSubject({ reacted })} ${content}`;
