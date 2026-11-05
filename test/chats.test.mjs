@@ -895,6 +895,8 @@ test("requests: what is approved once for a start goes to the next one alone (st
   assert.deepEqual(chats.startProfile(task).capabilities, ["pull", "setup"]);
   // A start that fails before its preparation is through keeps it for the next one.
   assert.deepEqual(chats.startProfile(task).capabilities, ["pull", "setup"]);
+  // After a handover, the run's copy of it is another object: still the same approval.
+  task.live.once = structuredClone(task.live.once);
   chats.spentOnce(task);
   assert.deepEqual(chats.startProfile(task).capabilities, ["pull"]);
   // Saved for the chat only within its ceiling: refused, the sandbox's hosts untouched.

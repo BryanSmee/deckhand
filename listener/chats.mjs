@@ -637,6 +637,8 @@ export function createChats(
         hosts: live?.hosts ?? null,
         mounts: live?.mounts ?? [],
         engine: !!live?.engine,
+        // No SANDBOX_ENGINE: no run gets one (access.mjs engineFor()).
+        engines: !!config.engine,
         // With the open internet, no host mount (preparation.mjs).
         internet: !!live?.capabilities?.includes("internet"),
       },
@@ -692,7 +694,8 @@ export function createChats(
   function spentOnce(task) {
     const chat = subjectOf(task);
     const used = task.live?.once;
-    if (!chat || !used || chat.once !== used) return;
+    // By value: after a handover, each comes from a store of its own.
+    if (!chat || !used || JSON.stringify(chat.once) !== JSON.stringify(used)) return;
     chat.once = null;
     save();
   }

@@ -151,13 +151,6 @@ export function createRequests(
       return closed("refused", "Refused: this run may not ask for permissions.");
     }
     record.chat = subject.id;
-    const waiting = [...requests.values()].filter((r) => r.run === run && r.state === "pending");
-    if (waiting.length > WAITING_MAX) {
-      return closed(
-        "refused",
-        `Refused: ${WAITING_MAX} requests of yours wait for an answer already; ask again once they have one.`,
-      );
-    }
     busy.add(id);
     try {
       await save({ strict: true });
@@ -185,6 +178,17 @@ export function createRequests(
     if (record.state !== "pending") return;
     if (!taskOfRun(run)) return close(record, "denied", "Denied: this sandbox's run has ended.");
     if (decided.verdict === "ask") {
+      // Those that wait for an answer: not those being decided, which may never wait.
+      const waiting = [...requests.values()].filter(
+        (r) => r.run === run && r.state === "pending" && r.what !== null,
+      );
+      if (waiting.length >= WAITING_MAX) {
+        return close(
+          record,
+          "refused",
+          `Refused: ${WAITING_MAX} requests of yours wait for an answer already; ask again once they have one.`,
+        );
+      }
       Object.assign(record, { what: decided.what, adds: decided.adds, live: decided.live });
       arm(record);
       await save();

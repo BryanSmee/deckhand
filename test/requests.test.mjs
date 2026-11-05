@@ -242,6 +242,25 @@ test("an agent asking in parallel: past WAITING_MAX, refused until the others ar
   );
 });
 
+test("WAITING_MAX counts the requests waiting, not those still being decided", async () => {
+  const given = { verdict: "given", message: "Granted: this sandbox reads GitHub already." };
+  let decided;
+  const { requests, told } = setup({
+    verdicts: { host: ASK, github: new Promise((resolve) => (decided = resolve)) },
+  });
+  // Three being decided (granted at once in the end), then three that wait: none refused.
+  const deciding = [1, 2, 3].map((n) => requests.received(event(n, "github", { value: "read" })));
+  for (const n of [4, 5, 6]) await requests.received(event(n));
+  decided(given);
+  await Promise.all(deciding);
+  await settled();
+  assert.equal(requests.waitingFor(CHAT).length, 3);
+  assert.deepEqual(
+    told.map((t) => t.state),
+    ["granted", "granted", "granted"],
+  );
+});
+
 test("a request read again from the stream isn't asked twice; one that can't be decided is refused", async () => {
   const { requests, told } = setup({
     verdicts: { host: ASK, engine: new Error("the policies are away") },

@@ -277,6 +277,10 @@ test("the engine: refused without the policies' and the operator's grant, asked 
     verdict({ kind: "engine" }, { c, live: { ...LIVE, engine: true } }).verdict,
     "given",
   );
+  // Granted, but no SANDBOX_ENGINE: no start gives it, so nobody is asked.
+  const none = verdict({ kind: "engine" }, { c, profile: off, live: { ...LIVE, engines: false } });
+  assert.equal(none.verdict, "beyond");
+  assert.match(none.message, /the operator hasn't set SANDBOX_ENGINE, so no run gets one/);
 });
 
 test("a mount: only the repository's granted ones, read-only, for the next start", () => {

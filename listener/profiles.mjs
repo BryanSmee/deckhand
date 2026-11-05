@@ -327,6 +327,12 @@ export function requestVerdict({ kind, value }, { ceiling, profile, live }) {
     const row = ceiling.capabilities.find((c) => c.name === "docker");
     if (!row?.allowed) return beyond(`the container engine: ${row?.reason ?? "not offered"}`);
     if (live.engine) return given("this sandbox has a container engine already");
+    // Granted, but the deployment has none: no start would give it (access.mjs engineFor()).
+    if (live.engines === false) {
+      return beyond(
+        "the container engine: the operator hasn't set SANDBOX_ENGINE, so no run gets one",
+      );
+    }
     const adds = { capabilities: withNeeds("docker", ceiling) };
     const has =
       saved.capabilities === null || adds.capabilities.every((c) => saved.capabilities.includes(c));
