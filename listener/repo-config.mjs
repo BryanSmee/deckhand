@@ -602,6 +602,11 @@ const none = (values) => (values.length ? values.join(", ") : "none");
 const asIs = ({ value, row }) => row(String(value));
 const orNone = ({ value, row }) => row(value ?? "none");
 
+// `language`: a name or code ("French", "pt-BR", "Simplified Chinese") on one line, not a
+// paragraph: no control character or line separator.
+const MAX_LANGUAGE = 40;
+const ONE_LINE = /^[^\p{C}\u2028\u2029]+$/u;
+
 // Each top-level key of the file:
 // - field: what it sets in `settings`; none for the keys that are only ignored (a warning);
 // - default: its value without the key, or a function of the operator's config;
@@ -708,6 +713,21 @@ export const KEYS = {
     display: orNone,
   },
   instructions: { field: "instructions", default: null, parse: pathKey, display: orNone },
+  // The language its runs write in for people (language.mjs languageLine()); none: English.
+  language: {
+    field: "language",
+    default: null,
+    parse: (value, { key, settings, fail }) => {
+      const name = typeof value === "string" ? value.trim() : "";
+      if (name.length <= MAX_LANGUAGE && ONE_LINE.test(name)) settings.language = name;
+      else
+        fail(
+          key,
+          `expected a language's name or code on one line (French, fr), at most ${MAX_LANGUAGE} characters`,
+        );
+    },
+    display: ({ value, row }) => row(value ?? "none: English"),
+  },
   dockerfile: {
     field: "dockerfile",
     default: null,

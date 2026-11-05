@@ -4,6 +4,7 @@ import { readFileSync } from "node:fs";
 import { entryName } from "./agents/index.mjs";
 import { entryLabel, providerLabel } from "./agents/select.mjs";
 import { mandatoryHosts } from "./egress.mjs";
+import { languageLine } from "./language.mjs";
 import { FRESH, INBOX, MODES } from "./modes.mjs";
 import { triggerWord } from "./onboarding.mjs";
 import { blockingSeverities } from "./reviews.mjs";
@@ -446,8 +447,15 @@ ${instructions.trim()}`;
 // `pull`: the issue or pull request the reply goes to, the one a review reads; `allowed`: a
 // review's tolerance (reviews' tolerance()); `ciNote`: a review's CI note, `reviewed` the
 // commit it reads (reviewPrompt());
-// `capabilities`: what its sandbox gets (capabilities.mjs), null when not known.
-export function promptFor(
+// `capabilities`: what its sandbox gets (capabilities.mjs), null when not known. The repo's
+// `language` closes it, whatever the mode.
+export function promptFor(task, options) {
+  const { settings, mode } = options;
+  const text = promptOf(task, options);
+  return settings?.language ? `${text}\n\n${languageLine(settings.language, mode)}` : text;
+}
+
+function promptOf(
   task,
   {
     mode,

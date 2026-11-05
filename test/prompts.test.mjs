@@ -22,6 +22,7 @@ import {
   resolved,
 } from "../listener/agents/select.mjs";
 import { replyFooter } from "../listener/footer.mjs";
+import { languageLine } from "../listener/language.mjs";
 
 const settings = {
   model: "opus",
@@ -992,4 +993,61 @@ test("openingMessages: another agent taking over is handed who stopped, why, wha
     { started: true },
   );
   assert.equal(retry.handoff, false);
+});
+
+test("prompts: the repo's `language` closes every mode's prompt; without it, nothing is added (#919)", () => {
+  const french = { ...settings, language: "French" };
+  const line = languageLine("French");
+  // Only what people read; what the listener parses stays English (#705, #711).
+  assert.match(
+    line,
+    /^Write in French everything this run produces for people \(replies, issues, pull requests, comments\)/,
+  );
+  assert.match(line, /code, code comments and commit messages stay in English/);
+  for (const token of ["<!-- needs-input -->", "Open questions", "None", "(recommended)"]) {
+    assert.ok(line.includes(`\`${token}\``), token);
+  }
+  const own = { name: "audit" };
+  const runs = {
+    work: [issue, { mode: "work" }],
+    "work on a pull request": [pr, { mode: "work" }],
+    "onboarding work": [issue, { mode: "work", onboardingWork: true }],
+    "work without push": [issue, { mode: "work", capabilities: ["pull"] }],
+    "work without pull": [issue, { mode: "work", capabilities: [] }],
+    brainstorm: [issue, { mode: "brainstorm" }],
+    stop: [issue, { mode: "stop" }],
+    idea: [issue, { mode: "idea" }],
+    bug: [issue, { mode: "bug" }],
+    discussion: [issue, { mode: "discussion" }],
+    analyze: [issue, { mode: "analyze" }],
+    research: [issue, { mode: "research" }],
+    review: [pr, { mode: "review", allowed: "low" }],
+    chat: [issue, { mode: "chat" }],
+    onboarding: [issue, { mode: "onboarding" }],
+    "the repo's own mode": [issue, { mode: "audit", own, instructions: "Audit it.\n" }],
+  };
+  for (const [name, [task, options]] of Object.entries(runs)) {
+    const base = { text: "the comments", config, grant, ...options };
+    const plain = promptFor(task, { ...base, settings });
+    const said = promptFor(task, { ...base, settings: french });
+    assert.equal(said, `${plain}\n\n${languageLine("French", options.mode)}`, name);
+    assert.doesNotMatch(plain, /Write in French/, name);
+  }
+  // A review's whole format is read in English (reviews.mjs parseReview()): it stays so.
+  const review = languageLine("French", "review");
+  assert.ok(review.startsWith(line.slice(0, -1)));
+  for (const token of [
+    "## Must fix",
+    "## Follow-ups",
+    "## Comments",
+    "`high`",
+    "`blocking`",
+    "`note`",
+    "`None.`",
+    "`Rating: <n>/10`",
+    "`Verdict: approve|comment|request-changes`",
+  ]) {
+    assert.ok(review.includes(token), token);
+  }
+  assert.doesNotMatch(line, /Rating/);
 });

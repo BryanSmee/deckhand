@@ -474,6 +474,36 @@ test("the entrypoint's brainstorm note matches the mid-run one", () => {
   assert.ok(liveMessage("brainstorm", "Hi").includes(note.slice(0, -1)));
 });
 
+// The entrypoint's close_language(), run alone: the repo's `language` line ends the prompt
+// whatever a continued session's notes put after TASK_PROMPT, once (#919).
+test(
+  "the entrypoint closes the prompt with TASK_LANGUAGE, unless it already ends with it",
+  { skip: needsBash },
+  (t) => {
+    const code = readFileSync(`${bin}entrypoint.sh`, "utf8");
+    const fn = code.match(/^close_language\(\) \{\n[^]*?^\}$/m)?.[0];
+    assert.ok(fn);
+    const close = (prompt, language) =>
+      spawnSync("bash", ["-c", `${fn}\nprompt=$PROMPT; close_language; printf '%s' "$prompt"`], {
+        env: scriptEnv(t, { PROMPT: prompt, TASK_LANGUAGE: language }),
+        encoding: "utf8",
+      }).stdout;
+    const line = "Write in French (`None`, *, $HOME).";
+    // A continued work run: the entrypoint's paragraph after the message, then the engine's note.
+    assert.equal(
+      close("New feedback: hi\n\nAddress it.\n\n", line),
+      `New feedback: hi\n\nAddress it.\n\n${line}`,
+    );
+    // A new session with nothing after its prompt: as it is.
+    assert.equal(close(`The task.\n\n${line}\n\n`, line), `The task.\n\n${line}\n\n`);
+    // No language: nothing added.
+    assert.equal(
+      close("New comment: hi\n\n(Still in the audit mode.)", ""),
+      "New comment: hi\n\n(Still in the audit mode.)",
+    );
+  },
+);
+
 // A new Kubernetes claim is root's, which git calls dubious ownership (#643): /workspace is
 // trusted before the clone, once however often the entrypoint runs with the same $HOME.
 test("the entrypoint trusts /workspace before cloning into it", { skip: needsBash }, (t) => {

@@ -3,6 +3,7 @@ import { test } from "node:test";
 import { ConfigError } from "../listener/config.mjs";
 import { AGENTS } from "../listener/agents/index.mjs";
 import { sandboxArgs } from "../listener/runner/docker.mjs";
+import { languageLine } from "../listener/language.mjs";
 import { createBackend } from "../listener/runner/index.mjs";
 import {
   SANDBOX_USER,
@@ -219,6 +220,19 @@ test("tokens: the run's tokens, bound to its sandbox, the agent's in place of a 
     mounts: [],
   });
   assert.equal((await codex.tokens("net-2")).OPENAI_API_KEY, "agent-deckhand-org-app-12-1@net-2");
+});
+
+test("sandboxEnv: the repo's `language` line, the mode's, for the entrypoint to close the prompt with (#919)", () => {
+  assert.equal(sandboxEnv(runOf(), "p", "m", parts.settings, null).TASK_LANGUAGE, "");
+  const french = { ...parts.settings, language: "French" };
+  assert.equal(
+    sandboxEnv(runOf(), "p", "m", french, null).TASK_LANGUAGE,
+    languageLine("French", "work"),
+  );
+  assert.equal(
+    sandboxEnv(runOf({ mode: "review", kind: "pr" }), "p", "m", french, null).TASK_LANGUAGE,
+    languageLine("French", "review"),
+  );
 });
 
 test("sandboxEnv: its prompt, mode and setup", () => {

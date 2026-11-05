@@ -4,6 +4,7 @@
 // task (with its `live`, runs.mjs), agent (agents/), bot (the App's git identity), publicUrl,
 // broker (broker.mjs, which signs the run's tokens: tokens()) }.
 import { proxyEnv } from "./egress.mjs";
+import { languageLine } from "./language.mjs";
 import { restricted } from "./github-forks.mjs";
 import { isApart, isFresh, RESEARCH } from "./modes.mjs";
 import { ENGINE_HOST } from "./runner/engine.mjs";
@@ -219,6 +220,10 @@ export function sandboxEnv(
     BASE_BRANCH: task.base,
     TASK_PROMPT: prompt,
     TASK_MESSAGE: message,
+    // The repo's `language` (language.mjs languageLine()): TASK_PROMPT ends with it, and the
+    // entrypoint adds it again after what it says past the prompt (a continued session's
+    // notes), so it stays the last thing the agent reads.
+    TASK_LANGUAGE: settings.language ? languageLine(settings.language, live.mode) : "",
     // work, brainstorm, idea, bug, discussion or one of the repo's own modes.
     TASK_MODE: mode,
     // A new session each time, which doesn't replace the issue's (inbox entries, fresh modes),
