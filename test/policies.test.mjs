@@ -890,6 +890,32 @@ test("check: an operator's bindings that Deckhand's access.rego cancels out are 
   }
   const [both] = await warned({ "a.rego": bindings, "b.rego": bindings });
   assert.match(both, /^The grants folder's policy\/a\.rego, policy\/b\.rego define `bindings`/);
+
+  // Deckhand's replaced by a copy that keeps its `*`, bindings added below it (#862).
+  const copy = `${own.trimEnd()}\n\n${bindings.replace("package deckhand\n\n", "")}`;
+  const [kept, ...none] = await warned({ "access.rego": copy });
+  assert.deepEqual(none, []);
+  assert.match(
+    kept,
+    /^The grants folder's policy\/access\.rego defines `bindings`, but policy\/access\.rego still gives every action to every login .*: the bindings narrow nothing\. Remove that rule/,
+  );
+  const star = 'package deckhand\n\nallow_access contains "*" if true # everyone\n';
+  const [apart] = await warned({ "access.rego": star, "bindings.rego": bindings });
+  assert.match(
+    apart,
+    /^The grants folder's policy\/bindings\.rego defines `bindings`, but policy\/access\.rego still gives/,
+  );
+  // The `*` commented out, given a condition, or in another package: the bindings decide.
+  for (const access of [
+    copy.replace('allow_access contains "*"', '# allow_access contains "*"'),
+    copy.replace(
+      'allow_access contains "*"',
+      'allow_access contains "*" if input.user.login == "root"',
+    ),
+    star.replace("deckhand", "other"),
+  ]) {
+    assert.deepEqual(await warned({ "access.rego": access, "bindings.rego": bindings }), []);
+  }
 });
 
 test("check: an operator's allow_github or allow_push whatever the input is warned of", async (t) => {

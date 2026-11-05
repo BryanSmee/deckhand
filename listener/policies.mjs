@@ -177,8 +177,11 @@ const UNKNOWN_ROLE = "deckhand:unknown-role:";
 const unknownRole = (role) =>
   `\`bindings\` of the operator's policies give the role \`${role}\`, which \`access_roles\` doesn't define: its bindings give nothing but their own \`actions\``;
 
-// Deckhand's policy/access.rego's one rule: every action, for every login (access()'s shortcut).
-const EVERY_ACTION = /^allow_access\s+contains\s+"\*"\s*(?:#.*)?$/m;
+// Deckhand's policy/access.rego's one rule: every action, for every login (access()'s shortcut),
+// or an operator's copy of it that kept it (bindingsCancelled()). With a condition (the
+// operator's own logins, say), it doesn't match: that `*` is the operator's choice.
+const EVERY_ACTION =
+  /^allow_access\s+contains\s+"\*"\s*(?:if\s+true|if\s*\{\s*true\s*\})?\s*(?:#.*)?$/m;
 
 // access()'s answer, read-only: kept and given to every caller for ACCESS_MS.
 const frozen = ({ actions, denied, files, error }) =>
@@ -1496,17 +1499,24 @@ export function createPolicies({
   // access.rego is still in effect, not replaced or replaced by a copy of it: its
   // `allow_access contains "*"` is in the union, so every login keeps every action whatever the
   // bindings say (#764). → the warning, or null.
+  // Or, Deckhand's replaced, the operator's files that keep its `allow_access contains "*"`
+  // (a copy of it, bindings added below its line): the same union, the same trap (#862).
   function bindingsCancelled(operator) {
     // Deckhand's as the service last gave them; unknown, describe() says why.
     const own = knownOwn?.get(ACCESS);
     if (!own) return null;
-    const replaced = operator.get(ACCESS);
-    if (replaced !== undefined && replaced !== own) return null;
-    const files = [...operator]
-      .filter(([, text]) => /^\s*package\s+deckhand\s*$/m.test(text) && BINDINGS.test(text))
-      .map(([name]) => `policy/${name}`);
+    const ours = [...operator].filter(([, text]) => /^\s*package\s+deckhand\s*$/m.test(text));
+    const named = (test) => ours.filter(([, text]) => test.test(text)).map(([n]) => `policy/${n}`);
+    const files = named(BINDINGS);
     if (!files.length) return null;
-    return `The grants folder's ${files.join(", ")} define${files.length === 1 ? "s" : ""} \`bindings\`, but Deckhand's ${ACCESS} still gives every action to every login (\`allow_access contains "*"\`): the bindings narrow nothing. Write them in the grants folder's policy/${ACCESS}, which replaces Deckhand's`;
+    const define = `The grants folder's ${files.join(", ")} define${files.length === 1 ? "s" : ""} \`bindings\``;
+    const replaced = operator.get(ACCESS);
+    if (replaced === undefined || replaced === own) {
+      return `${define}, but Deckhand's ${ACCESS} still gives every action to every login (\`allow_access contains "*"\`): the bindings narrow nothing. Write them in the grants folder's policy/${ACCESS}, which replaces Deckhand's`;
+    }
+    const every = named(EVERY_ACTION);
+    if (!every.length) return null;
+    return `${define}, but ${every.join(", ")} still give${every.length === 1 ? "s" : ""} every action to every login (\`allow_access contains "*"\`, kept from Deckhand's ${ACCESS}): the bindings narrow nothing. Remove that rule, or give it a condition`;
   }
 
   // A repo's files named as one of the operator's layer (`under`, name → text): it no longer
