@@ -24,10 +24,9 @@
 // checked against what the policies and the grants give on every save and at every start
 // (preparation.mjs).
 import { randomBytes } from "node:crypto";
-import { capabilitiesInput, outcomeOf } from "./capabilities.mjs";
+import { runOutcome } from "./capabilities.mjs";
 import { MODEL_TIERS, repoAllowed } from "./config.mjs";
 import { EFFORTS, MODEL_NAME, taskKey } from "./events.mjs";
-import { grantCheck, grantsBy } from "./grants.mjs";
 import { removeRun } from "./history.mjs";
 import { refusal as accessRefusal, startAction } from "./permissions.mjs";
 import { entryLabel, pickable, pickProblem } from "./agents/select.mjs";
@@ -373,19 +372,7 @@ export function createChats(
     const task = ensureTask(chat);
     task.settings = settings;
     task.base = base;
-    task.pending.push({
-      repo: chat.repo,
-      id: task.id,
-      kind: "chat",
-      number: null,
-      author: String(user).toLowerCase(),
-      text,
-      mode: "chat",
-      replyTo: null,
-      dashboard: true,
-      queuedAt: now(),
-      queueId: queueId(),
-    });
+    task.pending.push(messageItem(chat, user, text));
     // In the store at once (restart.mjs): a listener killed now doesn't lose it.
     ctx.saveQueue?.();
     if (!task.running) ctx.startLater(task);
@@ -398,6 +385,22 @@ export function createChats(
     }
     arm(chat);
   }
+
+  // The item `user`'s message `text` queues, like a comment's (tasks.mjs): what its run's
+  // capabilities are decided from too, so ceiling() reads the one its next run starts with.
+  const messageItem = (chat, user, text) => ({
+    repo: chat.repo,
+    id: chatTaskId(chat.id),
+    kind: "chat",
+    number: null,
+    author: String(user).toLowerCase(),
+    text,
+    mode: "chat",
+    replyTo: null,
+    dashboard: true,
+    queuedAt: now(),
+    queueId: queueId(),
+  });
 
   const answeredClosed = (live) =>
     !!live &&
@@ -527,33 +530,28 @@ export function createChats(
 
   // What `chat`'s profile may hold (profiles.mjs ceilingOf()): what a `chat` run of its
   // repository gets now, from its policies on its default branch, its config and the operator's
-  // grant, as its next run would start with them (preparation.mjs capabilitiesOf()), after the
-  // checks of a message (checked()). → { ceiling, errors }: `errors`, what would stop its next
-  // run whatever its profile.
+  // grant, as its next run starts with them (capabilities.mjs runOutcome(), from the item its
+  // message queues: messageItem()), after the checks of a message (checked()). → { ceiling,
+  // errors }: `errors`, what would stop its next run whatever its profile.
   async function ceiling(chat, user) {
     const { settings, base, isPrivate } = await checked(chat.repo, user);
     if (!ctx.policies) refuse(503, "No policies to decide what a chat gets.");
-    const repo = { name: chat.repo, private: isPrivate };
-    const input = capabilitiesInput({ repo, mode: "chat", fork: false, trigger: "dashboard" });
-    const said = await ctx.policies.capabilityRules(chat.repo, base, { chat: input });
-    if (said.error) {
-      refuse(503, `What ${chat.repo}'s chats get can't be decided now: ${said.error}`);
-    }
-    const check = await grantCheck(config, chat.repo, settings, {
-      granted: grantsBy(ctx.policies),
+    const decided = await runOutcome(ctx, {
+      repo: { name: chat.repo, private: isPrivate },
+      base,
+      settings,
+      mode: "chat",
+      item: messageItem(chat, user, ""),
+      fork: false,
     });
-    if (check.error) {
-      log(`Chats: ${chat.repo}: ${check.error.message}`);
+    if (decided.error) {
+      refuse(503, `What ${chat.repo}'s chats get can't be decided now: ${decided.error}`);
+    }
+    if (decided.grantsError) {
+      log(`Chats: ${chat.repo}: ${decided.grantsError.error.message}`);
       refuse(503, "The operator's grants folder has errors: no chat starts until they are fixed.");
     }
-    const outcome = outcomeOf({
-      rules: said.results.chat,
-      custom: false,
-      settings,
-      grant: check.grant,
-      repo,
-      mode: "chat",
-    });
+    const { outcome, check } = decided;
     const limit = ceilingOf({ outcome, grant: check.grant, mounts: check.mounts.mounts });
     return { ceiling: limit, errors: outcome.errors.map((e) => e.replaceAll("`", "")) };
   }

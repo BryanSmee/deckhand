@@ -5,6 +5,7 @@ import assert from "node:assert/strict";
 import { mkdirSync, realpathSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
+import { runInput } from "../listener/capabilities.mjs";
 import { chatKey, createChats } from "../listener/chats.mjs";
 import { DEFAULT_PROFILE } from "../listener/profiles.mjs";
 import { createRepoCheck } from "../listener/repo-check.mjs";
@@ -658,6 +659,27 @@ test("permissions: the ceiling a chat's run gets, a profile saved within it, wha
   // Someone else's: no such chat.
   assert.equal((await refusal(chats.permissions("bob", chat.id))).status, 404);
   assert.equal((await refusal(chats.setPermissions("bob", chat.id, { profile: {} }))).status, 404);
+});
+
+test("permissions: the panel's ceiling is decided from the item a message queues, as its run's start reads it (#835)", async (t) => {
+  const policies = capabilityPolicies();
+  const { chats, ctx } = await setup(t, {
+    env: { GRANTS_DIR: grantsFolder(t, "hosts: []\n") },
+    policies,
+  });
+  const chat = await chats.create("alice", { repo: "org/repo", message: "hi" });
+  await chats.permissions("alice", chat.id);
+  const task = ctx.tasks.get(chatKey(chat));
+  // What preparation.mjs capabilitiesOf() asks the policies with, from the queue's last item.
+  const started = runInput({
+    repo: { name: task.repo, private: true },
+    mode: task.pending.at(-1).mode,
+    issue: task.number,
+    item: task.pending.at(-1),
+    fork: false,
+  });
+  assert.deepEqual(policies.inputs.at(-1), started);
+  assert.equal(started.trigger, "dashboard");
 });
 
 test("permissions: a chat whose capabilities can't be decided answers a 503, saving nothing", async (t) => {
