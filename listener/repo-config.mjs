@@ -189,9 +189,6 @@ export function fileLines(text) {
 const SYNTAX_FIX = "Fix the YAML: until then, none of the file is read.";
 const KEY_FIX = "Change the value as the message says, or remove the key to get the default.";
 
-// `language`: a name or code ("French", "pt-BR", "Simplified Chinese"), not a paragraph.
-const MAX_LANGUAGE = 40;
-
 // Non-empty text, else an error.
 function text(key, value, fail) {
   if (typeof value === "string" && value.trim()) return value.trim();
@@ -605,6 +602,11 @@ const none = (values) => (values.length ? values.join(", ") : "none");
 const asIs = ({ value, row }) => row(String(value));
 const orNone = ({ value, row }) => row(value ?? "none");
 
+// `language`: a name or code ("French", "pt-BR", "Simplified Chinese") on one line, not a
+// paragraph: no control character or line separator.
+const MAX_LANGUAGE = 40;
+const ONE_LINE = /^[^\p{C}\u2028\u2029]+$/u;
+
 // Each top-level key of the file:
 // - field: what it sets in `settings`; none for the keys that are only ignored (a warning);
 // - default: its value without the key, or a function of the operator's config;
@@ -717,7 +719,7 @@ export const KEYS = {
     default: null,
     parse: (value, { key, settings, fail }) => {
       const name = typeof value === "string" ? value.trim() : "";
-      if (name && name.length <= MAX_LANGUAGE && !/[\r\n]/.test(name)) settings.language = name;
+      if (name.length <= MAX_LANGUAGE && ONE_LINE.test(name)) settings.language = name;
       else
         fail(
           key,

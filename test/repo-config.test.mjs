@@ -163,6 +163,8 @@ test("language: none by default; a name or code on one line, else an error (#919
     "language: ''",
     `language: ${"x".repeat(41)}`,
     'language: "fr\\nen"',
+    'language: "fr\ten"',
+    'language: "fr\u2028en"',
   ]) {
     const { settings, errors } = parseRepoConfig(`${bad}\n`, config);
     assert.equal(settings.language, null, bad);

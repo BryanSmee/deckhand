@@ -441,14 +441,14 @@ The ${own.name} mode's instructions, from the repository:
 ${instructions.trim()}`;
 }
 // The repo's `language` (repo-config.mjs), last in what the agent reads so the English around
-// it doesn't win: what people read only, and the tokens the listener parses stay English.
-export function languageLine(language) {
-  return `Write in ${language} everything this run produces for people (replies, issues, pull requests, comments); code, code comments and commit messages stay in English unless the repository's instructions say otherwise, and so do the parts the listener reads (\`<!-- needs-input -->\`, \`Open questions\`, \`None\`, \`(recommended)\`: see Open questions in your instructions).`;
-}
-
-// `text` with the language line after it, when the repo sets one.
-function inLanguage(text, language) {
-  return language ? `${text ? `${text}\n\n` : ""}${languageLine(language)}` : text;
+// it doesn't win: what people read only. The tokens the listener parses stay English, and a
+// review's whole format, which parseReview() (reviews.mjs) reads in English alone.
+export function languageLine(language, mode) {
+  const review =
+    mode === "review"
+      ? "; in a review, so does its format: the `## Must fix`, `## Follow-ups` and `## Comments` headings, the severities (`critical`, `high`, `medium`, `low`), `blocking` and `note`, `None.`, and the `Rating: <n>/10` and `Verdict: approve|comment|request-changes` lines, words and values as your prompt writes them"
+      : "";
+  return `Write in ${language} everything this run produces for people (replies, issues, pull requests, comments); code, code comments and commit messages stay in English unless the repository's instructions say otherwise, and so do the parts the listener reads (\`<!-- needs-input -->\`, \`Open questions\`, \`None\`, \`(recommended)\`: see Open questions in your instructions)${review}.`;
 }
 
 // The run's prompt, by what it is. `own`: the repo's mode, with its `instructions` text;
@@ -460,7 +460,9 @@ function inLanguage(text, language) {
 // `capabilities`: what its sandbox gets (capabilities.mjs), null when not known. The repo's
 // `language` closes it, whatever the mode.
 export function promptFor(task, options) {
-  return inLanguage(promptOf(task, options), options.settings?.language);
+  const { settings, mode } = options;
+  const text = promptOf(task, options);
+  return settings?.language ? `${text}\n\n${languageLine(settings.language, mode)}` : text;
 }
 
 function promptOf(
@@ -531,21 +533,15 @@ const NEW_CONTAINER =
 const CHAT_CONTAINER =
   "This is a new container: the conversation is kept, and so are /workspace's commits and branches, but its uncommitted and untracked files were removed, the default branch is checked out (`git branch` lists the branches you committed on), and /tmp and the rest of the container's own files are new.";
 
-// The run's first message, after its prompt: the comments. `started`: the session goes on, its
-// prompt not read again: the repo's `language` closes the message instead.
-export function firstMessage({ mode, text, restored, started, language }) {
+// The run's first message, after its prompt: the comments. `started`: the session goes on.
+export function firstMessage({ mode, text, restored, started }) {
   // A chat's answer stays in the conversation: nothing is posted.
-  if (mode === "chat") {
-    return started ? inLanguage(`${text || "Continue."}\n\n(${CHAT_CONTAINER})`, language) : text;
-  }
+  if (mode === "chat") return started ? `${text || "Continue."}\n\n(${CHAT_CONTAINER})` : text;
   const talk = mode === "brainstorm" || mode === "stop";
   const body = talk ? brainstormMessage(mode, text, restored) : text;
   // An empty follow-up (only "/model …", say) would open an interactive session instead.
   if (started) {
-    return inLanguage(
-      `${body || "Continue."}\n\n(${NEW_CONTAINER} Don't post comments on GitHub yourself: your final message is posted as a reply.)`,
-      language,
-    );
+    return `${body || "Continue."}\n\n(${NEW_CONTAINER} Don't post comments on GitHub yourself: your final message is posted as a reply.)`;
   }
   // A new inbox session reads its entries in the prompt (inboxPrompt()), an analysis its
   // selection (analyzePrompt()), a review what the comment asks (reviewPrompt()).
@@ -561,9 +557,8 @@ export function retryNote({ reason, provider }) {
 // A run that falls back to another agent, or that `/agent` gives to another one (runs.mjs):
 // sessions don't move between agents, so it starts a new one on what the previous agent left.
 // `from`: that agent and its provider; `reason`: why its provider failed (none: `/agent`);
-// `result`: its last message, if any; `body`: what the run was asked (firstMessage()); `language`:
-// the repo's, again after the English it quotes.
-export function handoffMessage({ from, reason, result, body, branches = [], language }) {
+// `result`: its last message, if any; `body`: what the run was asked (firstMessage()).
+export function handoffMessage({ from, reason, result, body, branches = [] }) {
   const pushes = branches.length
     ? `; its branch, and yours: ${branches.map((b) => `\`${b.replace(/\*$/, "…")}\``).join(" or ")}`
     : "";
@@ -577,23 +572,19 @@ export function handoffMessage({ from, reason, result, body, branches = [], lang
   const why = reason
     ? `${from} was working on this and stopped, as its provider failed: ${reason}.`
     : `${from} was working on this before; this comment asked for you instead (\`/agent\`).`;
-  return inLanguage(
-    `${why} You take over, in a new session: sessions don't move between agents, so start from what it left. /workspace is the clone it worked in, with what it hadn't committed (\`git status\`, \`git log\`)${pushes}; GitHub has what it pushed and posted. The rest of its container (/tmp included) is gone.${quoted ? `\n\nIts last message:\n\n${quoted}` : ""}${body ? `\n\nWhat it was asked:\n\n${body}` : ""}`,
-    language,
-  );
+  return `${why} You take over, in a new session: sessions don't move between agents, so start from what it left. /workspace is the clone it worked in, with what it hadn't committed (\`git status\`, \`git log\`)${pushes}; GitHub has what it pushed and posted. The rest of its container (/tmp included) is gone.${quoted ? `\n\nIts last message:\n\n${quoted}` : ""}${body ? `\n\nWhat it was asked:\n\n${body}` : ""}`;
 }
 
 // The agent's first message, and when another agent takes over the issue's session
 // (agents/select.mjs resolveEntry()), what it is handed (handoffMessage(), once the run's branches
-// are known). The same agent on another provider: its session goes on, told why. `language`:
-// the repo's (repo-config.mjs), or none.
-export function openingMessages(mode, text, chosen, { restored, started, previous, language }) {
+// are known). The same agent on another provider: its session goes on, told why.
+export function openingMessages(mode, text, chosen, { restored, started, previous }) {
   const { entry, switched, handedBy, takeOver } = chosen;
   const retry = switched && !takeOver;
   const said = retry
     ? `${retryNote({ ...switched, provider: providerLabel(entry) })}\n\n${text}`
     : text;
-  const message = firstMessage({ mode, text: said, restored, started, language });
+  const message = firstMessage({ mode, text: said, restored, started });
   const handoff = takeOver && {
     from: handedBy
       ? entryLabel(entryName(previous.agent, previous.provider, previous.credential))
@@ -601,7 +592,6 @@ export function openingMessages(mode, text, chosen, { restored, started, previou
     reason: handedBy ? null : switched.reason,
     result: handedBy ? previous.summary : entry.result,
     body: firstMessage({ mode, text, restored, started: false }),
-    language,
   };
   return { message, handoff };
 }

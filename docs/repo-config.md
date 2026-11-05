@@ -428,14 +428,19 @@ language: French
 ```
 
 Every run's prompt then ends with a line asking for it, whatever its mode (work, inbox
-entries, discussions, brainstorms, reviews, research, chats, onboarding, the repo's own), and
-so does the message that continues a session or hands it to another agent. It covers what
-people read: replies, the issues and pull requests a run files, comments. Code, code comments
-and commit messages stay in English unless the [instructions](#instructions) say otherwise,
-and so do the markers Deckhand reads (`<!-- needs-input -->`, `Open questions`, `None`,
-`(recommended)`), so a run that stops to ask still waits for input. Without the key, nothing
-is added: the language of the issue or comment doesn't count. It narrows nothing and needs
-no grant.
+entries, discussions, brainstorms, reviews, research, chats, onboarding, the repo's own). A
+session that goes on gets it again after the sandbox's notes on the comment, as does an agent
+taking over another's, so it stays the last thing the agent reads (`TASK_LANGUAGE`,
+`sandbox/entrypoint.sh`). It covers what people read: replies, the issues and pull requests a
+run files, comments. Code, code comments and commit messages stay in English unless the
+[instructions](#instructions) say otherwise, and so does what Deckhand reads: the markers of
+[open questions](#open-questions) (`<!-- needs-input -->`, `Open questions`, `None`,
+`(recommended)`), so a run that stops to ask still waits for input, and a
+[review](#reviews)'s format (its `## Must fix`, `## Follow-ups` and `## Comments` headings,
+severities, `blocking` and `note`, `None.`, and its `Rating:` and `Verdict:` lines), so its
+findings, rating and verdict are still read; only their text is in the language. Without the
+key, nothing is added: the language of the issue or comment doesn't count. It narrows nothing
+and needs no grant.
 
 ## Modes
 

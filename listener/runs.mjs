@@ -343,8 +343,7 @@ export function createRuns(ctx) {
     const restored = items.some((i) => i.restored);
     record.mode =
       mode === "stop" ? "wrap-up" : restored ? "restore" : started ? "continue" : "start";
-    const { language } = settings;
-    const messages = openingMessages(mode, text, chosen, { restored, started, previous, language });
+    const messages = openingMessages(mode, text, chosen, { restored, started, previous });
     // Once its capabilities are decided (preparation.mjs), the volume the run mounts
     // (sandbox-spec.mjs sessionOf()) may not be its mode's: looked at again there, and when that
     // changes whether it continues, its record and its first message are made again → the new
@@ -367,7 +366,7 @@ export function createRuns(ctx) {
           ? "What this run gets gives it another session volume, which has a session: it continues there."
           : "What this run gets gives it a session volume of its own, without the session it would have continued: it starts afresh.",
       );
-      return openingMessages(mode, text, chosen, { restored, started: now, previous, language });
+      return openingMessages(mode, text, chosen, { restored, started: now, previous });
     };
     return { ...chosen, ...messages, settings, errors, warnings, own, text, reopen };
   }

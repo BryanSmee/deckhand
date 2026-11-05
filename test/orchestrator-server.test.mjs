@@ -3783,7 +3783,8 @@ allow_capabilities contains "read:pulls"
     const { dir, github, listener, send } = await listen(
       t,
       {
-        ".deckhand.yaml": MODES,
+        // Its runs write in French (#919): the line reaches the sandbox, for the entrypoint too.
+        ".deckhand.yaml": `${MODES}language: French\n`,
         ".deckhand/audit.md": "Read the diff and list the risks.",
         // Its own mode runs once it allows it (allow_run, run-policy.mjs).
         "policy:modes.rego": AUDIT_POLICY,
@@ -3809,7 +3810,8 @@ allow_capabilities contains "read:pulls"
     assert.match(runEnv, /^SANDBOX_SETUP=$/m);
     assert.match(runEnv, /^TASK_PROMPT=You are in the "audit" mode of this repository/m);
     assert.match(runEnv, /You can't push, create a branch or open a pull request/);
-    assert.match(runEnv, /Read the diff and list the risks\./);
+    assert.match(runEnv, /Read the diff and list the risks\.\n\nWrite in French everything/);
+    assert.match(runEnv, /^TASK_LANGUAGE=Write in French everything this run produces for people/m);
     assert.match(runEnv, /^TASK_MESSAGE=Mind the tests\.$/m);
     // Comments only: its token reads, what its capabilities give (no `read:actions` here).
     const mint = github.requests.find((r) => r.body.includes("repositories"));
