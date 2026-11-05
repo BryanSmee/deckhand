@@ -2368,8 +2368,9 @@ repository's open issues to signed-in users in its `users` with `tasks:read` (ev
 with `tasks:read` while its config has errors), from GitHub at most once every 30 seconds per repository, or after an `issues`
 delivery for it, one read at a time; the dashboard keeps the last one in memory only, not in
 the browser's storage. The repository list's backlog counts (`GET /api/repos?backlog=1`, the
-Overview) come from the same reads under the same `users` rule (a repository whose `users`
-leaves the user out has none). While the list is asked for them, each configured repository
+Overview) come from the same reads under the same `users` rule and the same `tasks:read`
+(a repository whose `users` leaves the user out, or that the user sees through another action
+only, has none, and isn't read for them). While the list is asked for them, each configured repository
 is read again in the background at most once every 5 minutes, which labels open questions as
 a board's read does.
 
