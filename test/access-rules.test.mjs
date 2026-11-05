@@ -811,6 +811,64 @@ test("access: the renamed repositories' names kept for MAX_ACCESS at most, the o
   assert.equal(reads("acme/alias0"), 2);
 });
 
+// A service answering `tasks:read` to every input, the logins and repositories asked in `asked`.
+function countingAccess(t) {
+  const engine = policyEngineOf(t, {
+    readOperator: () => new Map([["access.rego", bindings([])]]),
+  });
+  const asked = [];
+  const service = {
+    ...localService(engine),
+    evaluateAccess: async ({ inputs }) => {
+      for (const input of Object.values(inputs)) asked.push(input.repo?.name ?? input.user.login);
+      const rules = { allow: [["tasks:read"]], deny: [[]] };
+      return {
+        results: Object.fromEntries(
+          Object.keys(inputs).map((k) => [k, { operator: { all: rules, files: {} } }]),
+        ),
+      };
+    },
+  };
+  return { service, asked: (name) => asked.filter((a) => a === name).length };
+}
+
+test("access: its answers kept for MAX_ACCESS logins at most, the one asked longest ago dropped first (#886)", async (t) => {
+  const logins = Array.from({ length: MAX_ACCESS + 1 }, (_, i) => `u${i}`);
+  const { service, asked } = countingAccess(t);
+  const clock = { now: 0 };
+  const policies = createPolicies({ config: {}, github: null, service, now: () => clock.now });
+  // u0 asked first, then again once its answer is past ACCESS_MS, while there is still room, then
+  // the last two: the oldest answer is u1's.
+  await policies.access("u0", null);
+  clock.now += ACCESS_MS;
+  for (const login of logins.slice(1, -2)) await policies.access(login, null);
+  await policies.access("u0", null);
+  for (const login of logins.slice(-2)) await policies.access(login, null);
+  await policies.access("u0", null);
+  assert.equal(asked("u0"), 2);
+  await policies.access("u1", null);
+  assert.equal(asked("u1"), 2);
+});
+
+test("access: the config panel's warnings kept for MAX_ACCESS repositories at most, the one asked longest ago dropped first (#886)", async (t) => {
+  const names = Array.from({ length: MAX_ACCESS + 1 }, (_, i) => `acme/r${i}`);
+  const { github } = fakeGithub(Object.fromEntries(names.map((name) => [name, {}])));
+  const { service, asked } = countingAccess(t);
+  const clock = { now: 0 };
+  const policies = createPolicies({ config: {}, github, service, now: () => clock.now });
+  // As access()'s: r0 asked again past ACCESS_MS before the last two, r1 the oldest.
+  await policies.accessNameWarnings("acme/r0", "main");
+  clock.now += ACCESS_MS;
+  for (const name of names.slice(1, -2)) await policies.accessNameWarnings(name, "main");
+  await policies.accessNameWarnings("acme/r0", "main");
+  for (const name of names.slice(-2)) await policies.accessNameWarnings(name, "main");
+  // Asked as a private and a public repository each time.
+  await policies.accessNameWarnings("acme/r0", "main");
+  assert.equal(asked("acme/r0"), 4);
+  await policies.accessNameWarnings("acme/r1", "main");
+  assert.equal(asked("acme/r1"), 4);
+});
+
 test("access: a repository's name is owner/repo, nothing GitHub's paths would read otherwise", async (t) => {
   const { github, calls } = fakeGithub({ "acme/y": {} });
   const engine = policyEngineOf(t, { readOperator: () => new Map() });
