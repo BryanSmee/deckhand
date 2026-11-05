@@ -2080,7 +2080,8 @@ label, unless an allowed user ticked an option of every question:
 - A comment that is only the trigger line (with `/mode`, `/model`, `/effort`, `/speed`, `/agent` or `/after`
   lines at most) starts nothing: the App replies that the issue has open questions, points
   to the dashboard's form, and the label stays. A trigger comment with text is the answer:
-  the label comes off and the run starts.
+  the label comes off and the run starts. Its author needs `runs:manage` for that too:
+  without it, the comment is held back as a trigger line alone.
 - A comment waiting for other issues (`/after`) whose last one is done keeps waiting until
   the questions are answered (the label is removed, or every box ticked), then starts by
   itself.

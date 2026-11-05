@@ -13,8 +13,9 @@ const tickedBody = (box) =>
   `## Open questions\n\n1. Which one?\n   - [${box}] This one\n   - [ ] That one`;
 
 // createTasks() whose policies allow every run, the repo's config `yaml`: the ctx, its log, its
-// replies and settled comments. `issue`: what GitHub answers for org/repo#12 (resume()).
-function gate(yaml = "", { issue = null, ticksIgnored = false } = {}) {
+// replies and settled comments. `issue`: what GitHub answers for org/repo#12 (resume());
+// `permissions`: the logins' actions (permissions.mjs), none for every action.
+function gate(yaml = "", { issue = null, ticksIgnored = false, permissions } = {}) {
   const logs = [];
   const replies = [];
   const settled = [];
@@ -40,6 +41,7 @@ function gate(yaml = "", { issue = null, ticksIgnored = false } = {}) {
     inputs: { ticksIgnored: () => ticksIgnored },
     waits: { reserve: () => null, release: async () => {}, request: async () => false },
     policies: { decide: async () => ({ applied: false, messages: [] }) },
+    permissions,
     github: async () => (issue ? Response.json(issue) : new Response("", { status: 404 })),
   };
   const tasks = createTasks(ctx);
@@ -104,6 +106,53 @@ test("wait_for_answers: text besides the trigger line is the answer: it starts, 
   await g.say("Deckhand\n1. The first one");
   assert.deepEqual(g.queued(), [["1. The first one", "work"]]);
   assert.deepEqual([g.replies, g.settled], [[], []]);
+});
+
+// permissions.mjs's decide() giving alice `actions` alone (and some action, null, with any);
+// `asked`: the actions asked.
+function only(actions, asked = []) {
+  return {
+    decide: async (login, repo, action) => {
+      asked.push(action);
+      const ok = action === null ? actions.length > 0 : actions.includes(action);
+      return login === "alice" && ok ? { ok: true } : { ok: false };
+    },
+  };
+}
+
+test("wait_for_answers: text from an author without runs:manage is no answer: held back, as a trigger line alone", async () => {
+  const g = gate("", { permissions: only(["runs:start:work"]) });
+  await g.say("Deckhand\n1. The first one");
+  assert.deepEqual(g.queued(), []);
+  assert.ok(
+    g.logs.includes("org/repo#12: its answers refused, alice has no runs:manage here"),
+    g.logs.join("\n"),
+  );
+  assert.ok(g.logs.includes(HELD), g.logs.join("\n"));
+  assert.match(g.replies[0], /^#12 has open questions/);
+  assert.deepEqual(g.settled, [[99, "needs-input"]]);
+});
+
+test("wait_for_answers: text from an author with runs:manage starts work; with neither it nor the start, nothing is said", async () => {
+  const asked = [];
+  const g = gate("", { permissions: only(["runs:start:work", "runs:manage"], asked) });
+  await g.say("Deckhand\n1. The first one");
+  assert.deepEqual(g.queued(), [["1. The first one", "work"]]);
+  assert.ok(asked.includes("runs:manage"), asked.join());
+  assert.deepEqual([g.replies, g.settled], [[], []]);
+
+  // Held back, and no start either: no reply (permissions.mjs).
+  const none = gate("", { permissions: only(["tasks:read"]) });
+  await none.say("Deckhand\n1. The first one");
+  assert.deepEqual([none.queued(), none.replies, none.settled], [[], [], []]);
+});
+
+test("wait_for_answers: no open questions: text needs no runs:manage", async () => {
+  const asked = [];
+  const g = gate("", { permissions: only(["runs:start:work"], asked) });
+  await g.say("Deckhand\n1. The first one", { labels: [] });
+  assert.deepEqual(g.queued(), [["1. The first one", "work"]]);
+  assert.ok(!asked.includes("runs:manage"), asked.join());
 });
 
 test("wait_for_answers: a brainstorm still runs on an issue with open questions", async () => {

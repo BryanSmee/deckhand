@@ -198,7 +198,7 @@ export function createTasks(ctx) {
     }
     // Only the comment's own issue, as the delivery has it: a pull request's labels are its own.
     const issue = event === "issue_comment" && !payload.issue?.pull_request ? payload.issue : null;
-    if (!hasAnswer(item) && unanswered(item, issue)) {
+    if (unanswered(item, issue) && !(await answers(item))) {
       // Its reply is for an author who may start what the comment asks for (permissions.mjs).
       if (!(await may(item, startAction(item.modeLine ?? "work"), "held back, and "))) return;
       return holdBack(item);
@@ -238,6 +238,14 @@ export function createTasks(ctx) {
   // the issue's open questions (questions.mjs takes the label off).
   function hasAnswer(item) {
     return !!takeOptions(item.text ?? "", {});
+  }
+
+  // Whether the comment answers the issue's open questions, so that its run may start: its
+  // text, from an author with `runs:manage`, as the dashboard's answers and questions.mjs
+  // applyInput() ask. Without it, held back as a trigger line alone: else its run's start
+  // would take the label off (runs.mjs) for an answer that was refused.
+  async function answers(item) {
+    return hasAnswer(item) && (await may(item, "runs:manage", "its answers refused, "));
   }
 
   // Whether the repo's `wait_for_answers` holds `item` back: work, or a mode of the repo's, on an
