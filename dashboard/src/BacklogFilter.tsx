@@ -48,19 +48,22 @@ export function hiddenSubIssue(issue: BacklogIssue, listed: ReadonlySet<number>)
 }
 
 // What the labels ticked (any of them; none: every issue) and the toggle leave of `issues`.
+// The labels first: a sub-issue is hidden only when its parent shows, which lays it out (a
+// `bug` under an epic that isn't one still shows when `bug` is ticked).
 export function narrowBacklog(
   issues: readonly BacklogIssue[],
   ticked: readonly string[],
   hideSubIssues: boolean,
 ): BacklogIssue[] {
   const labels = new Set(tickedOf(labelCounts(issues), ticked));
-  const listed = new Set(issues.map((i) => i.number));
-  return issues.filter((i) => {
-    if (hideSubIssues && hiddenSubIssue(i, listed)) return false;
+  const labelled = issues.filter((i) => {
     if (!labels.size) return true;
     const names = i.labels?.length ? i.labels.map((l) => l.name) : [NO_LABEL];
     return names.some((n) => labels.has(n));
   });
+  if (!hideSubIssues) return labelled;
+  const shown = new Set(labelled.map((i) => i.number));
+  return labelled.filter((i) => !hiddenSubIssue(i, shown));
 }
 
 // What the text field leaves: `#<n> <title>` holds its words, as typed.
@@ -115,8 +118,9 @@ export function BacklogFilter({
   const labelled = counts.some((l) => l.name !== NO_LABEL);
   const listed = new Set(issues.map((i) => i.number));
   const subs = issues.some((i) => hiddenSubIssue(i, listed));
+  // From all those kept: a label gone keeps its tick, for when it comes back.
   const tick = (name: string, checked: boolean) =>
-    onTicked(checked ? [...on, name] : on.filter((n) => n !== name));
+    onTicked(checked ? [...ticked, name] : ticked.filter((n) => n !== name));
   const size = touch ? "touch" : "small";
 
   return (

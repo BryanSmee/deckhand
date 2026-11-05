@@ -890,6 +890,26 @@ test("GET issues: a sub-issue's parent when it is listed, read once per backlog 
   assert.equal(subCalls(), 2);
 });
 
+test("GET issues: parents' sub-issues read four at a time", async () => {
+  const issues = {};
+  for (let n = 1; n <= 6; n++)
+    issues[n] = { ...open(`Epic ${n}`), subs: [], sub_issues_summary: { total: 1, completed: 0 } };
+  const w = setup({ issues });
+  let release;
+  const subCalls = () => w.calls.filter((c) => c.includes("/sub_issues")).length;
+  w.onCall = (method, path) => {
+    if (path.includes("/sub_issues") && !release) w.hold = new Promise((r) => (release = r));
+  };
+  const res = call(w.api, "GET", "/api/repos/org/app/issues");
+  while (subCalls() < 4) await new Promise((r) => setImmediate(r));
+  await new Promise((r) => setImmediate(r));
+  assert.equal(subCalls(), 4);
+  w.hold = null;
+  release();
+  assert.equal((await res).status, 200);
+  assert.equal(subCalls(), 6);
+});
+
 test("GET issues: a parent's sub-issues that can't be read only lose their parent", async () => {
   const w = setup({
     issues: {

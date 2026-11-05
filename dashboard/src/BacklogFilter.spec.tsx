@@ -78,7 +78,9 @@ test("narrowBacklog: any label ticked, No label, the toggle, and a label gone le
   expect(n([])).toEqual([40, 41, 42, 43, 44, 45]);
   expect(n(["bug"])).toEqual([42, 43]);
   expect(n(["bug", NO_LABEL])).toEqual([42, 43, 44, 45]);
-  expect(n(["bug"], true)).toEqual([43]);
+  // #42's parent, #40, isn't a bug: #42 shows, as nothing else lays it out.
+  expect(n(["bug"], true)).toEqual([42, 43]);
+  expect(n(["idea"], true)).toEqual([40, 43]);
   expect(n([], true)).toEqual([40, 43, 44, 45]);
   // A label no issue has any more: as if not ticked, rather than an empty list.
   expect(n(["wontfix"])).toEqual([40, 41, 42, 43, 44, 45]);
@@ -147,11 +149,19 @@ test("kept across a reload: the labels per repo, a label gone dropped from the l
   localStorage.setItem("deckhand.backlog.labels.acme/app", JSON.stringify(["bug", "wontfix"]));
   localStorage.setItem("deckhand.backlog.hideSubIssues", "1");
   const { area } = await open();
-  expect(numbers(area)).toEqual([43]);
+  // #42's parent isn't a bug: it shows.
+  expect(numbers(area)).toEqual([42, 43]);
   // One ticked: the label that's gone isn't counted.
   expect(labelsButton(area).textContent).toBe("Labels1");
   fireEvent.click(labelsButton(area));
   expect(within(area).queryByRole("checkbox", { name: /wontfix/ })).toBeNull();
+  // Ticking another keeps it, for when it comes back.
+  tick(area, /^idea/);
+  expect(JSON.parse(localStorage.getItem("deckhand.backlog.labels.acme/app")!)).toEqual([
+    "bug",
+    "wontfix",
+    "idea",
+  ]);
   // Another repo's are its own.
   expect(localStorage.getItem("deckhand.backlog.labels.acme/other")).toBeNull();
 });
@@ -179,5 +189,9 @@ test("a phone: the text field, the labels and the toggle in the sheet", async ()
   tick(area, /^bug/);
   expect(numbers(area)).toEqual([42, 43]);
   fireEvent.click(within(area).getByRole("button", { name: "Hide sub-issues" }));
-  expect(numbers(area)).toEqual([43]);
+  // #42's parent isn't a bug: it stays.
+  expect(numbers(area)).toEqual([42, 43]);
+  tick(area, /^bug/);
+  tick(area, /^idea/);
+  expect(numbers(area)).toEqual([40, 43]);
 });

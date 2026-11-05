@@ -97,6 +97,9 @@ import { taskId } from "./spelling.mjs";
 import { Refused, readJsonBody, refuse, send } from "../lib/http.mjs";
 import { apiRoute, mustDo, routeChecks } from "./web.mjs";
 
+// How many parents' sub-issues a backlog read asks GitHub for at once (parentsOf()).
+const SUB_ISSUE_READS = 4;
+
 // How long a repo's open issues are served before they are read again (in the background):
 // the dashboard polls them.
 export const ISSUES_MS = 30_000;
@@ -265,22 +268,23 @@ export function createWorkApi({
     const listed = new Set(issues.map((i) => i.number));
     const parents = new Map();
     const get = (path) => github(repo, "GET", path);
-    await Promise.all(
-      issues
-        .filter((i) => subIssues(i).subIssues)
-        .map(async (i) => {
-          const path = `/repos/${repo}/issues/${i.number}/sub_issues`;
-          try {
-            for (const sub of await paginate(get, path)) {
-              const here = !repoOf(sub) || sameRepo(repoOf(sub), repo);
-              if (here && listed.has(sub.number) && sub.number !== i.number)
-                parents.set(sub.number, i.number);
-            }
-          } catch (error) {
-            log(`Work area: ${repo}: #${i.number}'s sub-issues: ${error.message ?? error}`);
+    const pending = issues.filter((i) => subIssues(i).subIssues);
+    // A few at a time: GitHub's secondary rate limits penalise many calls at once.
+    const reader = async () => {
+      for (let i = pending.shift(); i; i = pending.shift()) {
+        const path = `/repos/${repo}/issues/${i.number}/sub_issues`;
+        try {
+          for (const sub of await paginate(get, path)) {
+            const here = !repoOf(sub) || sameRepo(repoOf(sub), repo);
+            if (here && listed.has(sub.number) && sub.number !== i.number)
+              parents.set(sub.number, i.number);
           }
-        }),
-    );
+        } catch (error) {
+          log(`Work area: ${repo}: #${i.number}'s sub-issues: ${error.message ?? error}`);
+        }
+      }
+    };
+    await Promise.all(Array.from({ length: SUB_ISSUE_READS }, reader));
     return parents;
   }
 
