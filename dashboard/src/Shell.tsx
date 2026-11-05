@@ -495,7 +495,7 @@ export function PageHeader({
       {settings && <SettingsTabs route={route} count={needs} class={styles.headerTabs} />}
       {!settings && <Segmented label={t("shell.view")} options={views} value={view} />}
       {!settings && !chatting && !repo && <span class={styles.hint}>{t("shell.boardHint")}</span>}
-      {!chatting && repo && <RepoSlots state={state} repo={repo} />}
+      {!settings && !chatting && repo && <RepoSlots state={state} repo={repo} />}
       {!settings && state && (
         <PlanBars plans={state.plans} now={state.now} form="compact" class={styles.headerPlans} />
       )}

@@ -448,15 +448,17 @@ test("api/state (#639): each seen repo's run slots, against its own max_parallel
     permissions: permissionsOf({ alice: { "org/capped": ["*"], "org/shared": ["*"] } }),
     deliverable: () => 0,
   });
-  const task = (repo, id, running, settings, more = {}) =>
+  const task = (repo, id, running, settings, more = {}, queuedAt = 1000) =>
     ctx.tasks.set(`${repo}#${id}`, {
       ...{ repo, id, kind: "issue", running, settings },
-      pending: running ? [] : [{ mode: "work", replyTo: 9, text: "Go." }],
+      pending: running ? [] : [{ mode: "work", replyTo: 9, text: "Go.", queuedAt }],
       ...more,
     });
-  // org/capped's max_parallel: 2, read last by its running task (the queued one's is older).
-  task("org/capped", 1, true, { maxParallel: 2 });
-  task("org/capped", 2, false, { maxParallel: 3 });
+  // org/capped's max_parallel lowered to 2 while a run read 3: the queue holds its tasks to the
+  // settings read with their comments, the most recent's shown (not the first created's).
+  task("org/capped", 1, true, { maxParallel: 3 });
+  task("org/capped", 2, false, { maxParallel: 2 }, {}, 2000);
+  task("org/capped", 4, false, { maxParallel: 3 }, {}, 1000);
   // Nor a chat's, in a pool of its own, nor a task that is the owner's alone.
   task("org/capped", "chat-1", true, { maxParallel: 2 }, { pool: "chats" });
   task("org/capped", 3, true, { maxParallel: 2 }, { owner: "bob" });
@@ -470,9 +472,14 @@ test("api/state (#639): each seen repo's run slots, against its own max_parallel
   const state = async () =>
     (await fetch(`${url}/api/state`, { headers: { "x-user": "alice" } })).json();
   assert.deepEqual((await state()).repoSlots, {
-    "org/capped": { running: 1, queued: 1, max: 2, own: true },
+    "org/capped": { running: 1, queued: 2, max: 2, own: true },
     "org/shared": { running: 1, queued: 1, max: 4, own: false },
   });
+  // Nothing queued: the running task's.
+  ctx.tasks.delete("org/capped#2");
+  ctx.tasks.delete("org/capped#4");
+  const idle = (await state()).repoSlots["org/capped"];
+  assert.deepEqual(idle, { running: 1, queued: 0, max: 3, own: true });
   ctx.permissions = permissionsOf({ alice: { "org/equal": ["*"] } });
   const http = createHttp(ctx);
   const { url: other } = await serve(t, (req, res) => http.handle(req, res, { user: "alice" }));

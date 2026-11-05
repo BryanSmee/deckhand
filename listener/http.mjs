@@ -180,20 +180,21 @@ export function createHttp(ctx) {
   // Each repo `shows` with tasks in the shared pool (#639): its runs going and its tasks
   // waiting, counted as the totals are, and the cap schedule() holds them to (repo-config.mjs
   // startable()): its max_parallel when below MAX_PARALLEL (`own`), else MAX_PARALLEL, which the
-  // other repos share. Its settings are those its runs read last: a running task's, else the
-  // last one's that has them.
+  // other repos share. Its settings are those startable() holds a queued task to: the most
+  // recently queued one's (tasks.mjs accept() keeps the latest), else, with none queued, a
+  // running task's.
   function repoSlots(shows) {
     const slots = new Map();
     for (const t of tasks.values()) {
       if (t.owner || poolOf(t) !== SHARED || !shows(t.repo)) continue;
       const name = t.repo.toLowerCase();
-      const s = slots.get(name) ?? { repo: t.repo, running: 0, queued: 0, settings: null };
+      const s = slots.get(name) ?? { repo: t.repo, running: 0, queued: 0, settings: null, at: -1 };
       if (t.running) s.running++;
-      if (t.pending.length > (t.running ? ctx.deliverable(t) : 0)) s.queued++;
-      if (t.settings && (t.running || !s.fromRun)) {
-        s.settings = t.settings;
-        s.fromRun = t.running;
-      }
+      const waits = t.pending.length > (t.running ? ctx.deliverable(t) : 0);
+      if (waits) s.queued++;
+      // A queued task's by when its last comment came; a running one's below any queued.
+      const at = waits ? (t.pending.at(-1).queuedAt ?? 0) : -1;
+      if (t.settings && (!s.settings || at > s.at)) Object.assign(s, { settings: t.settings, at });
       slots.set(name, s);
     }
     return Object.fromEntries(

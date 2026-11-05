@@ -5492,6 +5492,8 @@ allow_capabilities contains "read:pulls"
     // The shape dashboard/src/types.ts expects: change both together.
     assertShape(board, STATE_KEYS, "State");
     assertShape(board.server, SERVER_KEYS, "ServerInfo");
+    // org/repo's: its task, done, is still known.
+    assert.deepEqual(Object.keys(board.repoSlots), ["org/repo"]);
     for (const slots of Object.values(board.repoSlots)) {
       assertShape(slots, REPO_SLOTS_KEYS, "RepoSlots");
     }
@@ -5724,12 +5726,13 @@ allow_capabilities contains "read:pulls"
       "running",
       "queued",
       "maxParallel",
+      "repoSlots",
       "githubUrl",
       "server",
       "lastSync",
       "now",
     ],
-    ["inboxes", "lanes", "plans", "access", "repoSlots"],
+    ["inboxes", "lanes", "plans", "access"],
   ];
   const ACCESS_KEYS = [["server", "repos"], []];
   const REPO_SLOTS_KEYS = [["running", "queued", "max", "own"], []];
