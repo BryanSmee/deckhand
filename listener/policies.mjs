@@ -199,6 +199,10 @@ const frozen = ({ actions, denied, files, error }) =>
 // GRANTS_MS bounds a rule reading the time), and for how many at most.
 export const ACCESS_MS = 60_000;
 export const MAX_ACCESS = 5000;
+// How many names forget() is given while one GitHub read is in flight are kept for it (#892):
+// past them, the read's answer isn't kept at all (fail closed), so a burst of deliveries can't
+// grow it.
+export const MAX_LATER = 100;
 
 // `deny_merge`, `allow_merge` or `merge` → "merge".
 export const decisionOf = (rule) => rule.replace(/^(?:allow|deny)_/, "");
@@ -443,10 +447,13 @@ export function createPolicies({
   // The reads of GitHub in flight (listing(), repoOf()), by the repo's name in lower case → a Set
   // of { forgotten }: forget() marks them, so that an answer read before it is neither kept after
   // it nor replaced by what was kept before it (#875). Each read removes itself when done (a
-  // `finally`), so it holds the reads in flight alone: no MAX_ACCESS bound needed.
+  // `finally`), so it holds the reads in flight alone: no MAX_ACCESS bound needed. `later`: the
+  // names forget() was given while it was in flight, whatever their repo: a renamed repository's
+  // first read only learns its current name from GitHub's answer, after a forget() of that name
+  // could have marked it (#892). Past MAX_LATER of them, it is marked forgotten instead.
   const reading = new Map();
   function started(key) {
-    const read = { forgotten: false };
+    const read = { forgotten: false, later: new Set() };
     reading.set(key, (reading.get(key) ?? new Set()).add(read));
     return read;
   }
@@ -1123,6 +1130,9 @@ export function createPolicies({
           // forget() are all of the repository the caller asked about.
           const current = String(info.full_name).toLowerCase();
           if (current !== key) {
+            // forget() ran under the current name while it was read (a privatization delivered
+            // under it): it didn't know this name was that repository's yet.
+            if (read.later.has(current)) read.forgotten = true;
             const names = new Set([...(renamed.get(current) ?? []), key]);
             // Moved last, as listing() moves its listings, so that the oldest is first to go.
             keepLast(renamed, current, names, MAX_ACCESS);
@@ -1698,6 +1708,12 @@ export function createPolicies({
       listings.delete(name);
       repoInfos.delete(name);
       for (const read of reading.get(name) ?? []) read.forgotten = true;
+    }
+    for (const reads of reading.values()) {
+      for (const read of reads) {
+        if (read.later.size < MAX_LATER) read.later.add(key);
+        else read.forgotten = true;
+      }
     }
   }
 
