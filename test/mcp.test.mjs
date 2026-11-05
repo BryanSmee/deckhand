@@ -381,22 +381,68 @@ test("MCP: list_tasks gives a page of tasks at a time, and where the next starts
   const first = await tool("list_tasks");
   assert.equal(first.structuredContent.tasks.length, TASKS_PAGE);
   assert.equal(first.structuredContent.total, 30);
-  assert.equal(first.structuredContent.next, TASKS_PAGE);
-  assert.match(first.content[0].text, /^30 tasks, 1–25 here\. More: offset=25\./);
-  const rest = (await tool("list_tasks", { offset: TASKS_PAGE })).structuredContent;
+  const { next } = first.structuredContent;
+  assert.equal(typeof next, "string");
+  assert.match(first.content[0].text, /^30 tasks, 1–25 here\. More: cursor=\S+\./);
+  const rest = (await tool("list_tasks", { cursor: next })).structuredContent;
   assert.equal(rest.tasks.length, 30 - TASKS_PAGE);
+  assert.equal(rest.offset, TASKS_PAGE);
   assert.equal(rest.next, null);
   const keys = [...first.structuredContent.tasks, ...rest.tasks].map((x) => x.key);
   assert.equal(new Set(keys).size, 30);
-  const small = (await tool("list_tasks", { limit: 2, offset: 1 })).structuredContent;
+  const one = (await tool("list_tasks", { limit: 1 })).structuredContent;
+  const small = (await tool("list_tasks", { limit: 2, cursor: one.next })).structuredContent;
   assert.deepEqual(
     small.tasks.map((x) => x.key),
     keys.slice(1, 3),
   );
-  assert.equal(small.next, 3);
-  assert.deepEqual((await tool("list_tasks", { offset: 99 })).structuredContent.tasks, []);
+  const third = (await tool("list_tasks", { limit: 1, cursor: small.next })).structuredContent;
+  assert.deepEqual(
+    third.tasks.map((x) => x.key),
+    [keys[3]],
+  );
   assert.equal((await tool("list_tasks", { limit: MAX_TASKS_PAGE + 1 })).isError, true);
-  assert.equal((await tool("list_tasks", { offset: -1 })).isError, true);
+  for (const cursor of ["nope", Buffer.from("[1,2]").toString("base64url"), ""]) {
+    assert.equal((await tool("list_tasks", { cursor })).isError, true, cursor);
+  }
+});
+
+test("MCP: list_tasks's next page holds on while tasks start or move to the top", async (t) => {
+  const runs = Array.from({ length: 10 }, (_, i) =>
+    runOf(`org/repo#${i + 1}`, `org-repo-${i + 1}-1000`, {
+      startedAt: 1000 + i,
+      finishedAt: 2000 + i,
+    }),
+  );
+  const { ctx } = orchestrator({ runs });
+  const { tool } = await serveMcp(t, ctx);
+  const all = (await tool("list_tasks")).structuredContent.tasks.map((x) => x.key);
+  const first = (await tool("list_tasks", { limit: 4 })).structuredContent;
+  assert.deepEqual(
+    first.tasks.map((x) => x.key),
+    all.slice(0, 4),
+  );
+  // A new task starts, and one further down (not yet listed) runs again: both go on top.
+  ctx.runs.unshift(
+    runOf("org/repo#11", "org-repo-11-3000", { status: "running", startedAt: 3000 }),
+    runOf(all[8], `${all[8].replace(/[/#]/g, "-")}-3001`, {
+      status: "running",
+      startedAt: 3001,
+    }),
+  );
+  const second = (await tool("list_tasks", { limit: 4, cursor: first.next })).structuredContent;
+  // The same tasks an offset of 4 would have given before they moved, not shifted by two.
+  assert.deepEqual(
+    second.tasks.map((x) => x.key),
+    all.slice(4, 8),
+  );
+  assert.equal(second.total, 11);
+  // The task that moved above the cursor isn't listed again further down.
+  const last = (await tool("list_tasks", { cursor: second.next })).structuredContent;
+  assert.deepEqual(
+    last.tasks.map((x) => x.key),
+    [all[9]],
+  );
 });
 
 test("MCP: a task's row says its mode, wait and questions only when it has them", async (t) => {
