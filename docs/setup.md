@@ -1959,9 +1959,9 @@ With Redis as [the store](#the-store), the orchestrator now lists keys by prefix
 start: the maps it keeps one key per item (#615, #616), its live runs' states (#617). A
 `deckhand` user written from this page before #614 has no `+scan`: the orchestrator then stops
 at its start with `NOPERM … 'scan'` in its log. Add it before you update, in `redis.conf` (the
-`user deckhand …` line, as in [The store](#the-store)) or at once on the running Redis, as a
-user allowed `ACL` (the one you administer it with: `default` is off there). `ACL SETUSER` adds
-to the user's rules, keeping the others:
+line of the user the orchestrator signs in as, as in [The store](#the-store)) or at once on the
+running Redis, as a user allowed `ACL` (the one you administer it with: `default` is off
+there). `ACL SETUSER` adds to the user's rules, keeping the others:
 
 ```sh
 redis-cli --user <admin> --askpass ACL SETUSER deckhand +scan
@@ -2386,7 +2386,7 @@ reads.
 - **`redis://[user:password@]host:6379[/db]`**, or **`rediss://`** over TLS: on several nodes
   (a k3s cluster with more than one), where two copies of a service run on different nodes and
   a ReadWriteOnce volume can't be on both. `?prefix=` changes what goes before every key
-  (`deckhand:`), for two deployments sharing one Redis. `REDIS_PASSWORD` gives the password
+  (`deckhand:`): each service needs one of its own (below). `REDIS_PASSWORD` gives the password
   when it isn't in the URL (from a Kubernetes Secret, say). With `rediss://`, Redis's
   certificate is checked against Node's CAs: a private one (a cluster's own, a self-signed
   certificate) is trusted through `NODE_EXTRA_CA_CERTS`, the path of its PEM file.
@@ -2405,20 +2405,38 @@ appendonly yes
 appendfsync everysec
 # Never evict: an evicted key or event would be lost.
 maxmemory-policy noeviction
-# No other network than the services' own, and a user allowed the store's commands and keys
-# only (those its scripts call included: Redis checks them too). REDIS_PASSWORD, with
-# redis://deckhand@redis:6379 as STORE_URL.
+# No other network than the services' own, and one user per service, allowed the store's
+# commands only (those its scripts call included: Redis checks them too) on its own keys alone.
+# Each service's STORE_URL is redis://<service>@redis:6379?prefix=deckhand:<service>:, its
+# password in REDIS_PASSWORD.
 user default off
-user deckhand on ><a long random password> ~deckhand:* resetchannels -@all +evalsha +eval +time +exists +scan +hmget +hset +del +pexpireat +incr +xadd +xgroup|create +xreadgroup +xack +xdel +xinfo|groups +getrange +strlen +set +append +select +ping +quit
+user edge on ><edge's password> ~deckhand:edge:* resetchannels -@all +evalsha +eval +time +exists +hmget +hset +del +pexpireat +incr +xadd +xgroup|create +xreadgroup +xack +xdel +xinfo|groups +getrange +strlen +set +append +select +ping +quit
+user orchestrator on ><orchestrator's password> ~deckhand:orchestrator:* resetchannels -@all +evalsha +eval +time +exists +scan +hmget +hset +del +pexpireat +incr +xadd +xgroup|create +xreadgroup +xack +xdel +xinfo|groups +getrange +strlen +set +append +select +ping +quit
+user runner on ><runner's password> ~deckhand:runner:* resetchannels -@all +evalsha +eval +time +exists +scan +hmget +hset +del +pexpireat +incr +xadd +xgroup|create +xreadgroup +xack +xdel +xinfo|groups +getrange +strlen +set +append +select +ping +quit
+user broker on ><broker's password> ~deckhand:broker:* resetchannels -@all +evalsha +eval +time +exists +hmget +hset +del +pexpireat +incr +xadd +xgroup|create +xreadgroup +xack +xdel +xinfo|groups +getrange +strlen +set +append +select +ping +quit
+user github on ><github's password> ~deckhand:github:* resetchannels -@all +evalsha +eval +time +exists +hmget +hset +del +pexpireat +incr +xadd +xgroup|create +xreadgroup +xack +xdel +xinfo|groups +getrange +strlen +set +append +select +ping +quit
+user models on ><models' password> ~deckhand:models:* resetchannels -@all +evalsha +eval +time +exists +hmget +hset +del +pexpireat +incr +xadd +xgroup|create +xreadgroup +xack +xdel +xinfo|groups +getrange +strlen +set +append +select +ping +quit
 ```
 
-The user's key pattern follows the prefix: with `?prefix=team-a:`, it is `~team-a:*`, else
-every call is refused with `NOPERM`. `+scan` lists a prefix's keys (a map kept one key per
-item, read back whole when a copy takes over): Redis's ACL doesn't hold `SCAN` to the key
-pattern, so a user can list the names of other users' keys (never read their values). Give a
-deployment that mustn't see another's key names a Redis of its own. `requirepass <a long random password>` (the `default`
-user) works too, but leaves it every
-command, `FLUSHALL` and `CONFIG` included. A call Redis doesn't answer within 5 seconds fails,
+**Each service needs a prefix of its own**, and so does each deployment sharing one Redis:
+their keys aren't told apart otherwise. The github service keeps its runs' state under
+`runs/<id>` and `runs/<id>/state` (`github/runs.mjs`), the same keys as the orchestrator's live
+runs (`listener/restart.mjs`): on one prefix, each would overwrite the other's, and the
+orchestrator, which removes a `runs/<id>` that holds none of its runs' state at every takeover,
+would delete the github service's. So never leave two services on the default `deckhand:`:
+give each `deckhand:<service>:`, as above and as the Kubernetes component does, and a user of
+its own on it. A deployment that put several services on one prefix moves each to its own with
+the services stopped: they start with an empty store, as when they first moved to Redis.
+
+A user's key pattern follows its service's prefix: with `?prefix=team-a:orchestrator:`, it is
+`~team-a:orchestrator:*`, else every call is refused with `NOPERM`. A user per service also
+keeps each from reading or writing another's store. `+scan` lists a prefix's keys (a map kept
+one key per item, read back whole when a copy takes over), and only the orchestrator and the
+runner list theirs: Redis's ACL doesn't hold `SCAN` to the key pattern, so a user with it can
+list the names of other users' keys (never read their values). Give a deployment that mustn't
+see another's key names a Redis of its own. `requirepass <a long random password>` (the
+`default` user) works too, but leaves every service every command and key, `FLUSHALL` and
+`CONFIG` included. A call Redis doesn't answer within 5 seconds fails,
 and the next one connects again: a copy that loses Redis learns in time that it can't renew
 its lease.
 
@@ -2427,14 +2445,14 @@ On Kubernetes, `deploy/kubernetes/`'s `redis` component runs it this way, one us
 
 With Redis, the orchestrator needs no volume (#619): it writes nothing outside its store, on a
 read-only root. On Compose, a `compose.override.yaml` beside `compose.yaml` (Docker Compose 2.24
-or later, for `!override`), with the Redis above on a network of its own and a user for the
+or later, for `!override`), with the Redis above on a network of its own and its user for the
 orchestrator (`ORCHESTRATOR_REDIS_PASSWORD` in `.env`):
 
 ```yaml
 services:
   orchestrator:
     environment:
-      STORE_URL: "redis://deckhand@redis:6379?prefix=deckhand:orchestrator:"
+      STORE_URL: "redis://orchestrator@redis:6379?prefix=deckhand:orchestrator:"
       REDIS_PASSWORD: ${ORCHESTRATOR_REDIS_PASSWORD}
     networks:
       store:
@@ -2450,7 +2468,8 @@ networks:
     internal: true
 ```
 
-The user's key pattern follows that prefix (`~deckhand:orchestrator:*`). Coming from a release
+Its user's key pattern follows that prefix (`~deckhand:orchestrator:*`); another service moved
+to Redis gets its own the same way, never the orchestrator's. Coming from a release
 before #619, keep the old volume mounted for the first start, which moves what it left there:
 [Upgrading: the orchestrator without a volume](#upgrading-the-orchestrator-without-a-volume-619).
 
