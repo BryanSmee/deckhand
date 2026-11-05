@@ -8,6 +8,7 @@ import { createHash } from "node:crypto";
 import { posix } from "node:path";
 import { AGENTS } from "./agents/index.mjs";
 import { EFFORTS, MODEL_NAME, SPEEDS } from "./events.mjs";
+import { GitHubUnavailable, unavailable } from "./github.mjs";
 import { list, normalize } from "./config.mjs";
 import { machineLabel } from "./machines.mjs";
 import { customMode, PICKED_MODES, RESERVED_MODES } from "./modes.mjs";
@@ -1161,6 +1162,9 @@ export async function readRepoFile(request, repo, path, ref) {
   const url = `/repos/${repo}/contents/${path.split("/").map(encodeURIComponent).join("/")}?ref=${encodeURIComponent(ref)}`;
   const res = await request(repo, "GET", url, null, [404]);
   if (res.status === 404) return null;
+  if (!res.ok && (await unavailable(res))) {
+    throw new GitHubUnavailable("GET", url, res.status, `reading ${path} of ${repo}`);
+  }
   if (!res.ok) throw new Error(`reading ${path} of ${repo}: ${res.status}`);
   const file = await res.json();
   if (file.type !== "file") throw new Error(`${path} of ${repo} is not a file`);

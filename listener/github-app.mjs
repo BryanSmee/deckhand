@@ -4,6 +4,7 @@
 import { createSign } from "node:crypto";
 import { join } from "node:path";
 import { readJson, writeJsonAtomic } from "../lib/files.mjs";
+import { rateLimited } from "./github.mjs";
 
 // What the App asks for when /setup creates it (manifest flow).
 export const APP_PERMISSIONS = {
@@ -191,6 +192,34 @@ export const PERMISSIONS_MS = 5 * 60000;
 // whoever gets it can use it for at least that long.
 export const REFRESH_MS = 10 * 60000;
 
+// GitHub's short hiccups (#680): a 5xx below, or no answer at all, tried again after these
+// waits, then given up as it answered. Only a call that may be repeated (repeatable()).
+export const RETRY_DELAYS = [1000, 3000, 9000];
+const HICCUPS = new Set([500, 502, 503, 504]);
+// A secondary rate limit's wait, as GitHub says it (`retry-after`; a minute when it says
+// nothing, as its docs ask): not a failed try, but waited this long at most, this many times.
+// A longer one, or the primary limit (no requests left until its reset), is answered as it is.
+export const RATE_WAIT_MAX_MS = 60_000;
+const RATE_WAITS = 3;
+
+// Whether `method` on `path` may be sent again after GitHub failed it: a read, or a write that
+// sets a known value (PUT, PATCH), but a merge, whose second try would be refused for the first.
+// Never a POST (a comment twice) nor a DELETE (a 404 for the first's success).
+export function repeatable(method, path) {
+  if (method === "GET" || method === "HEAD") return true;
+  return (method === "PUT" || method === "PATCH") && !/\/merge(\?|$)/.test(path);
+}
+
+// `retry-after` in ms (seconds, or an HTTP date), or null.
+function retryAfter(res, now) {
+  const value = res.headers?.get?.("retry-after");
+  if (!value) return null;
+  const seconds = Number(value);
+  if (Number.isFinite(seconds)) return Math.max(0, seconds * 1000);
+  const at = Date.parse(value);
+  return Number.isNaN(at) ? null : Math.max(0, at - now());
+}
+
 // What every call to GitHub sends (auth.mjs and setup.mjs add to it).
 export const GITHUB_HEADERS = Object.freeze({
   accept: "application/vnd.github+json",
@@ -224,6 +253,7 @@ export function createGitHubApp({
   fetch = globalThis.fetch,
   now = Date.now,
   log = () => {},
+  sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
 }) {
   const installations = new Map(); // "owner/repo" → installation id
   // installation id → { permissions, url, account, at }, as GitHub last said; and the ones
@@ -381,14 +411,60 @@ export function createGitHubApp({
     return token(await installationOf(repo), repo.toLowerCase(), permissions);
   }
 
-  // `expected`: error statuses that are normal for this call, so not logged.
+  // `expected`: error statuses that are normal for this call, so not logged. A hiccup of
+  // GitHub's (HICCUPS, no answer) is tried again after RETRY_DELAYS when the call may be
+  // repeated (repeatable()), and a secondary rate limit waited for (RATE_WAIT_MAX_MS), each
+  // retry logged once; what still fails is answered (or thrown) as GitHub left it.
   async function request(repo, method, path, body, expected = []) {
-    const { token: t } = await token(await installationOf(repo));
-    const res = await call(method, path, t, body);
-    if (!res.ok && !expected.includes(res.status)) {
-      log(`GitHub ${method} ${path}: ${res.status} ${await res.clone().text()}`);
+    const again = repeatable(method, path);
+    let tries = 0;
+    let waits = 0;
+    for (;;) {
+      const { token: t } = await token(await installationOf(repo));
+      let res;
+      try {
+        res = await call(method, path, t, body);
+      } catch (error) {
+        if (!again || tries >= RETRY_DELAYS.length) throw error;
+        const ms = RETRY_DELAYS[tries++];
+        log(
+          `GitHub ${method} ${path}: ${error.message ?? error}, tried again in ${ms / 1000} s (attempt ${tries + waits + 1})`,
+        );
+        await sleep(ms);
+        continue;
+      }
+      const wait = await waitFor(res, again, tries, waits);
+      if (wait) {
+        if (wait.rate) waits++;
+        else tries++;
+        const why = wait.rate ? "rate limited" : String(res.status);
+        log(
+          `GitHub ${method} ${path}: ${why}, tried again in ${wait.ms / 1000} s (attempt ${tries + waits + 1})`,
+        );
+        await res.body?.cancel();
+        await sleep(wait.ms);
+        continue;
+      }
+      if (!res.ok && !expected.includes(res.status)) {
+        log(`GitHub ${method} ${path}: ${res.status} ${await res.clone().text()}`);
+      }
+      return res;
     }
-    return res;
+  }
+
+  // How long to wait before `res`'s call goes again, { ms, rate } (a rate limit's, not a
+  // failed try), or null: answered as it is. A rate limit refused the call, so any may go again.
+  async function waitFor(res, again, tries, waits) {
+    if (res.ok) return null;
+    if (res.status === 403 || res.status === 429) {
+      if (waits >= RATE_WAITS || res.headers?.get?.("x-ratelimit-remaining") === "0") return null;
+      if (!(await rateLimited(res))) return null;
+      const ms = retryAfter(res, now) ?? RATE_WAIT_MAX_MS;
+      return ms <= RATE_WAIT_MAX_MS ? { ms, rate: true } : null;
+    }
+    if (!HICCUPS.has(res.status) || !again || tries >= RETRY_DELAYS.length) return null;
+    const after = retryAfter(res, now);
+    return { ms: Math.min(after ?? RETRY_DELAYS[tries], RATE_WAIT_MAX_MS), rate: false };
   }
 
   // As the App itself (its JWT): what lists its installations.
