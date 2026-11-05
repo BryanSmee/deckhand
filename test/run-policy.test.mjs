@@ -764,8 +764,20 @@ test("Deckhand's defaults alone, with permissions: GitHub failing on the reposit
     assert.equal(await allowed(work(), "work", "Org/Repo#12"), true);
     assert.equal((await policies.access("alice", "Org/Repo")).error, null);
   }
+  down = answering(502);
+  // Past an hour: nothing, as every other decision.
+  clock = 61 * 60_000;
+  assert.equal(await allowed(work(), "work", "Org/Repo#12"), false);
+  assert.match((await policies.access("alice", "Org/Repo")).error, /can't be read/);
+  // Back: read again. Its push forgets it: GitHub down then gives nothing.
+  down = null;
+  assert.ok(await policies.can("alice", "Org/Repo", "logs:read"));
+  policies.forget("Org/Repo");
+  down = answering(502);
+  assert.match((await policies.access("alice", "Org/Repo")).error, /can't be read/);
   // A 404 (deleted, or out of the App's reach) or a plain 403 (the App's access gone, the
-  // repository blocked) isn't: nothing, at once.
+  // repository blocked) isn't a hiccup: nothing, at once, each after a fresh read. And what
+  // GitHub said before goes with it: a hiccup next doesn't bring it back.
   for (const [answer, status] of [
     [answering(404), /404/],
     [answering(403), /403/],
@@ -778,21 +790,17 @@ test("Deckhand's defaults alone, with permissions: GitHub failing on the reposit
     [service(412), /412/],
     [service(404), /404/],
   ]) {
+    down = null;
+    clock += 60_000;
+    assert.ok(await policies.can("alice", "Org/Repo", "logs:read"));
+    clock += 60_000;
     down = answer;
     assert.equal(await allowed(work(), "work", "Org/Repo#12"), false);
     assert.match((await policies.access("alice", "Org/Repo")).error, status);
+    down = answering(502);
+    assert.equal(await allowed(work(), "work", "Org/Repo#12"), false);
+    assert.match((await policies.access("alice", "Org/Repo")).error, /can't be read/);
   }
-  down = answering(502);
-  // Past an hour: nothing, as every other decision.
-  clock = 61 * 60_000;
-  assert.equal(await allowed(work(), "work", "Org/Repo#12"), false);
-  assert.match((await policies.access("alice", "Org/Repo")).error, /can't be read/);
-  // Back: read again. Its push forgets it: GitHub down then gives nothing.
-  down = null;
-  assert.ok(await policies.can("alice", "Org/Repo", "logs:read"));
-  policies.forget("Org/Repo");
-  down = answering(502);
-  assert.match((await policies.access("alice", "Org/Repo")).error, /can't be read/);
   // Nothing posted for any of it: a refused or undecided author gets no reply.
   assert.deepEqual(replies, []);
 });

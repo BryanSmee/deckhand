@@ -24,7 +24,8 @@ const noOpa = !hasOpa() && "no opa on the PATH";
 const bindings = (list) => `package deckhand\n\nbindings := ${JSON.stringify(list, null, 2)}\n`;
 
 // The repositories GitHub knows: name → { private, policies: name → text, branch, down (true: 502,
-// or the status every path answers), renamed:
+// or the status every path answers), infoDown (true: GET /repos/{repo} alone answers 502),
+// renamed:
 // the name GitHub answers with }, their
 // policies on their default branch (`branch`, `main` by default) alone; `calls`, the paths asked.
 function fakeGithub(repos) {
@@ -39,6 +40,7 @@ function fakeGithub(repos) {
     if (!repo) return new Response("{}", { status: 404 });
     if (repo.down) return new Response("{}", { status: repo.down === true ? 502 : repo.down });
     if (!at[2]) {
+      if (repo.infoDown) return new Response("{}", { status: 502 });
       const branch = repo.branch ?? "main";
       const full = repo.renamed ?? at[1];
       return Response.json({ full_name: full, private: repo.private, default_branch: branch });
@@ -580,7 +582,19 @@ test(
       assert.ok(!(await policies.can("bob", "acme/api", action)), action);
     }
     assert.match((await policies.access("bob", "acme/api")).error, /404/);
-    // Up to STALE_LISTING_MS: past it, nothing.
+    // What GitHub said before goes with the 404: a hiccup next gives nothing, rather than the
+    // old view of a repository GitHub said is gone.
+    repos["acme/api"].down = true;
+    assert.match((await policies.access("bob", "acme/api")).error, /can't be read/);
+    // Nor when only GET /repos/{repo} fails, its listing answering.
+    repos["acme/api"].down = false;
+    repos["acme/api"].infoDown = true;
+    assert.match((await policies.access("bob", "acme/api")).error, /can't be read/);
+    repos["acme/api"].infoDown = false;
+    // Read again, it holds through a hiccup up to STALE_LISTING_MS: past it, nothing.
+    repos["acme/api"].down = false;
+    assert.ok(!(await policies.can("bob", "acme/api", "runs:manage")));
+    clock.now += ACCESS_MS;
     repos["acme/api"].down = true;
     assert.ok(await policies.can("bob", "acme/api", "tasks:read"));
     clock.now += STALE_LISTING_MS;

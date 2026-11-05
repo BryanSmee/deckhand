@@ -2150,9 +2150,10 @@ hour old, as run decisions do, and the log says so: a short GitHub error refuses
 service failing, or out of reach, counts as GitHub failing. Any other answer gives no action at
 once, since its listing would read as no policy and drop its deny rules: a 404 (the repository
 deleted, or out of the App's reach, which the github service passes on as GitHub said it, its
-installation included), any other 403, or the github service's own refusal (no App yet). A push
-forgets both, and an orchestrator that hasn't read them in that hour, since its start or since a
-push, gives no action.
+installation included), any other 403, or the github service's own refusal (no App yet). Such an
+answer also forgets what GitHub said before and the last listing, so a hiccup right after it gives
+no action either. A push forgets both, and an orchestrator that hasn't read them in that hour, since
+its start or since a push, gives no action.
 
 **When a change holds.** An edit of your policy files holds at the next decision (the answers
 are kept per digest of your files); a repository's own at the push to its default branch, which

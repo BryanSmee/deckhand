@@ -872,7 +872,15 @@ export function createPolicies({
           // that isn't a hiccup (a 404: deleted, or out of the App's reach; the github service's
           // own refusal): fails closed, since its listing would then 404 too, read as no policy,
           // dropping its deny rules.
-          if (!(await transient(res)) || !kept || now() - kept.at > STALE_LISTING_MS) {
+          const hiccup = await transient(res);
+          await res.body?.cancel().catch(() => {});
+          if (!hiccup) {
+            // GitHub said something of it: what it said before, and its listing, go, so that a
+            // later hiccup can't bring them back.
+            repoInfos.delete(key);
+            listings.delete(key);
+          }
+          if (!hiccup || !kept || now() - kept.at > STALE_LISTING_MS) {
             throw res.error ?? new Error(why);
           }
           log(`${name}: reading the repository: ${why}; what GitHub last said kept`);

@@ -49,6 +49,15 @@ async function fakeGitHub(t, answer = () => null) {
         res.writeHead(404, { "content-type": "application/json" });
         return res.end(JSON.stringify({ message: "Not Found" }));
       }
+      // org/limited: a secondary rate limit, which sends no header; org/blocked: a plain 403.
+      if (req.url.endsWith("/repos/org/limited/installation")) {
+        res.writeHead(403, { "content-type": "application/json" });
+        return res.end(JSON.stringify({ message: "You have exceeded a secondary rate limit." }));
+      }
+      if (req.url.endsWith("/repos/org/blocked/installation")) {
+        res.writeHead(403, { "content-type": "application/json" });
+        return res.end(JSON.stringify({ message: "Repository access blocked" }));
+      }
       if (req.url.endsWith("/repos/org/down/installation")) {
         res.writeHead(502, { "content-type": "application/json" });
         return res.end("{}");
@@ -483,6 +492,15 @@ test("the listener's client: GitHub's answers as fetch() gives them, the service
       path,
     );
   }
+  // A 403 that is a rate limit stays a failure; any other, the refusal it is.
+  await assert.rejects(
+    app.request("org/limited", "GET", "/repos/org/limited"),
+    (error) => error.status === 500,
+  );
+  await assert.rejects(
+    app.request("org/blocked", "GET", "/repos/org/blocked"),
+    (error) => error.status === 403,
+  );
   await assert.rejects(
     app.request("org/down", "GET", "/repos/org/down"),
     (error) => error.status === 500,

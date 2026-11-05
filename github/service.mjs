@@ -44,7 +44,7 @@ import { createGithubGateway } from "../listener/github-gateway.mjs";
 import { createGraphqlChecks, createValidator, lookupNodes } from "../listener/github-graphql.mjs";
 import { createPullChecks } from "../listener/github-pulls.mjs";
 import { createReadChecks, createWriteChecks } from "../listener/github-writes.mjs";
-import { createGitHub, getJson } from "../listener/github.mjs";
+import { createGitHub, getJson, rateLimited } from "../listener/github.mjs";
 import { repoPath } from "../listener/repo-config.mjs";
 import { parse } from "../listener/vendor/graphql.mjs";
 import { NO_METRICS } from "./metrics.mjs";
@@ -483,14 +483,20 @@ export function createGithubService({
   // up, a token minted: github-app.mjs json(), GitHub's status on the error) passed on as the
   // service's refusal with that status: a repository out of the App's reach is a 404 to the
   // caller, not the service failing, which a caller may take for a hiccup (policies.mjs
-  // transient(), #785). A 5xx or a rate limit stays a failure.
+  // transient(), #785). A 5xx or a rate limit (a 403 may be one: rateLimited(), on the headers
+  // and the message github-app.mjs json() puts on the error) stays a failure.
   async function reached(make) {
     try {
       return await make();
     } catch (error) {
       const status = error?.status;
       if (error instanceof Refused || !Number.isInteger(status)) throw error;
-      if (status < 400 || status >= 500 || status === 429) throw error;
+      if (status < 400 || status >= 500) throw error;
+      const answer = new Response(String(error.message ?? ""), {
+        status,
+        headers: error.headers ?? {},
+      });
+      if (await rateLimited(answer)) throw error;
       throw new Refused(status, `GitHub answered ${status} for the App's access to it`);
     }
   }
