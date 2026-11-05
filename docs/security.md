@@ -2011,7 +2011,8 @@ allow_grant if {
 ## Who reaches a session
 
 A comment reaches Claude when its author is in `ALLOWED_USERS` and the repository's own
-`users`, and those are checked again later, not only when it arrives:
+`users`, and has the `runs:start:<mode>` [action](#access) for the mode it resolves to
+(`runs:manage` for `/cancel`), and those are checked again later, not only when it arrives:
 
 - a comment queued when the orchestrator stops (or crashes) keeps its author in the queue, saved
   in the store as it comes (`store/state.json`): the next orchestrator (or the copy waiting for
@@ -2021,7 +2022,9 @@ A comment reaches Claude when its author is in `ALLOWED_USERS` and the repositor
   default branch, when its run begins (or, for a run still going after a restart, before it
   reaches that run): a `.deckhand.yaml` that removes a user while their comment waits out
   the pause, or behind a busy repository, stops it;
-- a comment that waits for other issues (`/after`) is checked again when it starts.
+- a comment that waits for other issues (`/after`) is checked again when it starts;
+- its author's access is asked again before queued work runs: a refusal drops it, a decision
+  that fails (the policy service away) keeps it for the next try.
 
 A comment on a pull request goes on in the session of the issue the pull request closes
 (`Closes #12` in its description) only when the pull request's head branch is in the
@@ -2047,13 +2050,13 @@ it couldn't see of a label:
 
 - the run is the work of whoever last added the label (the issue's `labeled` events): they
   must be in `ALLOWED_USERS` and the repository's `users`, read from its default branch right
-  before the start, and not a bot. Anyone with triage access can add a label: one added by
+  before the start, have `runs:start:work` ([access](#access)), and not be a bot. Anyone with triage access can add a label: one added by
   someone else starts nothing. When the label's last event the issue lists took it off (a
   picked run's), the labelling that put it back isn't listed yet: nothing starts until it is,
   rather than as the earlier labeller's;
 - the label vouches for the issue as it was when it went on. A title changed (a `renamed`
   event) or a description edited (GraphQL's `userContentEdits`) after it, or in the same
-  second, by anyone but an allowed user, holds the issue: on a public repository, an
+  second, by anyone but an allowed user with `runs:start:work`, holds the issue: on a public repository, an
   outsider's issue rewritten once labelled would otherwise run as the labeller's. Every edit
   since the label counts, not only the last one (an allowed user's typo fix doesn't vouch for
   an outsider's rewrite before it). The issue's own last edit (`lastEditedAt`, `editor`) is
@@ -2073,23 +2076,89 @@ it couldn't see of a label:
   of each such issue (its number, the merger, the issue's creation time), and a labelling by
   the App counts only when it matches one, the same issue within two seconds
   (`followUpPick()`, `listener/reviews.mjs`). The run is then the merger's, checked against
-  `ALLOWED_USERS` and `users` at the pick as any labeller, and the edit check above starts
+  `ALLOWED_USERS`, `users` and `runs:start:work` at the pick as any labeller, and the edit check above starts
   from the label's time (the original GitHub lists for an edited description, the App's at
   the issue's creation, isn't an edit since; any later edit of the App's is). A merge by Deckhand itself (`review.merge`), a bot or anyone not
   allowed labels nothing. A run can't forge a record: it would have to file the issue
   through the orchestrator's own merge handling, not a write of its own.
 
+## Access
+
+Who may do what on which repository (#725), among the people Deckhand lets in at all. Three
+gates, each narrowing the one before ([Access](repo-config.md#access) for the rules, the
+actions and the roles):
+
+- **`ALLOWED_USERS`, the outer gate**: who signs in to the dashboard, whose MCP clients get a
+  token, whose comments reach Deckhand. A login outside it has nothing, whatever a policy says:
+  no rule is asked for it.
+- **The operator's `allow_access`**: the actions a login has on a repository (`tasks:read`,
+  `logs:read`, `runs:start:<mode>`, `runs:manage`, `repo:config:read`) and server-wide
+  (`server:read`, `server:sync`), from the policies of your layer alone: Deckhand's
+  `access.rego` (every action to every login, the default) or the grants folder's
+  `policy/access.rego` that replaces it, usually `bindings` of logins, repository patterns and a
+  role (`access-roles.rego`). Only your layer allows: a repository's `allow_access` is ignored
+  (a config check error).
+- **What narrows it**: `deny_access` rules, yours (for every repository) and those of a
+  repository's `.deckhand/policy/` (for its own), take actions away, and a deny always wins; a
+  repository's `.deckhand.yaml` `users`, as the orchestrator last read them, leaves a login
+  outside them nothing there. Both are read from the default branch, so whoever may push there
+  can take access away on that repository, never give it: a repository can't give a login an
+  action, nor reach another repository's access or the server-wide actions.
+
+**Trust boundaries.** Access is decided from files only, yours and the repositories' default
+branches, never from the dashboard (Settings › Access only shows it) nor from GitHub's roles: a
+repository's admin on GitHub has no action in Deckhand that a rule doesn't give, and a login
+given `runs:start:work` starts work on a repository whose GitHub permissions it doesn't have
+(the run is the App's, as any). Teams aren't read: bindings name logins. The operator's files
+are as sensitive as the grants: keep the grants folder in a reviewed repository
+([The grants folder](#the-grants-folder)). The server-wide actions matter as much: `server:read`
+shows the server's setup, the grants and who has what (Settings › Server, Settings › Access,
+with each deny's reason), and `server:sync` asks GitHub for every repository's failed
+deliveries again.
+
+**Hidden repositories.** A repository where a login has no action at all is hidden from it
+everywhere: the repositories list, the tasks, inboxes, lanes and blockers of `api/state`,
+`/status` and the live logs (MCP's tools will ask the same checks once #482 and #483 land). Its routes answer as one outside `ALLOWED_REPOS` (the same
+404 and message), so a login can't tell a hidden repository from one that doesn't exist; a
+blocker in a repository it doesn't see is "a hidden issue", its title never read for it.
+Without `server:read`, the repositories list names only the installations of the accounts
+owning a repository the login sees. Totals without names stay (running, queued, slots).
+
+**Fail closed.** An unknown login, a repository no rule names, a policy that doesn't compile or
+errs, policies that can't be read and a policy service that can't be reached all give no action:
+the repository is hidden, a comment starts nothing (and gets no reply), a repository's route
+answers as one hidden (the 404 above, the log saying the decision failed), and a server-wide
+route answers 503. A failure is never
+mistaken for a refusal that sticks: queued work isn't dropped and an auto-pickup label isn't held
+for one, they are asked again. So **the dashboard needs the policy service**, as the runs'
+writes do: every decision first reads the operator's layer, which the orchestrator asks the
+service for again once 30 seconds have passed (`DEFAULTS_MS`), whatever answer is kept, so a
+policy service away hides every repository within about 30 seconds, until it is back. Deckhand's default
+`access.rego` alone, with no repository policy, is decided without evaluating `opa`, but still
+needs the service's listing of its policies.
+
+**When a change holds.** An edit of your policy files holds at the next decision (the answers
+are kept per digest of your files); a repository's own at the push to its default branch, which
+forgets its listing; anything else a rule reads (whether GitHub says the repository is private)
+once the kept answer is a minute old. A live log asks again each second and ends once
+`logs:read` goes. Removing a login from `ALLOWED_USERS` (edge restarted) ends its sessions and
+its MCP clients' tokens ([The dashboard](#the-dashboard), [MCP clients](#mcp-clients)).
+
+**Upgrading changes nothing**: Deckhand's `access.rego` gives every allowed user every action,
+server views included, as before access had rules; the repositories' `users` narrow as they did.
+To narrow, see [setup.md](setup.md#upgrading-access-control-725).
+
 ## The dashboard
 
-Only `ALLOWED_USERS` sign in. Each repository's tasks, runs and live logs (whose tool output
-may hold what a run read) are shown to the users in its own `users` too, as the orchestrator last
-read them (for a run or a comment, or for the repositories tab); a repository whose
-`.deckhand.yaml` hasn't been read since the orchestrator started is shown to every allowed user
-until it is. `/status` lists them the runs and queued comments of those
-repositories only. An open live log stops within a second of its viewer leaving the
-repository's `users`. Edge checks the session on each request it passes on, not during a
-stream: a live log already open goes on after a sign-out until its stream ends or reconnects.
-The repositories tab and its configs are shown to every allowed user.
+Only `ALLOWED_USERS` sign in, and each sees what [access](#access) gives them. A repository's
+tasks and runs need `tasks:read`, its live logs (whose tool output may hold what a run read)
+`logs:read`, its config, grants and policies `repo:config:read`; a repository with no action is
+hidden. `/status` lists the runs and queued comments of the repositories with `tasks:read`
+only. An open live log stops within a second of its viewer losing `logs:read` (leaving the
+repository's `users` included). Edge checks the session on each request it passes on, not during
+a stream: a live log already open goes on after a sign-out until its stream ends or reconnects.
+The dashboard only shows the controls a user's actions allow: what it hides is still refused by
+the orchestrator, which decides every request again.
 
 Every answer on edge's port carries `Content-Security-Policy: default-src 'self';
 frame-ancestors 'none'` and `X-Content-Type-Options: nosniff`: the dashboard runs its own
@@ -2170,8 +2239,9 @@ resource_metadata="<PUBLIC_URL>/.well-known/oauth-protected-resource/mcp"` (RFC 
   Settings › MCP clients (the login's own clients, posted from the dashboard's origin), or the
   client's own `POST /oauth/revoke` (RFC 7009). A login keeps 20 clients at most: a 21st ends
   the oldest.
-- What a client may then do is its login's, as on the dashboard: `/mcp`'s tools (#482, #483)
-  check `ALLOWED_REPOS` and each repository's `users` on every call.
+- What a client may then do will be its login's, as on the dashboard: `/mcp`'s tools, once
+  #482 and #483 land, will check `ALLOWED_REPOS` and the login's [access](#access) (each
+  repository's `users` included) on every call, a hidden repository staying hidden.
 
 ## Edge's and the orchestrator's data
 
@@ -2259,7 +2329,10 @@ starts runs, so it is checked as a comment that waited is (`tasks.resume()`), at
 - the repository in `ALLOWED_REPOS` (when set: by name, or through its owner's `owner/*`)
   and the App installed on it;
 - its `.deckhand.yaml` on the default branch without errors, and a mode it has;
-- the user in both `ALLOWED_USERS` and the repository's own `users`;
+- the user in both `ALLOWED_USERS` and the repository's own `users`, with the route's
+  [action](#access) there: `runs:start:<mode>` for what it starts, `runs:manage` for what it
+  moves or stops (its mode's start too when that starts a run), each checked before anything
+  is posted ([Access](repo-config.md#access) lists each route's);
 - an open issue, not a pull request, with no run going or queued (a running issue doesn't
   move), and no wait that would loop back to it.
 
@@ -2267,8 +2340,8 @@ Each action is written on the issue as the App's comment ("Started from the dash
 @alice"), so the issue's history says who started what, as a trigger comment would. The
 App's comments are ignored as triggers, so the orchestrator queues or holds the work itself
 rather than through a webhook. The backlog (`GET /api/repos/<owner>/<repo>/issues`) lists a
-repository's open issues to signed-in users in its `users` (all of them while its config has
-errors), from GitHub at most once every 30 seconds per repository, or after an `issues`
+repository's open issues to signed-in users in its `users` with `tasks:read` (every signed-in user
+with `tasks:read` while its config has errors), from GitHub at most once every 30 seconds per repository, or after an `issues`
 delivery for it, one read at a time; the dashboard keeps the last one in memory only, not in
 the browser's storage. The repository list's backlog counts (`GET /api/repos?backlog=1`, the
 Overview) come from the same reads under the same `users` rule (a repository whose `users`
@@ -2330,7 +2403,8 @@ keys of that repository's issues and pull requests only. It is the orchestrator'
 (its store's `lanes`), never posted on GitHub nor read by a run: one line of at most 60 characters,
 shown as text.
 
-Sync (`POST /api/sync`) takes a signed-in session and this dashboard's `Origin`, at most once
+Sync (`POST /api/sync`) takes a signed-in session with `server:sync` and this dashboard's
+`Origin`, at most once
 every 30 seconds for everyone. It starts nothing itself: it asks GitHub to redeliver the
 App's deliveries that failed (signed by GitHub as any delivery, then checked as one) and reads
 the open pull requests' states again, for every repository, as the orchestrator does at start.
@@ -2364,6 +2438,7 @@ Discussions from the dashboard (`POST /api/repos/<owner>/<repo>/discussions`, an
 category: a discussion elsewhere, or a reply to a comment of another discussion, is refused. Their
 text is posted as the App's, ending "From the dashboard by @alice". Reading a thread
 (`GET …/discussions/<n>`) takes a signed-in user in `ALLOWED_USERS` and the repo's `users`,
+with `tasks:read`,
 for a discussion in that category only. The thread shows a post as a dashboard user's only when
 the App wrote it and its line carries a tag that checks: an HMAC of the user and the text, with
 a key derived from the App's webhook secret, which no run holds. Anyone else writing the same
