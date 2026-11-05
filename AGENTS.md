@@ -78,19 +78,28 @@ started before you finish.
 ## Layout (target; build it as the issues land)
 
 ```
-lib/          what every service shares, copied into each image: yaml, settings, redact, log
-              (its lines, a request's ID), http, health (every service's /health), files, drain,
-              tokens, service tokens, the store (store.mjs, store-file.mjs, store-redis.mjs and
-              its client resp.mjs, the arguments both backends check in store-checks.mjs;
-              store-map.mjs: a Map kept there one key per item), the S3 client (s3.mjs, #605) and blob storage over it (blobs.mjs:
-              BLOB_URL's backends, #606)
+lib/          what every service shares, copied into each image: yaml, settings, redact, log (its
+              lines, a request's ID), http, health (every service's /health), files, drain,
+              tokens, service tokens (service-token.mjs), the store (store.mjs, store-file.mjs,
+              store-redis.mjs and its client resp.mjs, the arguments both backends check in
+              store-checks.mjs; store-map.mjs: a Map kept there one key per item), the S3 client
+              (s3.mjs, #605) and blob storage over it (blobs.mjs: BLOB_URL's backends, #606),
+              metrics (every service's registry and METRICS_PORT's server, #651), shots (the
+              screenshots' names, sizes and types the broker accepts and edge serves, #609), the
+              calls between services (services.mjs: which calls which; service-client.mjs,
+              broker-client.mjs; fence.mjs: the orchestrator's fencing epoch), active.mjs (a
+              lease's active/passive copies), seal.mjs (secrets sealed in the store),
+              fingerprints.mjs (redacting secrets a service doesn't hold), policy-files.mjs (the
+              operator's policy files), subnets.mjs, upstream.mjs (forwarding a call as it
+              streams)
 edge/         edge (#506), the only service the internet reaches: server.mjs (wiring), http.mjs
               (webhooks, /setup, sign-in, the dashboard's files), forward.mjs (the dashboard's API
               passed on to the orchestrator), internal.mjs (the deliveries' stream and the App's
               public parts, for the orchestrator), app.mjs (the webhook secret, the OAuth
               client's), oauth.mjs (MCP clients' sign-in: an OAuth 2.1 server over GitHub's),
               client.mjs (what the orchestrator calls it with), metrics.mjs (its metrics: the
-              webhooks, the requests by route, sign-ins and sessions)
+              webhooks, the requests by route, sign-ins and sessions), shots.mjs (the runs'
+              screenshots, passed on to the broker)
 orchestrator/ the orchestrator (#506): server.mjs (wiring: its lease, then the queue and the runs'
               lives, from ../listener/'s modules); two copies, active/passive
 listener/     the modules edge and the orchestrator run (no entry point of its own): http.mjs (the
