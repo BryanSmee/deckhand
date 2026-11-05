@@ -2376,7 +2376,7 @@ orchestrator (`ORCHESTRATOR_REDIS_PASSWORD` in `.env`):
 services:
   orchestrator:
     environment:
-      STORE_URL: redis://deckhand@redis:6379?prefix=deckhand:orchestrator:
+      STORE_URL: "redis://deckhand@redis:6379?prefix=deckhand:orchestrator:"
       REDIS_PASSWORD: ${ORCHESTRATOR_REDIS_PASSWORD}
     networks:
       store:
