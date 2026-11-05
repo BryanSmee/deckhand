@@ -584,8 +584,10 @@ unknown severity, a missing field, a path without its line) is logged, and the m
 instead, with the review's own "request changes" (the block's or the markdown's) kept whatever
 the rest says. So is a block that says less than its markdown: one that blocks less or doesn't
 request changes where the markdown does, rates the pull request higher, has fewer findings at
-any severity and above or fewer blocking comments, or has nothing as severe at the place of one
-of the markdown's findings or blocking comments.
+any severity and above, fewer blocking comments or fewer follow-ups, or has nothing as severe
+at the place of one of the markdown's findings or blocking comments. Where both ask for
+changes, the block decides whether that verdict reads "comment" (on tolerated findings, or on
+follow-ups and notes alone), however unsure the markdown read alone would be.
 
 - **Claims and acceptance criteria first.** Before security, the review lists the
   acceptance criteria of the issue the pull request closes (and the decisions settled in

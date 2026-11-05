@@ -120,7 +120,7 @@ function lastAt(v) {
 // Read from its verdict block first (a fenced `json deckhand-review` block, readBlock(), #645):
 // its items are typed, so nothing is guessed. A block that doesn't validate is logged (`log`)
 // and the markdown read instead (readMarkdown()), the block's own `request-changes` kept, and so
-// is one the markdown is stricter than (strictness(): it blocks on an item the block lacks, or
+// is one the markdown says more than (saysLess(): it blocks on an item the block lacks, or
 // asks for changes the block doesn't); a reply
 // without one (a repo's own prompt, an older session) reads from its markdown as before it.
 // The rating is capped by the most severe finding (RATING_CAPS), and anything blocking makes
@@ -142,7 +142,11 @@ export function parseReview(text, { allowed = "low", log = () => {} } = {}) {
     // The markdown, read as it would be alone, saying more than the block (saysLess()): one of
     // the two left something out, so the block is no surer than the markdown, read as when it
     // doesn't validate.
-    const stricter = read.block && saysLess(fromBlock, markdownAlone(md, read.block, allowed));
+    const stricter =
+      read.block &&
+      saysLess(fromBlock, markdownAlone(md, read.block, allowed), {
+        asked: md.said === "request-changes" && read.block.verdict !== "request-changes",
+      });
     if (read.block && !stricter) return fromBlock;
     log(
       stricter
@@ -175,19 +179,17 @@ const markdownAlone = (md, block, allowed) =>
     { said: md.said ?? "comment", allowed, sure: markdownSure(md) },
   );
 
-// How far a settled review stops the pull request: 2 blocking on its items (GitHub's
-// REQUEST_CHANGES, a fix run), 1 its verdict alone `request-changes` (no merge), 0 neither.
-const strictness = (review) =>
-  blocks(review, review.allowed) ? 2 : review.verdict === "request-changes" ? 1 : 0;
-
 // Whether settled review `block` says less than `md` in anything that blocks, is posted as a
-// finding or reaches the policies (`input.review`): less strict (strictness()), a higher rating,
-// fewer findings at any severity and above, fewer blocking comments, or a finding or blocking
-// comment of the markdown's with a place that the block has nothing as severe at. The model
-// wrote both: they differ only when one left something out, and the markdown may be the right
-// one.
-function saysLess(block, md) {
-  if (strictness(md) > strictness(block) || md.rating < block.rating) return true;
+// finding or a follow-up, or reaches the policies (`input.review`): `asked`, the markdown's
+// `request-changes` where the block's own verdict isn't (where both say it, the typed block
+// decides whether it reads `comment`, whatever the markdown's own doubts), blocking where the
+// block doesn't, a higher rating, fewer findings at any severity and above, fewer blocking
+// comments or follow-ups (each one a filed issue), or a finding or blocking comment of the
+// markdown's with a place that the block has nothing as severe at. The model wrote both: they
+// differ only when one left something out, and the markdown may be the right one.
+function saysLess(block, md, { asked }) {
+  if (asked || (blocks(md, md.allowed) && !blocks(block, block.allowed))) return true;
+  if (md.rating < block.rating || md.followUps.length > block.followUps.length) return true;
   const rank = (item) => (item.severity ? SEVERITIES.indexOf(item.severity) : RANK_BLOCKING);
   const atLeast = (review, limit) => review.findings.filter((f) => rank(f) <= limit).length;
   if (SEVERITIES.some((_, limit) => atLeast(md, limit) > atLeast(block, limit))) return true;

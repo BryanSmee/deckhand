@@ -163,7 +163,7 @@ Verdict: request-changes
   neither. `rating` is a number and `verdict` one of the three below. A title has no
   markdown. The two must agree, item for item and on the rating: when the block can't be
   read, or says less than the markdown (a finding or a blocking comment missing or less
-  severe, a higher rating, no `request-changes` where the markdown has it), the listener
+  severe, a follow-up missing, a higher rating, no `request-changes` where the markdown has it), the listener
   reads the markdown instead, less reliably, and keeps `request-changes`.
 - `Rating`: how ready to merge it is, from 0 (unusable) to 10 (merge as it is), tied to the
   Must fix findings: at most 3 with a critical finding, 5 with a high one, 8 with a medium one

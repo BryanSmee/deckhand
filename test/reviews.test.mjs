@@ -4357,6 +4357,50 @@ test("parseReview: the verdict block read first, the same review as its markdown
     log: (line) => quiet.push(line),
   });
   assert.deepEqual([agreeing.verdict, agreeing.followUps.length, quiet], ["comment", 2, []]);
+  // Agreeing on request-changes beside an off-format markdown, unsure alone (a stray section, no
+  // None. under Must fix): the typed block decides, comment, nothing logged.
+  const offFormat = [];
+  const tolerantBlock = {
+    findings: [finding("medium", "a.mjs", 1)],
+    followUps: [],
+    comments: [],
+    rating: 7,
+    verdict: "request-changes",
+  };
+  const caseA = parseReview(
+    `## Must fix\n\n- **medium** \`a.mjs:1\`: x.\n\n## Follow-ups\n\nNone.\n\n## Comments\n\nNone.\n\n## Checks\n\nThe tests weren't run.\n\nRating: 7/10\nVerdict: request-changes\n\n${block(tolerantBlock)}`,
+    { allowed: "medium", log: (line) => offFormat.push(line) },
+  );
+  const followUp = "- **Docs: the cache's limits**: nothing says how big it gets.";
+  const followUpBlock = {
+    findings: [],
+    followUps: [{ title: "Docs: the cache's limits", text: "nothing says how big it gets." }],
+    comments: [],
+    rating: 9,
+    verdict: "request-changes",
+  };
+  const caseBMd = `## Follow-ups\n\n${followUp}\n\nRating: 9/10\nVerdict: request-changes`;
+  assert.equal(parseReview(caseBMd).verdict, "request-changes");
+  const caseB = parseReview(`${caseBMd}\n\n${block(followUpBlock)}`, {
+    log: (line) => offFormat.push(line),
+  });
+  assert.deepEqual(
+    [caseA.verdict, caseB.verdict, caseB.followUps.length, offFormat],
+    ["comment", "comment", 1, []],
+  );
+  // A block without the markdown's follow-up (an issue that would never be filed): the markdown.
+  const dropped = [];
+  const keptFollowUp = parseReview(
+    `## Must fix\n\nNone.\n\n${caseBMd.replace("request-changes", "comment")}\n\n${block({ ...followUpBlock, followUps: [], verdict: "comment" })}`,
+    { log: (line) => dropped.push(line) },
+  );
+  assert.deepEqual(
+    [keptFollowUp.followUps.map((f) => f.title), dropped],
+    [
+      ["Docs: the cache's limits"],
+      ["the review's verdict block says less than its markdown: read from its markdown"],
+    ],
+  );
   // A title's bold and a text's blank lines are dropped: the posted review reads them back.
   const styled = {
     ...notes,
