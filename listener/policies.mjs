@@ -434,6 +434,21 @@ export function createPolicies({
   // repos as last listed, #783), and neither should drop the other's. MAX_ACCESS repos at most,
   // the one listed longest ago dropped first: a repo never asked again would stay for good.
   const listings = new Map();
+  // The reads of GitHub in flight (listing(), repoOf()), by the repo's name in lower case → a Set
+  // of { forgotten }: forget() marks them, so that an answer read before it is neither kept after
+  // it nor replaced by what was kept before it (#875). Each read removes itself when done (a
+  // `finally`), so it holds the reads in flight alone: no MAX_ACCESS bound needed.
+  const reading = new Map();
+  function started(key) {
+    const read = { forgotten: false };
+    reading.set(key, (reading.get(key) ?? new Set()).add(read));
+    return read;
+  }
+  function done(key, read) {
+    const reads = reading.get(key);
+    reads?.delete(read);
+    if (reads?.size === 0) reading.delete(key);
+  }
   // Deckhand's own policies as the service last gave them (name → text): what
   // onlyBuiltInAllowing() knows them by, and the defaults of each decision's operator layer.
   // Asked again when the service says its layer isn't the one expected (another version), and
@@ -508,35 +523,42 @@ export function createPolicies({
     const path = `/repos/${repo}/contents/${POLICY_DIR}?ref=${encodeURIComponent(ref)}`;
     let res;
     let listed = null;
+    const read = started(key);
     try {
-      res = await github(repo, "GET", path, undefined, [404]);
-      if (res.ok) listed = await res.json();
-    } catch (error) {
-      res = { error };
-    }
-    if (!res.ok && res.status !== 404) {
-      const why = res.error
-        ? String(res.error?.message ?? res.error)
-        : `GitHub GET ${path}: ${res.status}${await said(res)}`;
-      const hiccup = await transient(res);
-      await res.body?.cancel().catch(() => {});
-      if (!hiccup) listings.delete(key);
-      if (!stale || !hiccup || !kept || now() - kept.at > STALE_LISTING_MS) {
-        throw res.error ?? new Error(why);
+      try {
+        res = await github(repo, "GET", path, undefined, [404]);
+        if (res.ok) listed = await res.json();
+      } catch (error) {
+        res = { error };
       }
-      log(`${repo}: listing its policies: ${why}; the last listing kept`);
-      return kept.listed;
+      if (!res.ok && res.status !== 404) {
+        const why = res.error
+          ? String(res.error?.message ?? res.error)
+          : `GitHub GET ${path}: ${res.status}${await said(res)}`;
+        const hiccup = await transient(res);
+        await res.body?.cancel().catch(() => {});
+        if (!hiccup) listings.delete(key);
+        if (!stale || !hiccup || !kept || read.forgotten || now() - kept.at > STALE_LISTING_MS) {
+          throw res.error ?? new Error(why);
+        }
+        log(`${repo}: listing its policies: ${why}; the last listing kept`);
+        return kept.listed;
+      }
+      // Forgotten meanwhile (a push, a privatization): this answer may be older than what forget()
+      // dropped, so it is given to this caller alone, and the next one lists again.
+      if (cached && !read.forgotten) {
+        const refs = listings.get(key) ?? new Map();
+        // The branches too old even for `stale` go first, so a repo keeps a few at most.
+        for (const [r, entry] of refs) if (now() - entry.at > STALE_LISTING_MS) refs.delete(r);
+        // Moved last, so that the oldest listing is first to go.
+        listings.delete(key);
+        if (listings.size >= MAX_ACCESS) listings.delete(listings.keys().next().value);
+        listings.set(key, refs.set(ref, { at: now(), listed }));
+      }
+      return listed;
+    } finally {
+      done(key, read);
     }
-    if (cached) {
-      const refs = listings.get(key) ?? new Map();
-      // The branches too old even for `stale` go first, so a repo keeps a few at most.
-      for (const [r, entry] of refs) if (now() - entry.at > STALE_LISTING_MS) refs.delete(r);
-      // Moved last, so that the oldest listing is first to go.
-      listings.delete(key);
-      if (listings.size >= MAX_ACCESS) listings.delete(listings.keys().next().value);
-      listings.set(key, refs.set(ref, { at: now(), listed }));
-    }
-    return listed;
   }
 
   // A repo's policy files on `ref`, [{ name, url, text }]: its listing (`cached`: the default
@@ -1058,55 +1080,64 @@ export function createPolicies({
       if (kept && now() - kept.at < ACCESS_MS) info = kept.info;
       else {
         let res;
+        const read = started(key);
         try {
-          res = await github(name, "GET", `/repos/${name}`);
-        } catch (error) {
-          res = { error };
-        }
-        if (!res.ok) {
-          const why = res.error
-            ? String(res.error?.message ?? res.error)
-            : `GitHub GET /repos/${name}: ${res.status}${await said(res)}`;
-          // A GitHub hiccup (transient()): what it last said, up to STALE_LISTING_MS old, as
-          // listing()'s `stale` keeps the listing, so that it refuses nothing (#785). Its `at`
-          // stays: a failed read never extends it. Not kept, forgotten by a push, or an answer
-          // that isn't a hiccup (a 404: deleted, or out of the App's reach; the github service's
-          // own refusal): fails closed, since its listing would then 404 too, read as no policy,
-          // dropping its deny rules.
-          const hiccup = await transient(res);
-          await res.body?.cancel().catch(() => {});
-          if (!hiccup) {
-            // GitHub said something of it: what it said before, and its listing, go, so that a
-            // later hiccup can't bring them back.
+          try {
+            res = await github(name, "GET", `/repos/${name}`);
+          } catch (error) {
+            res = { error };
+          }
+          if (!res.ok) {
+            const why = res.error
+              ? String(res.error?.message ?? res.error)
+              : `GitHub GET /repos/${name}: ${res.status}${await said(res)}`;
+            // A GitHub hiccup (transient()): what it last said, up to STALE_LISTING_MS old, as
+            // listing()'s `stale` keeps the listing, so that it refuses nothing (#785). Its `at`
+            // stays: a failed read never extends it. Not kept, forgotten by a push, or an answer
+            // that isn't a hiccup (a 404: deleted, or out of the App's reach; the github service's
+            // own refusal): fails closed, since its listing would then 404 too, read as no policy,
+            // dropping its deny rules.
+            const hiccup = await transient(res);
+            await res.body?.cancel().catch(() => {});
+            if (!hiccup) {
+              // GitHub said something of it: what it said before, and its listing, go, so that a
+              // later hiccup can't bring them back.
+              repoInfos.delete(key);
+              listings.delete(key);
+            }
+            if (!hiccup || !kept || read.forgotten || now() - kept.at > STALE_LISTING_MS) {
+              throw res.error ?? new Error(why);
+            }
+            log(`${name}: reading the repository: ${why}; what GitHub last said kept`);
+            return shape(kept.info);
+          }
+          info = await res.json();
+          if (typeof info?.default_branch !== "string" || !info.default_branch) {
+            throw new Error(`GitHub gave no default branch for ${name}`);
+          }
+          // A repository renamed or transferred answers with another name entirely: the name
+          // asked for stays (as repo-check.mjs keeps it), so that the bindings, its listing and
+          // forget() are all of the repository the caller asked about.
+          const current = String(info.full_name).toLowerCase();
+          if (current !== key) {
+            const names = new Set([...(renamed.get(current) ?? []), key]);
+            // Moved last, as listing() moves its listings, so that the oldest is first to go.
+            renamed.delete(current);
+            if (renamed.size >= MAX_ACCESS) renamed.delete(renamed.keys().next().value);
+            renamed.set(current, names);
+            info = { ...info, full_name: name };
+          }
+          // Forgotten while it was read (a privatization, a push): given to this caller alone, as
+          // listing() does, so that a `private: false` read before it isn't kept ACCESS_MS after.
+          // Otherwise moved last too, a fresh read.
+          if (!read.forgotten) {
             repoInfos.delete(key);
-            listings.delete(key);
+            if (repoInfos.size >= MAX_ACCESS) repoInfos.delete(repoInfos.keys().next().value);
+            repoInfos.set(key, { at: now(), info });
           }
-          if (!hiccup || !kept || now() - kept.at > STALE_LISTING_MS) {
-            throw res.error ?? new Error(why);
-          }
-          log(`${name}: reading the repository: ${why}; what GitHub last said kept`);
-          return shape(kept.info);
+        } finally {
+          done(key, read);
         }
-        info = await res.json();
-        if (typeof info?.default_branch !== "string" || !info.default_branch) {
-          throw new Error(`GitHub gave no default branch for ${name}`);
-        }
-        // A repository renamed or transferred answers with another name entirely: the name
-        // asked for stays (as repo-check.mjs keeps it), so that the bindings, its listing and
-        // forget() are all of the repository the caller asked about.
-        const current = String(info.full_name).toLowerCase();
-        if (current !== key) {
-          const names = new Set([...(renamed.get(current) ?? []), key]);
-          // Moved last, as listing() moves its listings, so that the oldest is first to go.
-          renamed.delete(current);
-          if (renamed.size >= MAX_ACCESS) renamed.delete(renamed.keys().next().value);
-          renamed.set(current, names);
-          info = { ...info, full_name: name };
-        }
-        // Moved last too, a fresh read.
-        repoInfos.delete(key);
-        if (repoInfos.size >= MAX_ACCESS) repoInfos.delete(repoInfos.keys().next().value);
-        repoInfos.set(key, { at: now(), info });
       }
     }
     return shape(info);
@@ -1667,6 +1698,7 @@ export function createPolicies({
     for (const name of [key, ...(renamed.get(key) ?? [])]) {
       listings.delete(name);
       repoInfos.delete(name);
+      for (const read of reading.get(name) ?? []) read.forgotten = true;
     }
   }
 
