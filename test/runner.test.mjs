@@ -993,3 +993,45 @@ test("remove: never a container or a volume of the host's that has a sandbox's o
   assert.ok(!containers.has("dh-a") && !containers.has("dh-a-engine"));
   assert.ok(!volumes.has("dh-a-1-engine"));
 });
+
+test("start: session volumes made with this deployment's labels, an existing one left as it is (#813)", async () => {
+  const { r, volumes, calls } = runner();
+  volumes.set("dh-a-claude", {});
+  await r.start({
+    run: "dh-a-1",
+    name: "dh-a",
+    image: "i",
+    volumes: [
+      { kind: "session", name: "dh-a-workspace", path: "/workspace" },
+      { kind: "session", name: "dh-a-claude", path: "/home/agent/.claude" },
+      { kind: "cache", name: "dh-cache", path: "/cache" },
+    ],
+  });
+  assert.deepEqual(volumes.get("dh-a-workspace"), {
+    "deckhand.owner": "dh",
+    "deckhand.role": "session",
+  });
+  assert.deepEqual(volumes.get("dh-a-claude"), {});
+  assert.ok(!volumes.has("dh-cache"));
+  const made = calls.findIndex((c) => c.args.slice(0, 2).join(" ") === "volume create");
+  assert.ok(made < calls.findIndex((c) => c.args[0] === "run"));
+});
+
+test("removeSessions: this deployment's session volumes and unlabelled ones, never another's (#813)", async () => {
+  const { r, volumes } = runner();
+  volumes.set("dh-a-workspace", { "deckhand.owner": "dh", "deckhand.role": "session" });
+  // Made by `docker run -v` before session volumes had labels.
+  volumes.set("dh-a-claude", {});
+  // Another deployment's with the same prefix, and an engine's of ours.
+  volumes.set("dh-a-codex", { "deckhand.owner": "other", "deckhand.role": "session" });
+  volumes.set("dh-a-fork-workspace", { "deckhand.owner": "dh", "deckhand.engine": "dh-a-1" });
+  const removed = await r.removeSessions([
+    "dh-a-workspace",
+    "dh-a-claude",
+    "dh-a-codex",
+    "dh-a-fork-workspace",
+    "dh-a-gone",
+  ]);
+  assert.deepEqual(removed, ["dh-a-workspace", "dh-a-claude"]);
+  assert.ok(volumes.has("dh-a-codex") && volumes.has("dh-a-fork-workspace"));
+});

@@ -73,18 +73,19 @@ export async function containerLabels(docker, name) {
   return { owner, run, engine };
 }
 
-// A volume's: its owner and the run whose engine it is, or null when there is none.
+// A volume's: its owner, the run whose engine it is and its role (a session's), or null when
+// there is none.
 export async function volumeLabels(docker, name) {
   const { code, out } = await docker([
     "volume",
     "inspect",
     "--format",
-    '{{index .Labels "deckhand.owner"}}|{{index .Labels "deckhand.engine"}}',
+    '{{index .Labels "deckhand.owner"}}|{{index .Labels "deckhand.engine"}}|{{index .Labels "deckhand.role"}}',
     name,
   ]);
   if (code !== 0) return null;
-  const [owner = "", engine = ""] = out.split("|");
-  return { owner, engine };
+  const [owner = "", engine = "", role = ""] = out.split("|");
+  return { owner, engine, role };
 }
 
 export async function removeVolume(docker, name) {
