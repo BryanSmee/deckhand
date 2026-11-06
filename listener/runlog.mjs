@@ -635,6 +635,10 @@ export function buildOutput(file, now = Date.now) {
 // (`every`, in ms: shorter in the tests). The log is the runner's: `read(offset)` → { data }, its
 // bytes from `offset` (../runner/client.mjs readLog(), as edge). A run that hasn't written a line
 // yet reads as empty. Any error ends this stream only, through `onError`, never the listener.
+// Each `entries` event's id is the byte offset of the last whole line it read (#923): the
+// browser's EventSource reconnects with it (Last-Event-ID) after a dropped connection, and the
+// stream goes on from there. The lines before it are read again but not sent, as the reader's
+// state (the phase, the build steps, the times) comes from them.
 export function stream(
   req,
   res,
@@ -649,12 +653,18 @@ export function stream(
   // At once, not with the first line: a run that has written none yet is still open.
   res.flushHeaders?.();
   const reading = reader(agentFor(run.agent));
-  const decoder = new StringDecoder("utf8");
+  const resumed = /^\d{1,15}$/.exec(req.headers?.["last-event-id"] ?? "");
+  const from = resumed ? Number(resumed[0]) : 0;
+  // The bytes read, and those after their last newline: a line not whole yet (a character
+  // split too, as "\n" is never part of one in UTF-8).
   let offset = 0;
-  let rest = "";
+  let rest = Buffer.alloc(0);
   let busy = false;
   let stopped = false;
-  const send = (event, data) => res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+  const send = (event, data, id) =>
+    res.write(
+      `event: ${event}\n${id === undefined ? "" : `id: ${id}\n`}data: ${JSON.stringify(data)}\n\n`,
+    );
   const pump = async () => {
     if (busy || stopped) return;
     busy = true;
@@ -676,14 +686,23 @@ export function stream(
       if (stopped) return;
       if (!data.length) break;
       offset += data.length;
-      const lines = (rest + decoder.write(data)).split("\n");
-      rest = lines.pop();
-      const entries = lines.flatMap(reading);
-      if (entries.length) send("entries", entries);
+      const bytes = rest.length ? Buffer.concat([rest, data]) : data;
+      const cut = bytes.lastIndexOf(10) + 1;
+      rest = bytes.subarray(cut);
+      if (!cut) continue;
+      // Where in the log `bytes` starts: each line's end is counted in bytes, not characters.
+      const start = offset - bytes.length;
+      const entries = [];
+      for (let i = 0; i < cut;) {
+        const end = bytes.indexOf(10, i) + 1;
+        const more = reading(bytes.toString("utf8", i, end - 1));
+        if (start + end > from) entries.push(...more);
+        i = end;
+      }
+      if (entries.length) send("entries", entries, start + cut);
     }
     if (ended) {
-      rest += decoder.end();
-      if (rest) send("entries", reading(rest));
+      if (rest.length && offset > from) send("entries", reading(rest.toString("utf8")), offset);
       send("end", publicRun(run));
       return stop();
     }
