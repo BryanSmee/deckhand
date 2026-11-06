@@ -278,6 +278,7 @@ const MAPS = {
   picks: {},
   machines: {},
   routes: {},
+  admissions: {},
 };
 const store = openStore(storeUrl, {
   password: env.REDIS_PASSWORD,
@@ -853,6 +854,8 @@ Object.assign(ctx, {
   }),
   // The issues whose session is in one of their repo's own modes.
   issueModes: createIssueModes(maps.maps.modes),
+  // Comments GitHub kept from being admitted, admitted again later (tasks.mjs holdAdmission()).
+  admissions: maps.maps.admissions,
 });
 Object.assign(ctx, createStatus(ctx), createTasks(ctx), createRuns(ctx), createRestart(ctx));
 // Open pull requests of opted-in repos that conflict with their base get a rebase run.
@@ -1314,6 +1317,7 @@ models.consume({ note: (event) => ctx.broker.runOf(event.run)?.note?.(event.mess
 const relinking = setInterval(ctx.relink, RELINK_MS);
 ctx.conflicts.start();
 ctx.waits.start();
+ctx.startAdmissions();
 ctx.reviews.start();
 ctx.autoPickup.start();
 // The machines' leases, looked at from here on.
