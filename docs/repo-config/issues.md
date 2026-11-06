@@ -229,6 +229,8 @@ A label is letters, digits, `.`, `_` and `-`, compared in lower case. Without th
 config page says the block is offered to no machine; an error in the block leaves it off. A
 machine is offered the repository only while its owner is in `ALLOWED_USERS` and may start work
 runs here (`runs:start:work`, and `users`): never more than its owner may do on the dashboard.
+Machines read this block again a minute after their last read of it: a block added, changed or
+removed is seen a minute later at most.
 
 An agent runs on that machine on its own, with its owner's files, credentials and network:
 Deckhand suggests settings and enforces none there ([security.md](../security.md#machines)).
