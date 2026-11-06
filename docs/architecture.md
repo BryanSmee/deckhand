@@ -427,6 +427,10 @@ GitHub with the repo's tolerance, as Fix reads it, its follow-ups with the issue
 in the store's `reviews`) and their state now, and who merged it. Never in `api/state` nor the
 store: the findings are long, and a model wrote them. A repo the user may not see the tasks of
 (`tasks:read`) answers `404`, as a pull request without such a review does.
+Each read costs the installation's rate limit a few GitHub calls (#911): the requests asking at
+once about one pull request share a read, and a read done is kept 5 s (`REVIEW_MS`) while that
+pull request's entry in the store's `reviews` stays the same, so a new round, its merge seen or
+its follow-ups filed still read GitHub again at once. A failed read isn't kept.
 
 A failed or interrupted task stops asking for attention (Waiting on you, the Failed tile, the
 Error chip, its repository card's "failed" count) once its issue is closed or its pull request
