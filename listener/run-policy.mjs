@@ -4,7 +4,7 @@
 // issue's mode, the dashboard, an inbox entry, a discussion. Not the runs the listener starts by
 // itself (review, fix, CI fix, conflict: `deny_review` and `deny_fix` decide those), nor an
 // onboarding issue's run (nobody asked for it). Asked once, when the item is queued: a label
-// added before it starts changes nothing. Input: ../docs/repo-config.md#the-run-input.
+// added before it starts changes nothing. Input: ../docs/repo-config/policy-inputs.md#the-run-input.
 import { getJson } from "./github.mjs";
 import { BUILT_IN, isFresh } from "./modes.mjs";
 import { startAction } from "./permissions.mjs";

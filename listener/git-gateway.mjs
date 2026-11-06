@@ -263,7 +263,7 @@ export function refusal(ref, base, branches) {
 
 // What the policies' `allow_push` and `deny_push` read of a push's update of `ref` ({ ref, old,
 // new }: commandReader()'s) by `run` (the broker's), the repo's default branch being `base`
-// (docs/repo-config.md#the-push-input): the run as `allow_github` reads it, the branch, and
+// (docs/repo-config/policy-inputs.md#the-push-input): the run as `allow_github` reads it, the branch, and
 // whether the push creates or deletes it.
 export function pushInput(run, { ref, old, new: next }, base) {
   const zero = (oid) => /^0+$/.test(oid);

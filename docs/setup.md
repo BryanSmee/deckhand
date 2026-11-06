@@ -99,7 +99,7 @@ listed there.
 
 Actions: read lets runs read their pull request's CI runs and logs; write, rerun the failed
 jobs of their own pull request's head (`gh run rerun --failed`), a call the GitHub gateway
-checks first ([repository config](repo-config.md#reruns)): the sandbox's own token only
+checks first ([repository config](repo-config/policy-inputs.md#reruns)): the sandbox's own token only
 reads them. An App created before reruns has Actions: read only: set it to **read and
 write** in the App's settings, then accept it on each installation. Until then a run's rerun
 is refused with a message naming the permission, and everything else works.
@@ -107,7 +107,7 @@ is refused with a message naming the permission, and everything else works.
 Organization projects lets the orchestrator move a repository's issues on an organization's
 project (v2), and its runs add their issues and pull requests there, for the repositories
 whose grants file lists the project in `allow_projects` only
-([Projects](repo-config.md#projects)). An App created before then lacks it, which only
+([Projects](repo-config/issues.md#projects)). An App created before then lacks it, which only
 matters once you grant a project: add **Organization projects: read and write** under
 _Organization permissions_ in the App's settings, then accept it on the organization's
 installation. Until then, the orchestrator's moves fail (said in its log and the run's) and a
@@ -128,10 +128,10 @@ Upgrading: runs' reads of checks and projects are new to `allow_github` and `den
 (`action: "read_checks"` or `"read_projects"`, without a `target` or `change`). A deny rule of
 yours written for writes that refuses whatever isn't in a list (`not input.target.kind in {…}`)
 now refuses those reads too: guard it with `not input.action in {"read_checks",
-"read_projects"}` ([Reading CI's checks](repo-config.md#reading-cis-checks)). `/mode policy` on
+"read_projects"}` ([Reading CI's checks](repo-config/policy-inputs.md#reading-cis-checks)). `/mode policy` on
 a pull request shows whether one does.
 
-Upgrading to allow rules ([Policies](repo-config.md#policies)): a decision is now allowed only
+Upgrading to allow rules ([Policies](repo-config/policies.md#policies)): a decision is now allowed only
 when an `allow_*` rule matches, and Deckhand's `policy/allow.rego` allows each one, so nothing
 changes for the built-in modes. A `policy/allow.rego` of yours in the grants folder replaces
 it: keep its rules unless you mean to refuse. A repository's `.deckhand/policy/` is now a layer
@@ -144,10 +144,10 @@ repository file that doesn't start with its `package` line (after comments only)
 
 Upgrading to per-mode policies (issue #496): the modes' write ceilings built into Deckhand's
 code are gone. A run's GitHub writes, its reads of checks and projects, and its pushes (a new
-decision, `push`: [the push input](repo-config.md#the-push-input)) now need an allow rule
+decision, `push`: [the push input](repo-config/policy-inputs.md#the-push-input)) now need an allow rule
 (`allow_github`, `allow_push`), which Deckhand's `policy/mode-<mode>.rego` files give each
 mode as its ceiling did, with the refusals of the old per-feature files
-([the default policies](repo-config.md#the-default-policies)); `allow.rego` no longer allows
+([the default policies](repo-config/policies.md#the-default-policies)); `allow.rego` no longer allows
 `github`. Without policies, every write and push is refused. **A `policy/allow.rego` of yours
 that kept `allow_github := true`** (as the note above said to) now allows every write of every
 mode, an inbox entry's or a review's included, with no ceiling left to cap it: remove that
@@ -272,7 +272,7 @@ closed. With a wildcard:
 A repository can also declare inboxes in its `.deckhand.yaml`: an ideas issue and a bug
 reports issue, where every comment of an allowed user becomes a labelled GitHub issue (or an
 answer), and a GitHub Discussions category (for example "Ask Claude") where Claude answers
-allowed users' questions. See [Inboxes](repo-config.md#inboxes).
+allowed users' questions. See [Inboxes](repo-config/issues.md#inboxes).
 
 Each repository can add a `.deckhand.yaml` on its default branch: its own users (narrowing
 `ALLOWED_USERS`), trigger word, models, parallel cap, setup command, instructions,
@@ -349,7 +349,7 @@ one that failed, once, within GitHub's 3 days: a comment posted meanwhile still 
 whatever its age. The App needs no extra permission or event for that: an App can always read
 its own deliveries. **Sync** (in the top bar, after the running and queued counts) does it
 now, asks GitHub about the open pull requests' states again, and checks them for conflicts
-in the repos that opted in (`conflicts.check_minutes`, see repo-config.md), starting a rebase
+in the repos that opted in (`conflicts.check_minutes`, see repo-config/issues.md), starting a rebase
 run for each one in conflict: for when GitHub is unstable, or you just merged into a base
 branch, and you'd rather not wait.
 
@@ -507,7 +507,7 @@ so they ask before calling them:
 A machine's driver asks for the `deckhand:machine` scope, which no client gets unless it asks
 for it: its tools register one of your own computers and claim the issues routed to it
 (machines, #594: a `runs-on:<label>` label or a `/machine` comment,
-[repo-config.md](repo-config.md#routing-an-issue-to-a-machine)). An agent then runs there on its
+[repo-config/issues.md](repo-config/issues.md#routing-an-issue-to-a-machine)). An agent then runs there on its
 own, with your files, credentials and network: Deckhand suggests settings and enforces none
 there.
 
@@ -542,11 +542,11 @@ checks the branch is the issue's, on the repository (never a fork), at that comm
 opens the draft pull request (`Closes #<n>`), or finds the one it opened, so its review and fix
 loop run as for a sandbox's; a fix round pushes to the same branch. The dashboard shows it as
 your machine's, and Deckhand's default policy never merges it by itself
-([`machines.rego`](repo-config.md#machinesrego)).
+([`machines.rego`](repo-config/policies.md#machinesrego)).
 
 A repository is offered to a machine only when the operator's policies grant it `machines`
 ([security.md](security.md#the-grants)) and its `.deckhand.yaml` has a `machines:` block
-([repo-config.md](repo-config.md#machines)), and only where you may start runs.
+([repo-config/issues.md](repo-config/issues.md#machines)), and only where you may start runs.
 
 A client gets `deckhand:read` and `deckhand:work` by default; the sign-in page lists them, and a client asking for
 `deckhand:read` alone gets the read tools only. What the dashboard refuses (an issue running
@@ -577,7 +577,7 @@ Windows has none (WSL2 has).
 
 1. The repository takes machines: the operator's `machines` grant
    ([security.md](security.md#the-grants)) and a `machines:` block in its `.deckhand.yaml`
-   ([repo-config.md](repo-config.md#machines)).
+   ([repo-config/issues.md](repo-config/issues.md#machines)).
 2. Download `deckhand-machine.mjs` (attached to each release; `machine/` in this repository) and
    sign in, which shows the warning and waits for you to type `yes`, then opens your browser:
 
@@ -615,7 +615,7 @@ Windows has none (WSL2 has).
    Its first `run` shows the warning again and waits for `yes`. It registers the machine (it
    shows in Settings › MCP clients), says it is there every 30 s and claims what is routed to it:
    a `runs-on:<label>` label or a `/machine` comment
-   ([repo-config.md](repo-config.md#routing-an-issue-to-a-machine)).
+   ([repo-config/issues.md](repo-config/issues.md#routing-an-issue-to-a-machine)).
 
 Each run fetches the repository into its clone, checks out the issue's branch (as it is on
 GitHub, ahead of it after a push that failed, or new from the base; one that went another way
@@ -877,7 +877,7 @@ doesn't start: the reply says why.
 An issue nobody starts can wait for months. With `AUTO_PICKUP_SLOTS` above 0 (and below
 `MAX_PARALLEL`, which it comes out of), the orchestrator starts the open issues labelled
 `AUTO_PICKUP_LABEL` (`auto-pickup`) by itself, oldest created first across the repositories
-whose `.deckhand.yaml` says `auto_pickup: true` ([repo-config.md](repo-config.md#auto-pickup)),
+whose `.deckhand.yaml` says `auto_pickup: true` ([repo-config/issues.md](repo-config/issues.md#auto-pickup)),
 in `work` mode, as many at once as there are slots. It looks every 5 minutes, a few seconds
 after the label is added (an `issues` delivery), and as soon as a run ends or a queued
 auto-picked issue is cancelled.
@@ -911,7 +911,7 @@ auto-picked issue is cancelled.
   since by anyone but an allowed user (the App's bot included) holds it until the label is
   added again ([security.md](security.md#auto-pickup)). The run is theirs for the policies
   (`sender`, `trigger: "auto-pickup"`: a `deny_run` rule can refuse it,
-  [The run input](repo-config.md#the-run-input)).
+  [The run input](repo-config/policy-inputs.md#the-run-input)).
 - **Once picked.** The App comments on the issue, then the label comes off and the run is
   queued. A failed or stopped run isn't picked again: add the label back to retry. An issue
   held by who added the label, or by an edit since, keeps it, and the App says why once.
@@ -934,7 +934,7 @@ against `CHATS_PER_USER`, New chat (the repository, then the agent, model and ef
 conversation, and each chat's menu: its permissions (#478), Reset and Delete.
 
 - `CHATS_PER_USER` (2) is how many chats a user keeps, running or not, across the
-  repositories; a repository's `chats.per_user` may lower it ([repo-config.md](repo-config.md#chats)).
+  repositories; a repository's `chats.per_user` may lower it ([repo-config/issues.md](repo-config/issues.md#chats)).
   `0`: no chats.
 - `MAX_RUNNING_CHATS` (2) is how many chats' sandboxes run at once, apart from
   `MAX_PARALLEL`: chats never hold an issue's run back, nor the other way round. A message
@@ -956,7 +956,7 @@ answered.
 
 A chat's reset drops its volumes and its conversation, and keeps it; deleting it removes its
 volumes and its runs' logs too. A user taken out of `ALLOWED_USERS` or a repository's `users`,
-or whose [access](repo-config.md#access) there no longer gives `runs:start:chat`, can no longer
+or whose [access](repo-config/policies.md#access) there no longer gives `runs:start:chat`, can no longer
 send a message there, and their chat's sandbox stops; its volumes stay until it
 is deleted.
 
@@ -966,7 +966,7 @@ Claude Code's fast mode runs the same Opus model with output up to about 2.5× f
 higher price per token (about twice Opus's). It is for work that can't wait, like a critical
 fix: a `/speed fast` line in a comment (or ending its trigger line or an inbox entry's line)
 asks for it, `/speed normal` drops it, and a repository's mode may ask for it by default
-(`speed: fast`, see [Modes](repo-config.md#modes)). It is off until you allow it:
+(`speed: fast`, see [Modes](repo-config/modes.md#modes)). It is off until you allow it:
 
 ```yaml
 # server/config.yaml
@@ -2138,7 +2138,7 @@ To give some people some actions on some repositories only, write a `policy/acce
 grants folder: it replaces Deckhand's, so each login then has the actions of its bindings alone,
 and a login of `ALLOWED_USERS` no binding names signs in to an empty dashboard. Bindings name
 logins, repository patterns (`owner/repo`, `owner/*`, `*/*`) and a role
-([Access](repo-config.md#access)):
+([Access](repo-config/policies.md#access)):
 
 | Role       | May                                                                                       |
 | ---------- | ----------------------------------------------------------------------------------------- |
@@ -2173,7 +2173,7 @@ server's setup. Then open **Settings › Access** to check who has what: an edit
 policies holds at the next request. Other rules of yours can give or deny actions besides the
 bindings (a `deny_access` for every repository), and a repository's maintainers can take
 actions away on theirs with `deny_access` in its `.deckhand/policy/`, never give any
-([Access](repo-config.md#access)).
+([Access](repo-config/policies.md#access)).
 
 ### Upgrading: `+scan` for Redis's user (#614)
 
@@ -2406,7 +2406,7 @@ held the host's Docker socket, so it was root on the host. What changes for you:
 - **To deploy previews**, add a webhook to the repository (or to an App of your own) for its
   `pull_request` events (and `workflow_run`, to deploy once CI has passed), pointed at a small
   HTTPS server of yours that checks the webhook's secret and deploys
-  ([Preview deployments](repo-config.md#preview-deployments)). It gets what the hook got, with
+  ([Preview deployments](repo-config/issues.md#preview-deployments)). It gets what the hook got, with
   only the access you give it.
 
 ### Upgrading: the runner network's subnet (#543)
@@ -2478,7 +2478,7 @@ key's error says which applies. `hosts`, `cached_hosts`, `mounts`, `limits` and
 services).
 
 A repository's `.deckhand.yaml` mode with `light: true` is an error too (`light: false` a
-warning): its runs get what its policies give them now ([Modes](repo-config.md#modes)), and
+warning): its runs get what its policies give them now ([Modes](repo-config/modes.md#modes)), and
 Deckhand's `mode-work.rego` gives every repository mode work's writes as the ceiling. Its
 maintainers remove it, and in `.deckhand/policy/` give the mode an `allow_capabilities` rule
 without `push`, and `allow_github` and `allow_push` rules that leave it out: a rule on

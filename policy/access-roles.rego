@@ -1,4 +1,4 @@
-# Deckhand's roles and bindings (docs/repo-config.md#access): who may do what on which repository
+# Deckhand's roles and bindings (docs/repo-config/policies.md#access): who may do what on which repository
 # (#730). A role is a set of actions; a binding gives a role (or its own `actions`) to some
 # logins on some repositories, and `allow_access` gives the actions of every binding that matches.
 # Deckhand's access.rego gives every action to every login instead; a grants folder's

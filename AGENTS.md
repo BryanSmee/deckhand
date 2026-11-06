@@ -127,8 +127,8 @@ sandbox/      base image: Dockerfile, entrypoint.sh, draft-pr.sh, pre-push, git 
               helper and gh wrapper; agents/<name>.sh and agents/<name>/ (Claude Code's
               flags, installer, settings, hooks, progress.jq)
 prompts/      sandbox.md (generic rules), idea.md, bug.md, discussion.md, brainstorm.md,
-              analyze.md, onboarding.md (followed by docs/repo-config.md, copied into the
-              image)
+              analyze.md, onboarding.md (followed by the config's reference, its pages in
+              prompts.mjs CONFIG_PAGES, copied into the image)
 proxy/        egress proxy for sandboxes
 machine/      deckhand-machine.mjs: the driver that runs a user's machine tasks there (#599), one
               file, no dependency, attached to each release; its loop tested against a fake /mcp
@@ -151,8 +151,10 @@ deploy/       kubernetes/: the manifests for a cluster (#396), a kustomize base 
               grafana/deckhand.json: the Grafana dashboard, alerts/: the alert rules and their
               promtool tests (#661; docs/setup.md, Metrics), the chart carrying copies of both in
               helm/deckhand/files/, held the same by test/metrics-deploy.test.mjs
-docs/         setup, per-repo config reference, security model, architecture, the dashboard's
-              languages (dashboard-languages.md)
+docs/         setup, per-repo config reference (repo-config.md: the core keys; repo-config/: modes,
+              reviews, issues, policies, policy inputs), security model, architecture, the
+              dashboard's languages (dashboard-languages.md); test/docs-links.test.mjs holds every
+              docs/<page>.md#<anchor> reference to a heading that exists
 ```
 
 ## Conventions

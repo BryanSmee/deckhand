@@ -1,5 +1,5 @@
 # Deckhand's default policy for the reviewers the listener requests on Deckhand's pull requests
-# (`review.request`, docs/repo-config.md#reviewers): on work runs' pull requests (work, fix and
+# (`review.request`, docs/repo-config/reviews.md#reviewers): on work runs' pull requests (work, fix and
 # conflict runs), when they turn ready and after a fix; on those of the repository's own modes
 # once its .deckhand/policy/ allows it (`allow_request_review`). A grants folder's
 # policy/gh-reviewers.rego replaces it.

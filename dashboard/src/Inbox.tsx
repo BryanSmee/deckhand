@@ -23,7 +23,7 @@ import { Field } from "./ui/Field";
 import styles from "./NewRequest.module.css";
 
 export const INBOX_DOCS =
-  "https://github.com/BryanSmee/deckhand/blob/main/docs/repo-config.md#inboxes";
+  "https://github.com/BryanSmee/deckhand/blob/main/docs/repo-config/issues.md#inboxes";
 
 export type InboxKind = "idea" | "bug" | "discussion";
 

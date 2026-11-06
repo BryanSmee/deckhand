@@ -1,5 +1,5 @@
 # Deckhand's default for bug inbox entries, which read the code and file issues
-# (docs/repo-config.md#the-default-policies): what their sandbox gets (`allow_capabilities`) and
+# (docs/repo-config/policies.md#the-default-policies): what their sandbox gets (`allow_capabilities`) and
 # what they write to GitHub (`allow_github`). A grants folder's policy/mode-bug.rego replaces it.
 package deckhand
 

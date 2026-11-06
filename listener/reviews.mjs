@@ -1265,7 +1265,7 @@ export async function mergeRefusal(
   return { why: null, pr, method };
 }
 
-// The input of `deny_merge` (docs/repo-config.md#the-merge-input), from what mergeRefusal()
+// The input of `deny_merge` (docs/repo-config/policy-inputs.md#the-merge-input), from what mergeRefusal()
 // read: names as GitHub's API spells them where they are its own, the review as parsed.
 export function mergeInput({
   info,
@@ -1299,7 +1299,7 @@ const checksOf = (runs) =>
 // before the rounds read it.
 export const fixInput = (fixes) => ({ fixed: fixes > 0, fixes });
 
-// The input of `deny_review` and `deny_fix` (docs/repo-config.md#the-review-and-fix-input),
+// The input of `deny_review` and `deny_fix` (docs/repo-config/policy-inputs.md#the-review-and-fix-input),
 // read from GitHub now: only called when a policy applies (policies.mjs deny()), so a repo
 // without any pays no extra call. `issue`: the number of the issue the pull request closes,
 // or null; `extra`: the fix runs so far (fixInput()), and the fix's round and `reason`
@@ -1697,7 +1697,7 @@ function details(summary, value) {
 // run whose pull request it is, by a brainstorm on another issue, and by a run in the repo's
 // first own mode (`modes`: its settings' `modes:`), if it has one; then the work run reading
 // CI's checks (`read_checks`, no target), which a rule written for writes may refuse unawares.
-// → [{ what, input }] (docs/repo-config.md#the-github-input).
+// → [{ what, input }] (docs/repo-config/policy-inputs.md#the-github-input).
 export function githubSamples(repo, pr, modes = {}) {
   const target = (kind) => ({
     kind,
@@ -1740,7 +1740,7 @@ export function githubSamples(repo, pr, modes = {}) {
 
 // The branch a dry run asks `deny_link_branch` about: the pull request's head, as the work run
 // on `issue` (GitHub's, the one it closes, else the pull request itself) would have had it
-// linked, at its base's head (docs/repo-config.md#the-linked-branch-input). → { what, input }
+// linked, at its base's head (docs/repo-config/policy-inputs.md#the-linked-branch-input). → { what, input }
 export function linkSample(repo, pr, issue = null) {
   const number = issue?.number ?? pr.number;
   return {
@@ -1761,7 +1761,7 @@ export function linkSample(repo, pr, issue = null) {
 
 // The push a dry run asks `deny_push` about: the pull request's head, as the work run on `issue`
 // (GitHub's, the one it closes, else the pull request itself) would push it, the repo's default
-// branch being `base` (docs/repo-config.md#the-push-input: git-gateway.mjs pushInput()).
+// branch being `base` (docs/repo-config/policy-inputs.md#the-push-input: git-gateway.mjs pushInput()).
 // → { what, input }
 export function pushSample(repo, pr, issue = null, base = null) {
   const branch = pr.head?.ref ?? null;

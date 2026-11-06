@@ -9,6 +9,16 @@ import { FRESH, INBOX, MODES } from "./modes.mjs";
 import { triggerWord } from "./onboarding.mjs";
 import { blockingSeverities } from "./reviews.mjs";
 
+// The config's reference, its pages in reading order (the orchestrator's image copies them).
+export const CONFIG_PAGES = [
+  "docs/repo-config.md",
+  "docs/repo-config/modes.md",
+  "docs/repo-config/reviews.md",
+  "docs/repo-config/issues.md",
+  "docs/repo-config/policies.md",
+  "docs/repo-config/policy-inputs.md",
+];
+
 const instructions = (name) => readFileSync(new URL(`../prompts/${name}`, import.meta.url), "utf8");
 // Each built-in mode's instructions, by mode (MODES' `prompt`).
 const modeInstructions = Object.fromEntries(
@@ -23,11 +33,11 @@ const modeInstructions = Object.fromEntries(
 // without the comments that tell which test checks a block: the
 // prompt goes to the sandbox in TASK_PROMPT, and one environment string holds 128 KiB at most
 // (Linux's MAX_ARG_STRLEN: over it, the sandbox doesn't start, E2BIG).
-const configReference = onboardingReference(
-  readFileSync(new URL("../docs/repo-config.md", import.meta.url), "utf8"),
-);
+const configReference = CONFIG_PAGES.map((page) =>
+  onboardingReference(readFileSync(new URL(`../${page}`, import.meta.url), "utf8")).trimEnd(),
+).join("\n\n");
 
-// docs/repo-config.md's `text` as the onboarding prompt has it (configReference).
+// A config reference page's `text` as the onboarding prompt has it (configReference).
 export function onboardingReference(text) {
   return compactTables(text)
     .replace(/^<!-- onboarding: skip: ([^\n]*?) -->\n[^]*?^<!-- onboarding: end -->\n/gm, "$1\n")
@@ -236,7 +246,7 @@ ${modeInstructions.onboarding}
 - \`dockerfile\` in \`.deckhand.yaml\`: ${grant.allowDockerfile ? `allowed${grant.allowBranchDockerImages ? ", from pull requests' own branches too" : ""}` : "not granted: a \`dockerfile\` stops runs until the operator's policies grant this repository \`dockerfile\`"}
 - Models: work \`${settings.model}\` (${settings.effort} effort), brainstorms \`${settings.brainstormModel}\` (${settings.brainstormEffort})
 
-## Reference: \`.deckhand.yaml\` (docs/repo-config.md)
+## Reference: \`.deckhand.yaml\` (docs/repo-config.md and docs/repo-config/)
 
 ${configReference}`;
 }

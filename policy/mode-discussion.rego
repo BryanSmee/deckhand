@@ -1,5 +1,5 @@
 # Deckhand's default for discussion runs, which read the code and answer in the discussion
-# (docs/repo-config.md#the-default-policies): what their sandbox gets (`allow_capabilities`) and
+# (docs/repo-config/policies.md#the-default-policies): what their sandbox gets (`allow_capabilities`) and
 # what they write to GitHub (`allow_github`). The listener posts their answer. A grants folder's
 # policy/mode-discussion.rego replaces it.
 package deckhand

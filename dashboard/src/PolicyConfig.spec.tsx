@@ -305,7 +305,9 @@ test("Deckhand's default files: under the operator's, which replace them by name
   expect(within(run).getByText("Never allowed")).toBeTruthy();
   expect(run.textContent).toContain("No run a person asks for starts");
   const runInput = screen.getByRole("link", { name: "The run input" });
-  expect(runInput.getAttribute("href")).toMatch(/docs\/repo-config\.md#the-run-input$/);
+  expect(runInput.getAttribute("href")).toMatch(
+    /docs\/repo-config\/policy-inputs\.md#the-run-input$/,
+  );
   expect(runInput.closest("p")!.textContent).toMatch(/trigger.*sender.*target/);
   // Both rules read it; what run.rego does is the card's to say, when it applies.
   expect(runInput.closest("p")!.textContent).toMatch(/^allow_run and deny_run read/);
@@ -314,13 +316,15 @@ test("Deckhand's default files: under the operator's, which replace them by name
   expect(github.textContent).toContain("its reads of CI's checks (read_checks");
   // What deny_github reads of the run, and where its input is documented.
   const input = screen.getByRole("link", { name: "The GitHub input" });
-  expect(input.getAttribute("href")).toMatch(/docs\/repo-config\.md#the-github-input$/);
+  expect(input.getAttribute("href")).toMatch(
+    /docs\/repo-config\/policy-inputs\.md#the-github-input$/,
+  );
   expect(input.closest("p")!.textContent).toMatch(
     /read_checks, read_projects, no target or change/,
   );
   // And what deny_push reads.
   const push = screen.getByRole("link", { name: "The push input" });
-  expect(push.getAttribute("href")).toMatch(/docs\/repo-config\.md#the-push-input$/);
+  expect(push.getAttribute("href")).toMatch(/docs\/repo-config\/policy-inputs\.md#the-push-input$/);
   expect(push.closest("p")!.textContent).toMatch(/^allow_push and deny_push read each branch/);
   expect(input.closest("p")!.textContent).toMatch(/custom_mode.*\) and reason/);
   expect(source("deckhand/policy/gh-a.rego").textContent).toContain(

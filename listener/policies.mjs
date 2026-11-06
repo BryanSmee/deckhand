@@ -26,7 +26,7 @@
 // redacted with the operator's secrets, which the service never holds). Fail closed: a policy
 // that doesn't compile, times out or gives a rule anything but its type refuses, with that
 // reason, and so do a decision no allow rule matches and a policy service that can't be reached.
-// Format: ../docs/repo-config.md#policies; trust: ../docs/security.md#policies.
+// Format: ../docs/repo-config/policies.md#policies; trust: ../docs/security.md#policies.
 import { createHash } from "node:crypto";
 import { getJson, rateLimited } from "./github.mjs";
 import {
@@ -218,10 +218,10 @@ const ACCESS = "access.rego";
 // A `bindings` defined at the start of a line, out of a comment (what access-roles.rego reads).
 const BINDINGS = /^bindings\b\s*(?::=|=|\[|contains\b|if\b|\{)/m;
 
-// What the input looks like (docs/repo-config.md#the-merge-input): a policy can check it.
+// What the input looks like (docs/repo-config/policy-inputs.md#the-merge-input): a policy can check it.
 export const INPUT_VERSION = 1;
 
-// What every decision's input has about a pull request (docs/repo-config.md#the-merge-input),
+// What every decision's input has about a pull request (docs/repo-config/policy-inputs.md#the-merge-input),
 // reviews.mjs's and reviewers.mjs's: the repo (`info`, GET /repos/{repo}), the pull request
 // and its `files`, its linked `issue`, and the `review` when there is one. `bot`: the App's
 // login (config.bot), for `pr.deckhand`; `external`: the login whose machine pushed it
@@ -419,7 +419,7 @@ export const STALE_LISTING_MS = 6 * LISTING_MS;
 // would without opa, so the service's run.rego must be this one for that (deckhandOnly());
 // test/run-policy.test.mjs checks it is policy/run.rego's.
 export const SHIPPED_RUN_SHA256 =
-  "9f7bcbde7df36f3d44d40d64a5fdbcafacebb654dc711da01b49635c4bfac97e";
+  "eab827793e7cea52752045d0c2cc8c09e9ca512d1c5c16d5f22065bea2a41a3c";
 // Its name.
 const RUN = "run.rego";
 

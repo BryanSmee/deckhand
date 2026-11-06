@@ -1,4 +1,4 @@
-# Deckhand's default allow rules (docs/repo-config.md#the-default-policies). A decision is
+# Deckhand's default allow rules (docs/repo-config/policies.md#the-default-policies). A decision is
 # refused unless an allow rule of the operator's policies matches it: these allow each of the
 # listener's own decisions, which the deny rules of the other files narrow. Not `allow_run`
 # (run.rego allows each mode where it makes sense), nor what a run gets and does: each mode's

@@ -1,5 +1,5 @@
 # Deckhand's default for the reviews that start by themselves (`deny_review`, `review.on: ready`:
-# docs/repo-config.md#the-default-policies). A grants folder's policy/review.rego replaces it:
+# docs/repo-config/policies.md#the-default-policies). A grants folder's policy/review.rego replaces it:
 # one with only `package deckhand` has every bot's ready pull requests reviewed, say. A
 # repository's deny rules only add refusals. The built-in gate still holds: a person who opens
 # one must be an allowed user, and a fork's is never reviewed.
