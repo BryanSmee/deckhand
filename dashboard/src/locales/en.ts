@@ -17,6 +17,7 @@ import { policies } from "./en-policies";
 import { queue } from "./en-queue";
 import { repos } from "./en-repos";
 import { request } from "./en-request";
+import { review } from "./en-review";
 import { ui } from "./en-ui";
 
 export const en = {
@@ -284,4 +285,5 @@ export const en = {
   ...queue,
   ...detail,
   ...log,
+  ...review,
 } as const;

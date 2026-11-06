@@ -4,7 +4,7 @@
 // the backlog, the log's lines, a thread's posts) is data, not the dashboard's to translate.
 import { act, fireEvent, render, screen, within } from "@testing-library/preact";
 import { beforeAll, beforeEach, expect, test, vi } from "vitest";
-import type { Backlog, Entry, ReviewRound, State, Thread } from "./types";
+import type { Backlog, Entry, ReviewFindings, ReviewRound, State, Thread } from "./types";
 
 vi.mock("./locales", async (original) =>
   (await import("./testCatalog")).withMarked(await original()),
@@ -219,4 +219,82 @@ test("the task page's `a` finds its questions' form by what it is, not by its la
   const form = screen.getByRole("form", { name: t("questions.title") });
   fireEvent.keyDown(document.body, { key: "a" });
   expect(form.contains(document.activeElement)).toBe(true);
+});
+
+test("a task's Review tab, before and after its merge, with each follow-up's filing", async () => {
+  const head = "aaaaaaa1111111111111111111111111111111";
+  const url = "https://github.example.com/acme/app/pull/25";
+  const item = { path: "lib/cache.mjs", line: 20, text: "A miss goes out?" };
+  const FILINGS: ReviewFindings["followUps"][number]["filing"][] = [
+    ...(["after-merge", "failed", "left", "off", "unread", "not-filed", "unknown"] as const),
+  ];
+  const review: ReviewFindings = {
+    url: `${url}#pullrequestreview-7`,
+    at: state.now - 60_000,
+    verdict: "request-changes",
+    rating: 5,
+    head,
+    round: 1,
+    manual: false,
+    blob: `https://github.example.com/acme/app/blob/${head}`,
+    allowed: "medium",
+    findings: [
+      { ...item, severity: "high", tolerated: false },
+      { ...item, severity: "medium", tolerated: true },
+    ],
+    followUps: [
+      ...FILINGS.map((filing, i) => ({ ...item, title: `Follow-up ${i}`, filing })),
+      {
+        ...item,
+        title: "Filed",
+        filing: "issue",
+        issue: { number: 40, state: "closed", url: null },
+      },
+    ],
+    comments: [
+      { ...item, blocking: true },
+      { ...item, blocking: false },
+    ],
+    merged: null,
+  };
+  const reviewed: State = {
+    ...state,
+    tasks: state.tasks.map((task) =>
+      task.key === "acme/app#22"
+        ? {
+            ...task,
+            state: "done",
+            // A commit pushed since: the review's Outdated mark.
+            pr: { number: 25, url, state: "ready", readyAt: 1, head: "bbbbbbb" },
+            review: { loop: "stopped", round: 1, rounds: 2, history: [{ ...round(1, 1), head }] },
+          }
+        : task,
+    ),
+  };
+  // Not merged; then merged by Deckhand, by someone, by no one known.
+  for (const merged of [
+    null,
+    { at: state.now - 1000, by: "deckhand-app[bot]", deckhand: true },
+    { at: state.now - 1000, by: "alice", deckhand: false },
+    { at: state.now - 1000, by: null, deckhand: false },
+  ]) {
+    const shown = { ...review, merged };
+    mockApi({ "api/review": () => shown });
+    history.replaceState(null, "", `#/tasks?task=${encodeURIComponent("acme/app#22")}`);
+    const view = render(<Dashboard state={reviewed} error={null} />);
+    fireEvent.click(screen.getByRole("tab", { name: t("detail.reviewTab") }));
+    await screen.findByRole("region", { name: t("reviewTab.comments") });
+    // Only what the tab shows as it was sent: the review's own texts, not its verdict, filings or
+    // issue states, which the catalog writes. `allowed` is the repo's config value, shown so.
+    const sent = [
+      ...[...review.findings, ...review.followUps, ...review.comments].flatMap((f) => [
+        f.text,
+        `${f.path}:${f.line}`,
+      ]),
+      ...review.followUps.map((f) => f.title),
+      ...[review.allowed, "@alice", head.slice(0, 7), "bbbbbbb"],
+    ];
+    checked(document.body, sent);
+    view.unmount();
+  }
 });
