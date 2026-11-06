@@ -7,6 +7,7 @@ import {
   getJson,
   graphql,
   graphqlData,
+  incidentNote,
   listLabelled,
   paginate,
   rateLimited,
@@ -156,4 +157,55 @@ test("rateLimited: a 429, or a 403 saying so by its headers or its body, which s
   assert.equal(await rateLimited(answer(403, { "x-ratelimit-remaining": "12" })), false);
   assert.equal(await rateLimited(answer(403, {}, '{"message":"Resource not accessible"}')), false);
   for (const status of [404, 500, 200]) assert.equal(await rateLimited(answer(status)), false);
+});
+
+// The github service's GET /status, read a minute before `now` (#943).
+const NOW = 1_800_000_000_000;
+const read = (extra = {}) => ({
+  watched: true,
+  checkedAt: NOW - 60_000,
+  indicator: "minor",
+  description: "Minor Service Outage",
+  incidents: [],
+  ...extra,
+});
+
+test("incidentNote: GitHub's open incidents, each named, linked in a reply", () => {
+  const incidents = [
+    {
+      name: "Webhooks delayed",
+      status: "identified",
+      url: "https://www.githubstatus.com/incidents/a1",
+    },
+    { name: "Git slow", status: "investigating", url: null },
+  ];
+  assert.equal(
+    incidentNote(read({ incidents }), { now: NOW }),
+    "GitHub's status page reported 2 open incidents then: “Webhooks delayed” (identified); “Git slow” (investigating).",
+  );
+  assert.equal(
+    incidentNote(read({ incidents }), { now: NOW, links: true }),
+    "GitHub's status page reported 2 open incidents then: [Webhooks delayed](https://www.githubstatus.com/incidents/a1) (identified); “Git slow” (investigating).",
+  );
+});
+
+test("incidentNote: no incident, its indicator's description or nothing to report", () => {
+  assert.equal(
+    incidentNote(read({ indicator: "none" }), { now: NOW }),
+    "GitHub's status page reported no incident then.",
+  );
+  assert.equal(
+    incidentNote(read(), { now: NOW }),
+    "GitHub's status page said then: Minor Service Outage.",
+  );
+});
+
+test("incidentNote: null when the status can't tell about then", () => {
+  assert.equal(incidentNote(null, { now: NOW }), null);
+  assert.equal(incidentNote({ watched: false }, { now: NOW }), null);
+  // Not read yet, or only failed tries.
+  assert.equal(incidentNote(read({ indicator: null, checkedAt: null }), { now: NOW }), null);
+  // Read too long before.
+  assert.equal(incidentNote(read({ checkedAt: NOW - 16 * 60_000 }), { now: NOW }), null);
+  assert.ok(incidentNote(read({ checkedAt: NOW - 14 * 60_000 }), { now: NOW }));
 });

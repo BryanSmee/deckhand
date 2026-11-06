@@ -53,7 +53,16 @@ function fakeRunner(fails = null) {
 
 function setup(
   t,
-  { mode = "idea", graceMs = 60, tokens = [], scrubs = [], config = {}, answer, fails } = {},
+  {
+    mode = "idea",
+    graceMs = 60,
+    tokens = [],
+    scrubs = [],
+    config = {},
+    answer,
+    fails,
+    githubStatus,
+  } = {},
 ) {
   const dir = tempDir(t);
   const runner = fakeRunner(fails);
@@ -94,6 +103,8 @@ function setup(
     settle: (item, status) => settled.push(status),
     startLater: () => {},
     schedule: () => done.push(true),
+    // GitHub's own status, as the github service last read it (#943).
+    githubStatus,
   };
   const runs = createRuns(ctx);
   const key = "org/repo#12";
@@ -813,9 +824,9 @@ function replyingWith(statuses) {
   return { answer: comments.answer, bodies };
 }
 
-async function endWith(t, statuses, text) {
+async function endWith(t, statuses, text, githubStatus) {
   const github = replyingWith(statuses);
-  const run = setup(t, { graceMs: 30, answer: github.answer });
+  const run = setup(t, { graceMs: 30, answer: github.answer, githubStatus });
   const live = run.task.live;
   live.handled.push({ comment: { id: 7 } });
   run.runner.out(result(text));
@@ -908,14 +919,14 @@ test("an error whose reply GitHub refuses: logged", async (t) => {
 
 // GitHub failing the read of the repo's config after the App's own tries (#680), for an item
 // tried `tries` times already.
-async function githubDown(t, tries = 0) {
+async function githubDown(t, tries = 0, githubStatus = undefined, status = 500) {
   const fails = new GitHubUnavailable(
     "GET",
     "/repos/org/repo/contents/.deckhand.yaml?ref=main",
-    500,
+    status,
     "reading .deckhand.yaml of org/repo",
   );
-  const run = setup(t, { fails });
+  const run = setup(t, { fails, githubStatus });
   const later = [];
   run.ctx.startLater = (task, dueAt) => later.push({ task, dueAt });
   const item = { comment: { id: 7 }, ...(tries && { githubTries: tries }) };
@@ -966,6 +977,85 @@ test("a run GitHub kept failing every time: its reply says GitHub failed, with t
     readFileSync(logPath, "utf8"),
     new RegExp(RegExp.escape(`Failed: ${DOWN}, 4 tries`)),
   );
+});
+
+// GitHub's status page as the github service last read it, a minute ago (#943).
+const incident = (extra = {}) => ({
+  watched: true,
+  checkedAt: Date.now() - 60_000,
+  triedAt: Date.now() - 60_000,
+  failed: null,
+  indicator: "major",
+  description: "Partial System Outage",
+  components: [],
+  incidents: [
+    {
+      name: "Degraded API",
+      status: "investigating",
+      impact: "major",
+      startedAt: 0,
+      url: "https://www.githubstatus.com/incidents/abc123",
+    },
+  ],
+  ...extra,
+});
+const SAID = "GitHub's status page reported an open incident then: “Degraded API” (investigating).";
+
+test("a run GitHub failed with a 5xx: its outcome says GitHub's open incident then", async (t) => {
+  const { record, logPath } = await githubDown(t, 0, async () => incident());
+  assert.equal(record.summary, `Failed: ${DOWN}. Tried again in 1 min. ${SAID}`);
+  assert.match(readFileSync(logPath, "utf8"), new RegExp(RegExp.escape(SAID)));
+});
+
+test("a run GitHub failed every time: its reply links GitHub's open incident", async (t) => {
+  const { answers, record, logPath } = await githubDown(t, GITHUB_REQUEUE_MS.length, async () =>
+    incident(),
+  );
+  assert.equal(record.summary, `Failed: ${DOWN}. ${SAID}`);
+  assert.deepEqual(answers, [
+    `Claude couldn't start: ${DOWN}, 4 times. GitHub's status page reported an open incident then: [Degraded API](https://www.githubstatus.com/incidents/abc123) (investigating). Comment again once GitHub answers.`,
+  ]);
+  assert.match(
+    readFileSync(logPath, "utf8"),
+    new RegExp(RegExp.escape(`Failed: ${DOWN}, 4 tries. ${SAID}`)),
+  );
+});
+
+test("a run GitHub failed while its status page reported nothing: said so", async (t) => {
+  const none = incident({
+    indicator: "none",
+    description: "All Systems Operational",
+    incidents: [],
+  });
+  const { record } = await githubDown(t, 0, async () => none);
+  assert.equal(
+    record.summary,
+    `Failed: ${DOWN}. Tried again in 1 min. GitHub's status page reported no incident then.`,
+  );
+});
+
+test("GitHub's status unknown, stale or not a 5xx's: the outcome says nothing of it", async (t) => {
+  const plain = `Failed: ${DOWN}. Tried again in 1 min`;
+  const unreachable = async () => {
+    throw new Error("the github service: 502");
+  };
+  const { record, logs } = await githubDown(t, 0, unreachable);
+  assert.equal(record.summary, plain);
+  assert.ok(logs.includes("GitHub's status: the github service: 502"));
+  const stale = async () => incident({ checkedAt: Date.now() - 60 * 60_000 });
+  assert.equal((await githubDown(t, 0, stale)).record.summary, plain);
+  assert.equal((await githubDown(t, 0, async () => ({ watched: false }))).record.summary, plain);
+  // A rate limit isn't GitHub failing: its status isn't read.
+  let read = false;
+  const limited = await githubDown(t, 0, async () => ((read = true), incident()), 429);
+  assert.equal(limited.record.summary, plain.replace("500", "429"));
+  assert.equal(read, false);
+});
+
+test("a reply GitHub keeps refusing with a 5xx: its outcome says GitHub's open incident", async (t) => {
+  const { live, logPath } = await endWith(t, [500, 500, 500], "Done.", async () => incident());
+  assert.equal(live.record.summary, `The reply couldn't be posted: 500. ${SAID}`);
+  assert.match(readFileSync(logPath, "utf8"), new RegExp(RegExp.escape(SAID)));
 });
 
 test("the agent's output moves its log through work, push and wrap-up", async (t) => {
