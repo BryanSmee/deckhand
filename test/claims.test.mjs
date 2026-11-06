@@ -746,3 +746,103 @@ test("a claim asks the access decision again: a refused start drops its comment,
     }
   }
 });
+
+test("an issue closed drops its route once its task is idle: then, or at the sweep after its run", async () => {
+  const { t, ctx } = bench();
+  const desk = t.register("alice", "Desk");
+  await t.say("alice", "Deckhand\n/machine Desk");
+  t.ready();
+  await ctx.claims.claim("alice", desk);
+  // Closed while its machine holds it: kept, the claim's.
+  assert.equal(ctx.claims.forget(KEY), false);
+  assert.equal(ctx.claims.view(t.task()).machine, "Desk");
+  const closed = new Map([[KEY, "completed"]]);
+  ctx.titles = {
+    ...ctx.titles,
+    keys: () => [...closed.keys(), "org/repo#3"],
+    closed: (key) => closed.get(key) ?? null,
+  };
+  assert.deepEqual(ctx.claims.forgetClosed(), []);
+  // Its claim over: the next sweep drops it, the task shared again.
+  ctx.claims.cancel(t.task(), "alice");
+  assert.deepEqual(ctx.claims.forgetClosed(), [KEY]);
+  assert.equal(ctx.claims.view(t.task()), null);
+  assert.equal(poolOf(t.task()), "shared");
+  assert.match(t.logs.at(-1), /org\/repo#12: its route dropped, the issue closed/);
+  // Nothing left to drop.
+  assert.equal(ctx.claims.forget(KEY), false);
+  assert.deepEqual(ctx.claims.forgetClosed(), []);
+});
+
+test("a closed issue's `/machine none` goes too; a reopened one routes again from its runs-on label", async () => {
+  const labels = [{ name: "runs-on:unreal" }];
+  const { t, ctx } = bench({ labels, events: [labelledBy("alice")] });
+  await t.say("alice", "/machine none");
+  assert.equal(t.task(), undefined);
+  assert.equal(ctx.claims.forget(KEY), true);
+  const item = {
+    repo: "org/repo",
+    id: "12",
+    kind: "issue",
+    number: 12,
+    settings: (await ctx.repoSettings()).settings,
+  };
+  const route = await ctx.claims.routeFor(item, labels);
+  assert.equal(route.owner, "alice");
+  assert.equal(route.via, "label");
+});
+
+test("start() sweeps the closed issues' routes hourly, not at once; stop() ends both timers", async () => {
+  const timers = [];
+  const { ctx } = bench();
+  const routes = new Map();
+  ctx.claims = createClaims(ctx, {
+    routes,
+    every: (fn, ms) => (timers.push([ms, fn]), { unref: () => {} }),
+  });
+  routes.set(KEY, { none: true, by: "alice", at: 1 });
+  ctx.titles = { ...ctx.titles, keys: () => [KEY], closed: () => "not_planned" };
+  ctx.claims.start();
+  // Its reopen may be among the deliveries not read yet.
+  assert.equal(routes.size, 1);
+  assert.deepEqual(
+    timers.map(([ms]) => ms),
+    [5000, 3_600_000],
+  );
+  timers[1][1]();
+  assert.equal(routes.size, 0);
+  ctx.claims.stop();
+});
+
+test("a closed issue's task with comments queued keeps its route until they ran; held ones are dropped with it", async () => {
+  const { t, ctx } = bench();
+  t.register("alice", "Desk");
+  await t.say("alice", "Deckhand\n/machine Desk");
+  // Queued for its machine: kept.
+  assert.equal(t.task().pending.length, 1);
+  assert.equal(ctx.claims.forget(KEY), false);
+  // Taken off the queue, bob's comment held for alice, who never delivers it: the route goes.
+  t.task().pending = [];
+  await t.say("bob", "Also do the menu.", { id: 101 });
+  assert.equal(ctx.claims.heldOf(KEY).length, 1);
+  const closed = new Map([[KEY, "completed"]]);
+  ctx.titles = { ...ctx.titles, keys: () => [...closed.keys()], closed: (key) => closed.get(key) };
+  assert.deepEqual(ctx.claims.forgetClosed(), [KEY]);
+  assert.deepEqual(ctx.claims.heldOf(KEY), []);
+  // Neither queued for a sandbox, its 👀 off.
+  assert.deepEqual(t.task().pending, []);
+  assert.deepEqual(t.settled.at(-1), [101, "cancelled"]);
+  assert.equal(poolOf(t.task()), "shared");
+  assert.match(t.logs.at(-1), /its route dropped, the issue closed, 1 held comment\(s\) dropped/);
+});
+
+test("a closed issue's task still running keeps its route", async () => {
+  const { t, ctx } = bench();
+  t.register("alice", "Desk");
+  await t.say("alice", "Deckhand\n/machine Desk");
+  // Its comments taken by a run (an external one's record, say), not a claim.
+  Object.assign(t.task(), { pending: [], running: true });
+  assert.equal(ctx.claims.forget(KEY), false);
+  t.task().running = false;
+  assert.equal(ctx.claims.forget(KEY), true);
+});
