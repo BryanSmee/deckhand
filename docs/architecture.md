@@ -1417,7 +1417,8 @@ So an endpoint that sandboxes call is kept across one update: the sandboxes in f
 happens still find what they call after it. Once a release no longer calls an endpoint, the
 next one may remove it: its last callers were started before the release that stopped calling
 it, and none of them may still run when the next one is deployed (`docker ps --filter
-label=deckhand.run` on the server lists the running sandboxes).
+label=deckhand.run` on the server lists the running sandboxes). That is one of the three
+cases of [Runs in flight](#runs-in-flight).
 
 A run's tokens outlive a restart: the broker service (`broker/`) signs them, with a key only it
 holds, and keeps the live runs in its store; they name the run by its id, which the run's state
@@ -1433,6 +1434,62 @@ through the egress proxy to the broker service, which the orchestrator's restart
 one after 30 s (`curl --max-time 30`) and asks again every 30 s; a token that expired meanwhile
 still renews, from its own sandbox, for 7 days (`RENEW_GRACE_MS`), and the renewed one is bound
 where it was.
+
+### Runs in flight
+
+An update never waits for the runs (#441). A change to what the services and the sandbox agree
+on, the contract, meets three kinds of runs that started, or start, under another release:
+
+- **Running sandboxes under the new services.** They keep their image, its scripts
+  (`entrypoint.sh`, `deckhand-token`, `deckhand-files`, `deckhand-inbox`, the agents' hooks)
+  and the variables they started with, and call the new services with them: an endpoint they
+  call is kept one update (above), an answer they read keeps its old form as long.
+- **New runs on an older sandbox image.** The services' images and the sandbox's are pulled
+  separately. Compose's `sandbox` service exits as soon as it starts (`entrypoint: ["true"]`),
+  so an updater that follows running containers never pulls it; and a release builds its
+  images in parallel (`.github/workflows/release-workflow.yml`'s matrix), so one may be
+  published before another. A repository's image is built from the base it finds
+  (`listener/images.mjs` `imageTag()` hashes the base's id, so it is rebuilt once the base is
+  pulled, not before). A new run then gets the new services' variables in the old image's
+  scripts: #393 passed `DECKHAND_CA` as a broker URL, which an older entrypoint read as a file
+  that didn't exist, so it trusted no CA and the run failed at its first GitHub call through
+  the proxy, on TLS.
+- **Runs the next orchestrator picks up.** Their state in the store (`runs/<id>`), their
+  tokens' claims (`ver`, [security.md](security.md)) and what the broker, the egress proxy and
+  the gateways decide for them were written under the old release's rules: a decision the new
+  one makes for every run (decrypting a host, say) reaches runs whose sandbox was started
+  without what it needs (the CA).
+
+A pull request that touches the contract (the variables a run starts with, the endpoints a
+sandbox calls, the egress proxy's answers, a run's saved state, the claims, the sandbox's
+scripts) says under a "Runs in flight" heading which runs, if any, break and how, and picks
+one of:
+
+- a shim on the services' side: the old endpoint or answer kept for one update, or answering
+  with where to go;
+- a fallback in the sandbox's scripts that reads both the old form and the new;
+- a check that fails a run at its start with what to run (`docker compose pull sandbox`), when
+  neither side can bridge the change;
+- a one-time recovery the operator runs, written in the pull request.
+
+Whichever it is, a run that can't work stops at its start with a message, never later on an
+error that doesn't say why.
+
+**Finding the runs an update broke** (Docker; `deckhand.owner` is `NAME_PREFIX`'s value,
+`deckhand` by default). Pull the base image with the rest, then list the running sandboxes,
+their image and when they started:
+
+```sh
+docker compose pull && docker compose up -d
+docker ps --filter label=deckhand.owner=deckhand --filter label=deckhand.run \
+  --format '{{.Names}}  {{.Image}}  {{.RunningFor}}'
+```
+
+A sandbox whose image lacks what the change added (a script, a variable it reads) is one of
+them: `docker exec <name> sh -c 'command -v <script>'` tells. Stop each with the dashboard's
+**Stop** or a `/cancel` comment on its issue ([Stopping a run](#stopping-a-run): its reply
+says who stopped it, its session and pushed commits are kept), then comment on the issue
+again: the next comment resumes it, on the new image.
 
 ### The broker service
 
