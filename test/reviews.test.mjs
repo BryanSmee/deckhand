@@ -463,6 +463,64 @@ test("createReviews: respelled, the later review kept with the other's fix run",
   });
 });
 
+test("createReviews: respelled, the follow-ups' issues, refusals and titles left of both", async (t) => {
+  const path = join(tempDir(t), "reviews.json");
+  writeFileSync(
+    path,
+    JSON.stringify({
+      "org/repo#pr-5": {
+        head: "sha-0",
+        at: 1,
+        followUpsAt: 1,
+        followUpIssues: [
+          { title: "a", issue: 10 },
+          { title: "b", issue: 11 },
+        ],
+        followUpsRefused: ["c", "d"],
+        followUpsLeft: ["x"],
+        followUpsFiled: 2,
+      },
+      // Later: its issue for "b" wins; "c", filed here, isn't refused any more.
+      "Org/repo#pr-5": {
+        head: "sha-1",
+        at: 3,
+        followUpsAt: 3,
+        followUpIssues: [
+          { title: "b", issue: 21 },
+          { title: "c", issue: 22 },
+        ],
+        followUpsLeft: ["y"],
+        followUpsFiled: 1,
+      },
+      // An empty list stays: the issues were filed knowing which each became.
+      "org/repo#pr-6": { head: "sha-6", at: 1, followUpsAt: 1, followUpIssues: [] },
+      "Org/repo#pr-6": { head: "sha-7", at: 2 },
+      // Every refused title filed under the other spelling: none left.
+      "org/repo#pr-7": { head: "sha-8", at: 2, followUpsRefused: ["a"] },
+      "Org/repo#pr-7": { head: "sha-9", at: 1, followUpIssues: [{ title: "a", issue: 30 }] },
+    }),
+  );
+  const { reviews } = setup(t, undefined, { path });
+  reviews.respell((repo) => (repo.toLowerCase() === "org/repo" ? "Org/repo" : repo));
+  assert.deepEqual(JSON.parse(readFileSync(path, "utf8")), {
+    "Org/repo#pr-5": {
+      head: "sha-1",
+      at: 3,
+      followUpsAt: 3,
+      followUpIssues: [
+        { title: "a", issue: 10 },
+        { title: "b", issue: 21 },
+        { title: "c", issue: 22 },
+      ],
+      followUpsRefused: ["d"],
+      followUpsLeft: ["x", "y"],
+      followUpsFiled: 2,
+    },
+    "Org/repo#pr-6": { head: "sha-7", at: 2, followUpsAt: 1, followUpIssues: [] },
+    "Org/repo#pr-7": { head: "sha-8", at: 2, followUpIssues: [{ title: "a", issue: 30 }] },
+  });
+});
+
 test("createReviews: off without review.on, and the repo's users narrow the operator's", async (t) => {
   for (const yaml of ["", "review: true\n", "review:\n  on: manual\n", "review: false\n"]) {
     const { reviews, accepted } = setup(t, yaml);

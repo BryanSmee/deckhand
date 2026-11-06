@@ -3681,11 +3681,13 @@ export function createReviews({
   }
 
   // Rekeyed with spelled() (restart.mjs unifySpellings()). Both spellings of one pull request:
-  // the later review's, with what only the other had (an auto-merge), and the most fix runs
-  // either counted, so none happens twice.
+  // the later review's, with what only the other had (an auto-merge), the most fix runs either
+  // counted, so none happens twice, and the follow-ups' records of both, so the Review tab keeps
+  // every issue they became.
   function respell(spelled) {
     const merge = (a, b) => {
-      const both = (a.at ?? 0) >= (b.at ?? 0) ? { ...b, ...a } : { ...a, ...b };
+      const [earlier, later] = (a.at ?? 0) >= (b.at ?? 0) ? [b, a] : [a, b];
+      const both = { ...earlier, ...later };
       const fixes = Math.max(fixesOf(a), fixesOf(b));
       const reviewedFixes = Math.max(reviewedFixesOf(a), reviewedFixesOf(b));
       const ciFixes = Math.max(a.ciFixes ?? 0, b.ciFixes ?? 0);
@@ -3699,6 +3701,24 @@ export function createReviews({
       const pickups = [...(a.pickups ?? []), ...(b.pickups ?? [])].filter(
         (p, i, all) => all.findIndex((q) => q.issue === p.issue && q.at === p.at) === i,
       );
+      // The issue each follow-up became under either spelling, by title, the later's first; a
+      // title one refused and the other filed isn't refused any more. The titles left past the
+      // cap that either listed, and the most either filed (the cap counts them).
+      const issues = new Map(
+        [...(earlier.followUpIssues ?? []), ...(later.followUpIssues ?? [])].map((x) => [
+          x.title,
+          x.issue,
+        ]),
+      );
+      const followUpIssues = [...issues].map(([title, issue]) => ({ title, issue }));
+      const keptIssues = !!(a.followUpIssues || b.followUpIssues);
+      const followUpsRefused = [
+        ...new Set([...(earlier.followUpsRefused ?? []), ...(later.followUpsRefused ?? [])]),
+      ].filter((title) => !issues.has(title));
+      const followUpsLeft = [
+        ...new Set([...(earlier.followUpsLeft ?? []), ...(later.followUpsLeft ?? [])]),
+      ];
+      const followUpsFiled = Math.max(a.followUpsFiled ?? 0, b.followUpsFiled ?? 0);
       // The last fix run's time goes with the count.
       const fixedAt = Math.max(a.fixedAt ?? 0, b.fixedAt ?? 0);
       return {
@@ -3711,6 +3731,13 @@ export function createReviews({
         ...(hasFollowUps && { hasFollowUps }),
         ...(reviewComments.length && { reviewComments }),
         ...(pickups.length && { pickups }),
+        // Kept even empty: with `followUpsAt`, it says the issues were filed knowing which.
+        ...(keptIssues && { followUpIssues }),
+        ...(both.followUpsRefused && {
+          followUpsRefused: followUpsRefused.length ? followUpsRefused : undefined,
+        }),
+        ...(followUpsLeft.length && { followUpsLeft }),
+        ...(followUpsFiled && { followUpsFiled }),
       };
     };
     respellMap(reviewed, spelled, undefined, merge);
