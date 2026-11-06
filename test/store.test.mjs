@@ -619,6 +619,33 @@ test(
   },
 );
 
+// What WSL's kernel does by chance (the test above lost increments there at every run): another
+// process's write of state.json on the inode this one's had, of the same size, stamped with the
+// same time (a 100 Hz kernel's 10 ms). Here on purpose: written in place, its time set back.
+test("file: another process's write is seen, even with the inode, size and time of the one before", async (t) => {
+  const dir = tempDir(t);
+  const { utimesSync } = await import("node:fs");
+  const at = new Date(1_700_000_000_000);
+  const a = fileStore({
+    dir,
+    writeJson: (path, value, options) => {
+      writeJsonAtomic(path, value, options);
+      utimesSync(path, at, at);
+    },
+  });
+  const b = fileStore({
+    dir,
+    writeJson: (path, value) => {
+      writeFileSync(path, JSON.stringify(value, null, 2));
+      utimesSync(path, at, at);
+    },
+  });
+  await a.set("n", 1);
+  assert.equal(await b.increment("n"), 2);
+  assert.equal(await a.increment("n"), 3);
+  assert.equal(await b.get("n"), 3);
+});
+
 test("file: acknowledged with drop, a stream's events leave its memory and, past 100, its file (#506)", async (t) => {
   const dir = tempDir(t);
   const store = fileStore({ dir });
