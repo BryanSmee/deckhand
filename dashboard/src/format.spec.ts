@@ -8,7 +8,6 @@ import {
   isPrTask,
   kindName,
   ownMode,
-  plural,
   repoCounts,
   repoTabs,
   reservedText,
@@ -173,10 +172,7 @@ test("run names: why the listener started a run itself", () => {
   );
 });
 
-test("plurals, short repo names and pull requests' own tasks", () => {
-  expect(plural(1, "run")).toBe("1 run");
-  expect(plural(3, "run")).toBe("3 runs");
-  expect(plural(2, "earlier reply", "earlier replies")).toBe("2 earlier replies");
+test("short repo names and pull requests' own tasks", () => {
   expect(shortRepo("acme/app")).toBe("app");
   expect(isPrTask(task("acme/api#pr-141"))).toBe(true);
   // The issue a pull request closes is the issue's task.
