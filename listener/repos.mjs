@@ -37,6 +37,7 @@ import { sameRepo } from "./events.mjs";
 import { effectiveView } from "./repo-view.mjs";
 import { paginate } from "./github.mjs";
 import { send } from "../lib/http.mjs";
+import { mapLimited } from "../lib/pool.mjs";
 import { apiRoute, mustDo } from "./web.mjs";
 import { startAction } from "./permissions.mjs";
 
@@ -256,17 +257,10 @@ export function createRepoList({
   async function list() {
     const infos = await repos();
     const load = grantsOnce();
-    const rows = new Array(infos.length);
-    let next = 0;
-    const worker = async () => {
-      while (next < infos.length) {
-        const i = next++;
-        const found = await judged(infos[i], await configState(infos[i]), load);
-        rows[i] = repoStatus(infos[i], found, store.get(infos[i].full_name));
-      }
-    };
-    await Promise.all(Array.from({ length: Math.min(PARALLEL, infos.length) }, worker));
-    return rows;
+    return mapLimited(infos, PARALLEL, async (info) => {
+      const found = await judged(info, await configState(info), load);
+      return repoStatus(info, found, store.get(info.full_name));
+    });
   }
 
   async function get(repo) {

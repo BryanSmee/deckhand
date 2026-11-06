@@ -19,6 +19,7 @@
 import { randomBytes } from "node:crypto";
 import { keepLast } from "../lib/capped.mjs";
 import { Refused } from "../lib/http.mjs";
+import { mapLimited } from "../lib/pool.mjs";
 
 // How often a driver says it is there, and how long a machine stays online without it.
 export const HEARTBEAT_MS = 30_000;
@@ -144,20 +145,6 @@ function driverVersion(version) {
     throw new Refused(400, `\`version\` is one line of text, ${MAX_VERSION} characters at most.`);
   }
   return version;
-}
-
-// `fn` over `items`, `limit` at once at most, its results in their order.
-export async function mapLimited(items, limit, fn) {
-  const results = Array.from({ length: items.length });
-  let next = 0;
-  const worker = async () => {
-    while (next < items.length) {
-      const i = next++;
-      results[i] = await fn(items[i]);
-    }
-  };
-  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
-  return results;
 }
 
 // `machines`: id → { id, owner, name, labels, capacity, repos, version, createdAt, seenAt }, the
