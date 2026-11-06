@@ -416,7 +416,7 @@ test("s3: virtual-hosted style puts the bucket in the host", async (t) => {
 test("s3: no error, nor the client, holds the secret key or a signature", async (t) => {
   const s3 = await fakeS3(t);
   const secret = "the-secret-that-must-not-leak-0123456789";
-  const client = clientOf(t, s3, { secretAccessKey: secret, timeoutMs: 300, retries: 1 });
+  const client = clientOf(t, s3, { secretAccessKey: secret, retries: 1 });
   const messages = await errorsOf(
     () => client.put("k", "v"), // SignatureDoesNotMatch, whose body quotes the signature
     () => client.get("k", { offset: 1 }),
@@ -424,16 +424,21 @@ test("s3: no error, nor the client, holds the secret key or a signature", async 
     () => client.delete("k"),
   );
   assert.match(messages[0], /SignatureDoesNotMatch$/);
-  s3.fail("hang");
-  messages.push(...(await errorsOf(() => client.get("k"))));
-  assert.match(messages.at(-1), /timed out/);
   s3.fail("reset", "reset");
   messages.push(...(await errorsOf(() => client.put("k", "v"))));
   assert.match(messages.at(-1), /^S3 put k: ECONNRESET$/);
+  // The short deadline is the hang's alone, and last: a stall of the process as long as it (a
+  // loaded runner) fires its timer before the reset is read, and may keep the hanging request
+  // from reaching the server before it times out, leaving "hang" to the next one.
+  const hasty = clientOf(t, s3, { secretAccessKey: secret, timeoutMs: 300 });
+  s3.fail("hang");
+  messages.push(...(await errorsOf(() => hasty.get("k"))));
+  assert.match(messages.at(-1), /timed out/);
   const signatures = s3.requests.map(
     (r) => /Signature=([0-9a-f]{64})/.exec(r.headers.authorization)[1],
   );
-  for (const text of [...messages, inspect(client, { showHidden: true, depth: 9 })]) {
+  const clients = [client, hasty].map((c) => inspect(c, { showHidden: true, depth: 9 }));
+  for (const text of [...messages, ...clients]) {
     assert.ok(!text.includes(secret), text);
     assert.ok(!/Signature=|Credential=/.test(text), text);
     for (const signature of signatures) assert.ok(!text.includes(signature), text);
