@@ -538,16 +538,7 @@ export function createRuns(ctx) {
     // restarts doesn't write it again.
     const phase = fits(live, line) ? phaseOf(live.logPhase, events) : null;
     if (phase && enterPhase(live, phase)) ctx.saveLive(task);
-    // When a tool call, its output or a message came, for the dashboard's durations and
-    // timestamps; setup's output once a second: a line of the listener's before it, so the
-    // agent's line stays as it printed it (runlog.mjs reader()).
-    const stamped =
-      at !== null && fits(live, line) && needsStamp(line, events, at, live.stampedAt ?? null);
-    if (stamped) writeEvent(live.logFile, "at", { at });
-    // A run of plain lines (runlog.mjs reader()): any other line of the sandbox's ends it.
-    if (!plainLine(line, events)) {
-      if (line.trim()) live.stampedAt = null;
-    } else if (stamped) live.stampedAt = at;
+    if (at !== null) stamp(live, line, events, at);
     const kept = keep(task, line);
     live.lines.out++;
     ctx.saveLiveSoon?.(task);
@@ -572,6 +563,18 @@ export function createRuns(ctx) {
       linger(task);
     }
     ctx.saveLive(task);
+  }
+
+  // When a tool call, its output or a message came (`at`), for the dashboard's durations and
+  // timestamps; setup's output once a second: a line of the listener's before it, so the
+  // agent's line stays as it printed it (runlog.mjs reader()).
+  function stamp(live, line, events, at) {
+    const stamped = fits(live, line) && needsStamp(line, events, at, live.stampedAt ?? null);
+    if (stamped) writeEvent(live.logFile, "at", { at });
+    // A run of plain lines (runlog.mjs reader()): any other line of the sandbox's ends it.
+    if (!plainLine(line, events)) {
+      if (line.trim()) live.stampedAt = null;
+    } else if (stamped) live.stampedAt = at;
   }
 
   // Writes a line of the sandbox's output to its log, unless that would take the log past
@@ -1307,7 +1310,7 @@ export function createRuns(ctx) {
 
   // The agent's stream-json lines `lines` its machine reports (post_events), from the line
   // `from` of its output (null: after those it had), into the run's log as a sandbox's output
-  // is: redacted, cut at RUN_LOG_MAX_MB, its phases, its results. Lines it had already (a
+  // is: redacted, timed, cut at RUN_LOG_MAX_MB, its phases, its results. Lines it had already (a
   // driver sending again what a handover may have lost) are skipped. → how many it has now.
   async function externalLines(task, lines, from = null) {
     const live = task.live;
@@ -1331,6 +1334,9 @@ export function createRuns(ctx) {
     const events = agentOf(task).normalize(line);
     const phase = fits(live, line) ? phaseOf(live.logPhase, events) : null;
     if (phase) enterPhase(live, phase);
+    // Stamped as it comes, on the orchestrator's clock rather than the machine's: its driver
+    // sends each line as its agent prints it, batching only those printed while a call is out.
+    stamp(live, line, events, Date.now());
     const kept = keep(task, line);
     live.lines.out++;
     if (!kept) return;
