@@ -1,15 +1,15 @@
 // Each service's image holds only what its Dockerfile copies: a module that reads a file the
 // image doesn't have as it loads (prompts.mjs reads prompts/ and docs/) stops the service at
 // start, which the rest of the suite, run from the repository's root, never sees (#919: the
-// runner importing sandbox-spec.mjs, once that imported prompts.mjs). Loading the modules
-// misses what only runs later (the entry point's own imports, an import() in a function, a file
+// runner importing sandbox-spec.mjs, once that imported prompts.mjs). Loading the modules (the
+// entry point's imports, #925) misses what only runs later (an import() in a function, a file
 // read on a call), so each image's import graph is walked too, from its entry point (#924).
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, dirname, extname, join, relative, resolve } from "node:path";
 import { test } from "node:test";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { posix, tempDir } from "./helpers.mjs";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
@@ -46,7 +46,7 @@ function layOut(service, dir) {
   }
 }
 
-// Every module of the service but its entry point, which would start listening.
+// Each service's entry point: loaded through what it names, never itself (it would listen).
 const SERVICES = {
   edge: "server.mjs",
   broker: "server.mjs",
@@ -107,13 +107,18 @@ for (const [service, entry] of Object.entries(SERVICES)) {
   test(`the ${service} image: its modules load from what its Dockerfile copies`, (t) => {
     const dir = tempDir(t, `deckhand-image-${service}-`);
     layOut(service, dir);
-    const modules = readdirSync(join(dir, service)).filter(
-      (name) => name.endsWith(".mjs") && name !== entry,
+    const own = readdirSync(join(dir, service))
+      .filter((name) => name.endsWith(".mjs") && name !== entry)
+      .map((name) => join(dir, service, name));
+    // And the modules the entry point names, which load as it starts, without its listening:
+    // for the orchestrator (server.mjs alone), the whole service (#925).
+    const named = references(readFileSync(join(root, service, entry), "utf8"))
+      .filter((spec) => extname(spec) === ".mjs")
+      .map((spec) => resolve(dir, service, spec));
+    if (service === "orchestrator") assert.ok(named.length > 10, "server.mjs's imports found");
+    const imports = [...new Set([...own, ...named])].map(
+      (file) => `await import(${JSON.stringify(pathToFileURL(file).href)});`,
     );
-    // The orchestrator's only module is its entry point: prompts.mjs, which reads files, then.
-    const imports = modules.length
-      ? modules.map((name) => `await import("./${service}/${name}");`)
-      : [`await import("./listener/prompts.mjs");`];
     const result = spawnSync(process.execPath, ["--input-type=module", "-e", imports.join("\n")], {
       cwd: dir,
       encoding: "utf8",
