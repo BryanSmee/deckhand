@@ -127,6 +127,45 @@ test("pulls: recorded per task, and kept across a restart", async (t) => {
   assert.deepEqual(next.get("org/repo#30"), pr(31, "merged", NOW));
 });
 
+test("pulls: a machine's mark is kept per pull request, a newer one on the task leaving it (#947)", async () => {
+  const maps = mapStore();
+  const pulls = createPulls({
+    pulls: await maps.map("pulls"),
+    marks: await maps.map("marks"),
+    listPulls: async () => [],
+  });
+  pulls.record("org/repo#30", { ...pr(31, "ready"), external: "alice" });
+  assert.equal(pulls.externalOf("Org/Repo", 31), "alice");
+  // Another pull request becomes the task's: the older one, still open, stays alice's.
+  pulls.record("org/repo#30", pr(32, "draft"));
+  assert.equal(pulls.get("org/repo#30").external, undefined);
+  assert.equal(pulls.externalOf("org/repo", 31), "alice");
+  assert.equal(pulls.externalOf("org/repo", 32), null);
+  assert.equal(pulls.externalOf("org/other", 31), null);
+  // The task's again (a delivery of it): its entry has the mark back.
+  pulls.record("org/repo#30", pr(31, "ready"));
+  assert.equal(pulls.get("org/repo#30").external, "alice");
+  // In the store: the next copy has it.
+  const next = createPulls({
+    pulls: await maps.again("pulls"),
+    marks: await maps.again("marks"),
+    listPulls: async () => [],
+  });
+  assert.equal(next.externalOf("org/repo", 31), "alice");
+});
+
+test("pulls: a mark kept in the task's entry alone, before marks were (#947), is taken at start", async () => {
+  const maps = mapStore();
+  const before = await maps.map("pulls");
+  before.set("Org/Repo#30", { ...pr(31, "ready"), external: "alice" });
+  const marks = await maps.map("marks");
+  const pulls = createPulls({ pulls: before, marks, listPulls: async () => [] });
+  assert.equal(pulls.externalOf("org/repo", 31), "alice");
+  pulls.record("org/repo#30", pr(32, "draft"));
+  assert.equal(pulls.externalOf("org/repo", 31), "alice");
+  assert.deepEqual(Object.fromEntries(await maps.again("marks")), { "org/repo#31": "alice" });
+});
+
 test("pulls: an edited link moves the pull request; a closed one doesn't hide an open one", (t) => {
   const pulls = createPulls({ listPulls: async () => [] });
   pulls.record("org/repo#pr-31", pr(31, "ready", NOW));
