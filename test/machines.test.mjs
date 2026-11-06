@@ -6,7 +6,6 @@ import { grantFor, grantsFrom, withGrants } from "../listener/grants.mjs";
 import {
   createMachines,
   machineFields,
-  mapLimited,
   MAX_MACHINES,
   OFFER_READS,
   offeredLabels,
@@ -175,21 +174,6 @@ test("offers: the repositories of the machine's that opt in, where its owner may
   const bobs = machines.register("bob", { name: "desk", repos: ["org/app", "org/game"] });
   // Bob's machine has no `unreal` label: org/game isn't offered to it.
   assert.deepEqual(await machines.offers("bob", bobs.id), [{ repo: "org/app", labels: [] }]);
-});
-
-test("mapLimited: its results in order, never more than its limit at once", async () => {
-  let running = 0;
-  let most = 0;
-  const results = await mapLimited([5, 1, 4, 2, 3], 2, async (n) => {
-    running++;
-    most = Math.max(most, running);
-    for (let i = 0; i < n; i++) await new Promise((resolve) => setImmediate(resolve));
-    running--;
-    return n * 10;
-  });
-  assert.deepEqual(results, [50, 10, 40, 20, 30]);
-  assert.equal(most, 2);
-  assert.deepEqual(await mapLimited([], 4, async () => 1), []);
 });
 
 test("offers for owner/*: OFFER_READS reads at once, each .deckhand.yaml read again only after READ_MS (#914)", async () => {

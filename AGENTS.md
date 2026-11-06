@@ -81,7 +81,7 @@ started before you finish.
 lib/          what every service shares, copied into each image: yaml, settings, redact, log (its
               lines, a request's ID), http, health (every service's /health), files, drain,
               tokens, service tokens (service-token.mjs), capped.mjs (keepLast(): a capped Map
-              whose fresh value moves last, #887), the store (store.mjs, store-file.mjs,
+              whose fresh value moves last, #887), pool.mjs (mapLimited(): a worker pool, #974), the store (store.mjs, store-file.mjs,
               store-redis.mjs and its client resp.mjs, the arguments both backends check in
               store-checks.mjs; store-map.mjs: a Map kept there one key per item), the S3 client
               (s3.mjs, #605) and blob storage over it (blobs.mjs: BLOB_URL's backends, #606),
