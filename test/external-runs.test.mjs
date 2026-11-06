@@ -313,6 +313,40 @@ test("a run claimed, logged, asking, answered and finished goes the steps of a s
   assert.deepEqual(said.runner, []);
 });
 
+test("its lines are stamped as they come, on the orchestrator's clock, as a sandbox's are on Docker's (#950)", async (t) => {
+  const b = bench(t);
+  const { desk, work } = await claimed(b);
+  t.mock.timers.enable({ apis: ["Date"], now: 5000 });
+  const call = line({
+    type: "assistant",
+    message: { content: [{ type: "tool_use", id: "t1", name: "Bash", input: { command: "ls" } }] },
+  });
+  const output = line({
+    type: "user",
+    message: { content: [{ type: "tool_result", tool_use_id: "t1", content: "a" }] },
+  });
+  await b.ctx.claims.post("alice", desk, work.run, [text("Looking."), call], 0);
+  t.mock.timers.tick(12_000);
+  // Plain lines: one `at` as a run of them starts, as a sandbox's (needsStamp()).
+  await b.ctx.claims.post("alice", desk, work.run, [output, "warn: a", "warn: b"], 2);
+  const lines = readFileSync(join(b.ctx.logDir, `${work.run}.log`), "utf8")
+    .trim()
+    .split("\n")
+    .filter((l) => !/"event":"(phase|started|note)"/.test(l));
+  const at = (ms) => line({ type: "listener", event: "at", at: ms });
+  assert.deepEqual(lines.slice(-9), [
+    at(5000),
+    text("Looking."),
+    at(5000),
+    call,
+    at(17_000),
+    output,
+    at(17_000),
+    "warn: a",
+    "warn: b",
+  ]);
+});
+
 test("a claim's work says where to clone and which hosts to allow; how the machine runs it is its record's, its log's and its reply's (#599)", async (t) => {
   const b = bench(t);
   const { ctx, said } = b;
