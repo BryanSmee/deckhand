@@ -9,6 +9,8 @@
 import { useEffect } from "preact/hooks";
 import { useReview } from "./api";
 import { dayTime, reviewOutdated, shortSha } from "./format";
+import { t, tx } from "./i18n";
+import type { Plain } from "./locales";
 import type { ReviewFindings, ReviewItem, Severity, Task } from "./types";
 import { Button } from "./ui/Button";
 import * as Icon from "./ui/icons";
@@ -16,33 +18,33 @@ import { Card, Notice, Skeleton } from "./ui/Surface";
 import styles from "./ReviewTab.module.css";
 
 const SEVERITIES: Severity[] = ["critical", "high", "medium", "low"];
-const SEVERITY_NAMES: Record<Severity, string> = {
-  critical: "Critical",
-  high: "High",
-  medium: "Medium",
-  low: "Low",
+const SEVERITY_NAMES: Record<Severity, Plain> = {
+  critical: "reviewTab.critical",
+  high: "reviewTab.high",
+  medium: "reviewTab.medium",
+  low: "reviewTab.low",
 };
 // The severities a review blocks on at all: a low finding never does, tolerated or not.
 const BLOCKING: Severity[] = ["critical", "high", "medium"];
 
-const VERDICTS: Record<ReviewFindings["verdict"], string> = {
-  "request-changes": "Requests changes",
-  comment: "Comment",
-  approve: "Approve",
+const VERDICTS: Record<ReviewFindings["verdict"], Plain> = {
+  "request-changes": "reviewTab.requestChanges",
+  comment: "reviewTab.comment",
+  approve: "reviewTab.approve",
 };
 
 // Merged with follow-ups still being filed: read again after this.
 const FILING_AGAIN_MS = 10_000;
 
 // What a task's Review tab reads again on: its rounds and its pull request's state.
-export const reviewVersion = (t: Task) =>
-  `${t.review?.history.length ?? 0}-${t.review?.history.at(-1)?.at ?? 0}-${t.pr?.state ?? ""}`;
+export const reviewVersion = (task: Task) =>
+  `${task.review?.history.length ?? 0}-${task.review?.history.at(-1)?.at ?? 0}-${task.pr?.state ?? ""}`;
 
-export function ReviewTab({ task: t, now }: { task: Task; now: number }) {
+export function ReviewTab({ task, now }: { task: Task; now: number }) {
   const { review, error, missing, loading, reload } = useReview(
-    t.repo,
-    t.pr!.number,
-    reviewVersion(t),
+    task.repo,
+    task.pr!.number,
+    reviewVersion(task),
   );
   // Merged, its follow-ups' filing on its way: read again in a moment, as nothing in api/state
   // says when it is done.
@@ -56,19 +58,16 @@ export function ReviewTab({ task: t, now }: { task: Task; now: number }) {
     return (
       <div class={styles.page}>
         {missing ? (
-          <p class={styles.none}>
-            No review of Deckhand's to show here: GitHub refused the last one, posted as a comment
-            on the pull request instead, or it isn't in Deckhand's format.
-          </p>
+          <p class={styles.none}>{t("reviewTab.missing")}</p>
         ) : error ? (
           <Notice tone="err">
-            Couldn't read the last review: {sentence(error)}{" "}
+            {t("reviewTab.readFailed", { error: sentence(error) })}{" "}
             <Button size="small" variant="ghost" onClick={reload}>
-              Try again
+              {t("reviewTab.tryAgain")}
             </Button>
           </Notice>
         ) : (
-          <div class={styles.loading} aria-busy={loading} aria-label="Reading the last review">
+          <div class={styles.loading} aria-busy={loading} aria-label={t("reviewTab.reading")}>
             <Skeleton width="40%" height={14} />
             <Skeleton height={60} />
             <Skeleton height={60} />
@@ -89,17 +88,15 @@ export function ReviewTab({ task: t, now }: { task: Task; now: number }) {
     <div class={styles.page}>
       {merged && (
         <Notice tone="done" class={styles.merged}>
-          Merged #{t.pr!.number}{" "}
-          {merged.deckhand ? "by Deckhand" : merged.by ? `by @${merged.by}` : ""}
-          {merged.at ? ` ${dayTime(merged.at, now)}` : ""}
+          <MergedBy task={task} merged={merged} now={now} />
         </Notice>
       )}
-      <Head task={t} review={review} now={now} />
+      <Head task={task} review={review} now={now} />
       {error && (
         <Notice tone="err">
-          Couldn't read it again: {sentence(error)}{" "}
+          {t("reviewTab.readAgainFailed", { error: sentence(error) })}{" "}
           <Button size="small" variant="ghost" onClick={reload}>
-            Try again
+            {t("reviewTab.tryAgain")}
           </Button>
         </Notice>
       )}
@@ -108,51 +105,80 @@ export function ReviewTab({ task: t, now }: { task: Task; now: number }) {
   );
 }
 
+// "Merged #30 by Deckhand today 14:02".
+function MergedBy({
+  task,
+  merged,
+  now,
+}: {
+  task: Task;
+  merged: NonNullable<ReviewFindings["merged"]>;
+  now: number;
+}) {
+  const number = task.pr!.number;
+  const who = merged.deckhand ? "Deckhand" : merged.by ? `@${merged.by}` : null;
+  const said = who ? t("reviewTab.mergedBy", { number, who }) : t("reviewTab.merged", { number });
+  return (
+    <>
+      {merged.at ? t("reviewTab.mergedAt", { merged: said, when: dayTime(merged.at, now) }) : said}
+    </>
+  );
+}
+
 // "Requests changes · R2 · 6/10 · reviewed abc1234 · today 14:02 · On GitHub ↗", and the
 // Outdated mark once a commit was pushed after it.
-function Head({ task: t, review, now }: { task: Task; review: ReviewFindings; now: number }) {
-  const outdated = reviewOutdated(t);
+function Head({ task, review, now }: { task: Task; review: ReviewFindings; now: number }) {
+  const outdated = reviewOutdated(task);
   const blocks = review.verdict === "request-changes";
   return (
     <header class={styles.head}>
-      <span class={blocks ? styles.changes : styles.verdict}>{VERDICTS[review.verdict]}</span>
+      <span class={blocks ? styles.changes : styles.verdict}>{t(VERDICTS[review.verdict])}</span>
       {/* A maintainer's review counts no fix round: no R<n>, as the review loop's list. */}
       {review.manual ? (
-        <span class={styles.fact}>A maintainer's review</span>
+        <span class={styles.fact}>{t("reviewTab.maintainer")}</span>
       ) : (
         review.round !== null && (
           <span
             class={styles.round}
-            title={review.round ? `Review after fix round ${review.round}` : "First review"}
+            title={
+              review.round
+                ? t("reviewTab.afterRound", { round: review.round })
+                : t("reviewTab.first")
+            }
           >
-            R{review.round}
+            {t("reviewTab.round", { round: review.round })}
           </span>
         )
       )}
-      <span class={styles.fact}>{review.rating}/10</span>
+      <span class={styles.fact}>{t("reviewTab.rating", { rating: review.rating })}</span>
       {review.head && (
         <span class={styles.fact}>
-          reviewed{" "}
-          <a
-            class={styles.sha}
-            href={`${t.pr!.url}/commits/${review.head}`}
-            target="_blank"
-            rel="noreferrer"
-          >
-            {shortSha(review.head)}
-          </a>
+          {tx("reviewTab.reviewed", {
+            sha: (
+              <a
+                class={styles.sha}
+                href={`${task.pr!.url}/commits/${review.head}`}
+                target="_blank"
+                rel="noreferrer"
+              >
+                {shortSha(review.head)}
+              </a>
+            ),
+          })}
         </span>
       )}
       {review.at && <span class={styles.fact}>{dayTime(review.at, now)}</span>}
       {outdated && outdated.reviewed === review.head && (
         <span class={styles.outdated}>
           <Icon.Warning size={13} />
-          Outdated: head is now <span class={styles.sha}>{shortSha(outdated.head)}</span>
+          {tx("reviewTab.outdated", {
+            head: <span class={styles.sha}>{shortSha(outdated.head)}</span>,
+          })}
         </span>
       )}
       {review.url && (
         <a class={styles.github} href={review.url} target="_blank" rel="noreferrer">
-          On GitHub
+          {t("reviewTab.github")}
           <Icon.External size={12} />
         </a>
       )}
@@ -163,11 +189,11 @@ function Head({ task: t, review, now }: { task: Task; review: ReviewFindings; no
 function MustFix({ review, merged }: { review: ReviewFindings; merged: boolean }) {
   const n = review.findings.length;
   return (
-    <Card as="section" class={styles.section} aria-label="Must fix">
+    <Card as="section" class={styles.section} aria-label={t("reviewTab.mustFix")}>
       <h3>
-        Must fix <span class={styles.count}>{n}</span>
+        {t("reviewTab.mustFix")} <span class={styles.count}>{n}</span>
       </h3>
-      {!n && <p class={styles.none}>Nothing to fix.</p>}
+      {!n && <p class={styles.none}>{t("reviewTab.nothingToFix")}</p>}
       {SEVERITIES.map((s) => {
         const found = review.findings.filter((f) => f.severity === s);
         if (!found.length) return null;
@@ -175,7 +201,7 @@ function MustFix({ review, merged }: { review: ReviewFindings; merged: boolean }
           <div key={s} class={styles.group}>
             <h4>
               <span class={`${styles.dot} ${styles[s]}`} aria-hidden="true" />
-              {SEVERITY_NAMES[s]} <span class={styles.count}>{found.length}</span>
+              {t(SEVERITY_NAMES[s])} <span class={styles.count}>{found.length}</span>
             </h4>
             <ul class={styles.items}>
               {found.map((f, i) => (
@@ -183,16 +209,17 @@ function MustFix({ review, merged }: { review: ReviewFindings; merged: boolean }
                   <div class={styles.line}>
                     <Place item={f} blob={review.blob} />
                     {merged ? (
-                      <span class={styles.mark}>merged with</span>
+                      <span class={styles.mark}>{t("reviewTab.mergedWith")}</span>
                     ) : f.tolerated ? (
+                      // `allowed`: the repo's config value, as its file writes it, not translated.
                       <span
                         class={styles.mark}
-                        title={`The repo's review.max_allowed_severity is ${review.allowed}`}
+                        title={t("reviewTab.toleratedHelp", { severity: review.allowed })}
                       >
-                        tolerated
+                        {t("reviewTab.tolerated")}
                       </span>
                     ) : (
-                      BLOCKING.includes(s) && <span class={styles.fix}>to fix</span>
+                      BLOCKING.includes(s) && <span class={styles.fix}>{t("reviewTab.toFix")}</span>
                     )}
                   </div>
                   <Text text={f.text} />
@@ -206,14 +233,14 @@ function MustFix({ review, merged }: { review: ReviewFindings; merged: boolean }
   );
 }
 
-const FILINGS: Record<Exclude<ReviewFindings["followUps"][number]["filing"], "issue">, string> = {
-  "after-merge": "filed after merge",
-  failed: "filing failed: GitHub refused the issue",
-  left: "not filed: past the follow-ups Deckhand files per pull request",
-  off: "not filed: left to you (review.follow_ups: false)",
-  unread: "not known: the repo's config can't be read",
-  "not-filed": "not filed: nothing filed it at the merge",
-  unknown: "filed before Deckhand kept which issue",
+const FILINGS: Record<Exclude<ReviewFindings["followUps"][number]["filing"], "issue">, Plain> = {
+  "after-merge": "reviewTab.filingAfterMerge",
+  failed: "reviewTab.filingFailed",
+  left: "reviewTab.filingLeft",
+  off: "reviewTab.filingOff",
+  unread: "reviewTab.filingUnread",
+  "not-filed": "reviewTab.filingNotFiled",
+  unknown: "reviewTab.filingUnknown",
 };
 
 function FollowUps({ review, merged }: { review: ReviewFindings; merged: boolean }) {
@@ -221,13 +248,12 @@ function FollowUps({ review, merged }: { review: ReviewFindings; merged: boolean
   // A review from before the sections has none: no section.
   if (!n) return null;
   return (
-    <Card as="section" class={styles.section} aria-label="Follow-ups">
+    <Card as="section" class={styles.section} aria-label={t("reviewTab.followUps")}>
       <h3>
-        Follow-ups <span class={styles.count}>{n}</span>
+        {t("reviewTab.followUps")} <span class={styles.count}>{n}</span>
       </h3>
       <p class={styles.note}>
-        For other issues: Deckhand files each one{" "}
-        {merged ? "now that it is merged" : "once it is merged"}.
+        {merged ? t("reviewTab.followUpsMerged") : t("reviewTab.followUpsOpen")}
       </p>
       <ul class={styles.items}>
         {review.followUps.map((f, i) => (
@@ -245,7 +271,9 @@ function FollowUps({ review, merged }: { review: ReviewFindings; merged: boolean
                   )}
                   {f.issue.state && (
                     <span class={f.issue.state === "open" ? styles.open : styles.closed}>
-                      {f.issue.state}
+                      {f.issue.state === "open"
+                        ? t("reviewTab.issueOpen")
+                        : t("reviewTab.issueClosed")}
                     </span>
                   )}
                 </span>
@@ -255,7 +283,7 @@ function FollowUps({ review, merged }: { review: ReviewFindings; merged: boolean
                     f.filing === "failed" || f.filing === "not-filed" ? styles.failed : styles.mark
                   }
                 >
-                  {FILINGS[f.filing as keyof typeof FILINGS] ?? f.filing}
+                  {f.filing in FILINGS ? t(FILINGS[f.filing as keyof typeof FILINGS]) : f.filing}
                 </span>
               )}
             </div>
@@ -272,16 +300,16 @@ function Comments({ review }: { review: ReviewFindings }) {
   const n = review.comments.length;
   if (!n) return null;
   return (
-    <Card as="section" class={styles.section} aria-label="Comments">
+    <Card as="section" class={styles.section} aria-label={t("reviewTab.comments")}>
       <h3>
-        Comments <span class={styles.count}>{n}</span>
+        {t("reviewTab.comments")} <span class={styles.count}>{n}</span>
       </h3>
       <ul class={styles.items}>
         {review.comments.map((c, i) => (
           <li key={i}>
             <div class={styles.line}>
               <span class={c.blocking ? styles.fix : styles.mark}>
-                {c.blocking ? "blocking" : "note"}
+                {c.blocking ? t("reviewTab.blocking") : t("reviewTab.note")}
               </span>
               <Place item={c} blob={review.blob} />
             </div>
