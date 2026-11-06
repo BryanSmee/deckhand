@@ -311,8 +311,8 @@ test(
     repo = { "gh-linked-branch.rego": "package deckhand\n" };
     policies.forget("org/repo");
     assert.equal((await deny("plan", true)).length, 1);
-    // Its allow rule lets its mode link one: docs/repo-config.md's example.
-    const docs = readFileSync(new URL("../docs/repo-config.md", import.meta.url), "utf8");
+    // Its allow rule lets its mode link one: docs/repo-config/policies.md's example.
+    const docs = readFileSync(new URL("../docs/repo-config/policies.md", import.meta.url), "utf8");
     const [, example] = /```rego\n# \.deckhand\/policy\/modes\.rego\n([\s\S]*?)```/.exec(docs);
     repo = { "modes.rego": example };
     policies.forget("org/repo");

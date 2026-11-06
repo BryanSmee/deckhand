@@ -1599,8 +1599,8 @@ test(
   },
 );
 
-test("docs/repo-config.md's machines.rego rule is policy/machines.rego's", () => {
-  const docs = readFileSync(new URL("../docs/repo-config.md", import.meta.url), "utf8");
+test("docs/repo-config/policies.md's machines.rego rule is policy/machines.rego's", () => {
+  const docs = readFileSync(new URL("../docs/repo-config/policies.md", import.meta.url), "utf8");
   const from = docs.indexOf("#### machines.rego");
   const [, excerpt] = /```rego\n([\s\S]*?)```/.exec(docs.slice(from));
   const rule = excerpt.replace(/^# policy\/machines\.rego.*\n/, "");

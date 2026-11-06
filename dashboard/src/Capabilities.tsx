@@ -11,7 +11,8 @@ import { Alert, ChevronRight, Warning } from "./ui/icons";
 import { StatusBadge } from "./ui/Status";
 import styles from "./Capabilities.module.css";
 
-const DOCS = "https://github.com/BryanSmee/deckhand/blob/main/docs/repo-config.md#capabilities";
+const DOCS =
+  "https://github.com/BryanSmee/deckhand/blob/main/docs/repo-config/policies.md#capabilities";
 
 // What a capability's status says, as its row in a mode's details shows it (a key, written
 // when shown).

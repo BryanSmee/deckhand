@@ -543,7 +543,7 @@ test(
     await broad.reviews.consider("pull_request", dependabot);
     assert.equal(broad.accepted.length, 1);
     assert.equal(broad.accepted[0].author, undefined);
-    // The docs' examples (docs/repo-config.md#reviewrego): Dependabot's only, then every bot's,
+    // The docs' examples (docs/repo-config/policies.md#reviewrego): Dependabot's only, then every bot's,
     // neither warned of by the config check.
     const [, dependabotOnly, everyBot] = docsReviewBlocks();
     const renovate = delivery("ready_for_review", {}, "renovate[bot]");
@@ -564,16 +564,16 @@ test(
   },
 );
 
-// docs/repo-config.md's ```rego blocks under its review.rego marker, their text.
+// docs/repo-config/policies.md's ```rego blocks under its review.rego marker, their text.
 function docsReviewBlocks() {
-  const docs = readFileSync(new URL("../docs/repo-config.md", import.meta.url), "utf8");
+  const docs = readFileSync(new URL("../docs/repo-config/policies.md", import.meta.url), "utf8");
   const from = docs.indexOf("<!-- review.rego:");
   const until = docs.indexOf("**Upgrading with a `review.rego`", from);
   assert.ok(from > 0 && until > from);
   return [...docs.slice(from, until).matchAll(/```rego\n([\s\S]*?)```/g)].map((m) => m[1]);
 }
 
-test("docs/repo-config.md's review.rego rule is policy/review.rego's", () => {
+test("docs/repo-config/policies.md's review.rego rule is policy/review.rego's", () => {
   const [excerpt] = docsReviewBlocks();
   const rule = excerpt.replace(/^# policy\/review\.rego.*\n/, "");
   assert.ok(rule.startsWith("deny_review contains"));

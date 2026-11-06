@@ -471,10 +471,10 @@ test("access: a failure isn't kept", async (t) => {
 });
 
 test(
-  "the real opa: docs/repo-config.md's bindings give what its roles' table says",
+  "the real opa: docs/repo-config/policies.md's bindings give what its roles' table says",
   { skip: noOpa },
   async (t) => {
-    const text = docsBlock("repo-config.md", "access.rego");
+    const text = docsBlock("repo-config/policies.md", "access.rego");
     const { policies } = realAccess(t, { operator: { "access.rego": text } });
     const actions = async (login, where) => (await policies.access(login, where)).actions;
     assert.deepEqual(await actions("alice", repo("acme/docs")), ["tasks:read"]);
@@ -519,10 +519,10 @@ test(
 );
 
 test(
-  "the real opa: docs/repo-config.md's repository deny_access narrows what Deckhand's default gives",
+  "the real opa: docs/repo-config/policies.md's repository deny_access narrows what Deckhand's default gives",
   { skip: noOpa },
   async (t) => {
-    const text = docsBlock("repo-config.md", "repository deny_access");
+    const text = docsBlock("repo-config/policies.md", "repository deny_access");
     const repos = { "acme/api": { policies: { "access.rego": text } } };
     const { policies } = realAccess(t, { repos });
     assert.ok(await policies.can("alice", repo("acme/api"), "runs:start:work"));

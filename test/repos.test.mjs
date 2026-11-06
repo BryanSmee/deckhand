@@ -1102,7 +1102,7 @@ test("auto-merge: the row's badge and the config's warnings follow the grant and
     /is public.*grant it `auto_merge`, not `auto_merge_public`/,
   );
   assert.deepEqual(await warnings("org/hook"), [
-    "preview: removed, ignored (a GitHub webhook does this now, see docs/repo-config.md)",
+    "preview: removed, ignored (a GitHub webhook does this now, see docs/repo-config/issues.md)",
   ]);
   // The parse's own warning, once.
   assert.deepEqual(await warnings("org/manual"), [

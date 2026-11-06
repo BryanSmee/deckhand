@@ -100,7 +100,7 @@ export function createLinkedBranches({ github, graphql, policies, runOf, decided
     }
   }
 
-  // `deny_link_branch`'s messages (docs/repo-config.md#the-linked-branch-input), the decision
+  // `deny_link_branch`'s messages (docs/repo-config/policy-inputs.md#the-linked-branch-input), the decision
   // kept for the task's page when a policy was asked. [] without policies.
   async function deny(task, run, { issue, name, oid }) {
     if (!policies) return [];

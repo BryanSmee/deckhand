@@ -83,7 +83,7 @@ export function openerOf(runs, key, pr) {
   );
 }
 
-// The input of `deny_request_review` (docs/repo-config.md#the-reviewers-input): the pull
+// The input of `deny_request_review` (docs/repo-config/policy-inputs.md#the-reviewers-input): the pull
 // request's (pullInput(), no review), the `reviewers` to request, `when` ("ready": it turned
 // ready; "fix": a run pushed to it since), and the run's fields (runFields()).
 export function requestInput({

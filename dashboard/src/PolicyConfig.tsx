@@ -20,13 +20,13 @@ import styles from "./PolicyConfig.module.css";
 const COMMAND = "Deckhand /mode policy";
 // What allow_github and deny_github read, field by field.
 const GITHUB_INPUT =
-  "https://github.com/BryanSmee/deckhand/blob/main/docs/repo-config.md#the-github-input";
+  "https://github.com/BryanSmee/deckhand/blob/main/docs/repo-config/policy-inputs.md#the-github-input";
 // What deny_push reads.
 const PUSH_INPUT =
-  "https://github.com/BryanSmee/deckhand/blob/main/docs/repo-config.md#the-push-input";
+  "https://github.com/BryanSmee/deckhand/blob/main/docs/repo-config/policy-inputs.md#the-push-input";
 // What deny_run reads.
 const RUN_INPUT =
-  "https://github.com/BryanSmee/deckhand/blob/main/docs/repo-config.md#the-run-input";
+  "https://github.com/BryanSmee/deckhand/blob/main/docs/repo-config/policy-inputs.md#the-run-input";
 
 // The layer a file is evaluated in: Deckhand's and the operator's together, the repo's apart.
 const layerOf = (f: PolicyFile) => (f.source === "repo" ? "repo" : "operator");

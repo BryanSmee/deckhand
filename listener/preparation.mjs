@@ -176,7 +176,7 @@ export function createPreparation(ctx) {
     for (const warning of outcome.warnings) note(`Capabilities: ${warning}`);
     if (outcome.errors.length) {
       throw new RunError(
-        `${cantRun(agent)}: the capabilities its policies give a \`${live.mode}\` run don't hold.\n\n${outcome.errors.map((e) => `- ${e}`).join("\n")}\n\nThe repository's config page on the dashboard shows what each mode gets, and the file that decided it (see Deckhand's docs/repo-config.md#capabilities).`,
+        `${cantRun(agent)}: the capabilities its policies give a \`${live.mode}\` run don't hold.\n\n${outcome.errors.map((e) => `- ${e}`).join("\n")}\n\nThe repository's config page on the dashboard shows what each mode gets, and the file that decided it (see Deckhand's docs/repo-config/policies.md#capabilities).`,
       );
     }
     let used = outcome.used;

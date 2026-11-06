@@ -72,7 +72,7 @@ that file asks for, so none can:
   output as `[remote rejected] … (Deckhand: …)`.
 
   Past these checks, each branch a push updates is a `push` decision of the
-  [policies](#policies) (`allow_push`, `deny_push`: [the push input](repo-config.md#the-push-input)):
+  [policies](#policies) (`allow_push`, `deny_push`: [the push input](repo-config/policy-inputs.md#the-push-input)):
   one refused refuses the whole push. Deckhand's default, `policy/mode-work.rego`, allows work
   runs' pushes and those of a repository's own modes (which need the repository's `allow_push`
   too); without policies, every push is refused. A policy can only
@@ -307,7 +307,7 @@ changes: your workflows are yours to set up. On each repository the App is insta
   with required reviewers, or limit those workflows to the default branch (with the
   `workflows` grant, the gateway refuses the workflows a run writes that name one, above);
 - treat pull requests from the App's bot (`<app>[bot]`) like an outsider's in workflows
-  and in your own webhooks ([preview deployments](repo-config.md#preview-deployments)): they
+  and in your own webhooks ([preview deployments](repo-config/issues.md#preview-deployments)): they
   are same-repository and look trusted, but their code comes from a sandbox.
 - the same goes for `pull_request_target` and `workflow_run` workflows that check out a
   pull request's head: they run it with the default branch's secrets and a token that may
@@ -456,7 +456,7 @@ can read.
   reads the repository's metadata. A run without `pull` gets nothing from GitHub at all. It
   can't push (pushes go through the git gateway, with the run token). The organization's
   projects only for a run the policies allow `read_projects`, in a repository granted one
-  ([Projects](repo-config.md#projects)).
+  ([Projects](repo-config/issues.md#projects)).
 - **A token per write.** Each write the gateway checked and the policies allowed gets a token
   of its own, minted for that call, with the run's reads and only the write permission it
   needs (`listener/github-writes.mjs` `writePermissions()`): `issues: write` for an issue's (a
@@ -1075,12 +1075,12 @@ to GitHub: the proxy never tunnels those hosts for it, and its plain HTTP to the
     items it can see, which GitHub redacts for repositories the token doesn't cover). Setting
     an item's fields, removing or archiving it, and the project's settings, fields and views
     are refused: the orchestrator moves the repository's issues itself, from its
-    `projects:` ([Projects](repo-config.md#projects)), on granted projects only;
+    `projects:` ([Projects](repo-config/issues.md#projects)), on granted projects only;
   - then the policies' **`allow_github` and `deny_github`** ([Policies](#policies)): the write
     goes on when an allow rule of the operator's matches it (the repository's too for its own
     modes) and no deny rule does. No rule, no write; no policies, every write refused.
     Deckhand's defaults hold what each mode writes, one file per mode
-    ([the default policies](repo-config.md#the-default-policies), [the table](repo-config.md#the-github-input)):
+    ([the default policies](repo-config/policies.md#the-default-policies), [the table](repo-config/policy-inputs.md#the-github-input)):
     a work run (`policy/mode-work.rego`) writes its own issue, its pull requests (readying,
     drafting them and updating their branch with a merge too), its issue's sub-issues and the
     issues it created (their labels, reactions, projects and milestones too), replies to,
@@ -1112,7 +1112,7 @@ to GitHub: the proxy never tunnels those hosts for it, and its plain HTTP to the
   refuses it or it never goes out, and counted from GitHub's answer (or from none at all: a
   call whose answer was lost may have gone out, so it counts, fail closed), with the run and commit its check
   resolved, never looked up again, and saved with the run across a restart), and Deckhand's
-  default policy (`policy/mode-work.rego`) denies all but a first rerun of each workflow run ([repository config](repo-config.md#reruns)). Its token gets `actions: write` for that
+  default policy (`policy/mode-work.rego`) denies all but a first rerun of each workflow run ([repository config](repo-config/policy-inputs.md#reruns)). Its token gets `actions: write` for that
   one call; the sandbox's own only reads Actions.
 
   A refusal (a look-up GitHub fails: `502`, fail closed) answers in GitHub's error shape
@@ -1165,7 +1165,7 @@ to GitHub: the proxy never tunnels those hosts for it, and its plain HTTP to the
   but for what an external service chose to publish there. Neither permission writes: the
   routes that create or rerun a check are writes Deckhand doesn't classify, so refused. Each
   such read is first held to `allow_github` and `deny_github`, with `action: "read_checks"`
-  and no target ([Reading CI's checks](repo-config.md#reading-cis-checks); Deckhand's
+  and no target ([Reading CI's checks](repo-config/policy-inputs.md#reading-cis-checks); Deckhand's
   `policy/gh-checks.rego` allows it in every mode), once per run, the answer kept: its
   input depends on the run only, and `gh pr checks --watch` polls. A refusal refuses the
   call, `gh pr view` without `--json` included. It hides the checks, not whether CI passes:
@@ -1878,7 +1878,7 @@ hosts: ["*.acme.dev", pypi.org]
 # egress cache below), besides default.yaml's.
 cached_hosts: [apt.acme.dev]
 # Organization projects (v2), <organization>/<number>, its runs add their issues and pull
-# requests to, and the orchestrator moves its issues on (see Projects in repo-config.md). Needs the
+# requests to, and the orchestrator moves its issues on (see Projects in repo-config/issues.md). Needs the
 # App's Organization projects permission. Per repository only.
 allow_projects: [acme/3]
 # Its own limits; missing ones keep default.yaml's, else the built-in 2 CPUs, 4g, 2048.
@@ -2103,7 +2103,7 @@ it couldn't see of a label:
 ## Access
 
 Who may do what on which repository (#725), among the people Deckhand lets in at all. Three
-gates, each narrowing the one before ([Access](repo-config.md#access) for the rules, the
+gates, each narrowing the one before ([Access](repo-config/policies.md#access) for the rules, the
 actions and the roles):
 
 - **`ALLOWED_USERS`, the outer gate**: who signs in to the dashboard, whose MCP clients get a
@@ -2516,7 +2516,7 @@ starts runs, so it is checked as a comment that waited is (`tasks.resume()`), at
 - the user in both `ALLOWED_USERS` and the repository's own `users`, with the route's
   [action](#access) there: `runs:start:<mode>` for what it starts, `runs:manage` for what it
   moves or stops (its mode's start too when that starts a run), each checked before anything
-  is posted ([Access](repo-config.md#access) lists each route's);
+  is posted ([Access](repo-config/policies.md#access) lists each route's);
 - an open issue, not a pull request, with no run going or queued (a running issue doesn't
   move), and no wait that would loop back to it.
 
@@ -2871,7 +2871,7 @@ contributors whose threads you don't watch.
 ### Review follow-ups
 
 A review's follow-ups (problems it found outside the pull request's scope,
-[Reviews](repo-config.md#reviews)) are filed as issues by the orchestrator, with the App's
+[Reviews](repo-config/reviews.md#reviews)) are filed as issues by the orchestrator, with the App's
 token, once the pull request is merged: no sandbox writes them, and the review's token still
 only reads. Their titles and text are the review's, a model's output that read the diff and
 the thread, so they are posted as data, the same text the review already showed on the pull
@@ -2931,7 +2931,7 @@ With the `auto_merge` [grant](#the-grants) for a repository and `review.merge: t
 `.deckhand.yaml`, the orchestrator merges Deckhand's own pull requests after a review with nothing
 blocking (and, after a fix run, one more review of what it pushed), with the App's token
 (`PUT /pulls/{n}/merge`, the App's `contents` and `pull_requests: write`). The flow and its
-gates are in [Auto-merge](repo-config.md#auto-merge).
+gates are in [Auto-merge](repo-config/reviews.md#auto-merge).
 
 **What it gives up**: the maintainer who reads a pull request before it reaches the default
 branch, the last check of everything above. With it on:
@@ -2981,7 +2981,7 @@ trusted, and whose default branch deploys nothing you couldn't roll back.
 
 ## Policies
 
-[Policies](repo-config.md#policies) are Rego rules that allow and refuse a decision: `run`, a
+[Policies](repo-config/policies.md#policies) are Rego rules that allow and refuse a decision: `run`, a
 run a person asks for (a comment, the dashboard, an inbox entry, a discussion), before it is
 queued; `merge`, the last gate of an auto-merge; `review`, a review that starts by itself; `fix`, a review's fix
 run, a CI fix run or a conflict's rebase run; `link_branch`, the branch the orchestrator links to a
@@ -3001,7 +3001,7 @@ query of one `opa` (as before allow rules: a built-in mode pays nothing extra), 
 namespace of its own:
 
 - **The operator's**: Deckhand ships its own in the policy service's image
-  ([the default policies](repo-config.md#the-default-policies): `allow.rego`, which allows the
+  ([the default policies](repo-config/policies.md#the-default-policies): `allow.rego`, which allows the
   orchestrator's own decisions (`merge`, `review`, `fix`, `link_branch`, `request_review`),
   `run.rego`, which allows each mode where it makes sense (brainstorms and onboarding on issues
   only), a `mode-<mode>.rego` per mode for what its runs get, write and push
@@ -3117,7 +3117,7 @@ namespace of its own:
 ## Capabilities
 
 What a run's sandbox gets is decided once, as it starts, by the policies
-([Per-repo config](repo-config.md#capabilities)): `allow_capabilities` gives names,
+([Per-repo config](repo-config/policies.md#capabilities)): `allow_capabilities` gives names,
 `deny_capabilities` refuses them with a reason, in the two layers above (a deny always wins; a
 repository's allow rules count only for its own `modes:`, which need yours too). The outcome
 goes in the run's log, in its saved state and in its tokens' `caps` claim; the dashboard's
@@ -3322,7 +3322,7 @@ through the models service, and to whatever host its profile lets its sandbox re
 
 ## Research runs
 
-A run in the research mode (`/mode research`, [Per-repo config](repo-config.md#research))
+A run in the research mode (`/mode research`, [Per-repo config](repo-config/modes.md#research))
 reaches the open internet, which no other run does: the only other way is `hosts: ["*"]` in
 a repository's grants file, which opens it for every run of that repository, next to its
 code and a token. A research run is one prompt-injected page away from sending whatever it

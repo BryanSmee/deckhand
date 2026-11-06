@@ -20,6 +20,7 @@ COPY listener/agents/ listener/agents/
 COPY prompts/brainstorm.md prompts/idea.md prompts/bug.md prompts/discussion.md prompts/onboarding.md prompts/analyze.md prompts/research.md prompts/review.md prompts/chat.md prompts/
 # The onboarding prompt ends with the config's reference.
 COPY docs/repo-config.md docs/
+COPY docs/repo-config/ docs/repo-config/
 ENV NODE_ENV=production
 # The release it is (a git tag, .github/workflows/release.yml); "dev" when built from source.
 ARG DECKHAND_VERSION=dev
