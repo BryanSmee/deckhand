@@ -28,6 +28,7 @@ import {
   sameRepo,
 } from "./events.mjs";
 import { respellMap, sameTask } from "./spelling.mjs";
+import { mapLimited } from "../lib/pool.mjs";
 
 const open = (pr) => pr?.state === "draft" || pr?.state === "ready";
 // How many open pull requests' CI resync() reads at once (three GitHub calls each).
@@ -323,13 +324,10 @@ export function createPulls({
   let catching = Promise.resolve();
   function catchUp(keys) {
     const queue = [...keys];
-    const worker = async () => {
-      while (queue.length) {
-        const key = queue.shift();
-        await readCiOf(key).catch((error) => log(`${key}: CI: ${error.message ?? error}`));
-      }
-    };
-    const run = () => Promise.all(Array.from({ length: CI_AT_ONCE }, worker));
+    const run = () =>
+      mapLimited(queue, CI_AT_ONCE, (key) =>
+        readCiOf(key).catch((error) => log(`${key}: CI: ${error.message ?? error}`)),
+      );
     catching = catching.then(run, run);
     return catching;
   }
@@ -444,16 +442,8 @@ export function createPulls({
   // The open pull requests of `keys` read, MERGE_AT_ONCE at a time, whether each conflicts
   // recorded. Resolves to the keys GitHub hadn't computed it for yet; never throws.
   async function readMerge(keys) {
-    const pending = [];
-    const queue = [...keys];
-    const worker = async () => {
-      while (queue.length) {
-        const key = queue.shift();
-        if (await readOneMerge(key)) pending.push(key);
-      }
-    };
-    await Promise.all(Array.from({ length: MERGE_AT_ONCE }, worker));
-    return pending;
+    const pending = await mapLimited(keys, MERGE_AT_ONCE, readOneMerge);
+    return keys.filter((_, i) => pending[i]);
   }
 
   // Task `key`'s pull request read and whether it conflicts recorded, if it is still open.
