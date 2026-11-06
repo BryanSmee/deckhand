@@ -370,6 +370,87 @@ test("stream: an error reading the log ends that stream only", { timeout: 5000 }
   assert.equal(errors.length, 1);
 });
 
+// #923: a stream that dropped goes on where it left off, from the id of the last event the
+// browser read (Last-Event-ID), with nothing sent twice or lost: a line split between two reads
+// (a character too) is sent once whole, and the lines before the id still set the reader's
+// state (here the image phase, whose build step's output reads as that step's).
+test("stream: a reconnect resumes from Last-Event-ID", { timeout: 5000 }, async () => {
+  const log = Buffer.from(
+    [
+      phase("image", 1),
+      "#1 [a 1/1] RUN make",
+      "#1 0.1 première",
+      "#1 0.2 seconde",
+      "#1 DONE 0.5s",
+      phase("work", 2),
+      "",
+    ].join("\n"),
+  );
+  // The log is read a few bytes at a time, cut in the middle of "è" and of lines.
+  const split = log.indexOf("è") + 1;
+  const pieces = [10, split, split + 7, log.length];
+  const read = async (offset) => {
+    const to = pieces.find((p) => p > offset) ?? log.length;
+    return { data: log.subarray(offset, to) };
+  };
+  const events = async (headers, drop) => {
+    const req = new EventEmitter();
+    req.headers = headers;
+    let ended;
+    const done = new Promise((resolve) => (ended = resolve));
+    const written = [];
+    const res = {
+      writeHead() {},
+      write: (w) => {
+        written.push(w);
+        // The connection drops after the first entries.
+        if (drop && w.startsWith("event: entries")) req.emit("close");
+      },
+      end: ended,
+    };
+    stream(req, res, { status: "ok", agent: "claude" }, { read, every: 20 });
+    await done;
+    return written
+      .filter((w) => w.startsWith("event: "))
+      .map((w) => ({
+        event: /^event: (\w+)/.exec(w)[1],
+        id: /\nid: (\d+)/.exec(w)?.[1],
+        data: JSON.parse(w.split("data: ")[1]),
+      }));
+  };
+  const whole = (await events({}, false)).filter((e) => e.event === "entries");
+  const first = await events({}, true);
+  assert.equal(first.length, 1);
+  assert.equal(first[0].event, "entries");
+  const lastId = first[0].id;
+  assert.ok(Number(lastId) > 0 && Number(lastId) < log.length);
+  // Its id is a line's end.
+  assert.equal(log[Number(lastId) - 1], 10);
+  const after = await events({ "last-event-id": lastId }, false);
+  assert.equal(after.at(-1).event, "end");
+  const shown = (list) =>
+    list
+      .filter((e) => e.event === "entries")
+      .flatMap((e) => e.data.map((x) => [x.kind, x.phase ?? x.status ?? x.text, x.step]));
+  assert.deepEqual([...shown(first), ...shown(after)], shown(whole));
+  assert.deepEqual(
+    shown(whole).map(([kind, text]) => [kind, text]),
+    [
+      ["phase", "image"],
+      ["step", "running"],
+      ["raw", "première"],
+      ["raw", "seconde"],
+      ["step", "done"],
+      ["phase", "work"],
+    ],
+  );
+  // Each later event's id is past the one before.
+  const ids = after.filter((e) => e.id).map((e) => Number(e.id));
+  assert.ok(ids.length && ids.every((id, i) => id > (i ? ids[i - 1] : Number(lastId))));
+  // An id that isn't an offset starts from the beginning.
+  assert.deepEqual(shown(await events({ "last-event-id": "x" }, false)), shown(whole));
+});
+
 test("log: a cancelled run's log says who", () => {
   const cancelled = {
     type: "listener",

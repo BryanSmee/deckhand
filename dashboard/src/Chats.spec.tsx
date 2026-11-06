@@ -371,6 +371,55 @@ test("the agent's answers render as Markdown; your messages stay as typed", asyn
   expect(within(log).getByText("run();").closest("pre")).toBeTruthy();
 });
 
+// #923: a log stream that drops reconnects on its own. With the stream's ids, what it sends again
+// (a stream that started over) is dropped; without them, the log it sends from the start
+// replaces the one shown. Each message shows once either way.
+test("a log stream that reconnects shows each message once", async () => {
+  history.replaceState(null, "", "#/chats/0123456789abcdef");
+  show(makeChats([makeChat({ status: "idle", runs: [chatRun()] })]));
+  await waitFor(() => expect(FakeSource.opened.length).toBe(1));
+  const source = FakeSource.opened[0];
+  const first = [
+    { kind: "phase", phase: "work", at: 1_000 },
+    { kind: "message", text: "What does run() do?" },
+  ] satisfies Entry[];
+  const second = [{ kind: "text", text: "It starts a run." }] satisfies Entry[];
+  source.open();
+  source.emit("entries", first, 120);
+  source.emit("entries", second, 180);
+  const log = screen.getByRole("log", { name: "Conversation" });
+  expect(await within(log).findByText("It starts a run.")).toBeTruthy();
+  // Dropped, then open again: the same events come back, then a new one.
+  source.open();
+  source.emit("entries", first, 120);
+  source.emit("entries", second, 180);
+  source.emit("entries", [{ kind: "message", text: "And follow()?" }] satisfies Entry[], 240);
+  expect(await within(log).findByText("And follow()?")).toBeTruthy();
+  expect(within(log).getAllByText("What does run() do?").length).toBe(1);
+  expect(within(log).getAllByText("It starts a run.").length).toBe(1);
+});
+
+test("a log stream without ids that reconnects starts its log over", async () => {
+  history.replaceState(null, "", "#/chats/0123456789abcdef");
+  show(makeChats([makeChat({ status: "idle", runs: [chatRun()] })]));
+  await waitFor(() => expect(FakeSource.opened.length).toBe(1));
+  const source = FakeSource.opened[0];
+  const log = [
+    { kind: "phase", phase: "work", at: 1_000 },
+    { kind: "message", text: "What does run() do?" },
+    { kind: "text", text: "It starts a run." },
+  ] satisfies Entry[];
+  source.open();
+  source.emit("entries", log);
+  const shown = screen.getByRole("log", { name: "Conversation" });
+  expect(await within(shown).findByText("It starts a run.")).toBeTruthy();
+  source.open();
+  source.emit("entries", [...log, { kind: "message", text: "And follow()?" }] satisfies Entry[]);
+  expect(await within(shown).findByText("And follow()?")).toBeTruthy();
+  expect(within(shown).getAllByText("What does run() do?").length).toBe(1);
+  expect(within(shown).getAllByText("It starts a run.").length).toBe(1);
+});
+
 test("sending: Enter sends, Shift Enter doesn't; a message queued while the sandbox resumes stays shown", async () => {
   history.replaceState(null, "", "#/chats/0123456789abcdef");
   const list = makeChats([makeChat()]);

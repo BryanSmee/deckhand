@@ -633,6 +633,14 @@ before their run (logs from before #719) get none. A page of `get_run_log` from 
 log reads again the lines before it from the agent's last one (`mcp.mjs` `linesBack()`), so it
 reads as the whole log does there. `dashboard/src/types.ts` `Entry` is the contract.
 
+Each `entries` event has an `id:`, the byte offset of the last whole line it read (#923): a
+browser whose connection dropped (a phone in the background, a proxy's idle timeout, a
+handover) reconnects with it as `Last-Event-ID`, which edge passes on, and the stream goes on
+from there. The lines before it are read again but not sent, so the reader's state (the phase,
+the build steps, the times) is what it was. The dashboard (`api.ts` `followLog()`) drops an
+event whose id it has read already, and replaces the log it shows when a stream without ids
+opens again.
+
 ### Hot and cold
 
 The runner and the broker keep blobs in two places (#604). **Hot**, their store (`STORE_URL`, file
