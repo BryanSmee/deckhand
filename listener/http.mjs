@@ -36,6 +36,7 @@ import { repoAllowed } from "./config.mjs";
 import { createMcp } from "./mcp.mjs";
 import { apiRoute, needs, undecided } from "./web.mjs";
 import { createPermissions, refusal } from "./permissions.mjs";
+import { keepLast } from "../lib/capped.mjs";
 
 // The action that shows a repo's tasks (permissions.mjs).
 const TASKS = "tasks:read";
@@ -44,6 +45,12 @@ const HIDDEN = "a hidden issue";
 
 // The dashboard's Sync asks GitHub at most this often: each one lists the App's deliveries.
 const SYNC_MS = 30_000;
+
+// GET /api/review's reads of GitHub (#911): each costs a pull request, its reviews, a config and
+// an issue per follow-up, from the installation's rate limit, and each open Review tab may ask
+// again. One read per pull request at a time, kept this long once done, for so many of them.
+const REVIEW_MS = 5_000;
+const REVIEWS_KEPT = 200;
 
 // The graph's arrows, blocker → waiting task, for the waits of the tasks `shown`, and the keys
 // of the blockers that aren't shown. A wait names numbers: a pull request on the board is
@@ -396,6 +403,31 @@ export function createHttp(ctx) {
     log,
   });
 
+  // The reads of api/review (#911), by pull request: { version, read, at } (at: null until done).
+  const reviewReads = new Map();
+
+  // reviews.findings() of pull request `number` of `repo`, shared by the requests asking at once
+  // and kept REVIEW_MS once done, while its review entry (`version`: a new round, its merge seen,
+  // its follow-ups filed, what the Review tab reads again on) stays the same. A failed read
+  // isn't kept: the next request asks again. Asked once `user` may see the repo's tasks.
+  function readReview(repo, number) {
+    const now = ctx.now ?? Date.now;
+    const key = `${repo.toLowerCase()}#${number}`;
+    const version = JSON.stringify(ctx.reviews.entry?.(repo, number) ?? null);
+    const kept = reviewReads.get(key);
+    if (kept?.version === version && (kept.at === null || now() - kept.at < REVIEW_MS)) {
+      return kept.read;
+    }
+    const read = ctx.reviews.findings(repo, number);
+    const entry = { version, read, at: null };
+    keepLast(reviewReads, key, entry, REVIEWS_KEPT);
+    read.then(
+      () => (entry.at = now()),
+      () => reviewReads.get(key) === entry && reviewReads.delete(key),
+    );
+    return read;
+  }
+
   // GET /api/review?repo=<owner/repo>&number=<pr>: the last review the App posted on that pull
   // request, its findings read from GitHub now (reviews.mjs findings()), for the task page's
   // Review tab. As a run's log: 404 for a repo `user` may not see the tasks of, as for a pull
@@ -411,7 +443,7 @@ export function createHttp(ctx) {
     if (!(await seeing(user, [repo], TASKS))(repo)) return none();
     let found;
     try {
-      found = await ctx.reviews.findings(repo, number);
+      found = await readReview(repo, number);
     } catch (error) {
       log(`api/review ${repo}#${number}: ${error.message ?? error}`);
       return sendJson(res, { error: "GitHub couldn't be read: try again." }, 502);

@@ -547,6 +547,65 @@ test("api/review (#625): the last review's findings for a repo the login sees, 4
   assert.doesNotMatch(await state.text(), /a hole/);
 });
 
+test("api/review (#911): one GitHub read per pull request at a time, kept 5 s while its review entry stays", async (t) => {
+  let clock = 0;
+  let asked = 0;
+  let failing = false;
+  let release;
+  let held = null;
+  let entry = { rounds: [{ round: 1, head: "a" }] };
+  const ctx = oneRun({
+    config: { maxParallel: 3, users: ["alice", "bob"], repos: ["org/repo"] },
+    permissions: permissionsOf({ alice: { "org/repo": VIEWER }, bob: { "org/repo": VIEWER } }),
+    now: () => clock,
+    reviews: {
+      entry: () => entry,
+      findings: async (repo, number) => {
+        asked++;
+        if (held) await held;
+        if (failing) throw new Error("GitHub GET: 502");
+        return { verdict: "comment", number, read: asked };
+      },
+    },
+  });
+  const url = await serveHttp(t, ctx);
+  const get = async (user = "alice", number = 3) => {
+    const res = await fetch(`${url}/api/review?repo=org/repo&number=${number}`, {
+      headers: { "x-user": user },
+    });
+    return { status: res.status, body: await res.json() };
+  };
+  // Two tabs at once, two logins: one read between them.
+  held = new Promise((resolve) => (release = resolve));
+  const both = Promise.all([get("alice"), get("bob")]);
+  while (asked === 0) await new Promise((resolve) => setTimeout(resolve, 5));
+  release();
+  held = null;
+  const [first, second] = await both;
+  assert.equal(asked, 1);
+  assert.deepEqual(first, second);
+  assert.equal(first.body.read, 1);
+  // Asked again within 5 s: the same answer, no read; another pull request reads its own.
+  clock = 4_999;
+  assert.equal((await get()).body.read, 1);
+  assert.equal((await get("alice", 4)).body.read, 2);
+  // Past 5 s: read again.
+  clock = 10_000;
+  assert.equal((await get()).body.read, 3);
+  // Its entry changed (a new round): read again at once, as the tab does.
+  entry = { rounds: [...entry.rounds, { round: 2, head: "b" }] };
+  assert.equal((await get()).body.read, 4);
+  assert.equal((await get()).body.read, 4);
+  // A failed read isn't kept: the next request asks GitHub again.
+  clock = 20_000;
+  failing = true;
+  assert.equal((await get()).status, 502);
+  assert.equal((await get()).status, 502);
+  assert.equal(asked, 6);
+  failing = false;
+  assert.equal((await get()).body.read, 7);
+});
+
 test("a machine run's tool requests (#600): in api/state on its task, answered by POST from this dashboard", async (t) => {
   const asked = [];
   const waiting = [
