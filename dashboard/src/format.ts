@@ -407,10 +407,6 @@ export const isPrTask = (t: Pick<Task, "key" | "number">) =>
 // "app" for "org/app".
 export const shortRepo = (repo: string) => repo.slice(repo.indexOf("/") + 1);
 
-// "1 run", "3 runs"; `many` when adding an s won't do ("replies"). English only: what still
-// calls it moves to t() (i18n.ts), whose catalogs have each language's plurals.
-export const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
-
 // The top bar's run count: "2 of 3 running". Auto-pickup's share is reservedText()'s.
 export function runningText({
   running,
