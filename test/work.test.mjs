@@ -3052,14 +3052,14 @@ test("access: a comment queued while moving a task is decided is decided in turn
 
 // --- The MCP tools' way in (mcp.mjs, #483) -----------------------------------------------
 
-test("MCP: schedule starts, queues, plans, dequeues and cancels as the dashboard does, logged as MCP", async () => {
+test("MCP: schedule starts, queues, plans, dequeues and cancels as the dashboard does, logged as MCP, its App comments from an MCP client (#907)", async () => {
   const w = setup({
     issues: { ...epic(), 5: open("Five"), 6: open("Six"), 7: open("Seven") },
     cancels: { "org/app#5": "running" },
   });
   const { schedule } = w.api.mcp;
   assert.equal(await schedule("alice", "org/app", { action: "start", number: 5 }), "#5 started.");
-  assert.deepEqual(w.comments.at(-1), [5, "Started from the dashboard by @alice."]);
+  assert.deepEqual(w.comments.at(-1), [5, "Started from an MCP client by @alice."]);
   assert.equal(w.accepted.at(-1).number, 5);
   assert.ok(w.logs.includes("Work area: alice asks start org/app#5 (MCP)"));
   assert.equal(
@@ -3068,19 +3068,24 @@ test("MCP: schedule starts, queues, plans, dequeues and cancels as the dashboard
   );
   assert.deepEqual(w.waits.get("org/app#6").blockers, [7]);
   assert.ok(w.logs.includes("Work area: alice asks queue org/app#6 after #7 (MCP)"));
+  assert.match(w.comments.at(-1)[1], /^Queued from an MCP client by @alice, after #7\./);
   assert.equal(
     await schedule("alice", "org/app", { action: "dequeue", number: 6 }),
     "#6 no longer waits.",
   );
   assert.equal(w.waits.get("org/app#6"), undefined);
-  assert.match(w.comments.at(-1)[1], /^No longer waiting for #7: cancelled from the dashboard/);
+  assert.match(w.comments.at(-1)[1], /^No longer waiting for #7: cancelled from an MCP client/);
   assert.match(
     await schedule("alice", "org/app", { action: "plan", number: 10 }),
     /^#10 laid out: #12 and #13 start/,
   );
+  // Each issue of the tree says it too.
+  const laid = w.comments.filter(([n]) => [10, 12, 13].includes(n));
+  assert.ok(laid.length >= 3);
+  assert.ok(laid.every(([, text]) => /^(Started|Queued) from an MCP client by @alice/.test(text)));
   assert.equal(await schedule("alice", "org/app", { action: "cancel", number: 5 }), "#5 stops.");
   assert.deepEqual(w.cancelled, [["org/app#5", "alice"]]);
-  assert.deepEqual(w.comments.at(-1), [5, "Stopped from the dashboard by @alice."]);
+  assert.deepEqual(w.comments.at(-1), [5, "Stopped from an MCP client by @alice."]);
 });
 
 test("MCP: schedule refused as the dashboard's route: hidden repos, actions, its body's checks", async () => {
@@ -3139,7 +3144,7 @@ test("MCP: rerun by a run's id alone, refused as the dashboard's; a run the logi
   delete w.runs["run-5"].owner;
   assert.deepEqual([w.comments, w.accepted], [[], []]);
   assert.equal(await again("alice", "run-5"), "Rerun of #5 queued.");
-  assert.deepEqual(w.comments, [[5, "Rerun from the dashboard by @alice: its last run failed."]]);
+  assert.deepEqual(w.comments, [[5, "Rerun from an MCP client by @alice: its last run failed."]]);
   assert.ok(w.logs.includes("Work area: alice reruns org/app run-5 (MCP)"));
   // Not rerunnable (it ran again: something is queued now).
   const busy = setup({ issues: { 5: open("Five") }, ...failed("org/app#5"), busy: ["org/app#5"] });

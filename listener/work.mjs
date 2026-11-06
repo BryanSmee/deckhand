@@ -112,6 +112,10 @@ const MAX_ANSWER_BODY = 4 * MAX_TEXT;
 const ACTIONS = ["start", "queue", "plan", "dequeue", "stop", "cancel"];
 // The log lines' mark for what an MCP client asked (mcp.mjs).
 const MCP = " (MCP)";
+// Where a request came from, in the App's comments on GitHub: the dashboard's or an MCP
+// client's, so that the issue's readers tell one from the other.
+const DASHBOARD = "from the dashboard";
+const FROM_MCP = "from an MCP client";
 // What the routes need (permissions.mjs), checked before their handler; `work` and `inbox` check
 // the mode they start (`runs:start:<mode>`), or `runs:manage` to cancel or dequeue.
 const MANAGE = "runs:manage";
@@ -499,7 +503,10 @@ export function createWorkApi({
   // (run-policy.mjs: `refused`, their reply posted), the App's comment `user` posted for it
   // (item.comment) is edited to say nothing started, keeping what else it said (`also`: the
   // answers typed in the drag's form, which nothing ran with), and the wait stays.
-  async function started(item, { key = null, why = null, user = null, also = "" } = {}) {
+  async function started(
+    item,
+    { key = null, why = null, user = null, also = "", from = DASHBOARD } = {},
+  ) {
     const held = key ? waits.reserve(key) : null;
     let mode = null;
     try {
@@ -510,7 +517,7 @@ export function createWorkApi({
     if (item.refused && user && item.comment?.id) {
       const wait = key ? waits.get(key) : null;
       const still = wait ? ` It still waits for ${waitsFor(wait)}.` : "";
-      const body = `Asked from the dashboard by @${user}: not started, the policies refuse it.${still}${also}\n\n${MARKER}`;
+      const body = `Asked ${from} by @${user}: not started, the policies refuse it.${still}${also}\n\n${MARKER}`;
       const path = `/repos/${item.repo}/issues/comments/${item.comment.id}`;
       const res = await github(item.repo, "PATCH", path, { body }).catch((error) => {
         log(`Work area: editing comment ${item.comment.id}: ${error.message ?? error}`);
@@ -532,25 +539,32 @@ export function createWorkApi({
   // the drag opened; they go in the App's comment and are the run's text. Without them, an
   // issue with open questions doesn't move: they are answered first, unless the repo's
   // `wait_for_answers` is off.
-  async function act(repo, user, { action, number, after, mode, pr }, answers = null) {
+  // `from`: where it was asked (DASHBOARD, FROM_MCP), which its App comments say.
+  async function act(
+    repo,
+    user,
+    { action, number, after, mode, pr },
+    answers = null,
+    from = DASHBOARD,
+  ) {
     if (action === "cancel" || action === "dequeue") await mustDo(permissions, user, repo, MANAGE);
     if (action === "stop") await startable(repo, user, "stop");
     // Whatever the issue's state: a run may go on once it is closed.
-    if (action === "cancel") return cancelTask(repo, user, number, pr);
+    if (action === "cancel") return cancelTask(repo, user, number, pr, from);
     const key = taskKey(repo, number);
     const checks = await checked(repo, user, number, false, action === "queue");
     const { settings, base, issue } = checks;
-    if (action === "plan") return plan(repo, user, checks, { after, mode }, answers);
+    if (action === "plan") return plan(repo, user, checks, { after, mode }, answers, from);
     const asks = action === "start" || action === "queue";
     if (!answers && asks && asking(settings, key)) {
       refuse(409, `#${number} has open questions: answer them first.`);
     }
     if (action === "queue" && queuedTask(key)?.item) {
-      return requeue(repo, user, { number, after, mode, settings, answers });
+      return requeue(repo, user, { number, after, mode, settings, answers, from });
     }
     const wait = waits.get(key);
-    if (action === "dequeue") return dequeue(repo, user, number, wait);
-    if (action === "stop") return stop(repo, user, issue, base, settings);
+    if (action === "dequeue") return dequeue(repo, user, number, wait, from);
+    if (action === "stop") return stop(repo, user, issue, base, settings, from);
     // Moving a wait keeps its mode, unless another one is picked.
     const wanted = mode ?? wait?.item.modeLine ?? "work";
     if (!modeNames(settings).includes(wanted)) refuse(422, `${repo} has no mode \`${wanted}\`.`);
@@ -559,7 +573,7 @@ export function createWorkApi({
     if (answers) item.text = answers;
     const also = answers ? `\n\n${answers}` : "";
     if (action === "queue") {
-      const waiting = await queueAfter(repo, user, { item, after, mode, wanted, wait, also });
+      const waiting = await queueAfter(repo, user, { item, after, mode, wanted, wait, also, from });
       if (waiting) return waiting;
       // Done already: it starts now, as "/after" would.
     }
@@ -568,10 +582,10 @@ export function createWorkApi({
     item.comment = await comment(
       repo,
       number,
-      `Started from the dashboard by @${user}${inMode(wanted)}${why}.${was}${also}`,
+      `Started ${from} by @${user}${inMode(wanted)}${why}.${was}${also}`,
     );
     // Its wait goes once it runs: refused by the policies (a 403, after their reply), it stays.
-    await queued(item, { key, why: `started from the dashboard by @${user}`, user, also });
+    await queued(item, { key, why: `started ${from} by @${user}`, user, also, from });
     return `#${number} started.`;
   }
 
@@ -586,7 +600,7 @@ export function createWorkApi({
   // for its sub-issues; all in the mode picked. Every issue is checked as checked() checks one
   // before anything is posted: nothing half-done. `after`: the issue it was dropped next to,
   // which the tree's first issues wait for. One without open sub-issues starts or queues.
-  async function plan(repo, user, { settings, base, issue }, { after, mode }, answers) {
+  async function plan(repo, user, { settings, base, issue }, { after, mode }, answers, from) {
     const { number } = issue;
     const tree = await readTree(github, repo, issue);
     const away = tree.elsewhere.length
@@ -594,7 +608,8 @@ export function createWorkApi({
       : "";
     if (tree.nodes.size === 1) {
       const action = after === null ? "start" : "queue";
-      return `${await act(repo, user, { action, number, after, mode, pr: false }, answers)}${away}`;
+      const asked = { action, number, after, mode, pr: false };
+      return `${await act(repo, user, asked, answers, from)}${away}`;
     }
     let afterDone = "";
     if (after !== null) {
@@ -631,7 +646,8 @@ export function createWorkApi({
     const refusedRuns = [];
     try {
       for (const n of steps) {
-        if (await layOut(repo, user, { number, n, tree, planned, mode, base, settings, answers })) {
+        const how = { number, n, tree, planned, mode, base, settings, answers, from };
+        if (await layOut(repo, user, how)) {
           refusedRuns.push(n);
         }
         laid.push(n);
@@ -667,7 +683,11 @@ export function createWorkApi({
   }
 
   // What a plan does for issue `n` of the tree: the App's comment, then its wait or its start.
-  async function layOut(repo, user, { number, n, tree, planned, mode, base, settings, answers }) {
+  async function layOut(
+    repo,
+    user,
+    { number, n, tree, planned, mode, base, settings, answers, from },
+  ) {
     const key = taskKey(repo, n);
     const wait = waits.get(key);
     const wanted = mode ?? wait?.item.modeLine ?? "work";
@@ -682,7 +702,7 @@ export function createWorkApi({
       item.comment = await comment(
         repo,
         n,
-        `Queued from the dashboard by @${user}${part}, after ${issueList(blockers)}${inMode(wanted)}.${was} It starts when ${they} done (closed as completed, or merged).${also}`,
+        `Queued ${from} by @${user}${part}, after ${issueList(blockers)}${inMode(wanted)}.${was} It starts when ${they} done (closed as completed, or merged).${also}`,
       );
       await waits.hold(item, blockers);
       return;
@@ -690,14 +710,15 @@ export function createWorkApi({
     item.comment = await comment(
       repo,
       n,
-      `Started from the dashboard by @${user}${inMode(wanted)}${part}.${was}`,
+      `Started ${from} by @${user}${inMode(wanted)}${part}.${was}`,
     );
     // Refused by the policies (their reply says why, the comment is edited), its wait stays:
     // true, for the plan's answer.
     await started(item, {
       key,
-      why: `started from the dashboard by @${user} as part of #${number}`,
+      why: `started ${from} by @${user} as part of #${number}`,
       user,
+      from,
     });
     return !!item.refused;
   }
@@ -721,15 +742,15 @@ export function createWorkApi({
 
   // What "/after #n" does: `item` waits for issue `after`, its wait (`wait`, if any) moved
   // there. Null when `after` is done already: the caller starts it.
-  async function queueAfter(repo, user, { item, after, mode, wanted, wait, also }) {
+  async function queueAfter(repo, user, { item, after, mode, wanted, wait, also, from }) {
     const { number } = item;
     if ((await waitable(repo, number, after)) !== "open") return null;
     if (wait?.blockers.length === 1 && wait.blockers[0] === after && !mode) {
       return `#${number} already waits for #${after}.`;
     }
     const text = wait
-      ? `Moved from the dashboard by @${user}: now after #${after}${inMode(wanted)} (it waited for ${waitsFor(wait)}).`
-      : `Queued from the dashboard by @${user}, after #${after}${inMode(wanted)}.`;
+      ? `Moved ${from} by @${user}: now after #${after}${inMode(wanted)} (it waited for ${waitsFor(wait)}).`
+      : `Queued ${from} by @${user}, after #${after}${inMode(wanted)}.`;
     item.comment = await comment(
       repo,
       number,
@@ -746,7 +767,7 @@ export function createWorkApi({
   // queued, as it would start now anyway. `user` needs the start of the mode it waits in, and
   // `runs:manage` to move someone else's comment or drop another author's, as dequeueing needs
   // (mayMove()).
-  async function requeue(repo, user, { number, after, mode, settings, answers }) {
+  async function requeue(repo, user, { number, after, mode, settings, answers, from }) {
     const key = taskKey(repo, number);
     const modeOf = (item) => mode ?? item.modeLine ?? "work";
     const known = (wanted) => {
@@ -804,19 +825,19 @@ export function createWorkApi({
     await comment(
       repo,
       number,
-      `Moved from the dashboard by @${user}: no longer queued, now waits for #${after}${inMode(wanted)}. It starts when #${after} is done (closed as completed, or merged).${others}${also}`,
+      `Moved ${from} by @${user}: no longer queued, now waits for #${after}${inMode(wanted)}. It starts when #${after} is done (closed as completed, or merged).${others}${also}`,
     ).catch((error) => log(`${key}: ${error.message ?? error}`));
     return `#${number} waits for #${after}.`;
   }
 
   // Issue `number` no longer waits (`wait`): nothing starts until asked again.
-  async function dequeue(repo, user, number, wait) {
+  async function dequeue(repo, user, number, wait, from) {
     if (!wait) refuse(409, `#${number} doesn't wait for anything.`);
-    waits.cancel(taskKey(repo, number), `cancelled from the dashboard by @${user}`);
+    waits.cancel(taskKey(repo, number), `cancelled ${from} by @${user}`);
     await comment(
       repo,
       number,
-      `No longer waiting for ${waitsFor(wait)}: cancelled from the dashboard by @${user}. Nothing starts until a trigger comment or the dashboard says so.`,
+      `No longer waiting for ${waitsFor(wait)}: cancelled ${from} by @${user}. Nothing starts until a trigger comment or the dashboard says so.`,
     );
     return `#${number} no longer waits.`;
   }
@@ -824,7 +845,7 @@ export function createWorkApi({
   // What a "/stop" comment does: the brainstorm wraps up (task-modes.mjs stopBrainstorm()), in a
   // run that posts its summary and updates the issue. Only an active or idle one: checked()
   // refused a reply on its way.
-  async function stop(repo, user, issue, base, settings) {
+  async function stop(repo, user, issue, base, settings, from) {
     const { number } = issue;
     const state = taskOf(taskKey(repo, number))?.state;
     if (state !== "brainstorm" && state !== "idle-brainstorm") {
@@ -834,15 +855,15 @@ export function createWorkApi({
     item.comment = await comment(
       repo,
       number,
-      `Brainstorm stopped from the dashboard by @${user}: a summary and the issue's update follow.`,
+      `Brainstorm stopped ${from} by @${user}: a summary and the issue's update follow.`,
     );
-    await queued(item, { user });
+    await queued(item, { user, from });
     return `#${number}'s brainstorm wraps up.`;
   }
 
   // What a `/cancel` comment does (tasks.mjs cancelRun()), with the App's comment for the
   // record. The run's own reply follows once its sandbox is gone.
-  async function cancelTask(repo, user, number, pr) {
+  async function cancelTask(repo, user, number, pr, from) {
     await checkedRepo(repo, user);
     const key = taskKey(repo, pr ? prId(number) : number);
     const replyTo = taskOf(key)?.replyTo ?? number;
@@ -854,10 +875,10 @@ export function createWorkApi({
     const backlog = what === "queued" && !pr;
     const text =
       what === "running"
-        ? `Stopped from the dashboard by @${user}.`
+        ? `Stopped ${from} by @${user}.`
         : backlog
-          ? `Taken out of the queue from the dashboard by @${user}: back in the backlog.`
-          : `Queued comments dropped from the dashboard by @${user}.`;
+          ? `Taken out of the queue ${from} by @${user}: back in the backlog.`
+          : `Queued comments dropped ${from} by @${user}.`;
     await comment(repo, replyTo, text).catch((error) => log(`${key}: ${error.message ?? error}`));
     if (what === "running") return `#${number} stops.`;
     return backlog ? `#${number} is back in the backlog.` : `#${number}'s queued comments dropped.`;
@@ -867,7 +888,7 @@ export function createWorkApi({
   // comment. A run's questions: the comment is the reply that continues its session, as an
   // allowed user's would be. An issue's (its body's section): App comments don't take the
   // label off (questions.mjs), so this does, once every question has an answer.
-  async function answer(repo, user, asked, where = "from the dashboard") {
+  async function answer(repo, user, asked, where = DASHBOARD) {
     const { number, pr } = asked;
     const key = taskKey(repo, pr ? prId(number) : number);
     const task = taskOf(key);
@@ -888,7 +909,7 @@ export function createWorkApi({
     const left = open.length ? ` ${open.length} still open.` : "";
     if (fromRun) {
       // From the dashboard, a refusal is its answer; ticked on GitHub, the reply there says it.
-      await (where === "from the dashboard" ? queued : accept)({
+      await (where === DASHBOARD ? queued : accept)({
         repo,
         id: pr ? prId(number) : String(number),
         kind: pr ? "pr" : "issue",
@@ -904,7 +925,7 @@ export function createWorkApi({
         settings,
         comment: posted,
         // Ticked on GitHub, it is a GitHub action (ticked()): the policies' `input.trigger`.
-        dashboard: where === "from the dashboard",
+        dashboard: where === DASHBOARD,
       });
       return `Answers sent: #${number} continues.${left}`;
     }
@@ -974,7 +995,7 @@ export function createWorkApi({
   // The task's last run again, when it failed or the listener lost it: checked as a comment
   // is, then queued as its comments were, in its mode, with the App's comment for its
   // reactions. The issue's session volume carries what the run had done.
-  async function rerun(repo, user, runId) {
+  async function rerun(repo, user, runId, from = DASHBOARD) {
     const run = runOf(runId);
     if (!sameRepo(run?.repo, repo)) refuse(404, `No run ${runId} in ${repo}.`);
     const target = parseKey(run.key);
@@ -999,7 +1020,7 @@ export function createWorkApi({
     const posted = await comment(
       repo,
       replyTo,
-      `Rerun from the dashboard by @${user}${inMode(mode)}: its last run ${ended}.`,
+      `Rerun ${from} by @${user}${inMode(mode)}: its last run ${ended}.`,
     );
     await queued(
       {
@@ -1014,7 +1035,7 @@ export function createWorkApi({
         replyTo,
         comment: posted,
       },
-      { user },
+      { user, from },
     );
     return `Rerun of #${number} queued.`;
   }
@@ -1217,13 +1238,14 @@ export function createWorkApi({
   }
 
   // POST …/work's body for `user` on `repo`, from the dashboard or an MCP client (`via`, the
-  // log line's mark): its answer's message. Throws Refused.
+  // log line's mark, MCP for a client's, whose App comments then say so): its answer's message.
+  // Throws Refused.
   async function asks(repo, user, body, via = "") {
     const asked = checkAction(body);
     log(
       `Work area: ${user} asks ${asked.action} ${taskKey(repo, asked.number)}${asked.after ? ` after #${asked.after}` : ""}${via}`,
     );
-    return act(repo, user, asked);
+    return act(repo, user, asked, null, via === MCP ? FROM_MCP : DASHBOARD);
   }
 
   async function reruns(req, res, user, repo) {
@@ -1236,7 +1258,7 @@ export function createWorkApi({
     if (typeof runId !== "string" || !/^[\w.-]+$/.test(runId))
       refuse(400, "`runId` is a run's id.");
     log(`Work area: ${user} reruns ${repo} ${runId}${via}`);
-    return rerun(repo, user, runId);
+    return rerun(repo, user, runId, via === MCP ? FROM_MCP : DASHBOARD);
   }
 
   // The MCP tools' (mcp.mjs) way in: the checks the routes make (apiRoute()'s, but the Origin:
