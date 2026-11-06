@@ -17,6 +17,7 @@
 // Kept in the orchestrator's store, one key per machine (`machines/<id>`, lib/store-map.mjs),
 // which its two copies share.
 import { randomBytes } from "node:crypto";
+import { keepLast } from "../lib/capped.mjs";
 import { Refused } from "../lib/http.mjs";
 
 // How often a driver says it is there, and how long a machine stays online without it.
@@ -29,6 +30,14 @@ export const MAX_CAPACITY = 16;
 export const MAX_MACHINES = 10;
 export const MAX_LABELS = 20;
 export const MAX_REPOS = 50;
+// What offers() asks at once (a policy decision, then a .deckhand.yaml read from GitHub, per
+// repository), and how long a repository's .deckhand.yaml read is used again, by offers() and
+// takes() for every machine (#914): a machine taking `owner/*` on a large installation, or its
+// driver registering again and again, mustn't add to GitHub's rate limit a read a repository.
+// Its `machines:` block, added or removed, is seen READ_MS later at most.
+export const OFFER_READS = 4;
+export const READ_MS = 60_000;
+const MAX_READS = 1000;
 const MAX_NAME = 64;
 const MAX_VERSION = 64;
 
@@ -137,12 +146,27 @@ function driverVersion(version) {
   return version;
 }
 
+// `fn` over `items`, `limit` at once at most, its results in their order.
+export async function mapLimited(items, limit, fn) {
+  const results = Array.from({ length: items.length });
+  let next = 0;
+  const worker = async () => {
+    while (next < items.length) {
+      const i = next++;
+      results[i] = await fn(items[i]);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return results;
+}
+
 // `machines`: id → { id, owner, name, labels, capacity, repos, version, createdAt, seenAt }, the
 // store's map (lib/store-map.mjs). `config.users`: ALLOWED_USERS, read at each call. The seams,
 // for offers():
 //   repoNames()          the installed repositories in ALLOWED_REPOS (repos.mjs names())
 //   granted(repo)        whether the operator's policies grant it `machines`
-//   settings(repo)       its .deckhand.yaml from its default branch: { settings, errors }
+//   settings(repo)       its .deckhand.yaml from its default branch: { settings, errors }, used
+//                        again READ_MS (settingsOf())
 //   mayRun(owner, repo)  whether `owner` may start work runs there (the access decision)
 // `removed(machine)`: once a machine is removed, so that its claims end (claims.mjs).
 export function createMachines({
@@ -160,6 +184,20 @@ export function createMachines({
   const allowed = (owner) => config.users.some((u) => u.toLowerCase() === owner);
   const online = (m) => allowed(m.owner) && now() - m.seenAt < ONLINE_MS;
   const owned = (owner) => [...machines.values()].filter((m) => m.owner === owner);
+
+  // repo (lower case) → { at, read }: its .deckhand.yaml's read, a promise its callers share
+  // while it runs and READ_MS after. One that throws isn't kept: the next call asks again.
+  const reads = new Map();
+  function settingsOf(repo) {
+    const key = repo.toLowerCase();
+    const kept = reads.get(key);
+    if (kept && now() - kept.at < READ_MS) return kept.read;
+    const read = Promise.resolve().then(() => settings(repo));
+    const entry = { at: now(), read };
+    keepLast(reads, key, entry, MAX_READS);
+    read.catch(() => reads.get(key) === entry && reads.delete(key));
+    return read;
+  }
 
   // The owner's machine `id`, or Refused: another's is one that doesn't exist.
   function mine(owner, id) {
@@ -243,7 +281,7 @@ export function createMachines({
   async function offered(m, repo) {
     try {
       if (!(await granted(repo))) return null;
-      const read = await settings(repo);
+      const read = await settingsOf(repo);
       if (read.errors?.length) return null;
       const labels = offeredLabels({ granted: true, settings: read.settings, machine: m });
       if (!labels || !(await mayRun(m.owner, repo))) return null;
@@ -255,16 +293,14 @@ export function createMachines({
   }
 
   // The repositories offered to the owner's machine `id` now, each with the labels it takes
-  // their tasks with: [{ repo, labels }], by name.
+  // their tasks with: [{ repo, labels }], by name. OFFER_READS repositories at once.
   async function offers(owner, id) {
     const m = mine(owner, id);
     const names = (await repoNames()).filter((repo) => repoMatches(m.repos, repo));
-    const found = await Promise.all(
-      names.map(async (repo) => {
-        const labels = await offered(m, repo);
-        return labels && { repo, labels };
-      }),
-    );
+    const found = await mapLimited(names, OFFER_READS, async (repo) => {
+      const labels = await offered(m, repo);
+      return labels && { repo, labels };
+    });
     return found.filter(Boolean).toSorted((a, b) => a.repo.localeCompare(b.repo));
   }
 
