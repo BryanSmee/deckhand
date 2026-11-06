@@ -92,6 +92,24 @@ test("work open, the rest folded; cached steps on one line, each other step fold
   expect(calls).toEqual([true, false]);
 });
 
+// #923: the run page's log, its stream reconnecting: what it sends again isn't shown twice.
+test("a stream that reconnects shows each line once", () => {
+  render(<Streamed run={run} now={240000} />);
+  const source = FakeSource.last!;
+  const line = { kind: "meta", text: "Cloned acme/app" } satisfies Entry;
+  act(() => {
+    source.open();
+    source.emit("entries", [{ kind: "phase", phase: "setup", at: 0 }, line], 100);
+  });
+  act(() => {
+    source.open();
+    source.emit("entries", [{ kind: "phase", phase: "setup", at: 0 }, line], 100);
+    source.emit("entries", [{ kind: "meta", text: "Installed" }], 140);
+  });
+  expect(screen.getAllByText("Cloned acme/app").length).toBe(1);
+  expect(screen.getByText("Installed")).toBeTruthy();
+});
+
 test("a red dot for a section that failed: a failed build step, a run that ended in error, a push", () => {
   show({}, [
     ...entries.slice(0, 7),

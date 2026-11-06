@@ -202,6 +202,40 @@ export function useAppState(): AppState {
   return { state: data, error, refresh: reload };
 }
 
+// One run's log stream, each of its events read once (#923). A dropped connection reconnects on
+// its own (EventSource), with the last event's id: the stream (runlog.mjs stream()) goes on from
+// there, and an event at or before an id already read (a stream that started over) is dropped.
+// A stream without ids (an orchestrator from before them) opening again sends the log from its
+// start: `entries()` then replaces what it had (`fresh`).
+function followLog(
+  runId: string,
+  on: { entries: (more: Entry[], fresh: boolean) => void; end: () => void },
+): EventSource {
+  const source = new EventSource(`api/runs/${encodeURIComponent(runId)}/stream`);
+  let last = -1;
+  let opened = false;
+  source.addEventListener("open", () => {
+    if (opened && last < 0) on.entries([], true);
+    opened = true;
+  });
+  source.addEventListener("entries", (event) => {
+    const id = (event as MessageEvent).lastEventId;
+    if (/^\d+$/.test(id)) {
+      if (Number(id) <= last) return;
+      last = Number(id);
+    }
+    on.entries(JSON.parse((event as MessageEvent).data) as Entry[], false);
+  });
+  source.addEventListener("end", () => {
+    source.close();
+    on.end();
+  });
+  return source;
+}
+
+const more = (entries: Entry[], added: Entry[], fresh: boolean) =>
+  fresh ? added : [...entries, ...added];
+
 // A run's log so far, then live until it ends.
 export function useRunLog(runId: string | null): { entries: Entry[]; ended: boolean } {
   const [log, setLog] = useState<{ id: string | null; entries: Entry[]; ended: boolean }>({
@@ -212,14 +246,10 @@ export function useRunLog(runId: string | null): { entries: Entry[]; ended: bool
   useEffect(() => {
     setLog({ id: runId, entries: [], ended: false });
     if (!runId) return;
-    const source = new EventSource(`api/runs/${encodeURIComponent(runId)}/stream`);
-    source.addEventListener("entries", (event) => {
-      const more = JSON.parse((event as MessageEvent).data) as Entry[];
-      setLog((l) => (l.id === runId ? { ...l, entries: [...l.entries, ...more] } : l));
-    });
-    source.addEventListener("end", () => {
-      source.close();
-      setLog((l) => (l.id === runId ? { ...l, ended: true } : l));
+    const source = followLog(runId, {
+      entries: (added, fresh) =>
+        setLog((l) => (l.id === runId ? { ...l, entries: more(l.entries, added, fresh) } : l)),
+      end: () => setLog((l) => (l.id === runId ? { ...l, ended: true } : l)),
     });
     return () => source.close();
   }, [runId]);
@@ -244,21 +274,20 @@ export function useRunLogs(ids: string[]): RunLogs {
     setLogs((l) => Object.fromEntries(Object.entries(l).filter(([id]) => ids.includes(id))));
     for (const id of ids) {
       if (open.has(id)) continue;
-      const source = new EventSource(`api/runs/${encodeURIComponent(id)}/stream`);
+      const source = followLog(id, {
+        entries: (added, fresh) => {
+          if (open.get(id) !== source) return;
+          setLogs((l) => ({
+            ...l,
+            [id]: { entries: more(l[id]?.entries ?? [], added, fresh), ended: false },
+          }));
+        },
+        end: () => {
+          if (open.get(id) !== source) return;
+          setLogs((l) => ({ ...l, [id]: { entries: l[id]?.entries ?? [], ended: true } }));
+        },
+      });
       open.set(id, source);
-      source.addEventListener("entries", (event) => {
-        if (open.get(id) !== source) return;
-        const more = JSON.parse((event as MessageEvent).data) as Entry[];
-        setLogs((l) => ({
-          ...l,
-          [id]: { entries: [...(l[id]?.entries ?? []), ...more], ended: false },
-        }));
-      });
-      source.addEventListener("end", () => {
-        source.close();
-        if (open.get(id) !== source) return;
-        setLogs((l) => ({ ...l, [id]: { entries: l[id]?.entries ?? [], ended: true } }));
-      });
     }
   }, [key]);
   useEffect(

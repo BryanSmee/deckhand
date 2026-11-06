@@ -279,25 +279,33 @@ export function makeCapabilities(over: Partial<Capabilities> = {}): Capabilities
   };
 }
 
-// A log stream (api.ts useRunLog()): the last one opened, which a spec makes speak.
+// A log stream (api.ts useRunLog()): the last one opened, which a spec makes speak. `emit()`'s
+// id is the event's, kept for the next ones as a browser's lastEventId is; `open()`, the
+// connection (re)opening.
 export class FakeSource {
   static last: FakeSource | null = null;
   // Every one opened since the spec cleared it: a chat streams each of its runs' logs.
   static opened: FakeSource[] = [];
-  listeners = new Map<string, ((e: { data: string }) => void)[]>();
+  listeners = new Map<string, ((e: { data: string; lastEventId: string }) => void)[]>();
   closed = false;
+  lastEventId = "";
   constructor(public url: string) {
     FakeSource.last = this;
     FakeSource.opened.push(this);
   }
-  addEventListener(type: string, fn: (e: { data: string }) => void) {
+  addEventListener(type: string, fn: (e: { data: string; lastEventId: string }) => void) {
     this.listeners.set(type, [...(this.listeners.get(type) ?? []), fn]);
   }
   close() {
     this.closed = true;
   }
-  emit(type: string, data: unknown) {
-    for (const fn of this.listeners.get(type) ?? []) fn({ data: JSON.stringify(data) });
+  emit(type: string, data: unknown, id?: number) {
+    if (id !== undefined) this.lastEventId = String(id);
+    const event = { data: JSON.stringify(data), lastEventId: this.lastEventId };
+    for (const fn of this.listeners.get(type) ?? []) fn(event);
+  }
+  open() {
+    for (const fn of this.listeners.get("open") ?? []) fn({ data: "", lastEventId: "" });
   }
 }
 
