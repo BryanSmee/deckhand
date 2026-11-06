@@ -3098,16 +3098,14 @@ mounts:
     writeFileSync(join(dir, "go"), "");
     await ctx.listener.until(/saving the summary of /);
     assert.equal(replies(github).length, 1);
+    // The next copy started only once the folder is gone: one waiting for the lease takes it as
+    // the stopping copy gives it up, and would read the summary's key while the folder is there.
     const old = ctx.listener.child;
-    const { output } = await ctx.handOver({
-      // Taken again once the stopping copy is gone: it gave the run up.
-      between: async () => {
-        if (old.exitCode === null && !old.signalCode) {
-          await new Promise((resolve) => old.once("exit", resolve));
-        }
-        rmSync(blocked, { recursive: true });
-      },
-    });
+    const exited = new Promise((resolve) => old.once("exit", resolve));
+    old.kill("SIGTERM");
+    await exited;
+    rmSync(blocked, { recursive: true });
+    const { output } = await ctx.restart();
     assert.match(
       output,
       /its summary not saved as this copy stops: the run stays for the next one/,
