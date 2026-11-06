@@ -4422,14 +4422,14 @@ allow_capabilities contains "read:pulls"
     const rerun = await call("rerun", { runId: "nope" });
     assert.equal(rerun.isError, true);
     assert.equal(rerun.content[0].text, "No run nope among those you see.");
-    // The failed run again, as the dashboard's Rerun: the App's comment, then the run.
+    // The failed run again, as the dashboard's Rerun: the App's comment (an MCP client's), then the run.
     const again = await call("rerun", { runId: "org-repo-12-2000" });
     assert.equal(again.isError, undefined, again.content[0].text);
     assert.equal(again.content[0].text, "Rerun of #12 queued.");
     const posted = await github.waitFor(
       (r) => r.method === "POST" && r.path === "/repos/org/repo/issues/12/comments",
     );
-    assert.match(JSON.parse(posted.body).body, /^Rerun from the dashboard by @alice.*failed\./);
+    assert.match(JSON.parse(posted.body).body, /^Rerun from an MCP client by @alice.*failed\./);
     await until(() => exists(join(dir, "run-env")), "#12's rerun");
     assert.match(readFileSync(join(dir, "run-env"), "utf8"), /^TASK_ISSUE=12$/m);
   });
