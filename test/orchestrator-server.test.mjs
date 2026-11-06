@@ -1152,10 +1152,16 @@ describe("listener", options, () => {
       log: (line) => (modelsOut += `${line}\n`),
     });
     // The listener holds none of them (the models service does): those in `settings` go there.
-    // ORCHESTRATOR_DATA_DIR: its data folder, apart from the others' (the test's folder).
-    const listenerEnv = ({ ORCHESTRATOR_DATA_DIR: own, ...env }) => ({
+    // ORCHESTRATOR_DATA_DIR: its data folder, apart from the others' (the test's folder);
+    // ORCHESTRATOR_STORE_URL: its store, the orchestrator's alone (edge keeps its own).
+    const listenerEnv = ({
+      ORCHESTRATOR_DATA_DIR: own,
+      ORCHESTRATOR_STORE_URL: store,
+      ...env
+    }) => ({
       ...Object.fromEntries(Object.entries(env).filter(([name]) => !AGENT_SECRETS.includes(name))),
       ...(own && { DATA_DIR: own }),
+      ...(store && { STORE_URL: store }),
     });
     // The runner: the same settings (those it reads), its own port and store, the broker
     // service's keys, the listener's services port as its orchestrator and github service.
@@ -1168,7 +1174,7 @@ describe("listener", options, () => {
     };
     // Edge, in front: its own data folder (the App but its key) and store, the orchestrator's
     // services port to pass the dashboard's API on to, its internal port for the orchestrator.
-    const edgeEnv = (env) => ({
+    const edgeEnv = ({ ORCHESTRATOR_STORE_URL: _store, ...env }) => ({
       ...listenerEnv(env),
       PORT: env.EDGE_PORT ?? "0",
       INTERNAL_PORT: "0",
@@ -2183,9 +2189,9 @@ mounts:
   }
 
   // A listener whose sandbox waits (`hold`) before Claude's first answer, with a run started by
-  // a comment saying `body`.
-  async function holding(t, body, extra = () => ({})) {
-    const ctx = await listen(t, {}, (dir, github) => {
+  // a comment saying `body`; `files`: what its fake GitHub serves.
+  async function holding(t, body, extra = () => ({}), files = {}) {
+    const ctx = await listen(t, files, (dir, github) => {
       writeFileSync(join(dir, "hold"), "");
       return extra(dir, github);
     });
@@ -2924,15 +2930,22 @@ mounts:
   });
 
   // The orchestrator's handover (#506), with its two copies: issue 12's run held, a comment on
-  // issue 13 queued behind it (one run at a time), the next copy waiting for the lease.
-  async function handingOver(t, { lease = 8 } = {}) {
+  // issue 13 queued behind it (one run at a time), the next copy waiting for the lease. `files`
+  // and `extra(dir)`: what the fake GitHub serves, and more settings.
+  async function handingOver(t, { lease = 8, files = {}, extra = () => ({}) } = {}) {
     // A lease far longer than a handover: taking it at once shows it was released.
     // GITHUB_URL: the dashboard's sign-in, through the fake GitHub.
-    const ctx = await holding(t, "Deckhand", (dir, github) => ({
-      MAX_PARALLEL: "1",
-      LEASE_SECONDS: String(lease),
-      GITHUB_URL: github.url,
-    }));
+    const ctx = await holding(
+      t,
+      "Deckhand",
+      (dir, github) => ({
+        MAX_PARALLEL: "1",
+        LEASE_SECONDS: String(lease),
+        GITHUB_URL: github.url,
+        ...extra(dir),
+      }),
+      files,
+    );
     const queued = comment("alice");
     queued.issue = { number: 13 };
     queued.comment = { ...queued.comment, id: 130 };
@@ -3083,6 +3096,92 @@ mounts:
     assert.deepEqual(readdirSync(data), ["store"]);
     assert.doesNotMatch(ctx.listener.output(), /no longer is read/);
   });
+
+  // #613's acceptance: the orchestrator on Redis, no volume. Each copy on a "node" of its own:
+  // the first with an empty data folder it can't write, the next with none at all. The first
+  // crashes (SIGKILL: nothing saved on the way out) with issue 12's run live, 13's comment
+  // queued and 14's waiting for #77; the next takes over all of them, and the dashboard's
+  // history, from Redis alone, and neither writes a file (for root, which writes anywhere, the
+  // folders as they are after).
+  test(
+    "on Redis with no volume (#613): a copy on another node takes over a live run, the queue, a wait and the history",
+    { skip: !process.env.TEST_REDIS_URL && "no Redis: set TEST_REDIS_URL" },
+    async (t) => {
+      const url = new URL(process.env.TEST_REDIS_URL);
+      url.searchParams.set("prefix", freshRedisPrefix(t, url.href));
+      let nodeA;
+      let nodeB;
+      const files = { "issue:77": JSON.stringify({ state: "open" }) };
+      const ctx = await handingOver(t, {
+        lease: 4,
+        files,
+        extra: (dir) => {
+          nodeA = join(dir, "node-a");
+          nodeB = join(dir, "node-b");
+          mkdirSync(nodeA);
+          chmodSync(nodeA, 0o555);
+          t.after(() => chmodSync(nodeA, 0o755));
+          return { ORCHESTRATOR_DATA_DIR: nodeA, ORCHESTRATOR_STORE_URL: url.href };
+        },
+      });
+      const { dir, github, send } = ctx;
+      const after = comment("alice", "Deckhand /after #77\nThen this.");
+      after.issue = { number: 14 };
+      after.comment = { ...after.comment, id: 140 };
+      await send(after);
+      await until(() => posted(github, 14).length === 1, "the waiting reply");
+      const store = openStore(url.href);
+      t.after(() => store.close());
+      await until(
+        async () => (await store.get("waits/org/repo#14"))?.blockers?.[0] === 77,
+        "the wait",
+      );
+      assert.ok((await store.keys("runs/")).keys.length, "the live run's state");
+
+      await ctx.handOver({
+        signal: "SIGKILL",
+        between: async () => writeFileSync(join(dir, "go"), ""),
+        more: { ORCHESTRATOR_DATA_DIR: nodeB },
+      });
+      // 12's run ended across the handover, 13's run from the queue: one reply each.
+      await settled(github, [99, 130]);
+      assert.equal(posted(github, 12).length, 1);
+      assert.equal(posted(github, 13).length, 1);
+      // #77 done: the wait starts 14's comment, once.
+      files["issue:77"] = JSON.stringify({ state: "closed", state_reason: "completed" });
+      await send(
+        {
+          action: "closed",
+          installation: { id: 7 },
+          repository: { full_name: "org/repo", default_branch: "trunk" },
+          issue: { number: 77, state: "closed", state_reason: "completed" },
+          sender: { login: "alice" },
+        },
+        "issues",
+      );
+      await settled(github, [140]);
+      const starting = posted(github, 14).filter((r) => /#77 is done: starting/.test(r.body));
+      assert.equal(starting.length, 1);
+      assert.equal(ctx.listener.output().match(/org\/repo#14: done/g)?.length, 1);
+      assert.equal(await store.get("waits/org/repo#14"), null);
+
+      // The dashboard's history, from Redis: the three runs, the same after another handover.
+      const api = await dashboardApi(ctx.port);
+      const history = async () =>
+        (await api("/api/state")).tasks
+          .flatMap((task) => task.runs.map((r) => [r.id, r.status]))
+          .sort();
+      const before = await history();
+      assert.equal(before.length, 3, JSON.stringify(before));
+      await ctx.handOver({ more: { ORCHESTRATOR_DATA_DIR: nodeA } });
+      assert.deepEqual(await history(), before);
+      assert.equal((await store.keys("summaries/")).keys.length, 3);
+      // No file written: node A's folder empty, node B's never made.
+      assert.deepEqual(readdirSync(nodeA), []);
+      assert.equal(existsSync(nodeB), false);
+      assert.equal(existsSync(join(dir, "store")), false);
+    },
+  );
 
   // A run's end whose summary the store refuses (#619), its copy stopping meanwhile: the run left
   // as it is, its sandbox and its state, the next copy ends it once: its summary saved, its
