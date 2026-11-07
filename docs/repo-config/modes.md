@@ -24,7 +24,7 @@ Focus on the error handling.
 - **With the trigger line**, it starts that mode. Without one, on an issue that already has
   a session, it **switches**: the new mode goes on in the same session, so it starts from
   the conversation so far, as long as both get the same volumes (what their
-  [capabilities](../security.md#capabilities) give). A brainstorm has a clone and session of its
+  [capabilities](../security/policies.md#capabilities) give). A brainstorm has a clone and session of its
   own, apart from work's, and so does a mode's run without `push`: `/mode work` after a
   read-only audit starts from the issue and its comments, where the audit posted what it found.
 - **A comment with neither** goes on in the issue's current mode. The trigger line alone,
@@ -98,6 +98,6 @@ Code's `WebFetch`, the browser), so it gets nothing of the repository's to leak:
   there): comments without a trigger or `/mode` line go on in it, `/mode work` switches.
 
 It only runs where the operator grants it: `research`, an `allow_grant` rule of their policies
-([the grants](../security.md#the-grants)). Without it,
+([the grants](../security/policies.md#the-grants)). Without it,
 `/mode research` gets a reply naming the grant, and nothing runs. Its agent and model are
 those of brainstorms (`brainstorm_agent`, `brainstorm_model`).

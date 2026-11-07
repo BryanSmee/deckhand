@@ -3,7 +3,7 @@
 // The run's token only reads, so a prompt-injected diff can't write anything: the listener
 // posts the review with its own. It reads the thread the listener hands it (reviewThread()),
 // without what users outside the allowlist wrote: with `review.fix`, its findings become the
-// message of a run that can push (docs/security.md, Review fix runs).
+// message of a run that can push (docs/security/github.md#review-fix-runs).
 //
 // No loops: each pull request's reviewed head commit is kept in the orchestrator's store
 // (`reviews`, lib/store-map.mjs), so a redelivered

@@ -35,7 +35,7 @@ auto-picked issue is cancelled.
   be in `ALLOWED_USERS` and the repository's `users`, or nothing starts (a label a bot added
   either). The label vouches for the issue as it was then: a title or description changed
   since by anyone but an allowed user (the App's bot included) holds it until the label is
-  added again ([security.md](../security.md#auto-pickup)). The run is theirs for the policies
+  added again ([security.md](../security/webhooks-and-sign-in.md#auto-pickup)). The run is theirs for the policies
   (`sender`, `trigger: "auto-pickup"`: a `deny_run` rule can refuse it,
   [The run input](../repo-config/policy-inputs.md#the-run-input)).
 - **Once picked.** The App comments on the issue, then the label comes off and the run is

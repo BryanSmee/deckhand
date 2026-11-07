@@ -221,7 +221,7 @@ try {
   }
   for (const file of autoMergeFiles(files)) {
     log.warn(
-      `policy/${file} in the grants folder grants auto-merge: with review.merge in their .deckhand.yaml, Deckhand merges its own pull requests in those repositories with no human review (docs/security.md#auto-merge)`,
+      `policy/${file} in the grants folder grants auto-merge: with review.merge in their .deckhand.yaml, Deckhand merges its own pull requests in those repositories with no human review (docs/security/github.md#auto-merge)`,
     );
   }
 } catch (error) {

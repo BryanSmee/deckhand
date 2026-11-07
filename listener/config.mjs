@@ -294,9 +294,9 @@ function refused(key, name) {
   if (AGENT_SECRETS.includes(name))
     return "a secret, keep it in the environment (.env), not in a file";
   if (name === "GRANTS_FILE")
-    return "gone, one file per repository in grants_dir instead (docs/security.md)";
+    return "gone, one file per repository in grants_dir instead (docs/security/policies.md#the-grants-folder)";
   if (key === name.toLowerCase() && MOVED_TO_GRANTS[name]) {
-    return `gone, set ${MOVED_TO_GRANTS[name]} instead (docs/security.md)`;
+    return `gone, set ${MOVED_TO_GRANTS[name]} instead (docs/security/policies.md#the-grants-folder)`;
   }
   return null;
 }
@@ -689,7 +689,7 @@ function requiredSettings(env, { setting }, { users = true } = {}) {
   // Replaced by a folder: ignoring it would quietly take back every grant it held.
   if (env.GRANTS_FILE) {
     throw new ConfigError(
-      "GRANTS_FILE is gone: move each repository's entry to its own file in GRANTS_DIR (docs/security.md)",
+      "GRANTS_FILE is gone: move each repository's entry to its own file in GRANTS_DIR (docs/security/policies.md#the-grants-folder)",
     );
   }
   // Moved to the grants folder, read at each run: one place for what every sandbox gets.
@@ -697,7 +697,7 @@ function requiredSettings(env, { setting }, { users = true } = {}) {
   if (moved.length) {
     const where = moved.map((name) => `${name}: set ${MOVED_TO_GRANTS[name]}`).join("; ");
     throw new ConfigError(
-      `${moved.join(", ")} ${moved.length > 1 ? "are" : "is"} gone (${where} instead, docs/security.md)`,
+      `${moved.join(", ")} ${moved.length > 1 ? "are" : "is"} gone (${where} instead, docs/security/policies.md#the-grants-folder)`,
     );
   }
 }

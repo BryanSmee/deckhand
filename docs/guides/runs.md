@@ -19,8 +19,8 @@ without code; `/stop` wraps it up.
 
 `Deckhand /mode research` answers a question from the open web, without the repository's code
 or a GitHub token, once your policies grant the repository `research` (an `allow_grant` rule in
-`grants/policy/`: [the grants](../security.md#the-grants),
-[Research runs](../security.md#research-runs)).
+`grants/policy/`: [the grants](../security/policies.md#the-grants),
+[Research runs](../security/policies.md#research-runs)).
 
 A repository's own modes, and what each built-in one is for: [Modes](../repo-config/modes.md).
 

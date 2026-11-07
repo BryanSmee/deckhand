@@ -1,6 +1,6 @@
 # What one repository gets: rename to <owner>/<repo>.yaml (matched case-insensitively), one
 # file per repository, so CODEOWNERS can give each team its own. Every key:
-# docs/security.md#the-grants-folder.
+# docs/security/policies.md#the-grants-folder.
 
 # Reachable by its sandboxes, besides default.yaml's: the registries and APIs it needs.
 # hosts: ["*.example.com", registry.npmjs.org]

@@ -36,7 +36,7 @@ import { taskId } from "./spelling.mjs";
 export const REQUESTS_KEY = "permission-requests";
 
 // What the dashboard shows of a reason the agent wrote: one line, cut to this (as the policies'
-// messages are: ../docs/security.md, Policies), redacted, and shown as text, never markup.
+// messages are: ../docs/security/policies.md#policies), redacted, and shown as text, never markup.
 export const REASON_MAX = 200;
 // How many of a run's requests may wait for its owner at once: an agent asking in parallel
 // gets the rest refused, to ask again once they are answered.

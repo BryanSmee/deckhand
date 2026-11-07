@@ -8,7 +8,7 @@
 // (../../models/google.mjs). With a Google AI plan's login instead
 // (../../models/antigravity-login.mjs), `agy` has no base URL: the sandbox's token file holds the
 // run's agent token, and the proxy hands the hosts that carry it (`relayed`) to the models
-// service (../../models/google.mjs), which puts the plan's access token in its place. Security model: ../../docs/security.md.
+// service (../../models/google.mjs), which puts the plan's access token in its place. Security model: ../../docs/security/models.md#the-antigravity-clis-login.
 import { GOOGLE_CREDENTIALS } from "./credentials.mjs";
 import { installSpec, normalizer } from "./common.mjs";
 import { SANDBOX_URLS } from "../../lib/services.mjs";

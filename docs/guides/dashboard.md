@@ -16,7 +16,7 @@ serves the dashboard's files and passes its API on to the orchestrator, which an
 your login. Each user sees and does what their access gives them, every action on every
 repository by default, a repository's own `users` narrowing it
 ([Upgrading: access control](upgrade-notes.md#upgrading-access-control-725) to narrow it, and the
-[Security model](../security.md#access)): the controls they may not use aren't shown, a repository
+[Security model](../security/webhooks-and-sign-in.md#access)): the controls they may not use aren't shown, a repository
 where they have no action not at all. **Settings › Access** (with `server:read`) shows each of
 `ALLOWED_USERS`' actions, server-wide and on each repository, with the files that gave or
 denied them. `/status` also answers calls

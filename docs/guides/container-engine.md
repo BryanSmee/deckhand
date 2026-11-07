@@ -21,14 +21,14 @@ Three steps, all off by default:
    - `podman`: rootless Podman serving Docker's API. Nothing to install, but the engine runs
      with seccomp and AppArmor unconfined, `/dev/fuse` and `/dev/net/tun`, and Docker's
      default capabilities, which expose more of the host's kernel (see
-     [Security model](../security.md#container-engine)). `docker build` uses the classic
+     [Security model](../security/mounts-and-engine.md#container-engine)). `docker build` uses the classic
      builder there (`DOCKER_BUILDKIT=0`), and some compose features differ.
    - `auto`: Sysbox where `docker info` lists its runtime, else Podman.
 2. **Pull its image**: `COMPOSE_PROFILES=engine` in `.env`, then `docker compose pull` (or
    `up -d --build`) pulls or builds both engine images, `deckhand-engine` and
    `deckhand-engine-podman`, the way the `sandbox` service does the base image.
 3. **Grant it per repository**: `docker`, in an `allow_grant` rule of your policies that names
-   the repository (`grants/policy/grants.rego`, [the grants](../security.md#the-grants): a rule
+   the repository (`grants/policy/grants.rego`, [the grants](../security/policies.md#the-grants): a rule
    for every repository grants it to none), and the repository asks for it with `docker: true` in its
    `.deckhand.yaml` ([Per-repo config](../repo-config.md#container-engine)). Add the registries
    it pulls from to `hosts` in its grants file: Docker Hub is

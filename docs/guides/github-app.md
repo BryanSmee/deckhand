@@ -41,7 +41,7 @@ These permissions came with later features. An App created before one of them la
 only matters once you use the feature: each paragraph says what to add.
 
 Workflows lets the git gateway push changes to `.github/workflows/`, for the repositories
-your policies grant `workflows` only ([security model](../security.md#github-actions-on-deckhands-branches)):
+your policies grant `workflows` only ([security model](../security/github.md#github-actions-on-deckhands-branches)):
 every other token is narrowed to what it's for and never carries it. An App created before
 then lacks it, which only matters once you grant `workflows`: add **Workflows: read and
 write** in the App's settings (_Permissions & events_), then accept the new permission on its

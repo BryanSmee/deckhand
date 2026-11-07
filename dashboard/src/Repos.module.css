@@ -181,7 +181,7 @@
   white-space: nowrap;
 }
 
-/* Red on purpose: model output reaches the default branch unread (docs/security.md). */
+/* Red on purpose: model output reaches the default branch unread (docs/security/github.md#auto-merge). */
 .danger {
   border-color: var(--err-solid);
   color: var(--err);

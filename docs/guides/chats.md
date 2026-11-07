@@ -24,7 +24,7 @@ conversation, and each chat's menu: its permissions (#478), Reset and Delete.
   (a host, the engine, a mount) asks its user from the conversation (#479), who approves it once,
   for the chat, or denies it; no answer within that time denies it. It asks only for what your
   grants and the policies allow the repository's chats: the rest is refused at once, the agent
-  told that only you widen it, in the grants folder ([security.md](../security.md#chats)).
+  told that only you widen it, in the grants folder ([security.md](../security/policies.md#chats)).
 
 With Claude Code, a chat's sandbox waits between messages, and each message goes to it.
 Codex and the Antigravity CLI take no message while they run: each message of a chat with one

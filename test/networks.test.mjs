@@ -1,4 +1,4 @@
-// The networks compose.yaml attaches each service to (docs/security.md, The services' networks):
+// The networks compose.yaml attaches each service to (docs/security/services.md#the-services-networks):
 // two services share a network only when one calls the other (lib/services.mjs CALLS), each
 // network a service is on is one it calls or is called over, or its way to the internet when it
 // needs one, and a runs' network holds the egress proxy alone (and the sandboxes, which the

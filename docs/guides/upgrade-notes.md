@@ -145,7 +145,7 @@ and its copies go to any node. What changes for you:
 Nothing to do: Deckhand's `policy/access.rego` gives every login of `ALLOWED_USERS` every
 action, on every repository and server-wide, as before. `ALLOWED_USERS` still decides who signs
 in, uses MCP and comments, and a repository's `users` still narrows it. The policy service
-answers the dashboard now too ([Access](../security.md#access)): with it away, the dashboard shows
+answers the dashboard now too ([Access](../security/webhooks-and-sign-in.md#access)): with it away, the dashboard shows
 no repository within about 30 seconds, until it is back.
 
 To give some people some actions on some repositories only, write a `policy/access.rego` in the
@@ -450,7 +450,7 @@ The yes-or-no grants left the grants folder's YAML for your policies: each old k
 `default.yaml` or `<owner>/<repo>.yaml` is now an error, which stops that repository's runs (or
 every run, in `default.yaml`) until you move it. Its message gives the rule to write. Write one
 `allow_grant` rule per set of repositories in the grants folder's `policy/`
-([the grants](../security.md#the-grants)), then remove the keys:
+([the grants](../security/policies.md#the-grants)), then remove the keys:
 
 | Old key (grants YAML)                                                    | Grant (`input.grant`)                                                                         |
 | ------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------- |
@@ -604,7 +604,7 @@ limits: { memory: 8g }
 
 Upgrading from a version where a repository's `.deckhand.yaml` could add `hosts`: only the
 grants folder lists hosts now (see
-[Where a sandbox's hosts come from](../security.md#where-a-sandboxs-hosts-come-from)). A
+[Where a sandbox's hosts come from](../security/network.md#where-a-sandboxs-hosts-come-from)). A
 repository's `hosts` are ignored with a warning, and a grants file still saying
 `allow_repo_hosts` has an error that stops that repository's runs (or every run, in
 `default.yaml`) until you remove it. Copy the hosts those repositories listed into their

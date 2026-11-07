@@ -39,7 +39,7 @@ Both run modules of `listener/`, which has no entry point of its own any more.
 
 How a delivery goes from one to the other, the orchestrator's two copies and their handover:
 [services.md](services.md#edge-and-the-orchestrator). What each holds and may call:
-[Edge](security.md#edge) and [The orchestrator](security.md#the-orchestrator) in security.md.
+[Edge](security/webhooks-and-sign-in.md#edge) and [The orchestrator](security/services.md#the-orchestrator) in the security model.
 
 ## From a comment to a reply
 
@@ -177,7 +177,7 @@ sandbox, tokens, capabilities, inbox, log and restarts. What differs:
   and what its next run gets of it; `POST` saves one only within that ceiling (a `422` lists
   what goes beyond it); `POST /api/chats/<id>/restart` rests its sandbox, its session kept, so
   the next message starts with it. Each start narrows it again (`preparation.mjs`): see
-  [security.md](security.md#chats).
+  [security.md](security/policies.md#chats).
 - its agent asks for more within that ceiling (#479): `deckhand-permissions` in the sandbox (an
   MCP server with one tool, `request_permission`, added for a chat's run only, `TASK_PERMISSIONS`;
   and a CLI for an agent without it) asks the broker (`POST /run/permissions`, a `chat` run's
@@ -201,7 +201,7 @@ chat lists its messages not delivered yet (`pending`). Its conversation is its r
 as any run's (`/api/runs/<id>/stream`): a chat run's first line and its delivered messages are
 `message` entries (`runlog.mjs`), the owner's turns, rather than notes. It reads nothing of the
 chat's sandbox, so a chat whose agent runs elsewhere (#601) shows the same way. Who reaches a
-chat, what it may do and where its data lives: [security.md](security.md#chats).
+chat, what it may do and where its data lives: [security.md](security/policies.md#chats).
 
 ### Modes
 
@@ -215,7 +215,7 @@ built-in mode's `MODES` entry keeps where its volumes are (`volumes`: `apart`, `
 whose agent and model it defaults to (`defaults`: `brainstorm`, the light runs'). Comments without a trigger or `/mode`
 line go on in the issue's current mode (the store's `modes`).
 
-`/mode research` (repos granted `research`: [the grants](security.md#the-grants)) is a built-in
+`/mode research` (repos granted `research`: [the grants](security/policies.md#the-grants)) is a built-in
 mode for the open web (`volumes: "research"` in `modes.mjs`, `internet` alone in
 `policy/mode-research.rego`): any public host (`researchAccess()` in `access.mjs`), and nothing of
 the repo's. No clone (`SANDBOX_NO_CLONE`), no GitHub token (no `pull` capability,
@@ -503,7 +503,7 @@ taken out of what a user writes (`events.mjs` `unmarked()`) before it is posted.
 runs and replies with what would make sessions faster or more reliable (`analysis.mjs`). The
 form picks the repository (those `api/state` shows the user), how many recent runs (10 by
 default, 50 at most), their kinds (`taskMode`: work, brainstorm, idea, bug, discussion, the
-repo's own modes…; never research: [Security model](security.md#research-runs)) and outcomes (ok, error, needs-input, interrupted, cancelled). As the
+repo's own modes…; never research: [Security model](security/policies.md#research-runs)) and outcomes (ok, error, needs-input, interrupted, cancelled). As the
 selection changes, `GET /api/repos/<owner>/<repo>/analyze?count=&kinds=&outcomes=` says how
 many finished runs of that repository match, and about how many tokens their digest is
 (its size ÷ 4); the form warns that the run uses the operator's Claude budget. `POST` (the
@@ -689,7 +689,7 @@ than at a run's end.
   long and renewed by the sandbox every 5 with the broker service, through the egress proxy
   (`POST /run/token`, `deckhand-token --renew`, a file on a tmpfs rather than a variable); its
   `gh` and git hand it out as their
-  token (security.md, Run tokens); the egress proxy decrypts its calls to GitHub's hosts (with Deckhand's CA, which
+  token ([Run tokens](security/tokens.md#run-tokens)); the egress proxy decrypts its calls to GitHub's hosts (with Deckhand's CA, which
   every run but research trusts) and relays them to the GitHub gateway (`github-gateway.mjs`,
   in the github service), naming the network (or pod) of the sandbox they came from, as the
   orchestrator's egress policy found it (`runner.locate()`, never its engine's), which the service
@@ -1052,7 +1052,7 @@ in memory, so coming back to the graph or a repo's tab shows it at once. The orc
 each action on the issue as the App's comment, which reactions follow like a trigger
 comment's, and queues the work (`accept()`) or holds it (`waits.hold()`) itself: the App's
 own comments never reach `admit()`. The checks are `resume()`'s, see
-[security.md](security.md#the-dashboards-actions).
+[security.md](security/webhooks-and-sign-in.md#the-dashboards-actions).
 
 The Overview's repository cards get each configured repo's backlog count from the same reads
 (`GET /api/repos?backlog=1`, `work.mjs counts()`): the last read's at once, read again in the
@@ -1189,7 +1189,7 @@ are asked, what a refusal says) and reads a repository's `.deckhand/policy/` fro
 it sends with each call; the service reads Deckhand's policies (its image) and the operator's
 (the grants folder, mounted read-only), and answers four calls, each with a service token
 (`policy-service/service.mjs`). The runner may call the first two, for the operator's
-[grants](security.md#the-grants) (`grant`, the operator's layer alone), never the others:
+[grants](security/policies.md#the-grants) (`grant`, the operator's layer alone), never the others:
 
 - `GET /policies`: the operator's layer as it reads it now, Deckhand's files and the
   operator's, for the dashboard's Policies tab and `/mode policy`; the orchestrator keeps Deckhand's
@@ -1512,7 +1512,7 @@ run's end), their files ([Run files](#run-files)) and the `runs` stream the orch
 and acknowledges (`broker-service.mjs` `consume()`); the models service asks it whether a run
 still goes. Its API (`broker/http.mjs` `ROUTES`) names the callers of each endpoint, and each
 orchestrator call but a `GET` carries its fencing epoch. What each caller may do, and what a hole
-in it gives: [The broker service](security.md#the-broker-service) in security.md.
+in it gives: [The broker service](security/services.md#the-broker-service) in the security model.
 
 **The broker service's own update.** Compose runs one copy, which drains on SIGTERM for 30 s
 (`DRAIN_SECONDS`: the inboxes' long polls, uploads in flight), then the next one starts on the
@@ -1540,7 +1540,7 @@ hashes the Dockerfile's blob the github service read (`GET /blobs/…`). The
 orchestrator talks to it through `runner/client.mjs`.
 
 Its API (`runner/service.mjs`) names the callers of each endpoint (`ROUTES`), each with its own
-service token (docs/security.md, Service tokens): the orchestrator starts, follows, talks to
+service token ([Service tokens](security/tokens.md#service-tokens)): the orchestrator starts, follows, talks to
 and removes sandboxes and writes and reads their logs (`GET /logs/<run>`, `stream()` reading it
 from an offset, for the dashboard's live view, which the orchestrator relays to edge as it
 streams); it also asks, for the egress policy that stays with it, where an address is, the
@@ -1704,7 +1704,7 @@ each in its log).
   proxy waits (5 minutes, [services.md](services.md#upgrades-without-downtime)).
 
 What each caller may do, and the credentials' fingerprints:
-[The models service](security.md#the-models-service) in security.md.
+[The models service](security/models.md#the-models-service) in the security model.
 
 ### Run files
 
@@ -2113,7 +2113,7 @@ tests fake it.
 | `static.mjs`                                                                                | Edge's: the dashboard's files (`dashboard/dist`).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
 | `repo-view.mjs`                                                                             | A repository's config as the dashboard shows it: what its runs get, from the runs' own checks.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
 | `lib/health.mjs`                                                                            | Every service's `GET /health` answer: `{ ok, startedAt, version }` and the fields it already sent (`app`, `active`).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
-| `lib/services.mjs`, `lib/service-token.mjs`                                                 | The services and which calls which (#499); the service tokens the broker signs for those calls, each bound to its caller's network or pod, and each endpoint's callers (`serviceGuard()`) ([security.md, Service tokens](security.md#service-tokens)).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| `lib/services.mjs`, `lib/service-token.mjs`                                                 | The services and which calls which (#499); the service tokens the broker signs for those calls, each bound to its caller's network or pod, and each endpoint's callers (`serviceGuard()`) ([security.md, Service tokens](security/tokens.md#service-tokens)).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
 | `lib/service-client.mjs`, `lib/fence.mjs`                                                   | Calling another service: its URLs, the caller's service token, a service away waited for rather than failed; the orchestrator's fencing epoch on each call, and the check the services called make of it (an older one refused, 409).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
 | `lib/active.mjs`                                                                            | Active/passive: of a service's two copies, the one holding its lease in the store acts, the other waits to take over; each holder's epoch higher than every one before it.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 | `lib/store.mjs`, `lib/store-file.mjs`, `lib/store-redis.mjs`, `lib/resp.mjs`                | The store (above): its file and Redis backends, the Redis client.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
