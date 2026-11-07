@@ -660,6 +660,11 @@ export function createHttp(ctx) {
         endPicks(ctx.picks, ctx.runs, [closed.key, pr?.key].filter(Boolean));
         // Its route to a machine, if it had one (claims.mjs forget()).
         ctx.claims?.forget(closed.key);
+        // Its stop, and the comments held behind its stopped run (tasks.mjs forgetStopped()):
+        // merged, the issue's task too, as its questions.
+        for (const key of [closed.key, closed.state === "done" && pr?.key].filter(Boolean)) {
+          ctx.forgetStopped?.(key);
+        }
       }
       admitted(ctx.waits.closed(closed.repo, closed.number, closed.state));
     }

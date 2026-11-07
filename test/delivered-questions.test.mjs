@@ -132,6 +132,30 @@ test("a close or merge sets the questions aside, ends the pick; a close before t
   );
 });
 
+test("a close or merge forgets the task's stop; a reopen, or its pull request closed unmerged, doesn't", async () => {
+  const s = setup([]);
+  const forgot = [];
+  s.ctx.forgetStopped = (key) => forgot.push(key);
+  const issue = { number: 5, title: "Five", state: "closed", state_reason: "not_planned" };
+  await s.deliver("issues", { action: "closed", issue: { ...issue, closed_at: iso(5) } });
+  await s.deliver("issues", { action: "reopened", issue: { ...issue, state: "open" } });
+  const pull = (number, issueNumber, merged) => ({
+    number,
+    title: "A change",
+    state: "closed",
+    merged,
+    merged_at: merged ? iso(5) : null,
+    closed_at: iso(5),
+    body: `Closes #${issueNumber}`,
+    head: { ref: `issue-${issueNumber}-x`, repo: { full_name: "org/repo" } },
+  });
+  // Merged: the issue it closes too, whose task the stop is on.
+  await s.deliver("pull_request", { action: "closed", pull_request: pull(19, 9, true) });
+  await s.deliver("pull_request", { action: "closed", pull_request: pull(22, 12, false) });
+  s.clean();
+  assert.deepEqual(forgot, ["org/repo#5", "org/repo#pr-19", "org/repo#9", "org/repo#pr-22"]);
+});
+
 test("a pull request's label taken off sets its run's questions aside; put back, they wait again", async () => {
   const s = setup([asked("org/repo#pr-6")]);
   const pull = { number: 6, title: "A change", state: "open", labels: [], updated_at: iso(5) };

@@ -253,8 +253,14 @@ skips the pull request (its attempt not kept) and the review loop starts no fix 
 (the step says why). Comments queued for a follow-up run don't start one: the stopped run's
 `teardown()` moves them to the task's `onHold` (`tasks.mjs` `holdStopped()`), saved with the
 queue, and the next trigger's `queue()` lifts the mark and queues them first, in its run. A
-trigger that came before the run ended lifted it already: nothing is held. A task stopped
-before the mark existed has none, as before. A run still being prepared (its image building) doesn't start its sandbox; a task with
+trigger that came before the run ended lifted it already: nothing is held. A close ends it
+(#1009): the `closed` delivery (an issue closed, a pull request merged, which also ends the stop
+of the issue it names, whether GitHub closes that issue or not) drops the mark and settles the
+held comments, their 👀 off (`tasks.mjs` `forgetStopped()`), and an hourly `forgetClosedStops()`
+does the same for tasks closed as `titles.mjs` last heard of them: a close while the stopped run
+was ending, or while no copy was listening. Not `pulls.mjs`, whose merged pull request outlives a
+reopen of its issue, and not at start, as for a machine's route. A task stopped before the mark
+existed has none, as before. A run still being prepared (its image building) doesn't start its sandbox; a task with
 only queued comments loses them instead (409 from the API when there is neither). A copy of the
 orchestrator restarting between the cancel and the exit reads it from the saved state, stops the
 sandbox again if it still runs, and ends it as cancelled rather than queueing its comments again;

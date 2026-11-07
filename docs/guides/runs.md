@@ -40,7 +40,8 @@ session and pushed commits stay. A stopped task waits for you: nothing starts on
 a trigger comment (or a `/mode` line, or the dashboard's Start, Queue, Rerun or Fix), which
 resumes the session. A comment without one is left alone, the conflict watcher starts no rebase
 run and the review loop no fix run, and comments that came in during the stopped run wait to go
-with that trigger. On a queued task (waiting for a slot), `/cancel` and the page's **Remove from
+with that trigger. Closing the issue (or merging its pull request) ends the stop, and drops those
+comments. On a queued task (waiting for a slot), `/cancel` and the page's **Remove from
 queue** drop its queued comments: it is back in the backlog. With nothing running or queued,
 `/cancel` gets a reply saying so.
 
