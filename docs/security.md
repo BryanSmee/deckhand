@@ -14,7 +14,9 @@ Deckhand runs as services, split by the secret each one holds and what each one 
 reaches holds neither the App's key, the agents' credentials nor the Docker socket. Each service
 takes from each caller only the endpoints that caller needs ([Service tokens](#service-tokens)),
 and shares a network only with the services it calls or is called by
-([The services' networks](#the-services-networks)). What a hole in each one gives:
+([The services' networks](#the-services-networks)). Their diagram, with the trust boundaries
+(public, internal, the runs' networks), is in [services.md](services.md). What a hole in each one
+gives:
 
 | Service                                      | Holds                                                                                   | A hole in it gives                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
 | -------------------------------------------- | --------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |

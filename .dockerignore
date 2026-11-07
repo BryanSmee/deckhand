@@ -10,3 +10,5 @@ dashboard/node_modules
 dashboard/dist
 listener/vendor/node_modules
 listener/vendor/graphql.mjs
+# The docs' pictures (dashboard/screenshots/): the sandbox image copies docs/, and no run reads them.
+docs/images
