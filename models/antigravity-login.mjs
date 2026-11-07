@@ -39,7 +39,7 @@ function parseLogin(text, file) {
   }
   if (!json?.token?.access_token || !json.token.refresh_token) {
     throw new LoginError(
-      `${file} holds no Antigravity CLI login (sign in with \`agy\` for one, docs/setup.md)`,
+      `${file} holds no Antigravity CLI login (sign in with \`agy\` for one, docs/guides/antigravity.md)`,
     );
   }
   return json;

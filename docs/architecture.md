@@ -11,7 +11,7 @@ Beside them: the runner service (`runner/`, [The runner service](#the-runner-ser
 one with the Docker socket, which runs the sandboxes; the broker (`broker/`), the github service
 (`github/`), the models service (`models/`), the policy service (`policy-service/`) and the
 egress proxy (`proxy/`). This page is the map: what a comment turns into, and which module does
-what. Setup is in [setup.md](setup.md), the per-repo file in [repo-config.md](repo-config.md),
+what. Setup is in the [guides](guides/install.md) and [Server settings](settings.md), the per-repo file in [repo-config.md](repo-config.md),
 the security model in [security.md](security.md), the services and their updates in
 [services.md](services.md).
 
@@ -62,7 +62,7 @@ How a delivery goes from one to the other, the orchestrator's two copies and the
   agent has no `speeds` with `fast` or the provider isn't its default, and on its `best` tier
   when the model isn't one fast mode takes; the footer says which (`record.speedNote`). The
   sandbox gets `SANDBOX_SPEED`, which `claude.sh` turns into `--settings '{"fastMode": true}'`
-  (see [Fast mode](setup.md#fast-mode)). These lines may also follow
+  (see [Fast mode](guides/claude-code.md#fast-mode)). These lines may also follow
   the trigger on its first line (`Deckhand /agent codex /effort high`): `splitTrigger()` moves
   each to a line of its own, for `takeOptions()`, and a value it would refuse (`/effort huge`)
   makes the line no trigger at all. Inbox entries (ideas, bugs, discussions) have no trigger
@@ -605,8 +605,7 @@ sandbox, clone and the repo's `setup`), `building-image` while the image builds 
 its scheduling, then `scheduled` again), `working` from the agent's first event on. The
 record is saved with the live run, so a restart during setup still shows it `scheduled`;
 a record saved before records kept their phase takes its log's. The dashboard's states are all
-listed in `board.mjs` (`STATES`, and the comment above it) and in [setup](setup.md) (The
-dashboard); `in-review`, between the runs of a review loop, is in Reviews below.
+listed in `board.mjs` (`STATES`, and the comment above it) and in [the dashboard](guides/dashboard.md#task-states); `in-review`, between the runs of a review loop, is in Reviews below.
 
 The dashboard times slow steps from `at` lines (`{"type":"listener","event":"at","at":…}`),
 and shows each line's time of day when Preferences says (#719).
@@ -1281,13 +1280,13 @@ node takes over:
   the same way from their JSON files at the first start after the update. Their deadlines are
   data (`deadline`, `since`, `ciWaiting`), armed again by the copy that loads them. The
   comments a wait holds go without a secret (`storable()`); what keeps them is the store's own
-  access (docs/setup.md, its Redis ACL), not a file's mode.
+  access (docs/guides/store.md, its Redis ACL), not a file's mode.
 
 What a release before kept in `/data` is moved at the first start after the update (the moves
 above; the screenshots, `shots/`, to the broker, #609), so that start needs the old volume. The
 older moves are gone (#619: a listener's `queue.json`, its App's credentials, `reactions.json`, the
 run logs it kept itself): an install that still has those goes through a release before #619
-first ([setup.md](setup.md#upgrading-the-orchestrator-without-a-volume-619)). Once moved, the
+first ([Upgrading: the orchestrator without a volume (#619)](guides/upgrade-notes.md#upgrading-the-orchestrator-without-a-volume-619)). Once moved, the
 emptied `logs/` and `shots/` are removed, and anything else beside the store is named in a
 warning, for the operator to remove.
 
@@ -1359,7 +1358,7 @@ the browser reconnects), hands the redeliveries' poller's lease (`edge/redeliver
 other copy, then exits. A delivery it refuses meanwhile, or that reaches no copy, gets `503` (or
 no answer), which GitHub marks failed and the next scan redelivers ([Missed
 deliveries](#missed-deliveries)). Two copies, both active on one store, take over each other's
-requests: a rolling update starts the new one first ([setup.md](setup.md#two-copies)). The
+requests: a rolling update starts the new one first ([Running two copies](guides/two-copies.md)). The
 orchestrator away (handing over), edge waits for it up to 15 s on each call it passes on, then
 answers `503`.
 
@@ -1593,7 +1592,7 @@ finish (an image's build), then releases the lease, and the waiting copy takes i
 asks every 250 ms). On a crash, or a store that no longer answers it, the lease expires
 (15 s) and the other copy takes over; the stopped one, by its own clock, no longer acts. Either
 copy finds the sandboxes again by their labels, and the logs and events in the store: the file
-store for one node, Redis for copies on several (`STORE_URL`, docs/setup.md, The store). The
+store for one node, Redis for copies on several (`STORE_URL`, docs/guides/store.md). The
 runs' inboxes are files of its own volume (`runner-data`'s `runs/` folder), which it copies to the
 broker service as they change (the broker serves them): two copies on several nodes need that
 folder shared. With Docker Compose, one copy runs: an update is a wait
@@ -2125,5 +2124,5 @@ tests fake it.
 | `lib/drain.mjs`                                                                             | Draining a server on SIGTERM, every service's: no new connection, the requests in flight finished, each connection closed once its answer is sent.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
 | `lib/metrics.mjs`                                                                           | Every service's Prometheus metrics (#651, #652): its registry of counters, gauges and histograms, their labels bounded (a value outside those declared, or a series past `MAX_SERIES`, folded into `other`), the text format, `METRICS_PORT`'s server (`GET /metrics` alone, no token), and the metrics every service shares (`buildInfo()`, `processMetrics()`, `leaseMetric()`).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
 | `metrics.mjs`                                                                               | The orchestrator's metrics (#654), on that registry: the runs' lives, the queue and its slots, the deliveries, the checks it makes on its own (conflicts, review fix rounds, `/after` waits), model fallbacks, its calls to the other services; what only the acting copy knows, collected at each scrape from it alone.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
-| `../<service>/metrics.mjs`                                                                  | Each other service's metrics, on the same registry: edge's (`edge/metrics.mjs`, #655), the github service's (#656), the models service's (#657), the egress proxy's (`proxy/`, #658), the runner's (#659), the broker's and the policy service's (#660); what each counts: [setup.md, Metrics](setup.md#metrics).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| `../<service>/metrics.mjs`                                                                  | Each other service's metrics, on the same registry: edge's (`edge/metrics.mjs`, #655), the github service's (#656), the models service's (#657), the egress proxy's (`proxy/`, #658), the runner's (#659), the broker's and the policy service's (#660); what each counts: [Metrics](guides/metrics.md).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
 | `lib/files.mjs`, `html.mjs`, `web.mjs`, `lib/http.mjs`                                      | Shared helpers: JSON state files written whole; HTML pages; the API's `apiRoute`, and its checks (`routeChecks`) for the MCP write tools.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |

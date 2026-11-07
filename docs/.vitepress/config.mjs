@@ -71,7 +71,7 @@ export default defineConfig({
     editLink: { pattern: `${repo}/edit/main/docs/:path` },
     nav: [
       { text: "Get started", link: "/get-started/quick-start" },
-      { text: "Guides", link: "/setup" },
+      { text: "Guides", link: "/guides/install" },
       { text: "Reference", link: "/repo-config" },
       { text: "Security", link: "/security" },
     ],
@@ -84,16 +84,62 @@ export default defineConfig({
           { text: "Core ideas", link: "/get-started/core-ideas" },
         ],
       },
+      // Guides: one page per task, in the order an operator meets them (#984).
       {
-        text: "Guides",
+        text: "Guides: install",
         items: [
-          { text: "Setting up Deckhand", link: "/setup" },
+          { text: "Install with Compose", link: "/guides/install" },
+          { text: "Create the GitHub App", link: "/guides/github-app" },
+          { text: "Start runs", link: "/guides/runs" },
+          { text: "Repositories and onboarding", link: "/guides/repositories" },
           { text: "Deckhand on Kubernetes", link: "/kubernetes" },
+        ],
+      },
+      {
+        text: "Guides: use",
+        items: [
+          { text: "The dashboard", link: "/guides/dashboard" },
+          { text: "MCP clients", link: "/guides/mcp-clients" },
+          { text: "Your own machine", link: "/guides/machines" },
+          { text: "Chats", link: "/guides/chats" },
+          { text: "Auto-pickup", link: "/guides/auto-pickup" },
+        ],
+      },
+      {
+        text: "Guides: agents",
+        items: [
+          { text: "Agents and providers", link: "/guides/agents" },
+          { text: "Claude Code", link: "/guides/claude-code" },
+          { text: "Codex", link: "/guides/codex" },
+          { text: "Antigravity CLI", link: "/guides/antigravity" },
+          { text: "Fallbacks", link: "/guides/fallbacks" },
+        ],
+      },
+      {
+        text: "Guides: operate",
+        items: [
+          { text: "Logs and health checks", link: "/guides/logs" },
+          { text: "Metrics", link: "/guides/metrics" },
+          { text: "Metrics by service", link: "/guides/metrics-list" },
+          { text: "Updating", link: "/guides/updating" },
+          { text: "Upgrade notes", link: "/guides/upgrade-notes" },
+          { text: "Running two copies", link: "/guides/two-copies" },
+        ],
+      },
+      {
+        text: "Guides: services and storage",
+        items: [
+          { text: "What the services hold", link: "/guides/services" },
+          { text: "The store", link: "/guides/store" },
+          { text: "Blob storage", link: "/guides/blob-storage" },
+          { text: "Container engine", link: "/guides/container-engine" },
+          { text: "Download cache", link: "/guides/download-cache" },
         ],
       },
       {
         text: "Reference",
         items: [
+          { text: "Server settings", link: "/settings" },
           { text: "Repository config", link: "/repo-config" },
           { text: "Modes", link: "/repo-config/modes" },
           { text: "Reviews", link: "/repo-config/reviews" },

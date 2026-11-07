@@ -249,7 +249,7 @@ test("a file without a login is refused, naming it", async (t) => {
     await assert.rejects(login.headers(), (error) => {
       assert.equal(
         error.message,
-        `${file} holds no Antigravity CLI login (sign in with \`agy\` for one, docs/setup.md)`,
+        `${file} holds no Antigravity CLI login (sign in with \`agy\` for one, docs/guides/antigravity.md)`,
       );
       return true;
     });

@@ -92,7 +92,7 @@ export function unreadableCredentials(env, { access = accessSync } = {}) {
     } catch (error) {
       if (error.code === "ENOENT") return;
       problems.push(
-        `Models: ${what} ${path} can't be read (${error.code}): it runs as uid 1000, give it the credentials folder and its files (chown -R 1000, docs/setup.md#the-models-service)`,
+        `Models: ${what} ${path} can't be read (${error.code}): it runs as uid 1000, give it the credentials folder and its files (chown -R 1000, docs/guides/services.md#the-models-service)`,
       );
     }
   };

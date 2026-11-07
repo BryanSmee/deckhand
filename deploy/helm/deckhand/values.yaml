@@ -21,12 +21,12 @@ namespaces:
   services: deckhand
   sandboxes: deckhand-sandboxes
 
-# config.yaml and the grants folder, mounted at /etc/deckhand (docs/setup.md#settings,
+# config.yaml and the grants folder, mounted at /etc/deckhand (docs/settings.md,
 # docs/security.md#the-grants-folder). `--set-file server.config=config.yaml` reads yours.
 # Read at start: the pods restart when they change, as the ConfigMap's name carries their hash.
 server:
   config: |
-    # Deckhand's settings, as server.example/config.yaml (every key: docs/setup.md#settings), under
+    # Deckhand's settings, as server.example/config.yaml (every key: docs/settings.md), under
     # the key config.yaml: your overlay or the chart's values replace them with yours
     # (docs/kubernetes.md, Install). Read at start: the pods restart when it changes, as the
     # ConfigMap's name has a hash of it.
@@ -41,7 +41,7 @@ server:
       # (docs/security.md#the-grants-folder). Nothing set: nothing granted.
 
 # Any other setting of the orchestrator, the runner and the models service, in deckhand-env
-# (docs/setup.md#settings): MAX_PARALLEL, KUBERNETES_SESSION_SIZE, KUBERNETES_REGISTRY_HOSTS…
+# (docs/settings.md): MAX_PARALLEL, KUBERNETES_SESSION_SIZE, KUBERNETES_REGISTRY_HOSTS…
 # One the values below set (KUBERNETES_NAMESPACE, SANDBOX_IMAGE…) is refused, naming the value.
 env: {}
 
@@ -114,7 +114,7 @@ engine:
   # KUBERNETES_ENGINE_RUNTIME_CLASS: the RuntimeClass Sysbox's install makes.
   runtimeClass: sysbox-runc
 
-# Blob storage (docs/kubernetes.md#blob-storage, docs/setup.md#blob-storage): the blobs component,
+# Blob storage (docs/kubernetes.md#blob-storage, docs/guides/blob-storage.md): the blobs component,
 # BLOB_URL and its key pair for the runner and the broker alone, and their way to it. The Secret
 # (keys access-key-id and secret-access-key) you make beforehand. The placeholders reach
 # nothing: neither service starts until url, to and ports are yours.
@@ -161,7 +161,7 @@ metrics:
       grafana_dashboard: "1"
     # A folder, say, with the sidecar's `folderAnnotation` (grafana_folder: Deckhand).
     annotations: {}
-  # The alert rules (deploy/alerts/deckhand.yaml, docs/setup.md#alerts) as a PrometheusRule (the
+  # The alert rules (deploy/alerts/deckhand.yaml, docs/guides/metrics.md#alerts) as a PrometheusRule (the
   # Prometheus Operator's) or a VMRule (VictoriaMetrics' operator's), once its CRD is in the
   # cluster.
   rules:

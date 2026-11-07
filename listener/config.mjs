@@ -107,7 +107,7 @@ const RUNNERS = ["docker", "kubernetes"];
 // The operator's settings, by environment variable (in lowercase, its config.yaml key), in the
 // order they are read: a default can use the ones before it. Each one has a type, a default, a
 // parser and maybe `empty`, as lib/settings.mjs reads them.
-// Each one is in docs/setup.md and compose.yaml (test/settings.test.mjs). Secrets and the
+// Each one is in docs/settings.md and compose.yaml (test/settings.test.mjs). Secrets and the
 // wiring compose.yaml sets to match its own services stay in the environment only.
 export const SETTINGS = {
   // Fail closed: required (requiredSettings()).
@@ -412,7 +412,7 @@ export function unwritableData(dir, { access = accessSync, list = readdirSync, s
   if (found.length > shown) lines.push(`… and ${found.length - shown} more in ${dir}`);
   if (found.some(({ code }) => code === "EACCES" || code === "EPERM")) {
     lines.push(
-      `It runs as uid 1000, and a data volume from an earlier release is root's. Stop the orchestrator first (one still running as root writes its store again), then hand the volume over once. Compose: \`docker compose stop orchestrator\`, \`docker compose run --rm --no-deps --user root --cap-add CHOWN --entrypoint chown orchestrator -R 1000:1000 /data\`, then \`docker compose up -d\`. Kubernetes: scale it to 0, then \`fsGroup: 1000\` on its pod, or a one-time chown init container (docs/setup.md#upgrading-the-orchestrator-runs-as-node-536)`,
+      `It runs as uid 1000, and a data volume from an earlier release is root's. Stop the orchestrator first (one still running as root writes its store again), then hand the volume over once. Compose: \`docker compose stop orchestrator\`, \`docker compose run --rm --no-deps --user root --cap-add CHOWN --entrypoint chown orchestrator -R 1000:1000 /data\`, then \`docker compose up -d\`. Kubernetes: scale it to 0, then \`fsGroup: 1000\` on its pod, or a one-time chown init container (docs/guides/upgrade-notes.md#upgrading-the-orchestrator-runs-as-node-536)`,
     );
   }
   return lines;
@@ -657,7 +657,7 @@ function sandboxConfig(env, s) {
 // Fail closed: repo images run in their repos' sandboxes, with their broker secrets and
 // grants, so a registry anyone could push to (an in-cluster one the sandboxes and builds can
 // reach) would let one run replace another repo's image. Its credentials have to be there,
-// which a registry that asks for none would make pointless: docs/setup.md says it must.
+// which a registry that asks for none would make pointless: docs/settings.md says it must.
 function registryCredentials(s) {
   if (s.KUBERNETES_REGISTRY && !s.KUBERNETES_REGISTRY_SECRET) {
     throw new ConfigError(

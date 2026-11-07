@@ -1410,7 +1410,7 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
     const credentials = readJson(files.credentials, null);
     if (!credentials) throw new Error("Sign in first: deckhand-machine login <url>.");
     if (!existsSync(files.config))
-      throw new Error(`No ${files.config}: see docs/setup.md, Your own machine.`);
+      throw new Error(`No ${files.config}: see docs/guides/machines.md.`);
     const config = readConfig(readFileSync(files.config, "utf8"), { home, base: dhome });
     const state = { sessions: {}, ...readJson(files.state, {}) };
     const saveState = (s) => writeFileSync(files.state, JSON.stringify(s, null, 2) + "\n");

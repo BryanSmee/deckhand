@@ -29,7 +29,7 @@ const sha256 = (text) => createHash("sha256").update(text).digest("hex");
 // there is none. Every copy needs the same one (one volume, or one Secret on Kubernetes). A new
 // key (or another store) leaves the stored logins unreadable, and each starts again from its
 // file, whose refresh token the first refresh spent: the ChatGPT plan's needs a new sign-in then
-// (docs/setup.md, The models service).
+// (docs/guides/services.md, The models service).
 export function loginKey(dir, { beforeLink = () => {} } = {}) {
   const path = join(dir, "models.key");
   const read = () => {
@@ -119,7 +119,7 @@ export function sharedLogin({
     if (raw === null) return null;
     if (raw?.kid !== seal.kid) {
       throw new KeyMismatch(
-        `the ${name} login in the store is sealed with another models.key than this copy's: every copy of the models service needs the same one (docs/setup.md, The models service)`,
+        `the ${name} login in the store is sealed with another models.key than this copy's: every copy of the models service needs the same one (docs/guides/services.md, The models service)`,
       );
     }
     const text = seal.open(raw.sealed);

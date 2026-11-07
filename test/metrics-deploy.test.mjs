@@ -95,8 +95,8 @@ test("the dashboard: its datasource a variable, its panels apart", () => {
 });
 
 test("the alerts: each with a severity and its text, documented, and tested", () => {
-  const setup = read("docs", "setup.md");
-  const section = setup.slice(setup.indexOf("### Alerts"), setup.indexOf("## Health checks"));
+  const metrics = read("docs", "guides", "metrics.md");
+  const section = metrics.slice(metrics.indexOf("\n## Alerts\n"));
   const tested = new Set(
     parseYaml(read("deploy", "alerts", "deckhand.test.yaml")).tests.flatMap((t) =>
       t.alert_rule_test.filter((a) => a.exp_alerts.length).map((a) => a.alertname),
@@ -107,7 +107,10 @@ test("the alerts: each with a severity and its text, documented, and tested", ()
     assert.match(rule.alert, /^Deckhand[A-Za-z]+$/);
     assert.ok(["critical", "warning", "info"].includes(rule.labels.severity), rule.alert);
     assert.ok(rule.annotations.summary && rule.annotations.description, rule.alert);
-    assert.ok(section.includes(`\`${rule.alert}\``), `${rule.alert} in docs/setup.md's Alerts`);
+    assert.ok(
+      section.includes(`\`${rule.alert}\``),
+      `${rule.alert} in docs/guides/metrics.md's Alerts`,
+    );
     assert.ok(tested.has(rule.alert), `${rule.alert} fires in deckhand.test.yaml`);
   }
 });

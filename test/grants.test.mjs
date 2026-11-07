@@ -393,8 +393,8 @@ test("the preview hook's former keys load, ignored, with a warning (#574)", () =
       const empty = grantsFrom({ "default.yaml": "", "org/repo.yaml": "" }, config);
       assert.deepEqual(grantFor(grants, config, "org/repo"), grantFor(empty, config, "org/repo"));
       assert.deepEqual(grantWarnings(grants), [
-        `default.yaml: ${key}: the preview hook is gone (#574), ignored: remove it (docs/setup.md#upgrading-the-preview-hook-is-gone-574)`,
-        `org/repo.yaml: ${key}: the preview hook is gone (#574), ignored: remove it (docs/setup.md#upgrading-the-preview-hook-is-gone-574)`,
+        `default.yaml: ${key}: the preview hook is gone (#574), ignored: remove it (docs/guides/upgrade-notes.md#upgrading-the-preview-hook-is-gone-574)`,
+        `org/repo.yaml: ${key}: the preview hook is gone (#574), ignored: remove it (docs/guides/upgrade-notes.md#upgrading-the-preview-hook-is-gone-574)`,
       ]);
     }
   }

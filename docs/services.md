@@ -343,7 +343,7 @@ gap stays (above). The Compose test server keeps it.
 - **No shared database**: each service keeps its own state through one store interface
   (`lib/store.mjs`: keys with TTLs, atomic operations, leases with a fencing epoch, acknowledged
   streams, blobs; its file backend for one node, `lib/store-file.mjs`, #500; Redis on several,
-  `lib/store-redis.mjs`, #509: [setup.md](setup.md#the-store)), and
+  `lib/store-redis.mjs`, #509: [The store](guides/store.md)), and
   passes its changes to those that need them as store streams, acknowledged once handled, so a
   handover loses none. The broker streams run starts, ends and progress; edge, verified events; the
   orchestrator, task updates for the dashboard; the runner, run events (started, ended, exit code;

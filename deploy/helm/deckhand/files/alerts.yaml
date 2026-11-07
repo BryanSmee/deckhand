@@ -1,8 +1,8 @@
 # Deckhand's alerts, as Prometheus rules (a rule file for Prometheus or vmalert; the Helm chart
 # ships the same groups as a PrometheusRule or a VMRule, metrics.rules). What each one means and
-# what to do about it: docs/setup.md, Alerts. The thresholds are starting points: an overlay or a
+# what to do about it: docs/guides/metrics.md, Alerts. The thresholds are starting points: an overlay or a
 # copy of this file tunes them to your runs. Deckhand's targets are scraped as job `deckhand`
-# (docs/setup.md's scrape config; the chart's ServiceMonitor names it so): another job name, and
+# (docs/guides/metrics.md's scrape config; the chart's ServiceMonitor names it so): another job name, and
 # DeckhandServiceDown's selector changes with it.
 groups:
   - name: deckhand

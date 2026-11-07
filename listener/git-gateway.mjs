@@ -530,7 +530,7 @@ export function createGitGateway({
       // without it: the run would see GitHub's refusal and not know the grant is there.
       const why =
         error.status === 422
-          ? "`workflows` is granted but the App doesn't have the Workflows permission: add Workflows: read and write in its settings and accept it on the installation (docs/setup.md)"
+          ? "`workflows` is granted but the App doesn't have the Workflows permission: add Workflows: read and write in its settings and accept it on the installation (docs/guides/github-app.md)"
           : "couldn't get a token for this push; try again";
       return refuse(req, res, repo, parsed, new Map(parsed.refs.map((ref) => [ref, why])), "error");
     }
