@@ -17,6 +17,7 @@ import { createTasks, newTask } from "../listener/tasks.mjs";
 import { ambiguous, respellMap, respelled, spellings } from "../listener/spelling.mjs";
 import { openLog, SUMMARIES, summaryKey } from "../listener/runlog.mjs";
 import { createRuns } from "../listener/runs.mjs";
+import { createStopped } from "../listener/stopped.mjs";
 import { fileStore } from "../lib/store-file.mjs";
 import { openStore, values } from "../lib/store.mjs";
 import { logContext, withLogContext } from "../lib/log.mjs";
@@ -948,6 +949,36 @@ test("a machine's claim and the comments held for its owner come back with the q
   assert.deepEqual(
     plain.tasks.get("org/repo#7").pending.map((i) => i.queueId),
     ["q-claimed"],
+  );
+});
+
+test("comments held since a stop come back held while it is stopped, queued once it isn't (#1003)", async (t) => {
+  const dir = tempDir(t);
+  const store = fileStore({ dir: join(dir, "store") });
+  const before = queueContext(t, dir, store);
+  const task = newTask({ repo: "org/repo", id: "7", kind: "issue", number: 7, base: "main" });
+  before.tasks.set("org/repo#7", task);
+  task.onHold.push(queued("7", { queueId: "q-held", text: "And this." }));
+  await before.saveQueue();
+  const saved = (await fileStore({ dir: join(dir, "store") }).get(QUEUE_KEY))["org/repo#7"];
+  assert.deepEqual([saved.pending, saved.onHold.map((i) => i.queueId)], [[], ["q-held"]]);
+  // Still stopped: held, nothing armed.
+  const after = queueContext(t, dir, fileStore({ dir: join(dir, "store") }));
+  after.stopped = createStopped();
+  after.stopped.stop("org/repo#7", "alice");
+  await after.loadQueue();
+  const back = after.tasks.get("org/repo#7");
+  assert.deepEqual([back.pending, back.onHold.map((i) => i.text)], [[], ["And this."]]);
+  assert.deepEqual(after.armed, []);
+  // Its stop lifted, the queue not written since (a copy stopped in between): queued.
+  const lifted = queueContext(t, dir, fileStore({ dir: join(dir, "store") }));
+  lifted.stopped = createStopped();
+  await lifted.loadQueue();
+  const queuedBack = lifted.tasks.get("org/repo#7");
+  assert.deepEqual([queuedBack.pending.map((i) => i.queueId), queuedBack.onHold], [["q-held"], []]);
+  assert.deepEqual(
+    lifted.armed.map(([id]) => id),
+    ["7"],
   );
 });
 

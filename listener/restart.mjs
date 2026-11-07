@@ -454,7 +454,11 @@ export function createRestart(ctx) {
       // A machine task's comments held for its owner, and its machine's claim (claims.mjs):
       // in the same write as the queue they come from and go back to.
       const held = t.held ?? [];
-      if (!all.length && !Object.keys(t.next).length && !held.length && !t.claim) continue;
+      // Those queued behind a run that was stopped, until a trigger (tasks.mjs holdStopped()):
+      // in the same write as the queue they leave and go back to.
+      const onHold = t.onHold ?? [];
+      const empty = !all.length && !held.length && !onHold.length && !t.claim;
+      if (empty && !Object.keys(t.next).length) continue;
       const pending = all.map(plainOf);
       // The comments' text and authors: the store is the listener's own (its files the
       // owner's only, lib/store-file.mjs).
@@ -464,6 +468,7 @@ export function createRestart(ctx) {
         next: t.next,
         dueAt: t.dueAt ?? null,
         ...(held.length && { held: held.map(plainOf) }),
+        ...(onHold.length && { onHold: onHold.map(plainOf) }),
         ...(t.claim && { claim: { ...t.claim, items: t.claim.items.map(plainOf) } }),
       };
     }
@@ -527,6 +532,16 @@ export function createRestart(ctx) {
         ctx.claims.restore(task, { ...t.claim, items: t.claim.items.map(revive) });
         log(`${key}: claimed by ${t.claim.name} (${t.claim.machine}) before the restart`);
       } else if (t.claim) t.pending.unshift(...t.claim.items);
+      // Held since a stop (tasks.mjs holdStopped()), as the comments queued are checked. Its stop
+      // lifted already (a copy stopped between the mark's write and the queue's): queued first.
+      const free = [];
+      for (const item of t.onHold ?? []) {
+        const refused = noLongerAllowed(config, item);
+        if (refused) ctx.track(ctx.settle(revive(item), "refused"));
+        else if (ctx.stopped?.has(key)) (task.onHold ??= []).push(revive(item));
+        else free.push(item);
+      }
+      t.pending.unshift(...free);
       task.pending.push(...t.pending.map(revive));
       // Held for a machine task's owner, as the comments queued are checked.
       for (const item of t.held ?? []) {

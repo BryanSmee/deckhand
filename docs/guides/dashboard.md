@@ -180,7 +180,7 @@ Each task shows its state in the orchestrator:
 | `brainstorm`      | a brainstorm waits for your next comment                                  |
 | `idle brainstorm` | no comment for a while; the next one restores the session                 |
 | `done`, `error`   | how the last run ended (`interrupted`: a restart came before its start)   |
-| `cancelled`       | someone stopped its last run (`/cancel` or the dashboard's Stop)          |
+| `cancelled`       | someone stopped its last run (`/cancel`, Stop): it waits for a trigger    |
 
 Pick one to see the first line of its last reply and its latest run's log live (and the
 next runs as they start), or an earlier run. The address keeps the tab, task and run, so a

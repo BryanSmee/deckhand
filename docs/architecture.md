@@ -1072,8 +1072,16 @@ reaches the agent's inbox, and gives it 👍. `runs.mjs` `cancel()` writes a `ca
 ends the run as `cancelled` whatever the exit looked like: a "Stopped by @user" reply with the
 usual footer (a run that had `answered` posts that answer, then "Stopped by @user after its
 answer"), no fallback, 👀 off its comments, and `cleanUp()` as usual. The session volume
-and pushed commits stay, so the next comment resumes it; comments queued for a follow-up run
-stay queued. A run still being prepared (its image building) doesn't start its sandbox; a task
+and pushed commits stay, so the next trigger resumes it. `cancel()` marks the task stopped
+(`stopped.mjs`, the store's `stopped` map: who, when; #1003) before the sandbox goes: until
+something asks for a run (`asksForRun()`: a person's trigger or `/mode` line, any dashboard or
+MCP action), `modeOf()` skips a comment without a trigger line, `conflicts.mjs` `checkPull()`
+skips the pull request (its attempt not kept) and the review loop starts no fix or CI fix run
+(the step says why). Comments queued for a follow-up run don't start one: the stopped run's
+`teardown()` moves them to the task's `onHold` (`tasks.mjs` `holdStopped()`), saved with the
+queue, and the next trigger's `queue()` lifts the mark and queues them first, in its run. A
+trigger that came before the run ended lifted it already: nothing is held. A task stopped
+before the mark existed has none, as before. A run still being prepared (its image building) doesn't start its sandbox; a task
 with only queued comments loses them instead (409 from the API when there is neither). A
 copy of the orchestrator restarting between the cancel and the exit reads it from the saved state, stops the
 sandbox again if it still runs, and ends it as cancelled rather than queueing its comments

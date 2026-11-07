@@ -27,10 +27,14 @@ A repository's own modes, and what each built-in one is for: [Modes](../repo-con
 ## Stop a run
 
 `/cancel` (the whole first line) stops the issue's running run now, and the task's page on the
-dashboard has a **Stop** button that does the same: the run's reply says who stopped it, its
-session and pushed commits stay, and the next comment resumes it. On a queued task (waiting for
-a slot), `/cancel` and the page's **Remove from queue** drop its queued comments: it is back in
-the backlog. With nothing running or queued, `/cancel` gets a reply saying so.
+dashboard has a **Stop** button that does the same: the run's reply says who stopped it, and its
+session and pushed commits stay. A stopped task waits for you: nothing starts on it again until
+a trigger comment (or a `/mode` line, or the dashboard's Start, Queue, Rerun or Fix), which
+resumes the session. A comment without one is left alone, the conflict watcher starts no rebase
+run and the review loop no fix run, and comments that came in during the stopped run wait to go
+with that trigger. On a queued task (waiting for a slot), `/cancel` and the page's **Remove from
+queue** drop its queued comments: it is back in the backlog. With nothing running or queued,
+`/cancel` gets a reply saying so.
 
 ## Commands on the trigger's line
 

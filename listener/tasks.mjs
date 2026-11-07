@@ -35,6 +35,7 @@ import { sameTask, taskId } from "./spelling.mjs";
 import { createTaskModes } from "./task-modes.mjs";
 import { itemMay, startAction } from "./permissions.mjs";
 import { startedBy } from "./run-policy.mjs";
+import { asksForRun } from "./stopped.mjs";
 
 // How long Deckhand's own item waits before it is queued again, when its task's machine route
 // can't be read (queue()).
@@ -126,7 +127,8 @@ export const runningIn = (ctx, pool) =>
 // number, base, name, settings), or those a listener left (restart.mjs); with its `owner`, a
 // login whose task it is alone (a chat's: chats.mjs), null for the repo's users' tasks, and its
 // `pool` (poolOf()). `held`: other people's comments on a task routed to a machine, until its
-// owner delivers them; `claim`: the machine's that holds it (claims.mjs).
+// owner delivers them; `claim`: the machine's that holds it (claims.mjs); `onHold`: comments
+// queued behind a run that was stopped, until a trigger (holdStopped()).
 export function newTask(fields) {
   return {
     owner: null,
@@ -134,6 +136,7 @@ export function newTask(fields) {
     pool: poolOf(fields),
     pending: [],
     held: [],
+    onHold: [],
     claim: null,
     running: false,
     ready: false,
@@ -645,6 +648,16 @@ export function createTasks(ctx) {
       task.settings = item.settings;
       task.settingsAt = Date.now();
     }
+    // Asked for again: the stop is lifted, and the comments held since go first (holdStopped()),
+    // in the same queue write as this one.
+    if (asksForRun(item)) {
+      if (ctx.stopped?.clear(key)) log(`${key}: no longer stopped`);
+      const kept = task.onHold?.splice(0) ?? [];
+      if (kept.length) {
+        task.pending.push(...kept);
+        log(`${key}: ${kept.length} comment(s) held since its stop go with it`);
+      }
+    }
     // Its pick's follow-up (the review loop, a comment): in the reserved slot too, and still
     // started by what started it for the policies (run-policy.mjs runTrigger()).
     if (!item.autoPickup && followsPick(task, key, item.repo)) {
@@ -674,6 +687,24 @@ export function createTasks(ctx) {
       startLater(task);
     }
     return item.mode;
+  }
+
+  // A run that was stopped is over (runs.mjs teardown()): what was queued behind it doesn't
+  // start a follow-up run, it waits for the next trigger (queue()), unless one came since the
+  // stop (the stop lifted). Out of the run order, its 👀 kept; in the queue's next write, which
+  // keeps `onHold` too (restart.mjs). → how many were held.
+  function holdStopped(task) {
+    const key = taskKey(task.repo, task.id);
+    if (!task.pending.length || !ctx.stopped?.has(key)) return 0;
+    clearTimeout(task.timer);
+    task.timer = null;
+    task.dueAt = null;
+    task.ready = false;
+    const items = task.pending.splice(0);
+    (task.onHold ??= []).push(...items);
+    ctx.order?.drop(key);
+    log(`${key}: ${items.length} comment(s) held until a trigger, its run stopped`);
+    return items.length;
   }
 
   // A run apart from work (modes.mjs `volumes`) is what the task's next run will be: it goes
@@ -897,6 +928,7 @@ export function createTasks(ctx) {
     deliver,
     deliverLater,
     startLater,
+    holdStopped,
     schedule,
     queueOrder,
     pickedCount,
