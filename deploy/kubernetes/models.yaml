@@ -1,4 +1,4 @@
-# The models service (docs/setup.md#the-models-service): the only pods with your agents'
+# The models service (docs/guides/services.md#the-models-service): the only pods with your agents'
 # credentials (the deckhand-models Secret, docs/kubernetes.md), which add them to the sandboxes'
 # API calls the egress proxy sends here. The plans' refreshed logins are sealed in its store
 # with models.key, a Secret both copies mount: a copy with another key refuses them.

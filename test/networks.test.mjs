@@ -31,8 +31,7 @@ const RUNS = {
   egress: ["proxy"],
 };
 
-// Blob storage compose.yaml can run (a profile of its own, to try it: docs/setup.md, Blob
-// storage) → the services that call it, the runner and the broker, each over a network of its own.
+// Blob storage compose.yaml can run (a profile of its own, to try it: docs/guides/blob-storage.md) → the services that call it, the runner and the broker, each over a network of its own.
 const BLOB_STORAGE = { garage: ["runner", "broker"] };
 
 // Those reaching the internet: edge (webhooks and browsers, a published port), github, models
@@ -131,13 +130,13 @@ test("compose.yaml: each network joins services that call each other, the runs' 
   );
 });
 
-// docs/setup.md's compose.override.yaml for metrics (#653): each service on an internal network
+// docs/guides/metrics.md's compose.override.yaml for metrics (#653): each service on an internal network
 // shared with the scraper alone, as one for all of them would join services that don't call each
 // other, and the scraper on none of compose.yaml's.
-test("setup.md: the metrics override puts each service on a network of its own with the scraper", () => {
-  const setup = readFileSync(join(root, "docs", "setup.md"), "utf8");
+test("docs/guides/metrics.md: the metrics override puts each service on a network of its own with the scraper", () => {
+  const metrics = readFileSync(join(root, "docs", "guides", "metrics.md"), "utf8");
   const [, text] = /```yaml\n(# compose\.override\.yaml: each service's metrics[^]*?)```/.exec(
-    setup,
+    metrics,
   );
   const override = readCompose(text);
   const compose = readCompose(readFileSync(join(root, "compose.yaml"), "utf8"));
@@ -287,7 +286,7 @@ test("compose.yaml: only the runner and the broker get blob storage's settings",
   }
 });
 
-// Garage, to try blob storage (docs/setup.md, Blob storage): with its profile alone, reached by
+// Garage, to try blob storage (docs/guides/blob-storage.md): with its profile alone, reached by
 // the runner and the broker over a network each, internal (no way out for either), which they
 // wait for only when it runs.
 test("compose.yaml: Garage with the garage profile alone, on the runner's and the broker's internal networks", () => {

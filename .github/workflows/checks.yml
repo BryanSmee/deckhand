@@ -22,8 +22,8 @@ jobs:
     runs-on: [self-hosted, Linux] # TODO: change to ubuntu-latest on public release
     timeout-minutes: 20
     # A real Redis, so the store's Redis tests run (test/store-redis.test.mjs, its calls made as
-    # docs/setup.md's ACL user, and the runner's handover on Redis): Redis 7, the oldest
-    # docs/setup.md supports. On a port the host picks: a self-hosted machine may run two jobs.
+    # docs/guides/store.md's ACL users, and the runner's handover on Redis): Redis 7, the oldest
+    # docs/guides/store.md supports. On a port the host picks: a self-hosted machine may run two jobs.
     services:
       redis:
         image: redis:7
@@ -195,7 +195,7 @@ jobs:
       KUBECONFORM_SHA256: 9bc2bffbf71f261128533edaf912153948b7ff238f9a531ae6d34466ec287883
       HELM_VERSION: 4.3.1
       HELM_SHA256: 0403a88ae20913d11b10a2467b50087721fea7581736da6b9d3992f5357fe54b
-      # promtool, for the alert rules: Prometheus' release, the one docs/setup.md's example runs.
+      # promtool, for the alert rules: Prometheus' release, the one docs/guides/metrics.md's example runs.
       PROMETHEUS_VERSION: 3.15.1
       PROMETHEUS_SHA256: 6a726885328ad9efebbf36e876ce2fb6225468a71fd1e7ce3ba666d5f4d97a84
     steps:

@@ -1,5 +1,5 @@
 // Every service's metrics together (#651): built through the declareMetrics() each server calls
-// (#759, held to it below), they are the ones their code declares, documented in docs/setup.md,
+// (#759, held to it below), they are the ones their code declares, documented in docs/guides/metrics-list.md,
 // with bounded labels only, and no two services declare one name for different things.
 import assert from "node:assert/strict";
 import { readdirSync, readFileSync } from "node:fs";
@@ -143,10 +143,9 @@ test("every service's metrics: those its code declares, documented, their labels
   // Built here, every metric the code declares: none left out of a module this test builds.
   assert.deepEqual([...all.keys()].sort(), [...declaredInCode()].sort());
 
-  const setup = read("docs", "setup.md");
-  const section = setup.slice(setup.indexOf("\n## Metrics\n"));
+  const section = read("docs", "guides", "metrics-list.md");
   const undocumented = [...all.keys()].filter((name) => !section.includes(`\`${name}`));
-  assert.deepEqual(undocumented, [], "in docs/setup.md's Metrics");
+  assert.deepEqual(undocumented, [], "in docs/guides/metrics-list.md");
 
   for (const [name, { labels }] of all) {
     for (const label of labels) {

@@ -16,7 +16,7 @@ on the dashboard.
 ## Onboarding
 
 When the App is installed on a repository without this file, Deckhand opens an
-onboarding issue there (see [Setting up](setup.md#3-use-it)), and Claude proposes the file
+onboarding issue there (see [Onboarding](guides/repositories.md#onboarding)), and Claude proposes the file
 in its comments: it reads the repository (package managers, CI workflows, `AGENTS.md`, test
 and lint commands, services) and gives each key a reason, within the users and mount roots
 the operator allows, and names the hosts to ask the operator for. Each comment on the issue goes on in that conversation, with a
@@ -322,7 +322,7 @@ repositories whose branches they trust like the default branch.
 
 A sandbox has no Docker of its own, so a change to a Dockerfile or a compose file would ship
 untested. With `docker: true`, each work run gets a container engine next to its sandbox
-(set up by the operator: [Setup](setup.md#container-engine)), and the sandbox the `docker`
+(set up by the operator: [Container engine](guides/container-engine.md)), and the sandbox the `docker`
 CLI with buildx and compose, pointed at it (`DOCKER_HOST=tcp://engine:2375`). The agent's
 prompt says whether its run has an engine, and whether it answered:
 
@@ -408,10 +408,10 @@ says why. The Antigravity CLI's models carry their effort in their name
 Each agent keeps its own session for an issue: switching agent starts the issue afresh with
 the new one, which reads the issue and its comments like any first run. A comment's
 `/agent codex` picks the agent for the issue instead, among the operator's, whatever these
-keys say: [Agents and providers](setup.md#agents-and-providers). With Codex, comments
+keys say: [Agents and providers](guides/agents.md). With Codex, comments
 posted while a run works wait for it to end, and the next run answers them in the same
-session (see [Codex](setup.md#codex)); the same with the Antigravity CLI
-([Antigravity CLI](setup.md#antigravity-cli)).
+session (see [Codex](guides/codex.md)); the same with the Antigravity CLI
+([Antigravity CLI](guides/antigravity.md)).
 
 ## Instructions
 

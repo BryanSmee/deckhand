@@ -6,7 +6,7 @@ issue when it is done, or stops to ask when only you can decide.
 
 It is self-hosted and bring-your-own-key: you create your own private GitHub App, run your own
 server (Docker Compose, or [Kubernetes](../kubernetes.md)), and use your own Claude credential.
-It can run [Codex](../setup.md#codex) or the [Antigravity CLI](../setup.md#antigravity-cli)
+It can run [Codex](../guides/codex.md) or the [Antigravity CLI](../guides/antigravity.md)
 instead. One deployment serves one operator, across as many repositories as the App is
 installed on.
 
@@ -15,7 +15,7 @@ installed on.
 - **Comment triggers.** The first line of a comment is the command, the rest are instructions.
   `Deckhand` starts a run; later comments on the issue or its pull request continue the same
   session. `/mode brainstorm` discusses the issue without code, `/after #77` waits for another
-  issue, `/cancel` stops the run ([Use it](../setup.md#3-use-it)).
+  issue, `/cancel` stops the run ([Start runs](../guides/runs.md)).
 - **Needs input.** A run that hits a decision only you can make pushes its work in progress,
   asks numbered questions and labels the issue `needs-input`. Your answer continues it.
 - **Live feedback.** Reactions on your comment (👀, then 🚀, 😕 or 👎), and the final message as a
@@ -27,9 +27,9 @@ installed on.
 - **Inboxes.** An ideas issue and a bugs issue whose comments become filed issues
   ([Inboxes](../repo-config/issues.md#inboxes)).
 - **Your own machines.** Issues that need what only your computer has can run there, with your
-  own Claude Code ([Your own machine](../setup.md#your-own-machine)).
+  own Claude Code ([Your own machine](../guides/machines.md)).
 - **Dashboard.** Every issue and pull request Deckhand worked on, its runs' live logs, and what
-  waits for what ([The dashboard](../setup.md#4-the-dashboard)).
+  waits for what ([The dashboard](../guides/dashboard.md)).
 
 ## What it is not
 

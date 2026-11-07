@@ -221,7 +221,7 @@ test("scanning(): the store's functions listing keys, and the services calling t
   for (const service of ["edge", "orchestrator", "runner"]) assert.ok(found.includes(service));
 });
 
-test("components/redis and setup.md: each user's ACL allows every command the store sends", () => {
+test("components/redis and docs/guides/store.md: each user's ACL allows every command the store sends", () => {
   const commands = storeCommands();
   assert.ok(
     ["xdel", "xinfo|groups", "scan"].every((c) => commands.includes(c)),
@@ -240,9 +240,9 @@ test("components/redis and setup.md: each user's ACL allows every command the st
     service,
     line.replace("$scan", listing.includes(service) ? " +scan" : ""),
   ]);
-  // setup.md's users, one per service as here, each on its own prefix (#777).
+  // docs/guides/store.md's users, one per service as here, each on its own prefix (#777).
   const setup = [
-    ...readFileSync(join(import.meta.dirname, "..", "docs", "setup.md"), "utf8").matchAll(
+    ...readFileSync(join(import.meta.dirname, "..", "docs", "guides", "store.md"), "utf8").matchAll(
       /^(user ([a-z]+) on .*)$/gm,
     ),
   ].map(([, acl, service]) => [service, acl]);
@@ -251,11 +251,11 @@ test("components/redis and setup.md: each user's ACL allows every command the st
     services,
   );
   for (const [service, acl] of setup) {
-    assert.ok(acl.includes(` ~deckhand:${service}:* `), `setup.md: ${service}'s keys`);
-    acls.push([`setup.md: ${service}`, acl]);
+    assert.ok(acl.includes(` ~deckhand:${service}:* `), `store.md: ${service}'s keys`);
+    acls.push([`store.md: ${service}`, acl]);
   }
   for (const [who, acl] of acls) {
-    const scan = listing.includes(who.replace("setup.md: ", ""));
+    const scan = listing.includes(who.replace("store.md: ", ""));
     assert.deepEqual(
       commands.filter((c) => (scan || c !== "scan") && !allows(`${acl} `, c)),
       [],

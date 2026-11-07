@@ -200,7 +200,7 @@ test("each listing reads the App's settings again, and warns about an installati
   }
   assert.equal(settings, 4);
   assert.deepEqual(logs, [
-    "The GitHub App's installation on org lacks actions: write: an owner of the account accepts the new permissions on https://github.com/organizations/org/settings/installations/1 (docs/setup.md)",
+    "The GitHub App's installation on org lacks actions: write: an owner of the account accepts the new permissions on https://github.com/organizations/org/settings/installations/1 (docs/guides/github-app.md)",
   ]);
   // What the listing said each installation has goes to the tokens too.
   assert.deepEqual(await app.lacking("org/app", { actions: "read" }), {
@@ -228,7 +228,7 @@ test("what the App lacks too is left out of its installation's warning and links
   list.refresh();
   await list.list();
   assert.deepEqual(logs, [
-    "The GitHub App's installation on org lacks actions: write: an owner of the account accepts the new permissions on https://github.com/organizations/org/settings/installations/1 (docs/setup.md)",
+    "The GitHub App's installation on org lacks actions: write: an owner of the account accepts the new permissions on https://github.com/organizations/org/settings/installations/1 (docs/guides/github-app.md)",
   ]);
   const stored = { slug: "my-app", owner: "org", ownerType: "Organization" };
   const links = appLinks(

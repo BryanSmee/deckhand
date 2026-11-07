@@ -170,12 +170,12 @@ export function createRepoList({
   }
 
   // What an installation lacks of what its App has: an owner of its account has yet to accept
-  // it (docs/setup.md). Logged when it changes, not at each listing.
+  // it (docs/guides/github-app.md). Logged when it changes, not at each listing.
   function warnInstallation(installation, missing, appLacks) {
     const lacks = missing.filter((p) => !appLacks.includes(p)).join(", ");
     if (lacks && warned.get(installation.id) !== lacks) {
       log(
-        `The GitHub App's installation on ${installation.account?.login ?? installation.id} lacks ${lacks}: an owner of the account accepts the new permissions on ${installation.html_url} (docs/setup.md)`,
+        `The GitHub App's installation on ${installation.account?.login ?? installation.id} lacks ${lacks}: an owner of the account accepts the new permissions on ${installation.html_url} (docs/guides/github-app.md)`,
       );
     }
     warned.set(installation.id, lacks);

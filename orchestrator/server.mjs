@@ -199,7 +199,7 @@ await models.start();
 const stray = AGENT_SECRETS.filter((name) => env[name]);
 if (stray.length) {
   log(
-    `Warning: the orchestrator's environment holds ${stray.join(", ")}, which it doesn't use: the models service holds the agents' credentials (docs/setup.md). Remove them from the orchestrator's.`,
+    `Warning: the orchestrator's environment holds ${stray.join(", ")}, which it doesn't use: the models service holds the agents' credentials (docs/guides/services.md). Remove them from the orchestrator's.`,
   );
 }
 let config;
@@ -1332,7 +1332,7 @@ shotsMoved.then(() => ctx.stopping || (history.start(), tidyData()));
 
 // What a release before kept in the data volume, once moved (#619): its emptied folders go, and
 // what nothing reads any more is named, for the operator to remove (or, with Redis as the store,
-// the volume itself: docs/setup.md#upgrading-the-orchestrator-without-a-volume-619). A folder
+// the volume itself: docs/guides/upgrade-notes.md#upgrading-the-orchestrator-without-a-volume-619). A folder
 // not empty yet (a run's state whose tokens the broker hasn't taken) goes at a later start.
 function tidyData() {
   for (const dir of [logDir, shotsDir]) {
@@ -1346,7 +1346,7 @@ function tidyData() {
   const left = leftInData(config.dataDir, storeTop, moving);
   if (left.length) {
     log.warn(
-      `${config.dataDir} holds ${left.join(", ")}, which no longer is read: remove ${left.length > 1 ? "them" : "it"} (docs/setup.md#upgrading-the-orchestrator-without-a-volume-619)`,
+      `${config.dataDir} holds ${left.join(", ")}, which no longer is read: remove ${left.length > 1 ? "them" : "it"} (docs/guides/upgrade-notes.md#upgrading-the-orchestrator-without-a-volume-619)`,
     );
   }
 }

@@ -27,7 +27,7 @@ They are light runs, like brainstorms: no branch, no `setup`, the brainstorm mod
   comment it answers; the discussion keeps one session, like a brainstorm. When it settles
   on something to build, Claude files an issue and links it. Other categories are never
   read. These runs alone get a token with the Discussions permission (see
-  [Setting up](../setup.md) for an App created before it). Prompt: `prompts/discussion.md`.
+  [Create the GitHub App](../guides/github-app.md#apps-created-before-an-event) for an App created before it). Prompt: `prompts/discussion.md`.
   The dashboard starts discussions too (New request, Discussion: a title and details) and follows
   them: a discussion's page shows its thread, Deckhand's answers included, with a reply box
   under each thread and one for a new comment. Everything is written on GitHub first, as the
@@ -144,7 +144,7 @@ of [the GitHub input](policy-inputs.md#the-github-input); a repository's own mod
 policies allow them (`allow_github`, [the default policies](policies.md#the-default-policies)).
 
 Projects need the App's **Organization projects: Read and write** permission, accepted on the
-organization's installation ([setup](../setup.md)); a project owned by a user can't be reached by
+organization's installation ([Create the GitHub App](../guides/github-app.md#permissions-added-later)); a project owned by a user can't be reached by
 a GitHub App at all.
 
 ## Open questions
@@ -187,7 +187,7 @@ panel).
 ## Chats
 
 Deckhand's users may chat with the agent about this repository from the dashboard, without an
-issue ([setup.md](../setup.md#chats)): a chat runs in this repository's image, with its grants and
+issue ([Chats](../guides/chats.md)): a chat runs in this repository's image, with its grants and
 its setup (not its caches), in volumes of its own, and writes nothing to GitHub. The users in
 `users` may chat here; `chats` lowers how many chats each may keep:
 
@@ -208,7 +208,7 @@ repository's `.deckhand/policy/`), this file and the operator's grants give a ch
 
 A user's own computer may take this repository's tasks (Unreal Engine, a GPU, licensed tools
 the sandbox lacks): its driver, an MCP client signed in as its owner, registers it with its
-labels, its capacity and the repositories it takes ([setup.md](../setup.md#mcp-clients)). Both
+labels, its capacity and the repositories it takes ([MCP clients](../guides/mcp-clients.md)). Both
 sides must opt in before this repository is offered to one:
 
 - the operator's policies grant it `machines` ([security.md](../security.md#the-grants)), nothing
@@ -248,7 +248,7 @@ label still on routes it again). Other users' comments wait on the task's page u
 owner delivers them; Deckhand's own (a review's fix round, a CI fix) don't. When the agent
 there asks for a permission, the App's comment says so, and the owner answers with `/allow`,
 `/allow run` or `/deny` (or on the task's page): anyone else's answer is ignored
-([setup.md](../setup.md#mcp-clients)).
+([MCP clients](../guides/mcp-clients.md)).
 
 The App opens the pull request from the branch the machine pushed, which Deckhand's default
 `machines.rego` never auto-merges.
@@ -256,7 +256,7 @@ The App opens the pull request from the branch the machine pushed, which Deckhan
 ## Auto-pickup
 
 `auto_pickup: true` opts the repository in to the operator's auto-pickup
-([setup.md](../setup.md#auto-pickup)): its open issues labelled `AUTO_PICKUP_LABEL`
+([Auto-pickup](../guides/auto-pickup.md)): its open issues labelled `AUTO_PICKUP_LABEL`
 (`auto-pickup` by default) are started by Deckhand itself, oldest created first across
 every repository that opted in, in `work` mode, in the slots the operator reserves
 (`AUTO_PICKUP_SLOTS`). Without those slots (the default), or without this key, nothing is

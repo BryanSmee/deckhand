@@ -96,7 +96,7 @@ export function engineBackend(setting, runtimes) {
   if (setting === "auto") return sysbox ? "sysbox" : "podman";
   if (setting === "sysbox" && !sysbox) {
     throw new Error(
-      `SANDBOX_ENGINE is sysbox, but the host's Docker has no ${SYSBOX_RUNTIME} runtime: install Sysbox, or set SANDBOX_ENGINE to podman or auto (docs/setup.md)`,
+      `SANDBOX_ENGINE is sysbox, but the host's Docker has no ${SYSBOX_RUNTIME} runtime: install Sysbox, or set SANDBOX_ENGINE to podman or auto (docs/guides/container-engine.md)`,
     );
   }
   return setting;

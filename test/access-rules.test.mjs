@@ -492,10 +492,10 @@ test(
 );
 
 test(
-  "the real opa: docs/setup.md's bindings give what its migration notes say",
+  "the real opa: docs/guides/upgrade-notes.md's bindings give what its migration notes say",
   { skip: noOpa },
   async (t) => {
-    const text = docsBlock("setup.md", "migration access.rego");
+    const text = docsBlock("guides/upgrade-notes.md", "migration access.rego");
     const { policies } = realAccess(t, { operator: { "access.rego": text } });
     const actions = async (login, where) => (await policies.access(login, where)).actions;
     assert.ok((await actions("alice", repo("other/repo"))).includes("repo:config:read"));

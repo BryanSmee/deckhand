@@ -181,7 +181,7 @@ export class LastingRefusal extends Error {}
 // logins (chatgpt.mjs, antigravity-login.mjs), and where their calls go.
 //
 // Claude's needs the token's `user:profile` scope, which a `claude setup-token` token (what
-// docs/setup.md has CLAUDE_CODE_OAUTH_TOKEN be) doesn't have: refused (401, 403), it is a
+// docs/guides/install.md has CLAUDE_CODE_OAUTH_TOKEN be) doesn't have: refused (401, 403), it is a
 // LastingRefusal, and the Claude plan's bars come from the runs' answers alone.
 export function claudePoll({ token, upstream = "https://api.anthropic.com", fetch }) {
   const url = new URL("api/oauth/usage", `${upstream.replace(/\/+$/, "")}/`);

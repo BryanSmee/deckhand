@@ -287,13 +287,13 @@ async function realRedis() {
   throw new Error("redis-server didn't start");
 }
 
-// docs/setup.md's orchestrator user (+scan: it lists its keys), its keys under `deckhand-test:`
+// docs/guides/store.md's orchestrator user (+scan: it lists its keys), its keys under `deckhand-test:`
 // rather than `deckhand:orchestrator:`: the stores the tests open call Redis as it, so a command
 // the store sends that its ACL lacks fails them (NOPERM). Removed once the file's tests are
 // done. → a URL signing in as it.
 async function setupUser(url) {
   const line = /^user orchestrator on (.*)$/m.exec(
-    readFileSync(join(import.meta.dirname, "..", "docs", "setup.md"), "utf8"),
+    readFileSync(join(import.meta.dirname, "..", "docs", "guides", "store.md"), "utf8"),
   )[1];
   const name = `deckhand-test-${randomUUID()}`;
   const password = randomUUID();
@@ -322,7 +322,7 @@ async function setupUser(url) {
 
 const redisUrl = await realRedis();
 const skip = redisUrl ? false : "no Redis: set TEST_REDIS_URL, or put redis-server on the PATH";
-// The stores' (docs/setup.md's ACL); redisUrl's is the tests' own, to look at what they wrote.
+// The stores' (docs/guides/store.md's ACL); redisUrl's is the tests' own, to look at what they wrote.
 const storeUrl = redisUrl && (await setupUser(redisUrl));
 
 // Each test its own prefix, its keys deleted after it: a Redis shared with others keeps theirs.

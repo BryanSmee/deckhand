@@ -24,7 +24,7 @@ export function nextStep(mode, { talk, fresh, trigger }) {
 // A fast run, by what its agent said of its fast mode at the end (agents/claude.mjs): "on"
 // (or nothing, from an older version) is plain fast, "cooldown" back to normal speed for a
 // while after a rate limit, "off" it couldn't turn it on (the organization's settings, an
-// OAuth token: docs/setup.md).
+// OAuth token: docs/guides/claude-code.md).
 const FAST = {
   cooldown: " · fast, then normal speed for a while (rate limited)",
   off: " · normal speed: the agent couldn't turn fast mode on",

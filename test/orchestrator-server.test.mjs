@@ -3242,7 +3242,7 @@ mounts:
     const line = await listener.until(/holds .*, which no longer is read/);
     assert.match(
       line,
-      /holds run-token\.key, logs\/org-repo-1-1000\.log, which no longer is read: remove them \(docs\/setup\.md#upgrading-the-orchestrator-without-a-volume-619\)/,
+      /holds run-token\.key, logs\/org-repo-1-1000\.log, which no longer is read: remove them \(docs\/guides\/upgrade-notes\.md#upgrading-the-orchestrator-without-a-volume-619\)/,
     );
     // shots/ emptied, removed; logs/ kept for what is left in it.
     assert.deepEqual(readdirSync(data).sort(), ["logs", "run-token.key", "store"]);

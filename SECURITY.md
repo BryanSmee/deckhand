@@ -68,4 +68,4 @@ Out of scope:
 
 Fixes go into the next release; only the latest release is supported. Update with
 `docker compose pull` (or your chart's or manifests' new version), as
-[Updating](docs/setup.md#updating) says.
+[Updating](docs/guides/updating.md) says.

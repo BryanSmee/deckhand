@@ -7,7 +7,7 @@
 # hosts: [pypi.org]
 
 # Of the hosts they may reach, those whose answers the egress proxy keeps for every run,
-# HTTPS too: public mirrors downloaded from again and again (docs/setup.md#download-cache).
+# HTTPS too: public mirrors downloaded from again and again (docs/guides/download-cache.md).
 # cached_hosts: [deb.debian.org, dl-cdn.alpinelinux.org]
 
 # The yes-or-no grants (a Dockerfile, an engine, research, workflows, auto-merge) aren't

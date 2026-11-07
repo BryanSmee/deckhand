@@ -844,7 +844,7 @@ export function createGithubGateway({
     const where = lacks.url ? ` on ${lacks.url}` : "";
     return {
       status: 403,
-      message: `this needs the GitHub App's ${lacks.missing.join(", ")} permission, which its installation${lacks.account ? ` on ${lacks.account}` : ""} lacks: the operator adds ${them} to the App's settings if ${lacks.missing.length > 1 ? "they aren't" : "it isn't"} there, and an owner of the account accepts ${them}${where} (Deckhand's docs/setup.md)`,
+      message: `this needs the GitHub App's ${lacks.missing.join(", ")} permission, which its installation${lacks.account ? ` on ${lacks.account}` : ""} lacks: the operator adds ${them} to the App's settings if ${lacks.missing.length > 1 ? "they aren't" : "it isn't"} there, and an owner of the account accepts ${them}${where} (Deckhand's docs/guides/github-app.md)`,
     };
   }
 
