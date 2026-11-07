@@ -117,10 +117,10 @@ An App created before Deckhand followed repositories' changes lacks the `reposit
 on **Repository** under _Subscribe to events_ in its settings. Without it, a repository deleted,
 transferred or made private keeps what the access decisions last read of it (whether it is
 private, its policy listing) up to a minute, or up to an hour while GitHub fails, rather than
-being read again at once ([Security model](../security.md), Fail closed), and another branch made
-the default in its settings isn't followed by a conflict check of its open pull requests until
-the next poll. A repository removed
-from the installation needs no event of its own.
+being read again at once ([Access › Fail closed](../security/webhooks-and-sign-in.md#access)),
+and another branch made the default in its settings isn't followed by a conflict check of its
+open pull requests until the next poll. A repository removed from the installation needs no
+event of its own.
 
 An App created before `/after` lacks the `issues` event: turn on **Issues** under _Subscribe
 to events_ in its settings. Without it, a comment waiting for an issue (`/after #77`) still
