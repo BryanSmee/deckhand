@@ -3,13 +3,13 @@
 Deckhand runs Claude Code on GitHub issues and pull requests: comment triggers, brainstorms,
 inbox issues (ideas, bugs), GitHub Discussions, a sandbox container per issue, a dashboard. It is
 self-hosted and bring-your-own-key: each operator creates their own private GitHub App and
-runs their own server with their own Claude credentials. One deployment = one operator, Docker
-only.
+runs their own server with their own Claude credentials. One deployment = one operator, on
+Docker Compose (`compose.yaml`) or Kubernetes (`deploy/kubernetes/`, the Helm chart in
+`deploy/helm/deckhand/`, docs/kubernetes.md).
 
-It is being extracted from PocketBerry's `infra/claude/`
-(https://github.com/BryanSmee/shiny-piece/tree/main/infra/claude): port from there rather than
-rewriting, and keep what already works (debounce, live comments, reactions, needs-input,
-brainstorm sessions). The plan and its decisions: PocketBerry's PB-135 and issues #1–#7 here.
+It started as the issue runner of another project, PocketBerry, and was extracted from it: keep
+what already works (debounce, live comments, reactions, needs-input, brainstorm sessions)
+rather than rewriting it. Its decisions are in this repository's issues and pull requests.
 
 ## Commands
 
@@ -321,7 +321,6 @@ The details, and how to find the runs an update broke: `docs/architecture.md`, R
 
 - Work happens on GitHub issues: one branch and pull request per issue, `Closes #<n>`,
   never push to `main`. Write everything in English.
-- Until Deckhand runs itself, its runs come from PocketBerry's listener. That sandbox's user
-  `CLAUDE.md` is mostly about PocketBerry (`fr.json`, pnpm, dev servers, databases `shiny`):
-  ignore those parts here. Writing in English, stopping to ask and the needs-input marker
-  still apply.
+- Most pull requests come from Deckhand's own runs on this repository; a person's are held to
+  the same rules. How to contribute: CONTRIBUTING.md; how to report a vulnerability:
+  SECURITY.md.

@@ -5,7 +5,6 @@ auto_pickup: true
 inbox:
   ideas: 15
   bugs: 16
-  discussions: Ask Claude
 
 # Prettier (npx) and the dashboard's packages, downloaded once.
 caches:

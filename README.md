@@ -235,6 +235,7 @@ Read this before installing Deckhand on a repository.
 
 All of it, with the grants folder and the limits of each measure:
 [docs/security.md](docs/security.md).
+To report a vulnerability privately, see [SECURITY.md](SECURITY.md).
 
 ## Updating
 
@@ -276,7 +277,8 @@ sandbox/deckhand-inbox sandbox/deckhand-files` (the list: [AGENTS.md](AGENTS.md#
 The dashboard (`dashboard/`, Preact + Vite + TypeScript) is built into edge's image;
 locally: `cd dashboard && npm ci && npm test && npm run build`, or `npm run dev` against
 edge on port 8080.
-See [AGENTS.md](AGENTS.md) for the conventions and security rules.
+See [AGENTS.md](AGENTS.md) for the conventions and security rules, and
+[CONTRIBUTING.md](CONTRIBUTING.md) for how issues and pull requests are handled.
 
 ## Licence
 
