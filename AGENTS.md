@@ -191,8 +191,9 @@ docs/         the docs, and the site built from them (VitePress, build-time only
   `http.mjs` (`api/state`) and `runlog.mjs` (the log stream): change them together. Tests: Vitest and
   Testing Library, named `*.spec.ts(x)`: Node runs `*.test.ts` files itself, and
   `node --test` must leave them alone.
-- **So is the docs site** (`docs/`, issue #982): VitePress, pinned with its lock file in
-  `docs/package.json`, build-time only. Its files stay out of every image (`.dockerignore`): the
+- **So is the docs site** (`docs/`, issue #982): VitePress, and Mermaid for the ` ```mermaid `
+  blocks GitHub draws too (#996, drawn in the browser by `docs/.vitepress/theme/Mermaid.vue`),
+  pinned with their lock file in `docs/package.json`, build-time only. Its files stay out of every image (`.dockerignore`): the
   sandbox image copies `docs/` for its pages. The pages are plain Markdown that reads the same on
   GitHub: relative links, GitHub's heading anchors, no Vue components outside `index.md`.
 - **ESM** (`.mjs`), small functions, comments that explain _why_, briefly.
