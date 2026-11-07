@@ -47,7 +47,7 @@ closed. With a wildcard:
 A repository can also declare inboxes in its `.deckhand.yaml`: an ideas issue and a bug
 reports issue, where every comment of an allowed user becomes a labelled GitHub issue (or an
 answer), and a GitHub Discussions category (for example "Ask Claude") where Claude answers
-allowed users' questions. See [Inboxes](../repo-config/issues.md#inboxes).
+allowed users' questions. See [Inboxes](inboxes.md).
 
 Each repository can add a `.deckhand.yaml` on its default branch: its own users (narrowing
 `ALLOWED_USERS`), trigger word, models, parallel cap, setup command, instructions,

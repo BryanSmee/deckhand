@@ -23,7 +23,14 @@ or a GitHub token, once your policies grant the repository `research` (an `allow
 `grants/policy/`: [the grants](../reference/server-folder.md#the-grants),
 [Research runs](../security/policies.md#research-runs)).
 
+`Deckhand /mode review` on a pull request reviews it, once its repository's `review` block
+turns reviews on; the block can also review every pull request marked ready, send a fix run
+after a review that asks for changes, and (unsafe, with the operator's `auto_merge` grant) merge
+Deckhand's own pull request after a clean one: [Reviews](../repo-config/reviews.md#reviews),
+[Auto-merge](../repo-config/reviews.md#auto-merge).
+
 A repository's own modes, and what each built-in one is for: [Modes](../repo-config/modes.md).
+Ideas, bug reports and questions without a trigger line: [Inboxes](inboxes.md).
 
 ## Stop a run
 

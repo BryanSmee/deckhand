@@ -8,7 +8,8 @@ questions, chats, machines and auto-pickup.
 
 Places where a maintainer drops something for Claude to handle, without a trigger line.
 Only `ALLOWED_USERS` (narrowed by `users`) are answered; others are ignored, like anywhere.
-They are light runs, like brainstorms: no branch, no `setup`, the brainstorm model.
+They are light runs, like brainstorms: no branch, no `setup`, the brainstorm model. Setting
+one up, step by step: [Inboxes](../guides/inboxes.md).
 
 - **Ideas and bug reports**: an open issue each (pin them), named by its number. Every
   comment on it is an entry: Claude reads the code, looks for an existing issue, and
