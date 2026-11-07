@@ -50,6 +50,20 @@ function relativeImages(md) {
   });
 }
 
+// A ```mermaid block, a diagram on GitHub, is one here too: the Mermaid component
+// (theme/Mermaid.vue) draws it in the browser. The source goes encoded, so neither the markdown's
+// HTML nor Vue's templates read it, and as text in the slot too: the code shown until the diagram
+// is drawn, and what the local search indexes (it strips the tags of the rendered page).
+function mermaidDiagrams(md) {
+  const fence = md.renderer.rules.fence;
+  md.renderer.rules.fence = (tokens, i, options, env, self) => {
+    const token = tokens[i];
+    if (token.info.trim() !== "mermaid") return fence(tokens, i, options, env, self);
+    const source = md.utils.escapeHtml(token.content);
+    return `<Mermaid code="${encodeURIComponent(token.content)}"><pre v-pre><code>${source}</code></pre></Mermaid>\n`;
+  };
+}
+
 export default defineConfig({
   title: "Deckhand",
   description: "Runs Claude Code on your GitHub issues and pull requests, on your own server.",
@@ -62,7 +76,8 @@ export default defineConfig({
     languages: [rego],
     // Redis's config reads as key-value pairs.
     languageAlias: { conf: "properties" },
-    config: (md) => md.use(linksToGitHub).use(inlineCodeAsIs).use(relativeImages),
+    config: (md) =>
+      md.use(linksToGitHub).use(inlineCodeAsIs).use(relativeImages).use(mermaidDiagrams),
   },
   themeConfig: {
     search: { provider: "local" },
