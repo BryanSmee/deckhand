@@ -203,7 +203,7 @@ agent found elsewhere.
 
 ## Service tokens
 
-Deckhand runs as services (#499, [services.md](../services.md)), each one calling
+Deckhand runs as services (#499, [Services](../contributing/services.md)), each one calling
 others: edge the orchestrator, the orchestrator the runner, the proxy the github service, and so
 on (`lib/services.mjs` `CALLS`, the one list of who calls whom). Every such call carries a
 **service token** (`lib/service-token.mjs`), which the broker signs with the run tokens' key and

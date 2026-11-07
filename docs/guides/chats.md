@@ -1,7 +1,7 @@
 # Chats
 
 A chat is a conversation a user has with the agent on one repository, from the dashboard
-rather than an issue (`/api/chats`, [architecture.md](../architecture.md#chats)). It runs in
+rather than an issue (`/api/chats`, [Chats](../contributing/runs.md#chats)). It runs in
 the repository's image, with its grants (hosts, setup) and under its `users`, in volumes of
 its own, and its answers stay in the conversation: Deckhand's default policies
 (`policy/mode-chat.rego`) give it the code, its setup and its reads, no branch, no engine and

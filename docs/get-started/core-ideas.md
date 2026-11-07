@@ -9,7 +9,7 @@ starts it to the reply it posts. Each issue has its own sandbox, branch (`issue-
 and session: the next comment on it continues the same conversation, and a comment that arrives
 while a run works reaches it as it goes. Runs wait in a queue when the server's parallel runs
 (`max_parallel`) are all busy. A run ends with a reply, a question for you (`needs-input`), or an
-error ([From a comment to a reply](../architecture.md#from-a-comment-to-a-reply)).
+error ([From a comment to a reply](../contributing/architecture.md#from-a-comment-to-a-reply)).
 
 ## Modes
 
@@ -94,4 +94,4 @@ sequenceDiagram
 | policy service | Evaluates your policies and the repositories'.                                    |
 | egress proxy   | The sandboxes' only way out.                                                      |
 
-([Services](../services.md), [Architecture](../architecture.md).)
+([Services](../contributing/services.md), [Architecture](../contributing/architecture.md).)

@@ -207,7 +207,7 @@ hooks, `.claude/settings.json`, before the model reads anything). Before either 
 What it can still reach is in [Not covered](not-covered.md#not-covered).
 
 No volume of the orchestrator's (or edge's) is mounted (#393). A run's files go through the broker
-service ([Run files](../architecture.md#run-files)), with the run token, which works
+service ([Run files](../contributing/restarts.md#run-files)), with the run token, which works
 from its own sandbox only ([Run tokens](tokens.md#run-tokens)), and only for its own run's files:
 
 - **Its inbox** (the comments delivered to it), **the egress proxy's CA and its digest**: read
@@ -238,7 +238,7 @@ shared claim, or each sandbox's init container into an `emptyDir`): still not th
 user, and the sandbox mounts it read-only all the same. Through the egress proxy, it reaches
 its agent's install hosts only, tunnelled; an init container gets them only while its pod is
 Pending, never the run's own hosts, and the sandbox never gets them
-([Agents on Kubernetes](../kubernetes.md#agents-on-kubernetes)).
+([Agents on Kubernetes](../kubernetes/sandboxes.md#agents-on-kubernetes)).
 
 What is installed is pinned: Claude Code and Codex by their npm version, the Antigravity CLI
 by the sha256 of its release's tarball (`AGY_SHA256`, the operator's setting, not the

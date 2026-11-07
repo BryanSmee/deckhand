@@ -71,7 +71,7 @@ store, the token's claims, the sandbox's scripts) must say how it doesn't break 
 - never fail silently: a run that can't work stops at its start, saying why.
 
 The details: [AGENTS.md, Runs in flight](AGENTS.md#runs-in-flight) and
-[docs/architecture.md, Runs in flight](docs/architecture.md#runs-in-flight).
+[docs/contributing/restarts.md, Runs in flight](docs/contributing/restarts.md#runs-in-flight).
 
 ## Licence
 

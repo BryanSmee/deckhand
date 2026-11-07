@@ -169,7 +169,7 @@ looked for among the repository's 1,000 newest open issues and pull requests (Gi
 them together) past the run's own (GitHub can't
 look an issue up by its id); GraphQL's, by its node ID, is looked up wherever it is. A call
 without its blocker is refused. Deckhand reads these links to order a plan
-([architecture](../architecture.md)): a sub-issue waits on the graph until its blockers close.
+([architecture](../contributing/architecture.md)): a sub-issue waits on the graph until its blockers close.
 
 A **review thread** is answered with a `reply` (`POST …/pulls/<n>/comments/<id>/replies`, or
 GraphQL's `addPullRequestReviewThreadReply`, without a `pullRequestReviewId`: that would put the

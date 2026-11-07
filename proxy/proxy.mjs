@@ -65,8 +65,8 @@ export { blockedAddress, v6Bytes } from "./addresses.mjs";
 // How long a stopping proxy lets its open connections finish (DRAIN_SECONDS): 25 s where it is
 // the only copy, which Docker Compose stops before it starts the next, so that sandboxes'
 // connections aren't refused long; as long as an agent call (10 minutes) where a second copy
-// takes the new ones meanwhile, a Kubernetes rolling update (docs/services.md, The proxy's
-// handover).
+// takes the new ones meanwhile, a Kubernetes rolling update (docs/contributing/upgrades.md, The
+// proxy's handover).
 const DRAIN_MS = 25_000;
 
 // DRAIN_SECONDS → milliseconds; DRAIN_MS when unset, an error when it isn't a whole number.

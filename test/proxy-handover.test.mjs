@@ -1,6 +1,6 @@
-// The egress proxy's handover during an update (docs/services.md): a second copy on the same
-// network takes the new connections while the old one drains, as long as an agent call lasts,
-// so an agent stream through the old one finishes and no sandbox connection is refused.
+// The egress proxy's handover during an update (docs/contributing/upgrades.md#the-proxys-handover):
+// a second copy on the same network takes the new connections while the old one drains, as long as
+// an agent call lasts, so an agent stream through the old one finishes and no sandbox connection is refused.
 import assert from "node:assert/strict";
 import { request } from "node:http";
 import { connect } from "node:net";

@@ -1,4 +1,4 @@
-# Deckhand on Kubernetes as a Helm chart (docs/kubernetes.md#install-with-helm): the objects of
+# Deckhand on Kubernetes as a Helm chart (docs/kubernetes/helm.md#install-with-helm): the objects of
 # the kustomize base (deploy/kubernetes) and its components, with values instead of patches.
 # With its default values it renders what `kustomize build deploy/kubernetes` does, which
 # test/helm-chart.test.mjs checks (CI's kubernetes job): a change to the base goes here too.

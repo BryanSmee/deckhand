@@ -1,6 +1,6 @@
 # Services and networks
 
-How Deckhand's services ([services.md](../../services.md)) find and trust each other, and what
+How Deckhand's services ([Services](../../contributing/services.md)) find and trust each other, and what
 `compose.yaml` runs. Edge, the orchestrator, the runner, the policy service and the egress proxy
 read these, and the github, broker and models services their own. `compose.yaml` doesn't take
 most of them from `.env`: it sets some itself, to match the services and volumes it defines, and
@@ -56,7 +56,7 @@ The services' state, `DATA_DIR` and each one's `STORE_URL`: [The store](store.md
 - **`POLICY_PORT`** · environment only · default: `8082`\
   Port of the egress policy the proxy asks about each connection: open until the orchestrator exits.
 - **`RUNNER_URL`** · environment only · default: `http://runner:8080`\
-  The [runner service](../../architecture.md#the-runner-service), as the orchestrator calls it; several, comma-separated, for its copies, tried in turn.
+  The [runner service](../../contributing/each-service.md#the-runner-service), as the orchestrator calls it; several, comma-separated, for its copies, tried in turn.
 - **`EDGE_URL`** (orchestrator) · environment only · default: `http://edge:8083`\
   Edge's internal port: where the orchestrator reads the deliveries' stream and the App's public parts; compose sets it.
 - **`ORCHESTRATOR_URL`** (edge) · environment only · default: `http://orchestrator:8083`\
@@ -80,7 +80,7 @@ The services' state, `DATA_DIR` and each one's `STORE_URL`: [The store](store.md
 - **`BROKER_SERVICE_URL`, `RUNNER_URL`, `SERVICE_KEYS_DIR`** (models service) · environment only · default: `http://broker:8081`, `http://runner:8080`, `/service-keys`\
   The broker (its service tokens, whether a run goes), the runner (the Antigravity login's refresh), and the broker's public keys, which its callers' service tokens are checked with.
 - **`POLICY_SERVICE_URL`** · environment only · default: `http://policy:8181`\
-  The [policy service](../../services.md), which evaluates every policy decision, the config checks and the Policies tab; compose sets it. A decision waits up to 30 s for a service that refuses its connection (restarting), then refuses.
+  The [policy service](../../contributing/services.md), which evaluates every policy decision, the config checks and the Policies tab; compose sets it. A decision waits up to 30 s for a service that refuses its connection (restarting), then refuses.
 - **`EGRESS_PROXY`** · environment only · default: `http://egress:3128`\
   The egress proxy, as sandboxes reach it; compose sets it.
 
@@ -91,7 +91,7 @@ call arrives on (Docker) or the caller's service account (Kubernetes): see
 [The services' networks](../../security/services.md#the-services-networks).
 
 - **`SERVICE_NETWORKS`** · environment only · default: none: no call taken\
-  Which network each calling service is on, by its subnet (on the orchestrator `runner=…,edge=…`; on the runner `orchestrator=…,models=…`): a call from elsewhere, or with another's token, is refused; `none` where the network can't tell (Kubernetes, with NetworkPolicies and the callers' service accounts: [kubernetes.md](../../kubernetes.md#what-the-manifests-set-up-and-why)). Compose sets them from `RUNNER_SUBNET`, `EDGE_ORCHESTRATOR_SUBNET` and `RUNNER_MODELS_SUBNET`.
+  Which network each calling service is on, by its subnet (on the orchestrator `runner=…,edge=…`; on the runner `orchestrator=…,models=…`): a call from elsewhere, or with another's token, is refused; `none` where the network can't tell (Kubernetes, with NetworkPolicies and the callers' service accounts: [What the manifests set up, and why](../../kubernetes/isolation.md#what-the-manifests-set-up-and-why)). Compose sets them from `RUNNER_SUBNET`, `EDGE_ORCHESTRATOR_SUBNET` and `RUNNER_MODELS_SUBNET`.
 - **`SERVICE_NETWORKS`** (edge) · environment only · default: none: no call taken\
   The orchestrator's network to edge's internal port, `orchestrator=<subnet>`; compose sets it from `EDGE_ORCHESTRATOR_SUBNET`; `none` on Kubernetes.
 - **`SERVICE_NETWORKS`** (policy service) · environment only · default: none: not checked\
@@ -140,7 +140,7 @@ How long each service lets its calls finish when it stops, and the orchestrator'
 - **`DRAIN_SECONDS`** (models service) · environment only · default: `600`\
   How long a stopping copy lets the agents' calls in flight finish.
 - **`DRAIN_SECONDS`** (egress proxy) · environment only · default: `25`\
-  How long a stopping proxy lets its open connections finish, then cuts them: short with one copy (compose), whose stop refuses new connections until the next one starts; `600`, an agent call's length, where a second copy takes them meanwhile (Kubernetes, [services.md](../../services.md#the-proxys-handover)); under its `stop_grace_period` or `terminationGracePeriodSeconds`.
+  How long a stopping proxy lets its open connections finish, then cuts them: short with one copy (compose), whose stop refuses new connections until the next one starts; `600`, an agent call's length, where a second copy takes them meanwhile (Kubernetes, [The proxy's handover](../../contributing/upgrades.md#the-proxys-handover)); under its `stop_grace_period` or `terminationGracePeriodSeconds`.
 
 ## The egress proxy
 

@@ -4,7 +4,7 @@ Where each service keeps its state, and how to move it to Redis. With Compose on
 default file store needs nothing from you; you need Redis when copies of a service run on
 several nodes.
 
-Deckhand's services ([services.md](../services.md)) keep their state in a store, which each one's
+Deckhand's services ([Services](../contributing/services.md)) keep their state in a store, which each one's
 `STORE_URL` names. The broker service keeps its live runs, their files and events there
 ([The broker service](services.md#the-broker-service)); the runner the runs' logs and events and its lease;
 the orchestrator its queue, its lease and its fencing epoch, and the state that holds data alone
@@ -91,7 +91,7 @@ and the next one connects again: a copy that loses Redis learns in time that it 
 its lease.
 
 On Kubernetes, `deploy/kubernetes/`'s `redis` component runs it this way, one user per service
-([kubernetes.md](../kubernetes.md#several-nodes)).
+([Several nodes](../kubernetes/components.md#several-nodes)).
 
 ## Redis with Compose
 

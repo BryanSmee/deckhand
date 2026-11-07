@@ -495,7 +495,7 @@ spec:
             except: ["fc00::/7", "fe80::/10"]
 ---
 # The API server, for the runner (the sandboxes' pods) and the broker (TokenReview), and nothing
-# else of the cluster or beyond: its addresses, apiServer.cidrs (docs/kubernetes.md,
+# else of the cluster or beyond: its addresses, apiServer.cidrs (docs/kubernetes/install.md,
 # Install). The placeholder (192.0.2.1, a documentation address) reaches nothing, so neither
 # service works until it is set: fail closed. 6443 is where a cluster's API server usually
 # listens behind its `kubernetes` Service, whose address NetworkPolicies see translated.

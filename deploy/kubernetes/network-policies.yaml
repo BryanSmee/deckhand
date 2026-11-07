@@ -468,7 +468,7 @@ spec:
             except: ["fc00::/7", "fe80::/10"]
 ---
 # The API server, for the runner (the sandboxes' pods) and the broker (TokenReview), and nothing
-# else of the cluster or beyond: its addresses, which your overlay sets (docs/kubernetes.md,
+# else of the cluster or beyond: its addresses, which your overlay sets (docs/kubernetes/install.md,
 # Install). The placeholder (192.0.2.1, a documentation address) reaches nothing, so neither
 # service works until it is set: fail closed. 6443 is where a cluster's API server usually
 # listens behind its `kubernetes` Service, whose address NetworkPolicies see translated.
@@ -497,7 +497,7 @@ spec:
 # Every service's metrics port (METRICS_PORT, 9464): your monitoring namespace alone, whose
 # Prometheus or VictoriaMetrics scrapes it, by its kubernetes.io/metadata.name; never the
 # sandboxes', which the runner's network probe and check-isolation.sh try it from. `monitoring` is
-# a placeholder your overlay replaces with yours (docs/kubernetes.md#metrics).
+# a placeholder your overlay replaces with yours (docs/kubernetes/metrics.md#metrics).
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:

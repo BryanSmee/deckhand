@@ -1,7 +1,7 @@
-// Deckhand's policy service (#501, docs/services.md): the operator's and the repositories' Rego
-// policies, evaluated by long-lived `opa` servers (engine.mjs) for the services that decide. It
-// has no network but its callers' (no way out), holds no secret and keeps no state: any copy
-// answers any decision, and a rolling update starts the next copy before this one drains.
+// Deckhand's policy service (#501, docs/contributing/services.md): the operator's and the
+// repositories' Rego policies, evaluated by long-lived `opa` servers (engine.mjs) for the services
+// that decide. It has no network but its callers' (no way out), holds no secret and keeps no state:
+// any copy answers any decision, and a rolling update starts the next copy before this one drains.
 //
 // Every call carries a service token (../lib/service-token.mjs) the broker signed, checked
 // offline with its public keys (SERVICE_KEYS_DIR), and ROUTES says which callers may call each

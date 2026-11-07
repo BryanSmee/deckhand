@@ -1,5 +1,5 @@
-# The stores in Redis, for copies on several nodes (docs/kubernetes.md, Several nodes): in your
-# overlay, `components: [<this folder>]`, with the deckhand-redis Secret made beforehand.
+# The stores in Redis, for copies on several nodes (docs/kubernetes/components.md, Several nodes):
+# in your overlay, `components: [<this folder>]`, with the deckhand-redis Secret made beforehand.
 #
 # Each service's store goes to Redis, under its own user and keys (redis.yaml, stores/). Edge,
 # the broker, the github and models services keep nothing else on disk: their copies may go to

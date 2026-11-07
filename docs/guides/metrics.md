@@ -21,7 +21,7 @@ start. Off by default: set the port and each service listens on it.
   lag, which other runs' traffic moves ([security.md](../security/not-covered.md#not-covered)). It reads
   its environment alone, never `config.yaml`. On Kubernetes, where the sandboxes reach its
   proxy port alone, the manifests give it `METRICS_PORT` as every service
-  ([kubernetes.md](../kubernetes.md#metrics)).
+  ([Metrics](../kubernetes/metrics.md#metrics)).
 
 What each metric means, service by service: [Metrics by service](metrics-list.md).
 
@@ -133,7 +133,7 @@ New, Import), or provision it. Its rows:
   to the other services, and the version each copy runs.
 
 With the chart, `metrics.dashboard.enabled` ships it as a ConfigMap for Grafana's sidecar
-([kubernetes.md](../kubernetes.md#metrics)). With Compose, Grafana provisions it from a folder:
+([Metrics](../kubernetes/metrics.md#metrics)). With Compose, Grafana provisions it from a folder:
 
 ```yaml
 # compose.override.yaml, beside the Prometheus above.
@@ -175,7 +175,7 @@ file in a folder of yours.)
 
 `deploy/alerts/deckhand.yaml` holds Prometheus alerting rules, for Prometheus (`rule_files`) or
 vmalert (`-rule`); with the chart, `metrics.rules.enabled` ships them as a `PrometheusRule` (or,
-with `metrics.rules.kind: VMRule`, VictoriaMetrics') ([kubernetes.md](../kubernetes.md#metrics)).
+with `metrics.rules.kind: VMRule`, VictoriaMetrics') ([Metrics](../kubernetes/metrics.md#metrics)).
 Each has a `severity` label, `critical`, `warning` or `info`, for your Alertmanager's routes.
 `DeckhandServiceDown` reads the `up` of the targets of job `deckhand`, as the scrape config above
 and the chart's ServiceMonitor name them: with a job of another name (an annotation-based
@@ -203,7 +203,7 @@ them, point it at your Alertmanager too (`alerting: { alertmanagers: [{ static_c
 
 | Alert                            | Severity | When                                                                                                                                                                                                | What to do                                                                                                                                                                                                                                                                                                                                                                                                        |
 | -------------------------------- | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `DeckhandNetworkNotIsolated`     | critical | Kubernetes: the network probe found a sandbox reaching more than the egress proxy (`deckhand_network_isolated` 0)                                                                                   | every run is refused until it is fixed: the sandboxes' NetworkPolicies are missing, or the cluster's network plugin doesn't enforce them. Run `deploy/kubernetes/check-isolation.sh` ([kubernetes.md](../kubernetes.md#the-network-probe)); the next run's start probes again                                                                                                                                     |
+| `DeckhandNetworkNotIsolated`     | critical | Kubernetes: the network probe found a sandbox reaching more than the egress proxy (`deckhand_network_isolated` 0)                                                                                   | every run is refused until it is fixed: the sandboxes' NetworkPolicies are missing, or the cluster's network plugin doesn't enforce them. Run `deploy/kubernetes/check-isolation.sh` ([The network probe](../kubernetes/isolation.md#the-network-probe)); the next run's start probes again                                                                                                                       |
 | `DeckhandServiceDown`            | critical | a target of job `deckhand` hasn't answered its metrics port for 5 minutes, for as long as it stays down                                                                                             | its logs say why (`docker compose logs <service>`, `kubectl logs --previous`): a setting it refuses at start, the store or the broker away, its memory limit. A copy a rollout replaced leaves the scrape targets and doesn't fire it, nor does a service no target is left for (the orchestrator's copies found by DNS, all stopped; a pod Pending): `DeckhandServiceMissing` and `DeckhandNoLeaseHolder` say so |
 | `DeckhandServiceMissing`         | critical | no copy of the broker, the github, models or policy service has answered for 5 minutes (no `deckhand_build_info` of its `service`): on Kubernetes its pods Pending or gone, which leave the targets | every run needs them: `kubectl get pods` (Pending: no node with the room; none: its Deployment scaled down), `docker compose ps`. The services with a lease are `DeckhandNoLeaseHolder`'s; the egress proxy isn't watched, its metrics port being off by default with Compose                                                                                                                                     |
 | `DeckhandNoLeaseHolder`          | critical | no copy holds the `orchestrator`, `runner` or `edge/redeliveries` lease for 2 minutes: every copy answering waits, or none answers at all                                                           | no run starts (orchestrator), no sandbox starts (runner), or no failed delivery is asked again (edge). Check the copies run, then that [the store](store.md), which holds the lease, is reachable, then their logs                                                                                                                                                                                                |

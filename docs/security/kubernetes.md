@@ -16,7 +16,7 @@ Kubernetes' terms:
 | Hardened containers                                         | `cap_drop: ALL`, `no-new-privileges`, uid 1000, read-only roots                               | the same in each pod's security context; the sandboxes' namespace enforces Pod Security `restricted`, and every sandbox pod meets it                                                                               |
 | The broker's public key, read only                          | the `service-keys` volume, which the broker writes                                            | a ConfigMap the operator makes beside the signing key's Secret: no volume shared between services                                                                                                                  |
 | Blob storage's key pair, the runner's and the broker's      | their environment alone (`BLOB_*`)                                                            | `components/blobs`: the `deckhand-blobs` Secret, mounted read only by their pods alone (`BLOB_*_FILE`), `BLOB_URL` from a ConfigMap no other pod reads, a NetworkPolicy out to its address alone                   |
-| The metrics port, the scraper's alone                       | off; on, a network of each service's with the scraper alone ([Metrics](../guides/metrics.md)) | `deckhand-metrics`: every service's 9464 from the monitoring namespace alone, never the sandboxes', which the network probe tries it from ([kubernetes.md](../kubernetes.md#metrics))                              |
+| The metrics port, the scraper's alone                       | off; on, a network of each service's with the scraper alone ([Metrics](../guides/metrics.md)) | `deckhand-metrics`: every service's 9464 from the monitoring namespace alone, never the sandboxes', which the network probe tries it from ([Metrics](../kubernetes/metrics.md#metrics))                            |
 
 **NetworkPolicies need a network plugin that enforces them** (Calico, Cilium, k3s's own). One
 that doesn't (Flannel alone) takes them and enforces nothing: a sandbox could then call the
@@ -25,19 +25,19 @@ may. The runner checks that the policies are there before every run, and that th
 applies them with a probe pod labelled as a sandbox each time it takes its lease, refusing every
 run when the probe reaches anything but the egress proxy, another sandbox-labelled pod
 listening beside it included
-([kubernetes.md](../kubernetes.md#the-network-probe)); `deploy/kubernetes/check-isolation.sh`
+([The network probe](../kubernetes/isolation.md#the-network-probe)); `deploy/kubernetes/check-isolation.sh`
 checks it by hand, another sandbox's pod among what it must not reach. Some plugins apply a new pod's policies a moment after it starts (kube-router):
 every pod of the sandboxes' namespace, the probe's included, first waits in an init container
 until the API server and the DNS are out of reach and the proxy answers, and fails past
-`KUBERNETES_PENDING_MINUTES` ([kubernetes.md](../kubernetes.md#the-network-gate)). Each service's
+`KUBERNETES_PENDING_MINUTES` ([The network gate](../kubernetes/isolation.md#the-network-gate)). Each service's
 own ingress policy is a second line: with the sandboxes' policies gone, a sandbox reaches edge's
 public port alone.
 
 **The API server** is no pod: the runner's and the broker's way to it is an `ipBlock` of its
-addresses, which the operator sets (`deckhand-api-server`, [kubernetes.md](../kubernetes.md#install)),
+addresses, which the operator sets (`deckhand-api-server`, [kubernetes.md](../kubernetes.md#the-api-servers-addresses)),
 and which reaches nothing until then. With `buildkit`, the runner also reaches any address on 443
 (the registries). With `blobs`, the runner and the broker reach blob storage's address and port
-(`deckhand-blobs`, a placeholder that reaches nothing until set, [kubernetes.md](../kubernetes.md#blob-storage)).
+(`deckhand-blobs`, a placeholder that reaches nothing until set, [Blob storage](../kubernetes/components.md#blob-storage)).
 
 **What isn't covered**: a service
 mesh that rewrites source addresses breaks the orchestrator's check of the proxy's calls (by its

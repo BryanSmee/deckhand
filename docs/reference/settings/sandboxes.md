@@ -53,21 +53,21 @@ Docker's own pools, so list those first and add yours after them, for example
 - **`KUBERNETES_NAMESPACE`** · `kubernetes_namespace` · default: the runner's own\
   The sandboxes' namespace: the [Kubernetes runner](../../kubernetes.md)'s sandbox and install pods, their Secrets and claims.
 - **`KUBERNETES_SERVICES_NAMESPACE`** · `kubernetes_services_namespace` · default: `KUBERNETES_NAMESPACE`\
-  The services' namespace, the runner's own: the egress proxy's Service, BuildKit and the registry's pull Secret ([Namespaces](../../kubernetes.md#namespaces)).
+  The services' namespace, the runner's own: the egress proxy's Service, BuildKit and the registry's pull Secret ([Namespaces](../../kubernetes/sandboxes.md#namespaces)).
 - **`KUBERNETES_PENDING_MINUTES`** · `kubernetes_pending_minutes` · default: `10`\
-  How long a sandbox's pod may stay Pending (no room, an image it can't pull) before its run fails, with the reason in its reply; and how long each pod's network gate waits for its NetworkPolicies to apply ([kubernetes.md](../../kubernetes.md#the-network-gate)).
+  How long a sandbox's pod may stay Pending (no room, an image it can't pull) before its run fails, with the reason in its reply; and how long each pod's network gate waits for its NetworkPolicies to apply ([The network gate](../../kubernetes/isolation.md#the-network-gate)).
 - **`KUBERNETES_STORAGE_CLASS`** · `kubernetes_storage_class` · default: the cluster's default\
   The storage class of the issues' session claims.
 - **`KUBERNETES_SESSION_SIZE`** · `kubernetes_session_size` · default: `10Gi`\
   The size of each session claim (an issue's clone, and its agent's session).
 - **`KUBERNETES_REGISTRY`** · `kubernetes_registry` · default: none: no repo images\
-  The registry repo images are pushed to and the nodes pull from, with an optional path (`registry.example.com/deckhand`); see [Repo images on Kubernetes](../../kubernetes.md#repo-images-on-kubernetes).
+  The registry repo images are pushed to and the nodes pull from, with an optional path (`registry.example.com/deckhand`); see [Repo images on Kubernetes](../../kubernetes/components.md#repo-images-on-kubernetes).
 - **`KUBERNETES_REGISTRY_SECRET`** · `kubernetes_registry_secret` · default: none; required with `KUBERNETES_REGISTRY`\
   A `kubernetes.io/dockerconfigjson` Secret of the namespace, with credentials the registry requires to pull, push and delete: the nodes pull repo images and the agents' installs with it, and the runner and BuildKit push and prune with it.
 - **`KUBERNETES_BUILDKIT`** · `kubernetes_buildkit` · default: `tcp://buildkitd:1234`\
   The BuildKit daemon that builds repo images (`buildctl --addr`); its host is the name of its Service in the namespace.
 - **`KUBERNETES_REGISTRY_HOSTS`** · `kubernetes_registry_hosts` · default: none\
-  More hosts the BuildKit daemon may reach while it builds (a registry's token service or layer storage Deckhand doesn't know), as a grant's `hosts` are written; see [Repo images on Kubernetes](../../kubernetes.md#repo-images-on-kubernetes).
+  More hosts the BuildKit daemon may reach while it builds (a registry's token service or layer storage Deckhand doesn't know), as a grant's `hosts` are written; see [Repo images on Kubernetes](../../kubernetes/components.md#repo-images-on-kubernetes).
 - **`KUBERNETES_CACHE_STORAGE_CLASS`** · `kubernetes_cache_storage_class` · default: none: no caches\
   A `ReadWriteMany` storage class for the repos' cache claims (`caches`), which concurrent runs mount.
 - **`KUBERNETES_CACHE_SIZE`** · `kubernetes_cache_size` · default: `10Gi`\
@@ -77,7 +77,7 @@ Docker's own pools, so list those first and add yours after them, for example
 - **`KUBERNETES_AGENT_SIZE`** · `kubernetes_agent_size` · default: `5Gi`\
   The size of each agent's claim.
 - **`KUBERNETES_ENGINE_RUNTIME_CLASS`** · `kubernetes_engine_runtime_class` · default: none: no container engine on Kubernetes\
-  Sysbox's RuntimeClass (`sysbox-runc`), under which runs granted a container engine get one ([Container engine on Kubernetes](../../kubernetes.md#container-engine-on-kubernetes)).
+  Sysbox's RuntimeClass (`sysbox-runc`), under which runs granted a container engine get one ([Container engine on Kubernetes](../../kubernetes/components.md#container-engine-on-kubernetes)).
 - **`KUBERNETES_ENGINE_SIZE`** · `kubernetes_engine_size` · default: `20Gi`\
   How much a container engine's storage may take on Kubernetes, an `emptyDir` per run.
 - **`KUBERNETES_SERVICE_HOST`, `KUBERNETES_SERVICE_PORT`** · environment only · default: set by Kubernetes in every pod\

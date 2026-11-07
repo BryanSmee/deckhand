@@ -1,6 +1,6 @@
 // The agents Deckhand can run, behind one seam: everything that differs between them is in
 // their module (claude.mjs, codex.mjs, antigravity.mjs), and the listener only reads Deckhand's own events from
-// them. docs/architecture.md describes it.
+// them. docs/contributing/architecture.md describes it.
 import { antigravity } from "./antigravity.mjs";
 import { claude } from "./claude.mjs";
 import { codex } from "./codex.mjs";
