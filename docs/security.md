@@ -156,8 +156,8 @@ and pushes made with an App's token do trigger them. Code a sandbox wrote can th
   the egress proxy.
 
 By default the workflow files themselves can't change: neither the sandbox's token nor the
-gateway's has the `workflows` permission, so GitHub refuses a push that adds or edits one.
-What they run can.
+gateway's has the `workflows` permission, so GitHub refuses a push that adds or edits one,
+and the gateway refuses it first ([Without the grant](#without-the-grant)). What they run can.
 
 **The `workflows` grant** ([the grants](#the-grants), one repository at a time) lifts that
 for one repository: the gateway then pushes the run's branches with a token that also has
@@ -216,8 +216,7 @@ a changed workflow:
 Workflows identical to the default branch's, files the run deletes and pushes that don't touch
 `.github/workflows/` go through, the pack GitHub gets the one the client sent. A mirror that
 can't be fetched or a pack that can't be read refuses the push with "try again": it is never
-forwarded unchecked. Repositories without the grant don't change: their pushes stream through
-unread, and GitHub refuses their workflow changes.
+forwarded unchecked. Repositories without the grant: [Without the grant](#without-the-grant).
 
 A checked workflow still runs the branch's code, with a `GITHUB_TOKEN` that reads. A job that
 calls a reusable workflow from another repository (or another ref of this one, `uses:
@@ -315,9 +314,34 @@ changes: your workflows are yours to set up. On each repository the App is insta
   pull request's head: they run it with the default branch's secrets and a token that may
   write.
 
-Not checked yet: whether a sandbox could push the head of a fork's pull request
-(`refs/pull/<n>/head`) that changes a workflow, as its own branch, without `workflows`.
-Assume it could, and keep secrets away from workflows on `issue-*` branches as above.
+#### Without the grant
+
+A repository without `workflows` doesn't rest on GitHub refusing its workflow changes (#400).
+GitHub checks the commits a push brings, but a fork's are already on GitHub: a network's
+objects are kept together, so a push needn't carry a fork's pull request's head
+(`refs/pull/<n>/head`) to point a branch at it, and whether GitHub still asks for the
+Workflows permission then was never settled. A fork's run may push its pull request's commits
+to its branch ([What a fork's code may reach](#what-a-forks-code-may-reach)), and a branch of
+the repository runs its own workflows `on: push`, with the repository's secrets: a fork's
+workflow pushed so would get them.
+
+So the gateway reads every push of such a repository too, against the same mirror
+(`listener/git-mirror.mjs` `connect()`), and refuses a branch whose commits that the
+repository's branches and tags don't already reach change anything under
+`.github/workflows/` (without case; a `.github` or `.github/workflows` replaced by a file, a
+symlink or a submodule too): added, edited, renamed or deleted, whether the push carries
+them or not. A merge counts only what differs from every parent (`git diff-tree -c`), so
+merging the default branch into a run's branch passes after it changed a workflow; so does
+pointing a branch at a commit the repository's branches already reach. What a fork's run's
+push doesn't carry is fetched from GitHub by its id, into the push's quarantine (never the
+mirror), to be read; what GitHub doesn't serve either is refused ("couldn't read …"), and so
+is a push the gateway can't read ("try again"). The refusal names the files and says the
+repository isn't granted `workflows`; nothing reaches GitHub. With the grant, the checks above
+apply instead.
+
+Not covered: a branch pointed at an older commit the repository's branches reach, whose
+workflows a later commit changed; GitHub runs that older copy on the branch. It is the
+repository's own code, as a maintainer's branch is.
 
 ## Tokens
 
@@ -1689,8 +1713,9 @@ see the difference, and doesn't claim to.
   the `workflows` grant keeps ([GitHub Actions on Deckhand's branches](#github-actions-on-deckhands-branches)), now for
   every repository whose work runs push: a copy of each in the data volume (`git-mirrors/`),
   whose first fetch is a whole clone. A fork's run may push its pull request's commits to its
-  branch, as before: from then on they are the repository's, which the issue's later work runs
-  start from (see [Not covered](#not-covered)).
+  branch, as before, unless they change a workflow and the repository isn't granted
+  `workflows` ([Without the grant](#without-the-grant)): from then on they are the
+  repository's, which the issue's later work runs start from (see [Not covered](#not-covered)).
 - **Git's paths in any case** (`GIT-UPLOAD-PACK`, `Info/Refs`) are a fetch's, checked as one;
   any other spelling of them is a page, and refused. Git's fetch takes its own methods only,
   for every run: `GET` for its advertisement, `POST` for its pack request; any other would be a

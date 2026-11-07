@@ -23,7 +23,8 @@ export const RESOURCES = ["core", "graphql", "search"];
 // What the service does with git:
 //   clone          a mirror's first fetch, the whole repository (git-mirror.mjs); an empty
 //                  repository leaves its mirror empty, so each of its pushes counts a clone
-//   mirror_update  a mirror fetched again before a push is checked against it
+//   mirror_update  a mirror fetched again before a push is checked against it, or a fork's
+//                  commits a push points at, fetched beside it (git-mirror.mjs connect())
 //   fetch          a sandbox's git fetch or clone relayed to GitHub, once whatever its requests:
 //                  ok once its whole pack came (an ls-remote, or a fetch with nothing new,
 //                  brings none: not counted), refused or failed at the request that was, a
@@ -40,7 +41,8 @@ export const GIT_RESULTS = ["ok", "refused", "rejected", "failed"];
 //   branch          not a branch, or one that isn't the run's
 //   run             a run that may not push, or not to this repository
 //   policies        the policies' deny_push
-//   workflows       a workflow file that writes or names a secret (the `workflows` grant)
+//   workflows       a workflow file that writes or names a secret (the `workflows` grant), or
+//                   any workflow change without that grant
 //   fork            a branch reaching objects it doesn't carry, a fork's maybe
 //   error           what couldn't be checked (a token, the mirror, a push too large or too slow)
 export const PUSH_REASONS = [
