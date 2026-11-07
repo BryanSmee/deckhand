@@ -37,6 +37,10 @@ node --test --test-force-exit --import ./test/blocking-stdout.mjs --test-timeout
 # The dashboard, when it changed: types, tests, build
 (cd dashboard && npm ci && npm test && npm run build)
 
+# The docs site, when docs/ changed: its build, then every page's anchors as the site renders them
+(cd docs && npm ci && npm run build)
+node --test test/docs-links.test.mjs
+
 # Format (--write to fix)
 npx --yes prettier@3 --check .
 ```
@@ -47,7 +51,7 @@ stays up to date. The suite passes as root and as any other user, and the pure-N
 Windows too ([AGENTS.md, Testing](AGENTS.md#testing)). Flaky is a bug: fix it at its cause,
 never retry it away.
 
-`cd dashboard && npm run dev` serves the dashboard against an edge on port 8080.
+`cd dashboard && npm run dev` serves the dashboard against an edge on port 8080. `cd docs && npm run dev` previews the docs site.
 
 ## Runs in flight
 
