@@ -312,7 +312,7 @@ export function createGithubService({
     runFrom: (sandbox) => runs.bySandbox(sandbox),
     // The run's tokens are the broker's, redacted by their shape (lib/redact.mjs), and the one
     // the call carries; the operator's credentials, which this service doesn't hold, by the
-    // fingerprints the orchestrator sends (docs/security.md, The GitHub gateway): the models
+    // fingerprints the orchestrator sends (docs/security/github.md#the-github-gateway): the models
     // service's sets here, the others through scrub().
     secrets: () => sets,
     scrub: () => (text) => redactor(text),

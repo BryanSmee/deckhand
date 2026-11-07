@@ -2,7 +2,7 @@
 // the run's network, so the agent can `docker build`, `docker run` and `docker compose up`
 // without the host's Docker. The sandbox keeps all of its hardening (uid 1000, no
 // capabilities, no-new-privileges); what an engine needs relaxed is relaxed here only, never
-// --privileged and never the host's Docker socket. Security model: ../../docs/security.md.
+// --privileged and never the host's Docker socket. Security model: ../../docs/security/mounts-and-engine.md#container-engine.
 //
 //   sysbox   dockerd (../../engine/Dockerfile) under the Sysbox runtime: root in the
 //            container is an unprivileged user on the host, no relaxed seccomp or AppArmor

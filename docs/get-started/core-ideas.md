@@ -33,7 +33,7 @@ deployment, except the secrets, which stay in `.env`:
 A repository's `.deckhand.yaml`, read from its default branch only, can narrow what you allow
 (fewer users, fewer parallel runs) and ask for what you granted, never more
 ([The server folder](../settings.md#the-server-folder),
-[The grants folder](../security.md#the-grants-folder)).
+[The grants folder](../security/policies.md#the-grants-folder)).
 
 ## Sandboxes
 
@@ -49,7 +49,7 @@ what it can reach:
   hosts you grant.
 - **No host paths** unless you grant them, no privileges, and CPU, memory and process limits.
 
-([Security model](../security.md), [Capabilities](../security.md#capabilities).)
+([Security model](../security.md), [Capabilities](../security/policies.md#capabilities).)
 
 ## Services
 

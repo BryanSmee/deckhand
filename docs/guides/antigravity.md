@@ -59,7 +59,7 @@ each request to the models service, which checks the token, puts the plan's acce
 call on, on the paths `agy` uses only. `agy`'s telemetry (`play.googleapis.com`, which carries
 the token too) is refused; its feature flags (`antigravity-unleash.goog`) and your avatar
 (`lh3.googleusercontent.com`, which its eligibility check fetches) go through untouched. See
-[Security model](../security.md#the-antigravity-clis-login).
+[Security model](../security/models.md#the-antigravity-clis-login).
 
 1. Sign in once, for Deckhand alone, in a container (any machine with Docker; the image is
    Deckhand's sandbox image, which has what `agy` needs):

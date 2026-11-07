@@ -18,7 +18,7 @@ start. Off by default: set the port and each service listens on it.
   in `config.yaml` too (the broker mounts the server folder for it alone).
 - **The egress proxy's is a setting of its own**, `EGRESS_METRICS_PORT`, as every sandbox
   reaches the proxy, and so its metrics port: they would read its memory, CPU and event loop
-  lag, which other runs' traffic moves ([security.md](../security.md#not-covered)). It reads
+  lag, which other runs' traffic moves ([security.md](../security/not-covered.md#not-covered)). It reads
   its environment alone, never `config.yaml`. On Kubernetes, where the sandboxes reach its
   proxy port alone, the manifests give it `METRICS_PORT` as every service
   ([kubernetes.md](../kubernetes.md#metrics)).
@@ -30,7 +30,7 @@ What each metric means, service by service: [Metrics by service](metrics-list.md
 A `compose.override.yaml` beside `compose.yaml` (read by `docker compose up -d`, no
 flag needed) puts each service on a network of its own with your scraper: one network for all of
 them would let each reach the others, which their networks keep apart
-([security.md](../security.md#the-services-networks)). Each is internal, with no way out, and nothing
+([security.md](../security/services.md#the-services-networks)). Each is internal, with no way out, and nothing
 is published. On them, the scraper reaches the services' other ports too: their `/health`, and
 calls they refuse without a caller's service token (or, on the orchestrator's egress policy
 port, the proxy's address). With Prometheus, in the same project:

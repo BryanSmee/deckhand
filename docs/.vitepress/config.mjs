@@ -73,7 +73,7 @@ export default defineConfig({
       { text: "Get started", link: "/get-started/quick-start" },
       { text: "Guides", link: "/guides/install" },
       { text: "Reference", link: "/repo-config" },
-      { text: "Security", link: "/security" },
+      { text: "Security", link: "/security", activeMatch: "^/security" },
     ],
     sidebar: [
       {
@@ -150,7 +150,20 @@ export default defineConfig({
       },
       {
         text: "Security",
-        items: [{ text: "Security model", link: "/security" }],
+        items: [
+          { text: "Overview", link: "/security" },
+          { text: "The services", link: "/security/services" },
+          { text: "Webhooks and sign-in", link: "/security/webhooks-and-sign-in" },
+          { text: "Tokens", link: "/security/tokens" },
+          { text: "GitHub and git gateways", link: "/security/github" },
+          { text: "Egress proxy and hosts", link: "/security/network" },
+          { text: "Mounts and container engine", link: "/security/mounts-and-engine" },
+          { text: "Policies and capabilities", link: "/security/policies" },
+          { text: "Fork pull requests", link: "/security/forks" },
+          { text: "Models and credentials", link: "/security/models" },
+          { text: "On Kubernetes", link: "/security/kubernetes" },
+          { text: "Not covered", link: "/security/not-covered" },
+        ],
       },
       {
         text: "Contributing",

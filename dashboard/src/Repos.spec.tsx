@@ -594,7 +594,7 @@ test("auto-merge: a red badge in the list, a red risk box and its grant in the p
   expect(box.textContent).toContain("This repository is public");
   expect(box.textContent).not.toContain("root on the host");
   expect(within(box).getByRole("link").getAttribute("href")).toBe(
-    "https://github.com/BryanSmee/deckhand/blob/main/docs/security.md#auto-merge",
+    "https://github.com/BryanSmee/deckhand/blob/main/docs/security/github.md#auto-merge",
   );
   expect(within(rowIn("Switches", "auto_merge")).getByText("public")).toBeTruthy();
 });

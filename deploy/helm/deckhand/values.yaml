@@ -22,7 +22,7 @@ namespaces:
   sandboxes: deckhand-sandboxes
 
 # config.yaml and the grants folder, mounted at /etc/deckhand (docs/settings.md,
-# docs/security.md#the-grants-folder). `--set-file server.config=config.yaml` reads yours.
+# docs/security/policies.md#the-grants-folder). `--set-file server.config=config.yaml` reads yours.
 # Read at start: the pods restart when they change, as the ConfigMap's name carries their hash.
 server:
   config: |
@@ -38,7 +38,7 @@ server:
   grants:
     default.yaml: |
       # What every repository's sandboxes get, as server.example/grants/default.yaml
-      # (docs/security.md#the-grants-folder). Nothing set: nothing granted.
+      # (docs/security/policies.md#the-grants-folder). Nothing set: nothing granted.
 
 # Any other setting of the orchestrator, the runner and the models service, in deckhand-env
 # (docs/settings.md): MAX_PARALLEL, KUBERNETES_SESSION_SIZE, KUBERNETES_REGISTRY_HOSTS…

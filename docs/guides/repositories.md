@@ -53,7 +53,7 @@ Each repository can add a `.deckhand.yaml` on its default branch: its own users 
 `ALLOWED_USERS`), trigger word, models, parallel cap, setup command, instructions,
 Dockerfile and caches. See [Per-repo config](../repo-config.md). A Dockerfile and host mounts
 only take effect once you grant them to that repository in your grants folder (the Dockerfile
-in its policies: [the grants](../security.md#the-grants); mounts in
-its YAML: [Security model](../security.md#the-grants-folder)), which is also where you
+in its policies: [the grants](../security/policies.md#the-grants); mounts in
+its YAML: [Security model](../security/policies.md#the-grants-folder)), which is also where you
 list the hosts its sandboxes may reach (see
-[Where a sandbox's hosts come from](../security.md#where-a-sandboxs-hosts-come-from)).
+[Where a sandbox's hosts come from](../security/network.md#where-a-sandboxs-hosts-come-from)).

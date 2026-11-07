@@ -839,7 +839,7 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
   const log = createLogger({ service: "egress" });
   // Its metrics (../lib/metrics.mjs, metrics.mjs), on their own port when METRICS_PORT is set:
   // from its environment alone (compose.yaml's EGRESS_METRICS_PORT), never config.yaml's, as
-  // every sandbox reaches the proxy, and so that port (docs/security.md).
+  // every sandbox reaches the proxy, and so that port (docs/security/not-covered.md).
   let registry;
   try {
     ({ registry } = startMetrics({

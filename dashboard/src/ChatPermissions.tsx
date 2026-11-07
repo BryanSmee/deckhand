@@ -14,7 +14,7 @@ import { OptionCard, Switch } from "./ui/Choice";
 import { Alert } from "./ui/icons";
 import styles from "./ChatPermissions.module.css";
 
-const DOCS = "https://github.com/BryanSmee/deckhand/blob/main/docs/security.md#chats";
+const DOCS = "https://github.com/BryanSmee/deckhand/blob/main/docs/security/policies.md#chats";
 
 // What each GitHub level and capability is called here: keys, written when shown.
 const LEVELS: Record<GithubLevel, Plain> = {

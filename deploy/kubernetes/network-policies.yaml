@@ -1,5 +1,5 @@
 # The services' NetworkPolicies: Compose's internal networks, as Kubernetes writes them
-# (docs/security.md#on-kubernetes). Nothing goes in or out of a pod but what a policy below lets
+# (docs/security/kubernetes.md#on-kubernetes). Nothing goes in or out of a pod but what a policy below lets
 # through: each service is reached by its callers alone, on its port, and only the services
 # whose Compose network has a way out (edge, the github and models services, the proxy) reach
 # beyond the cluster; the runner and the broker reach the API server's addresses alone. Their

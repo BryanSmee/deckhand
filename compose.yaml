@@ -137,7 +137,7 @@ services:
       runner:
         condition: service_healthy
     # No way out: its networks to the broker, the runner, the github service, the policy
-    # service, the models service, edge and the egress proxy (docs/security.md#the-services-networks).
+    # service, the models service, edge and the egress proxy (docs/security/services.md#the-services-networks).
     networks:
       broker-orchestrator:
       runner:
@@ -297,7 +297,7 @@ services:
       # Your configuration, one folder you keep in git (server.example/ to start from), read
       # only: config.yaml, your settings, read at start (docs/settings.md); grants/,
       # what you grant each repo (hosts, Dockerfile, host mounts, limits), one
-      # file per repo and default.yaml, read at each run (docs/security.md). Both optional.
+      # file per repo and default.yaml, read at each run (docs/security/policies.md#the-grants-folder). Both optional.
       # Readable by uid 1000, as the orchestrator runs (the usual 0644 files and 0755 folders).
       - ${DECKHAND_SERVER_DIR:-./server}:/etc/deckhand:ro
       # Each mount root you grant, at the same path and read-only: the orchestrator resolves the
@@ -337,7 +337,7 @@ services:
       # Prometheus metrics on a port of their own, not published (docs/guides/metrics.md).
       METRICS_PORT: ${METRICS_PORT:-}
       # Who calls, by the network a call arrives on: each caller has one of its own to the
-      # broker, whose subnet is fixed below (docs/security.md#service-tokens).
+      # broker, whose subnet is fixed below (docs/security/tokens.md#service-tokens).
       SERVICE_NETWORKS: orchestrator=${BROKER_ORCHESTRATOR_SUBNET:-10.231.250.0/28},edge=${BROKER_EDGE_SUBNET:-10.231.250.208/28},proxy=${BROKER_PROXY_SUBNET:-10.231.250.16/28},runner=${BROKER_RUNNER_SUBNET:-10.231.250.32/28},models=${BROKER_MODELS_SUBNET:-10.231.250.64/28},github=${BROKER_GITHUB_SUBNET:-10.231.250.176/28}
       # Where it publishes its public key, which the policy service and the runner mount read-only.
       SERVICE_KEYS_DIR: /service-keys
@@ -534,7 +534,7 @@ services:
       # Its keys and tokens, and the runs' writes' and pushes' decisions.
       BROKER_SERVICE_URL: http://broker:8081
       POLICY_SERVICE_URL: http://policy:8181
-      # Who calls, by the network a call arrives on (docs/security.md#service-tokens).
+      # Who calls, by the network a call arrives on (docs/security/tokens.md#service-tokens).
       SERVICE_NETWORKS: orchestrator=${GITHUB_ORCHESTRATOR_SUBNET:-10.231.250.128/28},edge=${GITHUB_EDGE_SUBNET:-10.231.250.224/28},proxy=${GITHUB_PROXY_SUBNET:-10.231.250.144/28},runner=${GITHUB_RUNNER_SUBNET:-10.231.250.160/28}
     volumes:
       # The App's key (app.json, from /setup): this
@@ -546,7 +546,7 @@ services:
       - ${DECKHAND_SERVER_DIR:-./server}:/etc/deckhand:ro
     # Pushes are saved in /tmp while checked (up to
     # 2 GiB each, one per run): a size-limited tmpfs keeps them off the host disk
-    # (docs/security.md#github-actions-on-deckhands-branches).
+    # (docs/security/github.md#github-actions-on-deckhands-branches).
     # tmpfs:
     #   - /tmp:size=4g
     # Its way out on a network of its own: on `default` too, its name would resolve there for
@@ -698,7 +698,7 @@ services:
       SERVICE_KEYS_DIR: /keys
     volumes:
       # Your configuration, as the orchestrator has it, read only: the grants folder's policy/ is
-      # what it reads (docs/security.md#policies).
+      # what it reads (docs/security/policies.md#policies).
       - ${DECKHAND_SERVER_DIR:-./server}:/etc/deckhand:ro
       - service-keys:/keys:ro
     healthcheck:
@@ -732,7 +732,7 @@ services:
       LOG_FORMAT: ${LOG_FORMAT:-text}
       LOG_LEVEL: ${LOG_LEVEL:-}
       # Its Prometheus metrics: a setting of its own, off unless set, as every sandbox reaches
-      # the proxy, and so its metrics port (docs/guides/metrics.md, docs/security.md).
+      # the proxy, and so its metrics port (docs/guides/metrics.md, docs/security/not-covered.md).
       METRICS_PORT: ${EGRESS_METRICS_PORT:-}
       # The orchestrator's egress policy, on its own port (docs/architecture.md#restarts).
       POLICY_URL: http://orchestrator:8082/egress
@@ -756,7 +756,7 @@ services:
     volumes:
       # Answers from the hosts the grants list in cached_hosts, kept for every run, and the
       # CA with which the proxy decrypts their HTTPS: its key never leaves this volume
-      # (docs/security.md#the-egress-cache). EGRESS_CACHE_MAX in environment sizes it.
+      # (docs/security/network.md#the-egress-cache). EGRESS_CACHE_MAX in environment sizes it.
       - egress-cache:/cache
     # Its /ready, a plain HTTP request to itself: 503 once it drains, and until the broker
     # answered it (its service tokens).

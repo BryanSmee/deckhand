@@ -1,5 +1,5 @@
 // Webhook bodies read before their signature can be checked: anyone can send one to the public
-// port, so who may hold a place, and for how long, is limited here (http.mjs, docs/security.md).
+// port, so who may hold a place, and for how long, is limited here (http.mjs, docs/security/webhooks-and-sign-in.md#edge).
 
 // A client's address for its share of places: IPv4 as is, IPv6 by its /64 (one host usually
 // has a whole /64 to pick addresses from).

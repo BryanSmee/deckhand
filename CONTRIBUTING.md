@@ -14,8 +14,8 @@ before you spend time on a pull request.
   maintainer reviews and merges it. A pull request from a person goes through the same review
   and the same rules.
 - **Pull requests from forks**: their checks may wait for the maintainer's approval, and
-  Deckhand's runs never build, install or run a fork's code (docs/security.md, [What a fork's
-  code may reach](docs/security.md#what-a-forks-code-may-reach)). A maintainer may take the
+  Deckhand's runs never build, install or run a fork's code ([What a fork's
+  code may reach](docs/security/forks.md#what-a-forks-code-may-reach)). A maintainer may take the
   work over on an issue's branch instead.
 - **Security issues** are never reported in public: see [SECURITY.md](SECURITY.md).
 

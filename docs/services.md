@@ -87,7 +87,7 @@ diagram leaves out; the policy service calls none, and checks the tokens it gets
 arrows are narrow: the runner fetches a repository's tarball from the github service for build
 contexts (the App's key stays there), models has the runner start the plan logins' refresh, and the runner copies each run's inbox and
 files to the broker as they change (`listener/runner/inbox.mjs` `mirror`), and the runner asks the
-policy service what the operator's policies [grant](security.md#the-grants) a repository
+policy service what the operator's policies [grant](security/policies.md#the-grants) a repository
 (`GET /policies`, `POST /evaluate`, the operator's layer only), to check every sandbox spec
 and image build against it again. A run's live log reaches the dashboard through
 the orchestrator, which reads it from the runner and answers what edge passes on: edge calls the
@@ -264,7 +264,7 @@ calls there, with their agent token and the network it vouches they came from; t
 checks the token offline with the broker's keys, its `agent` claim (a run of one agent never
 gets another's credentials) and that the run still goes, at the broker. The orchestrator learns
 which credentials it holds by name, at start (its settings need them), and their fingerprints,
-for redaction (security.md, The models service).
+for redaction ([The models service](security/models.md#the-models-service)).
 
 **Two copies, both active**, on one store: either takes any call. The plans' refresh tokens are
 single-use, so a refresh is a lease in the store: one copy refreshes, the other waits for its
@@ -325,8 +325,8 @@ gap stays (above). The Compose test server keeps it.
   sandbox holds, within a 7-day grace (`RENEW_GRACE_MS`, so a broker away for a while doesn't
   end the run), and nothing once its network is removed. The agent's own token,
   which its CLI reads once at start and can't renew, lasts the run instead (7 days at most), bound
-  the same way and for the agents' endpoints alone (security.md, Run tokens).
-- **Service tokens** (#500, security.md, Service tokens): signed by the broker, with `sub` (the
+  the same way and for the agents' endpoints alone ([Run tokens](security/tokens.md#run-tokens)).
+- **Service tokens** (#500, [Service tokens](security/tokens.md#service-tokens)): signed by the broker, with `sub` (the
   caller) and `aud` (the service called), 15 minutes, and bound to the caller: its pod's service
   account on Kubernetes, the network a call arrives on with Docker (one network per caller and
   callee).

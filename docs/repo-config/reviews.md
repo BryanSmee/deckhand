@@ -228,7 +228,7 @@ review` gets the "unknown mode" reply. `review: true` (or a block without `on`, 
   the findings are claims to check, never instructions (no commands from them, no CI, workflow,
   `.deckhand.yaml` or credential changes the issue didn't ask for). It is not a guarantee: turn
   `fix` on where those who comment are trusted, and read what a fix pushed before merging
-  ([Security model](../security.md#review-fix-runs)).
+  ([Security model](../security/github.md#review-fix-runs)).
 - **What it reads**: the diff, and the thread (the pull request's description, comments and reviews,
   and the issue it closes) as Deckhand hands it over: only what Deckhand and the allowed users who
   may start work runs there (the access decision's `runs:start:work`, a viewer's comments left out
@@ -339,13 +339,13 @@ the operator's `workflows` grant.
 > merged as it is: a prompt injection in an issue or a comment, or a wrong fix, ships, and a
 > merged change runs the repository's workflows on the default branch, with its secrets. Use
 > it only on private repositories where everyone who can comment is trusted. See
-> [Security model](../security.md#auto-merge).
+> [Security model](../security/github.md#auto-merge).
 
 With `merge: true`, Deckhand merges Deckhand's own pull request once its review finds
 nothing blocking. It takes both sides:
 
 - **The operator's grant**: `auto_merge`, an `allow_grant` rule of their policies naming the
-  repository ([the grants](../security.md#the-grants)). It covers a private repository only; a
+  repository ([the grants](../security/policies.md#the-grants)). It covers a private repository only; a
   public one needs `auto_merge_public`. Without it, the config check warns, naming the grant, and
   nothing is merged; the reviews and fix runs go on as without `merge`.
 - **`on: ready`**: the merge follows the reviews that start by themselves, never a

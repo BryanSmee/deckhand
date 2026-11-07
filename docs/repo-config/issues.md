@@ -48,7 +48,7 @@ pointed at a small HTTPS server of your own that checks the webhook's secret and
 gets the deliveries the hook got, with only the access you give it. Treat what an event says
 as untrusted input: whoever opened the pull request wrote it, the App's bot's own pull
 requests included (a sandbox wrote them, see
-[GitHub Actions on Deckhand's branches](../security.md#github-actions-on-deckhands-branches)).
+[GitHub Actions on Deckhand's branches](../security/github.md#github-actions-on-deckhands-branches)).
 
 ## Conflicts
 
@@ -200,7 +200,7 @@ It counts a user's chats on every repository, when they create one here: with `p
 user who has a chat elsewhere already can't create one here. Chats already created stay.
 
 Each chat's owner may narrow what its sandbox gets from the dashboard, with its permissions
-profile ([security.md](../security.md#chats)): never beyond what `policy/mode-chat.rego` (and this
+profile ([security.md](../security/policies.md#chats)): never beyond what `policy/mode-chat.rego` (and this
 repository's `.deckhand/policy/`), this file and the operator's grants give a chat. A
 `deny_github` or `deny_capabilities` rule sees a chat's runs with `mode: "chat"`.
 
@@ -211,7 +211,7 @@ the sandbox lacks): its driver, an MCP client signed in as its owner, registers 
 labels, its capacity and the repositories it takes ([MCP clients](../guides/mcp-clients.md)). Both
 sides must opt in before this repository is offered to one:
 
-- the operator's policies grant it `machines` ([security.md](../security.md#the-grants)), nothing
+- the operator's policies grant it `machines` ([security.md](../security/policies.md#the-grants)), nothing
   by default;
 - this file has a `machines:` block, which may narrow the machines it takes to those with one
   of its labels (never wider than the grant):
@@ -233,7 +233,7 @@ Machines read this block again a minute after their last read of it: a block add
 removed is seen a minute later at most.
 
 An agent runs on that machine on its own, with its owner's files, credentials and network:
-Deckhand suggests settings and enforces none there ([security.md](../security.md#machines)).
+Deckhand suggests settings and enforces none there ([security.md](../security/webhooks-and-sign-in.md#machines)).
 
 ### Routing an issue to a machine
 

@@ -760,7 +760,7 @@ function Yaml({
 }
 
 const AUTO_MERGE_DOCS =
-  "https://github.com/BryanSmee/deckhand/blob/main/docs/security.md#auto-merge";
+  "https://github.com/BryanSmee/deckhand/blob/main/docs/security/github.md#auto-merge";
 
 // What auto-merge gives up, at the top of the panel: it is on (granted and in the config).
 function AutoMergeBox({ isPrivate }: { isPrivate: boolean }) {
