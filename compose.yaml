@@ -544,7 +544,7 @@ services:
       - github-data:/data
       # Your configuration, read only, as the orchestrator reads it: config.yaml and grants/.
       - ${DECKHAND_SERVER_DIR:-./server}:/etc/deckhand:ro
-    # Pushes of repositories granted `workflows` are saved in /tmp while checked (up to
+    # Pushes are saved in /tmp while checked (up to
     # 2 GiB each, one per run): a size-limited tmpfs keeps them off the host disk
     # (docs/security.md#github-actions-on-deckhands-branches).
     # tmpfs:
