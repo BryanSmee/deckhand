@@ -23,7 +23,8 @@ export const RESOURCES = ["core", "graphql", "search"];
 // What the service does with git:
 //   clone          a mirror's first fetch, the whole repository (git-mirror.mjs); an empty
 //                  repository leaves its mirror empty, so each of its pushes counts a clone
-//   mirror_update  a mirror fetched again before a push is checked against it
+//   mirror_update  a mirror fetched again before a push is checked against it, or a fork's
+//                  commits a push points at, fetched beside it (git-mirror.mjs connect())
 //   fetch          a sandbox's git fetch or clone relayed to GitHub, once whatever its requests:
 //                  ok once its whole pack came (an ls-remote, or a fetch with nothing new,
 //                  brings none: not counted), refused or failed at the request that was, a

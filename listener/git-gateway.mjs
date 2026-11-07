@@ -17,7 +17,9 @@
 // against the repo's mirror (git-mirror.mjs, workflow-check.mjs): GitHub runs a branch's own
 // workflows, so one that writes or names a secret is refused, unless the repo is granted
 // `workflow_secrets` too and GitHub only runs the default branch's copy of it (#700). Other
-// repos' pushes stream through unread.
+// repos' pushes are read too, and refused when their new commits change a workflow (#400):
+// GitHub would refuse one the push carries, but a fork's commits are already on GitHub, and
+// the gateway doesn't rest on its check for them.
 //
 // A push GitHub took is the run's last (broker.mjs watchPushes()): when, and to which branch,
 // for the dashboard.
@@ -225,6 +227,11 @@ function oneLine(text, max = 1000) {
   const line = text.replace(/[\0-\x1f\x7f]+/g, " ");
   return line.length > max ? `${line.slice(0, max)}…` : line;
 }
+
+// Why a work run's push can't point `ref` at `missing`, an object it doesn't carry and `repo`
+// doesn't have.
+const unconnectedReason = (repo, ref, missing) =>
+  `this push points ${ref} at ${missing.slice(0, 12)}, which it doesn't carry and ${repo} doesn't have: GitHub keeps a fork's objects with the repository's, so it may be a fork's; push the commits themselves, or: ${FORK_RUN}`;
 
 // Why the workflow files of a push can't go through, by ref (git-mirror.mjs check()'s
 // findings, { ref, path, problems }): empty when they all pass. `secrets`: the repo is granted
@@ -506,10 +513,14 @@ export function createGitGateway({
     // objects together, so a branch pointed at a fork's commit, or a new commit over a fork's
     // tree, needn't carry them, and its next fetch would bring them as the repository's own.
     const strict = forks?.restricted(may) === true;
+    // Without `workflows`, every push is read too, a fork's run's included: GitHub refuses a
+    // workflow change pushed without the Workflows permission, but the gateway doesn't rest on
+    // it for a fork's commits GitHub already has (#400).
     const workflows = await workflowsGranted(repo);
-    if (!strict && !workflows) return { body: parsed.body, token: null, parsed };
     // Only now: a push of no branch of the run's (a fork's pull request has none) never gets it.
-    if (!workflows) return checkSpooled(req, res, { repo, run, github }, parsed, base, null, true);
+    if (!workflows) {
+      return checkSpooled(req, res, { repo, run, github }, parsed, base, null, strict);
+    }
     let token;
     try {
       ({ token } = await github.repoToken(repo, WORKFLOW_PUSH_PERMISSIONS));
@@ -537,8 +548,9 @@ export function createGitGateway({
   // A push read whole, forwarded from disk once it passes: with `strict` (a work run that isn't
   // a fork's), its branches reach nothing it doesn't carry that the repository doesn't have
   // (mirrors.connect()); with `token` (a repo granted `workflows`, the token it pushes
-  // with), the workflow files it changes pass (workflow-check.mjs). Never forwarded unchecked: a
-  // mirror that can't be fetched, or a pack that can't be read, refuses it.
+  // with), the workflow files it changes pass (workflow-check.mjs); without, it changes none
+  // (ungranted()). Never forwarded unchecked: a mirror that can't be fetched, or a pack that
+  // can't be read, refuses it.
   async function checkSpooled(req, res, { repo, run, github }, parsed, base, token, strict) {
     const all = (why) => new Map(parsed.refs.map((ref) => [ref, why]));
     // One push of a run's on disk at a time: a run can't fill it with pushes sent at once.
@@ -581,10 +593,14 @@ export function createGitGateway({
       const start = await packStart(spooled.file, parsed.end, parsed.caps);
       const read = await github.repoToken(repo, { contents: "read" });
       const pushed = { repo, token: read.token, file: spooled.file, start, dir: spooled.dir };
-      reasons = strict ? await unconnected(pushed, parsed) : new Map();
-      if (!reasons.size && token) {
-        reason = "workflows";
-        reasons = await workflowReasons(github, pushed, parsed, base);
+      if (!token) {
+        ({ reasons, reason } = await ungranted(pushed, parsed, strict));
+      } else {
+        reasons = strict ? await unconnected(pushed, parsed) : new Map();
+        if (!reasons.size) {
+          reason = "workflows";
+          reasons = await workflowReasons(github, pushed, parsed, base);
+        }
       }
     } catch (error) {
       log(`Git gateway: ${repo}: ${error.message ?? error}`);
@@ -608,12 +624,43 @@ export function createGitGateway({
   async function unconnected(pushed, parsed) {
     const reasons = new Map();
     for (const { ref, missing } of await mirrors.connect({ ...pushed, updates: parsed.updates })) {
-      reasons.set(
-        ref,
-        `this push points ${ref} at ${missing.slice(0, 12)}, which it doesn't carry and ${pushed.repo} doesn't have: GitHub keeps a fork's objects with the repository's, so it may be a fork's; push the commits themselves, or: ${FORK_RUN}`,
-      );
+      reasons.set(ref, unconnectedReason(pushed.repo, ref, missing));
     }
     return reasons;
+  }
+
+  // Why each branch of a push of a repo not granted `workflows` can't go through: { reasons, reason
+  // }, reasons ref → why, and the first's `reason` (counted()). With `strict`, it may reach no
+  // object it doesn't carry that the repository doesn't have (unconnected()); a fork's run's may,
+  // read from GitHub. Either way, the commits it brings may change no workflow.
+  async function ungranted(pushed, parsed, strict) {
+    const found = await mirrors.connect({
+      ...pushed,
+      updates: parsed.updates,
+      strict,
+      workflows: true,
+    });
+    const reasons = new Map();
+    let reason = null;
+    for (const { ref, missing, paths } of found) {
+      if (missing) {
+        reasons.set(
+          ref,
+          strict
+            ? unconnectedReason(pushed.repo, ref, missing)
+            : `couldn't read ${missing.slice(0, 12)}, which this push points ${ref} at and doesn't carry; push the commits themselves`,
+        );
+        reason ??= strict ? "fork" : "error";
+      } else {
+        const shown = paths.slice(0, 5).join(", ") + (paths.length > 5 ? ", …" : "");
+        reasons.set(
+          ref,
+          `this push changes ${shown}, and ${pushed.repo} isn't granted \`workflows\`: a sandbox's push changes no workflow without it (docs/security.md#without-the-grant); push commits that leave .github/workflows/ as the repository has it`,
+        );
+        reason ??= "workflows";
+      }
+    }
+    return { reasons, reason };
   }
 
   // Why each branch of a push of a repo granted `workflows` can't go through, by its

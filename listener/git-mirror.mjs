@@ -9,6 +9,7 @@ import { createReadStream, createWriteStream } from "node:fs";
 import { mkdir, mkdtemp, readdir, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { inspectWorkflow } from "./workflow-check.mjs";
 
@@ -17,6 +18,9 @@ export const MAX_PUSH = 2 * 1024 ** 3;
 // A workflow file bigger than this isn't read: refused.
 export const MAX_WORKFLOW = 512 * 1024;
 const GIT_MS = 5 * 60_000;
+// How many fetches a fork's run's push may cost, each for an object it reaches and doesn't carry:
+// one for its tip is the usual (a pull request's head), more only for a pack made by hand.
+const MAX_FETCHES = 8;
 // A mirror's first fetch clones the whole repository: a big one takes longer.
 const CLONE_MS = 60 * 60_000;
 // Git's only setting from the listener's environment, which holds the operator's credentials.
@@ -25,6 +29,10 @@ const { PATH } = process.env;
 // The files GitHub would read as workflows, and anything under .github/workflows/ that isn't a
 // plain file (a symlink, a submodule): what the checks look at.
 const PLAIN = /^100[0-7]{3}$/;
+// A path a commit changes that GitHub would read as a workflow, or that decides where they are:
+// .github or .github/workflows replaced by a file, a symlink or a submodule. Without case, as
+// workflowFiles().
+const WORKFLOW_PATH = /^\.github(\/workflows(\/|$)|$)/i;
 const checked = (entry) => /\.ya?ml$/i.test(entry.path) || !PLAIN.test(entry.mode);
 
 // Removes what `dir` holds that is older than `ms`. Never fails: a sweep is only tidying.
@@ -304,33 +312,35 @@ export function createMirrors({
   }
 
   // The mirror brought up to date with GitHub. Its first fetch, a whole clone, gets longer.
-  async function fetch(repo, mirror, token) {
+  // With `refspecs`, those alone, into `env`'s object directory (a push's quarantine): a
+  // fork's commits by their id, never kept in the mirror.
+  async function fetch(repo, mirror, token, { env: into = null, refspecs = null } = {}) {
     await mkdir(mirror, { recursive: true });
     await git(["init", "-q", "--bare", mirror]);
     const empty = !(await git(["-C", mirror, "for-each-ref", "--count=1"])).length;
     const auth = Buffer.from(`x-access-token:${token}`).toString("base64");
     // The token in the environment, never in a command line or the mirror's config.
-    const op = empty ? "clone" : "mirror_update";
+    const op = empty && !refspecs ? "clone" : "mirror_update";
     await git(
       [
         "-C",
         mirror,
         "fetch",
         "-q",
-        "--prune",
+        ...(refspecs ? ["--no-auto-gc"] : ["--prune"]),
         "--no-tags",
         "--no-write-fetch-head",
         `${githubUrl}/${repo}.git`,
-        "+refs/heads/*:refs/heads/*",
-        "+refs/tags/*:refs/tags/*",
+        ...(refspecs ?? ["+refs/heads/*:refs/heads/*", "+refs/tags/*:refs/tags/*"]),
       ],
       {
         env: {
+          ...into,
           GIT_CONFIG_COUNT: "1",
           GIT_CONFIG_KEY_0: "http.extraHeader",
           GIT_CONFIG_VALUE_0: `Authorization: Basic ${auth}`,
         },
-        timeout: empty ? cloneMs : timeoutMs,
+        timeout: empty && !refspecs ? cloneMs : timeoutMs,
       },
     ).then(
       () => onFetch(op, "ok"),
@@ -347,9 +357,30 @@ export function createMirrors({
   // together, so a push needn't carry a fork's commit, tree or blob to point a branch at it, nor
   // a thin pack's delta base. It is git's own connectivity check, against the repository's
   // objects rather than its network's (github-forks.mjs: a work run that isn't a fork's). The
-  // pack (`file` from `start`, null: none) goes into a quarantine of its own in `dir`. Throws
-  // when the mirror can't be fetched or the pack read.
-  async function connect({ repo, token, updates, file = null, start = null, dir }) {
+  // pack (`file` from `start`, null: none) goes into a quarantine of its own in `dir`.
+  //
+  // Without `strict` (a fork's run), what the push doesn't carry is fetched from GitHub
+  // instead, by its id, into that quarantine: a fork's run may point its branch at its
+  // pull request's commits, which only the network has. Then `missing` is what even GitHub
+  // doesn't serve.
+  //
+  // With `workflows` (a repo not granted `workflows`), also [{ ref, paths }]: the paths under
+  // .github/workflows/ (any case, or a .github or workflows that isn't a folder) that the
+  // commits new to the repository change, deletions included, a merge's only where it differs
+  // from every parent (`diff-tree -c`: one taking the default branch's workflows changes none).
+  // GitHub refuses a push that changes a workflow without the Workflows permission, yet the
+  // gateway doesn't rely on it for commits GitHub already has (#400). Throws when the mirror
+  // can't be fetched or the pack read.
+  async function connect({
+    repo,
+    token,
+    updates,
+    file = null,
+    start = null,
+    dir,
+    strict = true,
+    workflows = false,
+  }) {
     const mirror = join(root, `${repo}.git`);
     return locked(repo, async () => {
       await fetch(repo, mirror, token);
@@ -366,25 +397,57 @@ export function createMirrors({
           input: createReadStream(file, { start }),
         });
       }
-      const unconnected = [];
-      for (const { ref, new: tip } of updates) {
-        if (/^0+$/.test(tip)) continue;
-        let out;
+      // The first object `tip` reaches that neither the push nor the repository has, or null.
+      const missingOf = async (tip) => {
         try {
-          out = await git(["rev-list", "--objects", "--missing=print", tip, "--not", "--all"], {
-            env,
-          });
+          const out = await git(
+            ["rev-list", "--objects", "--missing=print", tip, "--not", "--all"],
+            { env },
+          );
+          const line = String(out)
+            .split("\n")
+            .find((l) => l.startsWith("?"));
+          return line ? line.slice(1) : null;
         } catch {
           // Its tip itself is neither in the push nor the repository's.
-          unconnected.push({ ref, missing: tip });
+          return tip;
+        }
+      };
+      const found = [];
+      for (const { ref, new: tip } of updates) {
+        if (/^0+$/.test(tip)) continue;
+        let missing = await missingOf(tip);
+        for (let tries = 0; missing && !strict && tries < MAX_FETCHES; tries++) {
+          const wanted = missing;
+          // GitHub not serving it is the answer: it stays missing.
+          await fetch(repo, mirror, token, { env, refspecs: [wanted] }).catch(() => {});
+          missing = await missingOf(tip);
+          if (missing === wanted) break;
+        }
+        if (missing) {
+          found.push({ ref, missing });
           continue;
         }
-        const missing = String(out)
-          .split("\n")
-          .find((line) => line.startsWith("?"));
-        if (missing) unconnected.push({ ref, missing: missing.slice(1) });
+        if (!workflows) continue;
+        const commits = await git(["rev-list", tip, "--not", "--all"], { env });
+        if (!commits.length) continue;
+        const out = await git(
+          ["diff-tree", "--stdin", "--no-commit-id", "-r", "-c", "--root", "--no-renames"].concat([
+            "--name-only",
+            "-z",
+          ]),
+          { env, input: Readable.from([commits]) },
+        );
+        const paths = [
+          ...new Set(
+            String(out)
+              .split("\0")
+              .filter((path) => WORKFLOW_PATH.test(path)),
+          ),
+        ];
+        if (paths.length) found.push({ ref, paths });
       }
-      return unconnected;
+      return found;
     });
   }
 
