@@ -56,6 +56,33 @@ what it can reach:
 Deckhand runs as a few services, split by the secret each one holds, so that a hole in one
 doesn't give away the others:
 
+A comment's way through them, to the reply:
+
+```mermaid
+sequenceDiagram
+  actor you as You
+  participant gh as GitHub
+  participant edge as edge
+  participant orch as orchestrator
+  participant runner as runner
+  participant sandbox as sandbox
+  participant proxy as egress proxy
+  participant github as github service
+  participant models as models service
+
+  you->>gh: comment "Deckhand" on an issue
+  gh->>edge: webhook (signature checked)
+  edge->>orch: the delivery
+  orch->>orch: allowlist, trigger line, policies, queue
+  orch->>runner: start a run
+  runner->>sandbox: one container, the run's token only
+  sandbox->>proxy: the agent's API, git, gh
+  proxy->>models: the agent's calls, your credential added there
+  proxy->>github: GitHub calls and pushes
+  github->>gh: with a token for that repository only
+  gh-->>you: 👀, a draft pull request, the reply on the issue
+```
+
 | Service        | What it does                                                                      |
 | -------------- | --------------------------------------------------------------------------------- |
 | edge           | The only one the internet reaches: webhooks, sign-in, the dashboard's files.      |

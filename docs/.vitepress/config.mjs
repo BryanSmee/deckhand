@@ -36,6 +36,20 @@ function inlineCodeAsIs(md) {
     code(tokens, i, options, env, self).replace(/^<code/, "<code v-pre");
 }
 
+// An <img src="images/…"> in a page's HTML is relative on GitHub, but Vite reads a path without
+// ./ as a package to import: give it one.
+function relativeImages(md) {
+  const fix = (html) => html.replace(/\b(src|srcset)="(?![a-z][a-z\d+.-]*:|[./#])/gi, '$1="./');
+  md.core.ruler.push("relative_images", (state) => {
+    for (const token of state.tokens) {
+      if (token.type === "html_block") token.content = fix(token.content);
+      for (const child of token.children ?? []) {
+        if (child.type === "html_inline") child.content = fix(child.content);
+      }
+    }
+  });
+}
+
 export default defineConfig({
   title: "Deckhand",
   description: "Runs Claude Code on your GitHub issues and pull requests, on your own server.",
@@ -48,7 +62,7 @@ export default defineConfig({
     languages: [rego],
     // Redis's config reads as key-value pairs.
     languageAlias: { conf: "properties" },
-    config: (md) => md.use(linksToGitHub).use(inlineCodeAsIs),
+    config: (md) => md.use(linksToGitHub).use(inlineCodeAsIs).use(relativeImages),
   },
   themeConfig: {
     search: { provider: "local" },
