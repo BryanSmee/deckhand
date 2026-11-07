@@ -655,7 +655,7 @@ export function createGitGateway({
         const shown = paths.slice(0, 5).join(", ") + (paths.length > 5 ? ", …" : "");
         reasons.set(
           ref,
-          `this push changes ${shown}, and ${pushed.repo} isn't granted \`workflows\`: a sandbox's push changes no workflow without it (docs/security.md#without-the-grant); push commits that leave .github/workflows/ as the repository has it`,
+          `this push changes ${shown}, and ${pushed.repo} isn't granted \`workflows\`: a sandbox's push changes no workflow without it (docs/security.md#without-the-grant); push commits that leave .github/workflows/ as the repository has it (rebase on the default branch when the branch was cut from commits it no longer has)`,
         );
         reason ??= "workflows";
       }

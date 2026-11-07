@@ -41,7 +41,8 @@ export const GIT_RESULTS = ["ok", "refused", "rejected", "failed"];
 //   branch          not a branch, or one that isn't the run's
 //   run             a run that may not push, or not to this repository
 //   policies        the policies' deny_push
-//   workflows       a workflow file that writes or names a secret (the `workflows` grant)
+//   workflows       a workflow file that writes or names a secret (the `workflows` grant), or
+//                   any workflow change without that grant
 //   fork            a branch reaching objects it doesn't carry, a fork's maybe
 //   error           what couldn't be checked (a token, the mirror, a push too large or too slow)
 export const PUSH_REASONS = [

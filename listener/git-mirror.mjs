@@ -18,8 +18,9 @@ export const MAX_PUSH = 2 * 1024 ** 3;
 // A workflow file bigger than this isn't read: refused.
 export const MAX_WORKFLOW = 512 * 1024;
 const GIT_MS = 5 * 60_000;
-// How many fetches a fork's run's push may cost, each for an object it reaches and doesn't carry:
-// one for its tip is the usual (a pull request's head), more only for a pack made by hand.
+// How many fetches a fork's run's push may cost, each for an object it reaches and doesn't carry,
+// all its branches together: one per branch pointed at a pull request's head is the usual, more
+// only for a pack made by hand. Past it, what is still missing stays so: refused.
 const MAX_FETCHES = 8;
 // A mirror's first fetch clones the whole repository: a big one takes longer.
 const CLONE_MS = 60 * 60_000;
@@ -414,10 +415,12 @@ export function createMirrors({
         }
       };
       const found = [];
+      let fetches = 0;
       for (const { ref, new: tip } of updates) {
         if (/^0+$/.test(tip)) continue;
         let missing = await missingOf(tip);
-        for (let tries = 0; missing && !strict && tries < MAX_FETCHES; tries++) {
+        while (missing && !strict && fetches < MAX_FETCHES) {
+          fetches++;
           const wanted = missing;
           // GitHub not serving it is the answer: it stays missing.
           await fetch(repo, mirror, token, { env, refspecs: [wanted] }).catch(() => {});

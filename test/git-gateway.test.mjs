@@ -1454,7 +1454,7 @@ const forkChecks = () => createForkChecks({ get: async () => null });
 
 // A fork's commit, with a file of its own, pushed to the fake GitHub under its pull request's
 // ref only; the work clone goes back to where it was. → its sha.
-function forkCommit({ work, bare }, files = { "evil.sh": "echo the fork's code\n" }) {
+function forkCommit({ work, bare }, files = { "evil.sh": "echo the fork's code\n" }, pull = 7) {
   execFileSync("git", ["checkout", "-q", "-b", "fork"], { cwd: work, env: gitEnv });
   for (const [path, content] of Object.entries(files)) {
     mkdirSync(dirname(join(work, path)), { recursive: true });
@@ -1462,7 +1462,10 @@ function forkCommit({ work, bare }, files = { "evil.sh": "echo the fork's code\n
   }
   execFileSync("git", ["add", "-A"], { cwd: work, env: gitEnv });
   execFileSync("git", ["commit", "-q", "-m", "the fork's"], { cwd: work, env: gitEnv });
-  execFileSync("git", ["push", "-q", bare, "HEAD:refs/pull/7/head"], { cwd: work, env: gitEnv });
+  execFileSync("git", ["push", "-q", bare, `HEAD:refs/pull/${pull}/head`], {
+    cwd: work,
+    env: gitEnv,
+  });
   const sha = execFileSync("git", ["rev-parse", "HEAD"], { cwd: work }).toString().trim();
   execFileSync("git", ["checkout", "-q", "main"], { cwd: work, env: gitEnv });
   execFileSync("git", ["branch", "-q", "-D", "fork"], { cwd: work, env: gitEnv });
@@ -1601,6 +1604,46 @@ test("without the `workflows` grant, a fork's run can't push its pull request's 
   );
 });
 
+test("a fork's run's push costs 8 fetches of what it doesn't carry at most, all its branches together", async (t) => {
+  const register = (b) => {
+    const secret = b.register("org/repo", { push: true });
+    b.allow(secret, ["issue-1-*"], true);
+    return secret;
+  };
+  const run = await setup(t, { forks: forkChecks, register });
+  run.seed("main");
+  // Nine pull requests' heads, each a branch of one push that carries none of them.
+  const heads = Array.from({ length: 9 }, (_, n) =>
+    forkCommit(run, { [`f${n}.txt`]: `${n}\n` }, n + 1),
+  );
+  const commands = heads.map((sha, n) => `${ZERO} ${sha} refs/heads/issue-1-${n}`);
+  const body = Buffer.concat([
+    Buffer.from(pkt(`${commands[0]}\0report-status\n`)),
+    ...commands.slice(1).map((c) => Buffer.from(pkt(`${c}\n`))),
+    Buffer.from("0000"),
+  ]);
+  const auth = Buffer.from(`deckhand:${run.secret}`).toString("base64");
+  const res = await fetch(`http://127.0.0.1:${run.port}/git/org/repo.git/git-receive-pack`, {
+    method: "POST",
+    headers: {
+      authorization: `Basic ${auth}`,
+      "content-type": "application/x-git-receive-pack-request",
+    },
+    body,
+  });
+  const report = Buffer.from(await res.arrayBuffer()).toString("latin1");
+  // The first eight were read; the ninth is past the cap, refused as unread.
+  assert.match(
+    report,
+    new RegExp(`ng refs/heads/issue-1-8 Deckhand: couldn't read ${heads[8].slice(0, 12)}`),
+  );
+  for (let n = 0; n < 8; n++) {
+    assert.match(report, new RegExp(`issue-1-${n} Deckhand: another ref in this push was refused`));
+  }
+  assert.equal(run.ops.filter((op) => op === "mirror_update ok").length, 8);
+  assert.deepEqual(run.received, []);
+});
+
 test("without the `workflows` grant, a work run's commits change no workflow; the repository's pass", async (t) => {
   const run = await setup(t, { forks: forkChecks });
   const { work, remote, commit, received, sha } = run;
@@ -1649,7 +1692,24 @@ test("without the `workflows` grant, a work run's commits change no workflow; th
   const update = await git(work, "push", remote(), "HEAD:refs/heads/issue-1-d");
   assert.ok(update.ok, update.stderr);
   assert.equal(received.length, 3);
-  assert.deepEqual(run.refusals, Array(6).fill("workflows"));
+  // A merge that changes a workflow itself, resolved by hand: neither parent has its copy.
+  execFileSync("git", ["checkout", "-q", "-B", "issue-1-f", "main~1"], { cwd: work, env: gitEnv });
+  commit({ "f.txt": "f\n" });
+  execFileSync("git", ["merge", "-q", "--no-ff", "--no-commit", "main"], {
+    cwd: work,
+    env: gitEnv,
+  });
+  commit({ ".github/workflows/ci.yml": `${SAFE}# the merge's own\n` }, "merge main");
+  assert.equal(
+    execFileSync("git", ["rev-list", "--parents", "-n1", "HEAD"], { cwd: work })
+      .toString()
+      .trim()
+      .split(" ").length,
+    3,
+  );
+  await refused("refs/heads/issue-1-f", /this push changes \.github\/workflows\/ci\.yml/);
+  assert.equal(received.length, 3);
+  assert.deepEqual(run.refusals, Array(7).fill("workflows"));
 });
 
 // A run with tokens: what it may push is its token's claims, which the broker signed.
