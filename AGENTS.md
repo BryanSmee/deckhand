@@ -185,7 +185,8 @@ docs/         setup, per-repo config reference (repo-config.md: the core keys; r
   update that stops calling it, so the sandboxes in flight while it happens still reach it.
   The next update may remove it: its last callers were started before the one that stopped
   calling it (`docker ps --filter label=deckhand.run` lists the running sandboxes;
-  `docs/architecture.md`, Restarts). Not every older release's sandboxes.
+  `docs/architecture.md`, Restarts). Not every older release's sandboxes. That is one of the
+  cases of [Runs in flight](#runs-in-flight) below.
 - **GitHub only.** Issues, labels and sub-issues; branches `issue-<n>-<slug>`.
 - **Naming.** Never use "Claude" or "Anthropic" in the product, image or repo names; "runs
   Claude Code" in text is fine. Claude Code is never bundled in an image: it installs on
@@ -247,6 +248,39 @@ docs/         setup, per-repo config reference (repo-config.md: the core keys; r
   its lease's fencing epoch goes with every call to the github service, the runner and the
   broker, which refuse an older one.
 - Verify every webhook's HMAC with a constant-time comparison (edge, `edge/http.mjs`).
+
+## Runs in flight
+
+An update never waits for the runs (#441): sandboxes keep running, the base image may lag the
+services, and the next orchestrator picks up the runs the last one left. A change to the
+contract between the services and the sandbox breaks those runs unless it says how it doesn't:
+the variables a run starts with (`DECKHAND_CA`, `TASK_DIGEST`, the URLs), the endpoints a
+sandbox calls (broker, edge, the gateways through the proxy), the egress proxy's answers (which
+hosts it decrypts, relays or tunnels), a run's state in the store, the token's claims, and the
+sandbox's scripts (`entrypoint.sh`, `deckhand-*`, the agents' hooks). #393 passed `DECKHAND_CA`
+as a URL that older images read as a missing file: their runs trusted no CA and failed later on
+GitHub's TLS, without a word.
+
+- **Check the three cases** before pushing:
+  - **running sandboxes under the new services**: their old scripts and their old variables
+    call the new endpoints (the rule above);
+  - **new runs on an older sandbox image**: the base image lags the services (compose's
+    `sandbox` service exits at once, so an updater that follows running containers never pulls
+    it; a release publishes its images in parallel), and a repository's image is built from
+    that base;
+  - **runs the next orchestrator picks up**: their state in the store, and what the broker,
+    the proxy and the gateways decide for them, were written under the old rules.
+- **Say so in the pull request**, under a "Runs in flight" heading: "None affected", or which
+  runs break and how they fail.
+- **When runs break, give the options**, and pick one: a compatibility shim on the services'
+  side (an old endpoint kept, answering where to go, as above); a fallback in the sandbox's
+  scripts that reads both forms; a check that fails the run at once with what to run
+  (`docker compose pull sandbox`); or a one-time recovery (the commands that find and stop the
+  broken runs), written in the pull request for the operator.
+- **Never fail silently.** A run that can't work stops at its start with a message saying why,
+  not at its first GitHub call with a TLS error.
+
+The details, and how to find the runs an update broke: `docs/architecture.md`, Runs in flight.
 
 ## Testing
 
