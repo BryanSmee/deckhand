@@ -11,7 +11,7 @@ Beside them: the runner service (`runner/`, [The runner service](#the-runner-ser
 one with the Docker socket, which runs the sandboxes; the broker (`broker/`), the github service
 (`github/`), the models service (`models/`), the policy service (`policy-service/`) and the
 egress proxy (`proxy/`). This page is the map: what a comment turns into, and which module does
-what. Setup is in the [guides](guides/install.md) and [Server settings](settings.md), the per-repo file in [repo-config.md](repo-config.md),
+what. Setup is in the [guides](guides/install.md) and [Server settings](reference/settings.md), the per-repo file in [repo-config.md](repo-config.md),
 the security model in [security.md](security.md), the services and their updates in
 [services.md](services.md).
 
@@ -215,7 +215,7 @@ built-in mode's `MODES` entry keeps where its volumes are (`volumes`: `apart`, `
 whose agent and model it defaults to (`defaults`: `brainstorm`, the light runs'). Comments without a trigger or `/mode`
 line go on in the issue's current mode (the store's `modes`).
 
-`/mode research` (repos granted `research`: [the grants](security/policies.md#the-grants)) is a built-in
+`/mode research` (repos granted `research`: [the grants](reference/server-folder.md#the-grants)) is a built-in
 mode for the open web (`volumes: "research"` in `modes.mjs`, `internet` alone in
 `policy/mode-research.rego`): any public host (`researchAccess()` in `access.mjs`), and nothing of
 the repo's. No clone (`SANDBOX_NO_CLONE`), no GitHub token (no `pull` capability,
@@ -1189,7 +1189,7 @@ are asked, what a refusal says) and reads a repository's `.deckhand/policy/` fro
 it sends with each call; the service reads Deckhand's policies (its image) and the operator's
 (the grants folder, mounted read-only), and answers four calls, each with a service token
 (`policy-service/service.mjs`). The runner may call the first two, for the operator's
-[grants](security/policies.md#the-grants) (`grant`, the operator's layer alone), never the others:
+[grants](reference/server-folder.md#the-grants) (`grant`, the operator's layer alone), never the others:
 
 - `GET /policies`: the operator's layer as it reads it now, Deckhand's files and the
   operator's, for the dashboard's Policies tab and `/mode policy`; the orchestrator keeps Deckhand's

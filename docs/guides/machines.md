@@ -18,7 +18,7 @@ Claude Code, signed in, on Windows, macOS or Linux. Claude Code's sandbox needs 
 Windows has none (WSL2 has).
 
 1. The repository takes machines: the operator's `machines` grant
-   ([security.md](../security/policies.md#the-grants)) and a `machines:` block in its `.deckhand.yaml`
+   ([the grants](../reference/server-folder.md#the-grants)) and a `machines:` block in its `.deckhand.yaml`
    ([repo-config/issues.md](../repo-config/issues.md#machines)).
 2. Download `deckhand-machine.mjs` (attached to each release; `machine/` in this repository) and
    sign in, which shows the warning and waits for you to type `yes`, then opens your browser:

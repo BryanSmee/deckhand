@@ -2,7 +2,7 @@
 
 A first run in about 15 minutes, with Docker Compose. [Install with Compose](../guides/install.md) and the other guides have
 the details of each step and the rest: other agents, two copies of each service, metrics;
-[Server settings](../settings.md) has every setting. On a cluster, see [Deckhand on Kubernetes](../kubernetes.md).
+[Server settings](../reference/settings.md) has every setting. On a cluster, see [Deckhand on Kubernetes](../kubernetes.md).
 
 ## What you need
 
@@ -29,7 +29,7 @@ cp -r server.example server
 
 The `server/` folder holds every other setting, and in `server/grants/` what each repository
 gets beyond a bare sandbox (hosts, a Dockerfile, mounts). It grants nothing until you change it:
-leave it for now ([The server folder](../settings.md#the-server-folder)).
+leave it for now ([The server folder](../reference/server-folder.md)).
 
 ## 2. Start
 
@@ -81,6 +81,7 @@ orchestrator`: a login missing from `allowed_users` is logged there.
 ## Next
 
 - [Core ideas](core-ideas.md): runs, modes, the server folder, sandboxes and services.
+- [Comment commands](../reference/comment-commands.md): `Deckhand`, `/mode`, `/model`, `/after`…
 - [Per-repo config](../repo-config.md): a repository's own `.deckhand.yaml`.
 - [Security model](../security.md): read it before you install Deckhand on a repository other
   people write to.

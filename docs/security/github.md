@@ -127,7 +127,7 @@ By default the workflow files themselves can't change: neither the sandbox's tok
 gateway's has the `workflows` permission, so GitHub refuses a push that adds or edits one,
 and the gateway refuses it first ([Without the grant](#without-the-grant)). What they run can.
 
-**The `workflows` grant** ([the grants](policies.md#the-grants), one repository at a time) lifts that
+**The `workflows` grant** ([the grants](../reference/server-folder.md#the-grants), one repository at a time) lifts that
 for one repository: the gateway then pushes the run's branches with a token that also has
 `workflows: write`, so a run can add a CI job or bump the Node version of a workflow. That
 token is still the gateway's alone: the sandbox's own token never has `workflows`, a run without
@@ -208,7 +208,7 @@ run's branch was checked at its tip. Not checked:
   changed, runs a merge nobody checked. Limit environments' deployment branches (below) so that
   such a merge still can't read their secrets.
 
-**The `workflow_secrets` grant** ([the grants](policies.md#the-grants), one repository at a time, #700)
+**The `workflow_secrets` grant** ([the grants](../reference/server-folder.md#the-grants), one repository at a time, #700)
 lets a run write the deploy, release and nightly workflows maintainers ask for, which need
 secrets. It does nothing without `workflows`, and is asked again on each push too. The rules
 above exist because GitHub runs a branch's own copy of a workflow; a workflow it only ever runs
@@ -735,7 +735,7 @@ to (above) holds too: a fix to `.github/workflows/` needs the `workflows` grant.
 
 ### Auto-merge
 
-With the `auto_merge` [grant](policies.md#the-grants) for a repository and `review.merge: true` in its
+With the `auto_merge` [grant](../reference/server-folder.md#the-grants) for a repository and `review.merge: true` in its
 `.deckhand.yaml`, the orchestrator merges Deckhand's own pull requests after a review with nothing
 blocking (and, after a fix run, one more review of what it pushed), with the App's token
 (`PUT /pulls/{n}/merge`, the App's `contents` and `pull_requests: write`). The flow and its

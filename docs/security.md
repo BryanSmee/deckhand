@@ -87,7 +87,7 @@ Deckhand fails closed, but some things only you decide:
 - **What you grant.** Every host you grant is trusted entirely: anything a sandbox can write
   to there is a way out. Give `dockerfile`, `docker`, read-write mounts, `workflows`, research
   and auto-merge only to repositories whose default branch you trust
-  ([The grants folder](security/policies.md#the-grants-folder), [The grants](security/policies.md#the-grants)).
+  ([The grants folder](security/policies.md#the-grants-folder), [The grants](reference/server-folder.md#the-grants)).
 - **The host.** The runner's Docker socket is root on the host, and with it every service's
   volumes there; prefer Sysbox to Podman for container engines
   ([Container engine](security/mounts-and-engine.md#container-engine)).

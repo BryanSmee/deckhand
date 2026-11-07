@@ -158,7 +158,7 @@ The cap is per run: the logs together can take up to that much for each run kept
 
 ## Container engine
 
-A run whose repository the operator's policies grant `docker` ([the grants](policies.md#the-grants), one
+A run whose repository the operator's policies grant `docker` ([the grants](../reference/server-folder.md#the-grants), one
 repository at a time), whose
 `.deckhand.yaml` asks for `docker`, and for which the operator set `SANDBOX_ENGINE`, gets a
 second container next to its sandbox: an engine serving Docker's API

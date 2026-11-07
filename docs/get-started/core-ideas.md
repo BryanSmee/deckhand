@@ -32,7 +32,7 @@ deployment, except the secrets, which stay in `.env`:
 
 A repository's `.deckhand.yaml`, read from its default branch only, can narrow what you allow
 (fewer users, fewer parallel runs) and ask for what you granted, never more
-([The server folder](../settings.md#the-server-folder),
+([The server folder](../reference/server-folder.md),
 [The grants folder](../security/policies.md#the-grants-folder)).
 
 ## Sandboxes

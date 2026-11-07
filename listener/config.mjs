@@ -107,7 +107,7 @@ const RUNNERS = ["docker", "kubernetes"];
 // The operator's settings, by environment variable (in lowercase, its config.yaml key), in the
 // order they are read: a default can use the ones before it. Each one has a type, a default, a
 // parser and maybe `empty`, as lib/settings.mjs reads them.
-// Each one is in docs/settings.md and compose.yaml (test/settings.test.mjs). Secrets and the
+// Each one is in docs/reference/settings/ and compose.yaml (test/settings.test.mjs). Secrets and the
 // wiring compose.yaml sets to match its own services stay in the environment only.
 export const SETTINGS = {
   // Fail closed: required (requiredSettings()).
@@ -657,7 +657,8 @@ function sandboxConfig(env, s) {
 // Fail closed: repo images run in their repos' sandboxes, with their broker secrets and
 // grants, so a registry anyone could push to (an in-cluster one the sandboxes and builds can
 // reach) would let one run replace another repo's image. Its credentials have to be there,
-// which a registry that asks for none would make pointless: docs/settings.md says it must.
+// which a registry that asks for none would make pointless: docs/reference/settings/sandboxes.md says it
+// must.
 function registryCredentials(s) {
   if (s.KUBERNETES_REGISTRY && !s.KUBERNETES_REGISTRY_SECRET) {
     throw new ConfigError(

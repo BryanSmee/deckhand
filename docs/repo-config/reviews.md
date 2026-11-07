@@ -3,7 +3,7 @@
 Part of the [`.deckhand.yaml` reference](../repo-config.md): Deckhand's reviews of pull
 requests (`review`), the reviewers it asks, CI before the review, and auto-merge.
 
-### Reviews
+## Reviews
 
 The built-in review reads a pull request and posts **one GitHub review**, in three sections,
 then a rating out of 10 and a verdict. It never pushes, edits code or creates issues: its
@@ -249,7 +249,7 @@ review` gets the "unknown mode" reply. `review: true` (or a block without `on`, 
 `follow_ups_auto_pickup` are its only
 keys: any other, or a bad value, is an error.
 
-#### Reviewers
+### Reviewers
 
 `request: [alice, bob]` asks people to review Deckhand's pull requests, so a pull request that
 turns ready doesn't wait for someone to notice it. A run never picks who gets notified:
@@ -281,7 +281,7 @@ Deckhand requests them itself, with its own token (runs still can't use `gh pr c
 Requesting a review notifies people: keep the list to those who want every one of Deckhand's
 pull requests.
 
-#### CI before the review
+### CI before the review
 
 With `ci: wait` (and `on: ready`), an automatic review waits for the repository's CI first: a
 failing CI then costs a cheap CI fix run instead of a full review that misses the failure.
@@ -333,7 +333,7 @@ pull request's head commit (other checks and commit statuses aren't read, as for
 waits. CI fix runs push like any work run: one that has to change `.github/workflows/` needs
 the operator's `workflows` grant.
 
-#### Auto-merge
+### Auto-merge
 
 > **Unsafe: no human reads the code before it reaches the default branch.** Model output is
 > merged as it is: a prompt injection in an issue or a comment, or a wrong fix, ships, and a
@@ -345,7 +345,7 @@ With `merge: true`, Deckhand merges Deckhand's own pull request once its review 
 nothing blocking. It takes both sides:
 
 - **The operator's grant**: `auto_merge`, an `allow_grant` rule of their policies naming the
-  repository ([the grants](../security/policies.md#the-grants)). It covers a private repository only; a
+  repository ([the grants](../reference/server-folder.md#the-grants)). It covers a private repository only; a
   public one needs `auto_merge_public`. Without it, the config check warns, naming the grant, and
   nothing is merged; the reviews and fix runs go on as without `merge`.
 - **`on: ready`**: the merge follows the reviews that start by themselves, never a

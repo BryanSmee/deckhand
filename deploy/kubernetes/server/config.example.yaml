@@ -1,4 +1,4 @@
-# Deckhand's settings, as server.example/config.yaml (every key: docs/settings.md), under
+# Deckhand's settings, as server.example/config.yaml (every key: docs/reference/settings.md), under
 # the key config.yaml: your overlay or the chart's values replace them with yours
 # (docs/kubernetes.md, Install). Read at start: the pods restart when it changes, as the
 # ConfigMap's name has a hash of it.

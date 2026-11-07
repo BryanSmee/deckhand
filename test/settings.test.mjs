@@ -1,5 +1,5 @@
 // Every environment variable the listener, the runner, the policy service, the egress proxy, the
-// broker and the models service read is in docs/settings.md: a setting nobody can find is one nobody can change. Every
+// broker and the models service read is in docs/reference/settings/: a setting nobody can find is one nobody can change. Every
 // setting config.yaml takes is in compose.yaml too, which passes .env's value.
 import assert from "node:assert/strict";
 import { readdirSync, readFileSync } from "node:fs";
@@ -8,6 +8,17 @@ import { test } from "node:test";
 import { FILE_SETTINGS, SETTINGS } from "../listener/config.mjs";
 
 const root = join(import.meta.dirname, "..");
+
+// The server settings' reference: its index page and one page per area.
+function settingsReference() {
+  const dir = join(root, "docs", "reference", "settings");
+  return [
+    join(root, "docs", "reference", "settings.md"),
+    ...readdirSync(dir).map((f) => join(dir, f)),
+  ]
+    .map((page) => readFileSync(page, "utf8"))
+    .join("\n");
+}
 
 function sources(dir) {
   return readdirSync(join(root, dir), { recursive: true })
@@ -47,20 +58,20 @@ test("the listener, the policy service and the proxy read settings that the scan
   }
 });
 
-test("docs/settings.md documents every setting the listener, the runner, the policy service, the proxy, the broker and the models service read", () => {
-  const doc = readFileSync(join(root, "docs/settings.md"), "utf8");
+test("the server settings' reference documents every setting the listener, the runner, the policy service, the proxy, the broker and the models service read", () => {
+  const doc = settingsReference();
   const missing = settingsRead().filter((name) => !doc.includes(`\`${name}\``));
-  assert.deepEqual(missing, [], `not in docs/settings.md: ${missing.join(", ")}`);
+  assert.deepEqual(missing, [], `not in docs/reference/settings/: ${missing.join(", ")}`);
 });
 
 test("every setting config.yaml takes is documented with its key, and in compose.yaml", () => {
-  const doc = readFileSync(join(root, "docs/settings.md"), "utf8");
+  const doc = settingsReference();
   const compose = readFileSync(join(root, "compose.yaml"), "utf8");
   assert.deepEqual(Object.keys(FILE_SETTINGS), Object.keys(SETTINGS));
   for (const name of Object.keys(FILE_SETTINGS)) {
     assert.ok(
       doc.includes(`\`${name.toLowerCase()}\``),
-      `${name.toLowerCase()} not in docs/settings.md`,
+      `${name.toLowerCase()} not in docs/reference/settings/`,
     );
     assert.match(compose, new RegExp(`^ {6}${name}:`, "m"), `${name} not in compose.yaml`);
   }

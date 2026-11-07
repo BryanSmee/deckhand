@@ -450,7 +450,7 @@ The yes-or-no grants left the grants folder's YAML for your policies: each old k
 `default.yaml` or `<owner>/<repo>.yaml` is now an error, which stops that repository's runs (or
 every run, in `default.yaml`) until you move it. Its message gives the rule to write. Write one
 `allow_grant` rule per set of repositories in the grants folder's `policy/`
-([the grants](../security/policies.md#the-grants)), then remove the keys:
+([the grants](../reference/server-folder.md#the-grants)), then remove the keys:
 
 | Old key (grants YAML)                                                    | Grant (`input.grant`)                                                                         |
 | ------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------- |
@@ -559,7 +559,7 @@ Upgrading from a version with a single grants file (`GRANTS_FILE`, `grants.yaml`
 orchestrator reads a folder now, `GRANTS_DIR`, and refuses to start while `GRANTS_FILE` is set.
 Move each `owner/repo:` entry to its own file, `owner/repo.yaml`, with its keys one level
 up; `"*"` becomes `default.yaml`. Then mount the folder instead of the file
-(`server/grants/`, see [the server folder](../settings.md#the-server-folder)) and remove `GRANTS_FILE`. For example:
+(`server/grants/`, see [the server folder](../reference/server-folder.md)) and remove `GRANTS_FILE`. For example:
 
 ```yaml
 # grants.yaml, before

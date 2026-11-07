@@ -153,7 +153,7 @@ function moved(key, file, value) {
   const name = publicMerge ? "auto_merge_public" : MOVED[key];
   const repo = REPO_FILE.exec(file);
   const own = repo && `${repo[1]}/${repo[2]}`.toLowerCase();
-  const where = "in policy/ of the grants folder (docs/security/policies.md#the-grants)";
+  const where = "in policy/ of the grants folder (docs/reference/server-folder.md#the-grants)";
   // Neither true, false nor (auto-merge's) public: never valid, and no rule to copy from it.
   if (value !== true && value !== false && !publicMerge) {
     const allowed = key === "allow_auto_merge" ? "true, false or public" : "true or false";

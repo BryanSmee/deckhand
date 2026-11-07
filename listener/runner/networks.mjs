@@ -56,7 +56,7 @@ export function createNetworks({ config, docker, log, now }) {
       log(`The network ${run}: ${block} is taken, trying the next block`);
     }
     throw new Error(
-      `the run's network ${run} wasn't created: no free block of /${subnets.size} left in SANDBOX_SUBNETS (${subnets.range}). Set a larger range or a lower MAX_PARALLEL (docs/settings.md)`,
+      `the run's network ${run} wasn't created: no free block of /${subnets.size} left in SANDBOX_SUBNETS (${subnets.range}). Set a larger range or a lower MAX_PARALLEL (docs/reference/settings/sandboxes.md)`,
     );
   }
 
@@ -145,7 +145,7 @@ export function createNetworks({ config, docker, log, now }) {
     ]);
     if (project.code !== 0) {
       throw new Error(
-        `the runner's own container ${own} wasn't found: set EGRESS_CONTAINER (docs/settings.md)`,
+        `the runner's own container ${own} wasn't found: set EGRESS_CONTAINER (docs/reference/settings/services.md)`,
       );
     }
     const { code, out, err } = await docker([
@@ -159,7 +159,7 @@ export function createNetworks({ config, docker, log, now }) {
     const found = code === 0 ? out.split("\n").filter(Boolean) : [];
     if (found.length !== 1) {
       throw new Error(
-        `the egress proxy's container wasn't found (${code === 0 ? `${found.length} labelled ${ROLE}=egress` : err}): set EGRESS_CONTAINER (docs/settings.md)`,
+        `the egress proxy's container wasn't found (${code === 0 ? `${found.length} labelled ${ROLE}=egress` : err}): set EGRESS_CONTAINER (docs/reference/settings/services.md)`,
       );
     }
     return found[0];

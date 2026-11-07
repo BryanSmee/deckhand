@@ -19,7 +19,7 @@ sandbox ──(its run's network, internal: no route out)──▶ egress proxy 
 - That network is **internal**: Docker gives it no route out. The runner creates it with
   `--internal`, checks it (`docker network inspect`) and refuses to start the run otherwise.
   Its subnet comes from Docker's address pools, or from `SANDBOX_SUBNETS` when set (a block
-  no other network on the host uses, [Sandbox networks](../settings.md#sandbox-networks)): either way the network is
+  no other network on the host uses, [Sandbox networks](../reference/settings/sandboxes.md#sandbox-networks)): either way the network is
   internal, so the range changes addresses, not what a sandbox can reach. It must lie inside
   `10/8`, `172.16/12`, `192.168/16` or `100.64/10`: Deckhand refuses to start with
   another.
@@ -136,7 +136,7 @@ mandatory): `cached_hosts` alone opens nothing.
   URLs (a query string changed each time, say) can still push every other repository's
   answers out. The cache stays within its size, not its contents.
   `EGRESS_CACHE_MAX=0` turns the cache off
-  ([Advanced settings](../settings.md#advanced-settings)).
+  ([Services and networks](../reference/settings/services.md)).
 - **Trust**: plain HTTP can be tampered with on the way, cached or not, and a cached answer
   then reaches every run. Cache only what the client checks itself (apt's signed indexes and
   their package checksums do) or hosts you would trust over plain HTTP anyway.

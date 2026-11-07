@@ -4,81 +4,14 @@ What the operator grants a repository, and how the policies decide what each run
 
 ## The grants folder
 
-What you give a repository beyond what every sandbox gets lives in `GRANTS_DIR`
-(`/etc/deckhand/grants` in the orchestrator and the services that read it: `grants/` in the
-[server folder](../settings.md#the-server-folder) `compose.yaml` mounts read-only, with
-[`server.example/grants/`](../../server.example/grants) to start from): one file per
-repository for its hosts, projects, mounts and limits, `default.yaml` for every repository,
-and your policies in `policy/`, which hold [the grants](#the-grants) (a Dockerfile, an engine,
-research, workflows, auto-merge). It is optional and read again at each run,
-so an edit applies without a restart.
-
-```
-grants/
-  default.yaml       # every repository
-  acme/api.yaml      # acme/api
-  acme/web.yaml      # acme/web
-  policy/grants.rego # the grants, repository by repository (The grants, below)
-  CODEOWNERS         # anything that isn't .yaml is skipped, and dot folders (.git, .github)
-```
-
-A repository's file is `<owner>/<repo>.yaml`, matched case-insensitively. It holds what you
-grant that repository:
-
-```yaml
-# acme/api.yaml
-# Reachable by its sandboxes, besides the mandatory hosts and default.yaml's.
-hosts: ["*.acme.dev", pypi.org]
-# Of the hosts it may reach, those whose answers the egress proxy keeps, HTTPS too (see The
-# egress cache in security/network.md), besides default.yaml's.
-cached_hosts: [apt.acme.dev]
-# Organization projects (v2), <organization>/<number>, its runs add their issues and pull
-# requests to, and the orchestrator moves its issues on (see Projects in repo-config/issues.md). Needs the
-# App's Organization projects permission. Per repository only.
-allow_projects: [acme/3]
-# Its own limits; missing ones keep default.yaml's, else the built-in 2 CPUs, 4g, 2048.
-limits: { cpus: 4, memory: 8g, pids: 4096 }
-# Roots it may mount from (read-only unless read_only: false).
-mounts:
-  - root: /nfs/work
-    read_only: false
-  - /srv/datasets
-```
-
-`default.yaml` takes the same keys but `mounts` and `allow_projects`, for every repository:
-
-```yaml
-# default.yaml
-# Hosts every repository's sandboxes may reach, added to its own file's.
-hosts: [pypi.org]
-# Mirrors every repository's runs download from again and again, cached.
-cached_hosts: [deb.debian.org]
-# Every sandbox's limits, over the built-in 2 CPUs, 4g and 2048 processes; a repository's
-# own file overrides each one.
-limits: { memory: 8g }
-```
-
-`mounts` and `allow_projects` in `default.yaml` are errors: a root, or a project outside every
-repository, for every repository, are too broad to grant by accident, so they are granted one
-repository at a time. The yes-or-no keys these files had before #498 (`allow_dockerfile`,
-`allow_branch_docker_images`, `allow_docker`, `allow_research`, `allow_workflows`,
-`allow_auto_merge`) are errors too, each saying what to do instead: for `true`, the
-`allow_grant` rule to write; for `false`, which granted nothing, to remove it
-([Upgrading](../guides/upgrade-notes.md#upgrading-the-grants-498)). The preview hook's, `allow_preview` and
-`acknowledge_automerge_and_preview_is_highly_dangerous`, are only warnings: the hook is gone,
-so they grant nothing ([Upgrading](../guides/upgrade-notes.md#upgrading-the-preview-hook-is-gone-574)).
-
-**Errors stop runs, file by file.** A repository's file with errors grants that repository
-nothing: its runs stop, with a reply naming the file (the details are in the orchestrator's logs,
-not on GitHub), and the dashboard's repositories tab shows it as invalid, with the file and
-its errors in its panel. Other repositories keep running. A broken `default.yaml`, or a
-`.yaml` file that isn't `default.yaml` or `<owner>/<repo>.yaml` (deeper or at the top, a
-`.yml`, a name GitHub doesn't allow, `acme/API.yaml` next to `acme/api.yaml`), stops every
-run, and the orchestrator won't start with one. At start, a repository's broken file is logged
-and the orchestrator starts anyway.
-
-**Symlinks** are followed while they stay in the folder: one leading outside it is an error,
-for that repository when it is its file, for every repository when it is a folder.
+What you give a repository beyond what every sandbox gets lives in the grants folder
+(`GRANTS_DIR`, `grants/` in the server folder): its hosts, cached hosts, projects, mounts and
+limits, a file per repository and `default.yaml` for every one, and your policies in `policy/`,
+which hold [the grants](#the-grants) (a Dockerfile, an engine, research, workflows, auto-merge).
+Its layout, every key and how errors stop runs:
+[The server folder and grants](../reference/server-folder.md#the-grants-folder). It is read again
+at each run, and a file with errors grants its repository nothing (a broken `default.yaml`,
+nobody anything): it fails closed.
 
 **Who can edit the folder can grant what reaches the host** (a Dockerfile built on its
 Docker, a container engine, in `policy/`) and host paths (`mounts`): protect it like the deployment itself. A git checkout works well: reviewed pull
@@ -95,10 +28,6 @@ folder's root (`default.yaml`, `CODEOWNERS` itself) stays with you:
 `compose.yaml` mounts the server folder read-only into the services that read it; pull it on the host and
 the next run reads the change.
 
-Quote patterns starting with `*` (`"*.acme.dev"`): YAML reads a bare `*` as an alias. See
-[Where a sandbox's hosts come from](network.md#where-a-sandboxs-hosts-come-from) for how `hosts`
-apply.
-
 **Dockerfiles** are the most powerful thing a `.deckhand.yaml` asks for: a Dockerfile is built on the
 host's Docker with its network (on Kubernetes, by the cluster's BuildKit daemon, through the
 egress proxy with the repo's hosts only, and pushed to the operator's registry; the runner
@@ -114,72 +43,20 @@ repository change what is built.
 
 ### The grants
 
-What a repository may do beyond hosts, mounts, limits and projects is a `grant`
-[policy](#policies) decision of yours, asked for each repository and each grant, at each run
-(an edit applies without a restart):
+What a repository may do beyond hosts, mounts, limits and projects (a Dockerfile, a container
+engine, research runs, workflow pushes, auto-merge, machines) is a `grant` decision of your
+policies, asked for each repository and each grant, at each run: the list and how to write the
+rules are in [The grants](../reference/server-folder.md#the-grants). What holds whatever the
+rules say:
 
-```json
-{ "version": 1, "decision": "grant", "grant": "dockerfile", "repo": { "name": "acme/api" } }
-```
-
-`input.repo.name` is lower case. The rules are `allow_grant` (a boolean) and `deny_grant` (a set
-of reasons): granted when an allow rule matches and no deny rule does. Write them in the grants
-folder's `policy/` (`policy/grants.rego`, as
-[`server.example/grants/policy/grants.rego`](../../server.example/grants/policy/grants.rego)):
-
-```rego
-package deckhand
-
-allow_grant if {
-  input.repo.name == "acme/api"
-  input.grant in {"dockerfile", "research"}
-}
-```
-
-| Grant                  | What the repository gets                                                                                                             |
-| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
-| `dockerfile`           | its `dockerfile` built on the host's Docker (capability `image:repo`)                                                                |
-| `branch_docker_images` | its pull requests' runs build their branch's Dockerfile, never a fork's (`image:branch`)                                             |
-| `docker`               | a [container engine](mounts-and-engine.md#container-engine) next to its sandboxes (`docker`)                                         |
-| `research`             | [research runs](#research-runs): any public host, without its code (`internet`)                                                      |
-| `workflows`            | its pushes may change `.github/workflows/` ([GitHub Actions on Deckhand's branches](github.md#github-actions-on-deckhands-branches)) |
-| `workflow_secrets`     | with `workflows`, its workflows that only run from the default branch may use secrets                                                |
-| `auto_merge`           | UNSAFE: `review.merge` merges on a private repository ([Auto-merge](github.md#auto-merge))                                           |
-| `auto_merge_public`    | the same on a public repository too                                                                                                  |
-| `machines`             | its tasks may run on its users' own machines, with its `machines:` ([Machines](webhooks-and-sign-in.md#machines))                    |
-
-- **Nothing by default**: Deckhand's default policies have no `allow_grant` rule. No rule, no
-  grant.
-- **One repository at a time**: `docker`, `workflows`, `workflow_secrets`, `auto_merge` and
-  `auto_merge_public`
-  (an engine, workflow files run with
-  the Actions secrets, merges nobody reviewed are too broad to grant every repository by
-  accident). The orchestrator asks each of them again for two repositories nobody has: `*/*`, and
-  `<owner>/*` under the asked repository's owner (GitHub names have no `*`). A rule that also
-  grants it there (one without `input.repo.name`, a `startswith` on the owner, a `glob.match`
-  with `*`) gives it to none, and the orchestrator logs why. This is a best-effort check, not a
-  guarantee: a rule that doesn't match those two names (`regex.match("^acme/[a-z-]+$", …)`,
-  `endswith(input.repo.name, "/api")`) still grants every repository it matches. List each
-  `input.repo.name`. The others may go to every repository (a rule without `input.repo.name`).
-- **Auto-merge is two grants**: `auto_merge_public` merges on a private repository too, so a
-  `deny_grant` keeping a repository out of auto-merge names both:
-  `input.grant in {"auto_merge", "auto_merge_public"}`.
-- **Yours only**: only the operator's layer (Deckhand's `policy/` under the grants folder's
-  `policy/`) is asked. A repository's own `.deckhand/policy/` `allow_grant` or `deny_grant` is
-  ignored, and a config check error.
-- **Fail closed**: when the policies can't be evaluated (the policy service down, a policy
-  error), the repository gets nothing, as with a grants file with errors: no run starts there,
-  and the reply says the grants folder has errors.
-- **The runner asks too**: it calls the policy service itself (the operator's layer only, no
-  repository's files) and checks every sandbox spec (an engine needs `docker`), and image build
-  (`dockerfile`, `branch_docker_images`) against these, whatever
+- **Nothing by default**: Deckhand's default policies have no `allow_grant` rule.
+- **One repository at a time** for the riskiest (`docker`, `workflows`, `workflow_secrets`,
+  `auto_merge`, `auto_merge_public`): a rule that also grants one to `*/*` or `<owner>/*` gives
+  it to none, a best-effort check.
+- **Yours only**: a repository's own `.deckhand/policy/` never grants itself anything.
+- **Fail closed**: when the policies can't be evaluated, the repository gets nothing.
+- **The runner asks too**, and checks every sandbox spec and image build against them, whatever
   the orchestrator says ([The runner service](services.md#the-runner-service)).
-- **Where they show**: a refusal says, for example, "the operator's policies don't grant
-  `docker` to this repository (`allow_grant`)". The repository's config page names each grant,
-  with the policy files that have `allow_grant` rules, and its Capabilities tab each
-  capability's grant. The `/mode policy` dry run doesn't ask them. At start, the orchestrator warns
-  for each policy file of the grants folder whose `allow_grant` rules name `auto_merge` or
-  `auto_merge_public`.
 
 ## Policies
 
