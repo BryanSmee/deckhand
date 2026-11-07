@@ -1,5 +1,9 @@
 # The store
 
+Where each service keeps its state, and how to move it to Redis. With Compose on one host, the
+default file store needs nothing from you; you need Redis when copies of a service run on
+several nodes.
+
 Deckhand's services ([services.md](../services.md)) keep their state in a store, which each one's
 `STORE_URL` names. The broker service keeps its live runs, their files and events there
 ([The broker service](services.md#the-broker-service)); the runner the runs' logs and events and its lease;
@@ -123,7 +127,7 @@ before #619, keep the old volume mounted for the first start, which moves what i
 
 ## The run history's size
 
-**What the run history takes in it**: the orchestrator keeps each run's summary in its store
+The orchestrator keeps each run's summary in its store
 (`summaries/<run>`, what the dashboard's history is rebuilt from), until `LOG_RETENTION_DAYS`
 (90 by default) removes it with the run's log. A summary is a few KB: the run's details, its
 final answer's first lines and the text of the comments it acted on (more for a long comment).

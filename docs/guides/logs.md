@@ -1,5 +1,9 @@
 # Logs and health checks
 
+Where each service's log lines go, how to read them or send them to a collector, and how
+Compose checks that each service is up. Start here when a run doesn't start, or a service
+doesn't come up; what the lines don't count, the services' [metrics](metrics.md) do.
+
 Each service writes its own lines to stdout, one per event: its runs' output never goes there
 (the runner keeps it, the dashboard shows it). Every line goes through the same redaction as the
 runs' output first, GitHub's and Deckhand's own token shapes and the service's own secrets (the

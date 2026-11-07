@@ -6,7 +6,7 @@ Redis's memory, which a run history doesn't fit in for long: each of them then s
 in its log and on the dashboard's status page (Settings › Server). **Blob storage** is a
 second place for what will never change again, which each one's `BLOB_URL` names.
 
-**When you need it**: with Redis as the store ([The store](store.md)), so that the logs and
+You need it with Redis as the store ([The store](store.md)), so that the logs and
 screenshots leave Redis's memory. With the file store (Compose's default, one node), you don't:
 the blobs are on disk already. It is optional either way: unset, nothing changes.
 

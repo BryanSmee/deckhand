@@ -1,7 +1,8 @@
 # Codex
 
 Deckhand can run [Codex](https://github.com/openai/codex) (OpenAI's CLI) instead of Claude
-Code, with an OpenAI API key (or [a ChatGPT plan](#with-a-chatgpt-plan)). In `.env`:
+Code, with an OpenAI API key (or [a ChatGPT plan](#with-a-chatgpt-plan)): for every run, for
+some repositories, or as a [fallback](fallbacks.md) when Claude's provider fails. In `.env`:
 
 ```sh
 OPENAI_API_KEY=sk-proj-…

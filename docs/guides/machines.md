@@ -75,7 +75,7 @@ otherwise; Deckhand posts the reply and opens the pull request.
 
 ## The suggested settings
 
-**The suggested settings.** For each run the driver writes Claude Code settings
+For each run the driver writes Claude Code settings
 (`runs/<run>.settings.json` in its folder, which says the Claude Code version they were checked
 against), passed with `--settings`: above your user and the repository's settings, whose deny
 rules still add up. They:
@@ -102,7 +102,7 @@ own settings. On Windows there is no sandbox: its commands run with your rights.
 
 ## How it ran
 
-**How it ran.** Each claim reports Claude Code's version, whether its sandbox is on, its
+Each claim reports Claude Code's version, whether its sandbox is on, its
 permission mode and whether the suggested settings are used. The run's log, its page and its
 reply's footer say them ("on studio (v2.1.3, sandbox on, `acceptEdits`, Deckhand's settings, as it
 reports)"): what the machine reports, not something Deckhand checked.

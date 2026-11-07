@@ -1,5 +1,9 @@
 # Updating
 
+How to take a new release, or follow `main`, and what happens to the runs going meanwhile. Read
+it before your first update, then the [upgrade notes](upgrade-notes.md) of what changed since
+yours.
+
 Each release is a git tag (`v1.2.3`) that publishes the images, tagged `1.2.3`, `1.2`
 and `latest`. Each commit of `main` whose checks pass publishes them too, tagged `edge`. There is no built-in updater: update the way you update other compose
 services.

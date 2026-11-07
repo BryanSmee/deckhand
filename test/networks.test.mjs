@@ -133,10 +133,10 @@ test("compose.yaml: each network joins services that call each other, the runs' 
 // docs/guides/metrics.md's compose.override.yaml for metrics (#653): each service on an internal network
 // shared with the scraper alone, as one for all of them would join services that don't call each
 // other, and the scraper on none of compose.yaml's.
-test("setup.md: the metrics override puts each service on a network of its own with the scraper", () => {
-  const setup = readFileSync(join(root, "docs", "setup.md"), "utf8");
+test("docs/guides/metrics.md: the metrics override puts each service on a network of its own with the scraper", () => {
+  const metrics = readFileSync(join(root, "docs", "guides", "metrics.md"), "utf8");
   const [, text] = /```yaml\n(# compose\.override\.yaml: each service's metrics[^]*?)```/.exec(
-    setup,
+    metrics,
   );
   const override = readCompose(text);
   const compose = readCompose(readFileSync(join(root, "compose.yaml"), "utf8"));

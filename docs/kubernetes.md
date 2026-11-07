@@ -272,7 +272,7 @@ first install.
 | `image.sandbox`                             | `<repository>-sandbox:<tag>` | `SANDBOX_IMAGE` ([below](#what-the-manifests-set-up-and-why)), for a mirror of yours                                                                                                                                                                                                           |
 | `namespaces`                                | `deckhand`, `-sandboxes`     | the services' namespace and the sandboxes' ([Namespaces](#namespaces)), two different ones, and whether the chart makes them                                                                                                                                                                   |
 | `server.config`, `server.grants`            | the examples                 | `config.yaml` and the grants folder's files, by their path in it; `--set-file server.config=config.yaml` reads yours                                                                                                                                                                           |
-| `env`                                       | none                         | any other setting in `deckhand-env` ([Server settings](settings.md)); one the other values set (`KUBERNETES_NAMESPACE`, `SANDBOX_IMAGE`…) is refused, naming the value to use                                                                                                                   |
+| `env`                                       | none                         | any other setting in `deckhand-env` ([Server settings](settings.md)); one the other values set (`KUBERNETES_NAMESPACE`, `SANDBOX_IMAGE`…) is refused, naming the value to use                                                                                                                  |
 | `apiServer.cidrs`                           | a placeholder                | the API server's addresses ([Install](#install), step 2)                                                                                                                                                                                                                                       |
 | `store`                                     | `file`                       | `redis` for the `redis` component ([Several nodes](#several-nodes)), with `redis.image`, `redis.size` and `redis.storageClass`                                                                                                                                                                 |
 | `persistence.storageClass`, `.sizes`        | the cluster's default        | the services' claims; with `redis`, `persistence.sharedStorageClass` for the `ReadWriteMany` ones                                                                                                                                                                                              |
@@ -419,7 +419,7 @@ a restart of a few seconds, which the services wait through.
 
 With the `redis` component, the runs' logs and screenshots take Redis's memory: the runner and the
 broker say so at start, and on the dashboard's status page. [Blob storage](guides/blob-storage.md)
- takes them out of it; the `blobs` component gives it to
+takes them out of it; the `blobs` component gives it to
 the runner and the broker, and to no other service:
 
 ```yaml

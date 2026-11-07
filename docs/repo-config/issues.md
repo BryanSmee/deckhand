@@ -144,7 +144,7 @@ of [the GitHub input](policy-inputs.md#the-github-input); a repository's own mod
 policies allow them (`allow_github`, [the default policies](policies.md#the-default-policies)).
 
 Projects need the App's **Organization projects: Read and write** permission, accepted on the
-organization's installation ([Create the GitHub App](../guides/github-app.md#what-each-permission-is-for)); a project owned by a user can't be reached by
+organization's installation ([Create the GitHub App](../guides/github-app.md#permissions-added-later)); a project owned by a user can't be reached by
 a GitHub App at all.
 
 ## Open questions

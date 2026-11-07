@@ -1,6 +1,9 @@
 # Upgrade notes
 
-What an update changed that may need a step of yours, newest first: read the notes of the releases you skip before you [update](updating.md). Most need nothing.
+What an update changed that may need a step of yours: read the notes of the changes you haven't
+run yet before you [update](updating.md). Most need nothing; each says what does. The newest come
+first, then the older ones: the policies' (allow rules, per-mode policies, the grants) and the
+grants folder's.
 
 ## Upgrading: the orchestrator without a volume (#619)
 
@@ -449,15 +452,16 @@ every run, in `default.yaml`) until you move it. Its message gives the rule to w
 `allow_grant` rule per set of repositories in the grants folder's `policy/`
 ([the grants](../security.md#the-grants)), then remove the keys:
 
-| Old key (grants YAML) | Grant (`input.grant`) |
-| `allow_dockerfile: true` | `dockerfile` |
-| `allow_branch_docker_images: true` | `branch_docker_images` |
-| `allow_docker: true` | `docker` (one repository at a time) |
-| `allow_research: true` | `research` |
-| `allow_workflows: true` | `workflows` (one repository at a time) |
-| `allow_auto_merge: true` | `auto_merge` (one repository at a time) |
-| `allow_auto_merge: public` | `auto_merge_public` (one repository at a time) |
-| any of them `: false` | none: remove the key |
+| Old key (grants YAML)                                                    | Grant (`input.grant`)                                                                         |
+| ------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------- |
+| `allow_dockerfile: true`                                                 | `dockerfile`                                                                                  |
+| `allow_branch_docker_images: true`                                       | `branch_docker_images`                                                                        |
+| `allow_docker: true`                                                     | `docker` (one repository at a time)                                                           |
+| `allow_research: true`                                                   | `research`                                                                                    |
+| `allow_workflows: true`                                                  | `workflows` (one repository at a time)                                                        |
+| `allow_auto_merge: true`                                                 | `auto_merge` (one repository at a time)                                                       |
+| `allow_auto_merge: public`                                               | `auto_merge_public` (one repository at a time)                                                |
+| any of them `: false`                                                    | none: remove the key                                                                          |
 | `allow_preview`, `acknowledge_automerge_and_preview_is_highly_dangerous` | none: the preview hook is gone ([#574](#upgrading-the-preview-hook-is-gone-574)), remove them |
 
 ```yaml
@@ -508,7 +512,7 @@ rewrite it on `input.mode`, or on what `allow_capabilities` gives.
 
 ## Upgrading: runs' reads of checks and projects
 
-Upgrading: runs' reads of checks and projects are new to `allow_github` and `deny_github`
+Runs' reads of checks and projects are new to `allow_github` and `deny_github`
 (`action: "read_checks"` or `"read_projects"`, without a `target` or `change`). A deny rule of
 yours written for writes that refuses whatever isn't in a list (`not input.target.kind in {…}`)
 now refuses those reads too: guard it with `not input.action in {"read_checks",
@@ -517,7 +521,7 @@ a pull request shows whether one does.
 
 ## Upgrading: allow rules
 
-Upgrading to allow rules ([Policies](../repo-config/policies.md#policies)): a decision is now allowed only
+With allow rules ([Policies](../repo-config/policies.md#policies)), a decision is allowed only
 when an `allow_*` rule matches, and Deckhand's `policy/allow.rego` allows each one, so nothing
 changes for the built-in modes. A `policy/allow.rego` of yours in the grants folder replaces
 it: keep its rules unless you mean to refuse. A repository's `.deckhand/policy/` is now a layer
@@ -530,7 +534,7 @@ repository file that doesn't start with its `package` line (after comments only)
 
 ## Upgrading: per-mode policies (#496)
 
-Upgrading to per-mode policies (issue #496): the modes' write ceilings built into Deckhand's
+The modes' write ceilings built into Deckhand's
 code are gone. A run's GitHub writes, its reads of checks and projects, and its pushes (a new
 decision, `push`: [the push input](../repo-config/policy-inputs.md#the-push-input)) now need an allow rule
 (`allow_github`, `allow_push`), which Deckhand's `policy/mode-<mode>.rego` files give each

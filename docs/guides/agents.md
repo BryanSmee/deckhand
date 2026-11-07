@@ -1,16 +1,23 @@
 # Agents and providers
 
+Which agent runs an issue, on which provider and credential, and which model. Read it when you
+set up a second agent or credential, or wonder why a run took the one it did; each agent's own
+page has its setup: [Claude Code](claude-code.md), [Codex](codex.md),
+[Antigravity CLI](antigravity.md).
+
 Deckhand runs three agents, Claude Code (`claude`), Codex (`codex`) and the Antigravity CLI
 (`antigravity`), from one sandbox image: each installs on first use into a volume of its own.
-An agent calls a provider; its calls go through the [models service](services.md#the-models-service), which
-adds your credential and forwards them, so none of these needs a host in the grants folder (only GitHub's, which every
-run has, and the Antigravity CLI's own, which its runs have).
+An agent calls a provider; its calls go through the
+[models service](services.md#the-models-service), which adds your credential and forwards them,
+so none of these needs a host in the grants folder (only GitHub's, which every run has, and the
+Antigravity CLI's own, which its runs have).
 
-| Entry | Agent and provider | Credential (`.env`) | The models service calls |
-| `claude@anthropic` | Claude Code on Anthropic, or [a gateway](claude-code.md#through-a-gateway) | `CLAUDE_CODE_OAUTH_TOKEN` (a plan's), `ANTHROPIC_API_KEY` or `ANTHROPIC_AUTH_TOKEN` | `ANTHROPIC_BASE_URL` (`api.anthropic.com`) |
-| `claude@openrouter` | Claude Code through OpenRouter, as a [fallback](fallbacks.md) | `OPENROUTER_API_KEY` | `OPENROUTER_BASE_URL` (`openrouter.ai`) |
-| `codex@openai` | [Codex](codex.md) on OpenAI | `OPENAI_API_KEY`, or `CODEX_AUTH_FILE` (a ChatGPT plan's login) | `OPENAI_BASE_URL` (`api.openai.com`), or ChatGPT's Codex backend with a plan |
-| `antigravity@google` | [Antigravity CLI](antigravity.md) on Google | `GEMINI_API_KEY`, or `AGY_AUTH_FILE` (a Google AI Pro/Ultra plan's login) | `GEMINI_BASE_URL` (`generativelanguage.googleapis.com`), or `daily-cloudcode-pa.googleapis.com` and `www.googleapis.com` (handed over by the egress proxy) with a plan |
+| Entry                | Agent and provider                                                         | Credential (`.env`)                                                                 | The models service calls                                                                                                                                               |
+| -------------------- | -------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `claude@anthropic`   | Claude Code on Anthropic, or [a gateway](claude-code.md#through-a-gateway) | `CLAUDE_CODE_OAUTH_TOKEN` (a plan's), `ANTHROPIC_API_KEY` or `ANTHROPIC_AUTH_TOKEN` | `ANTHROPIC_BASE_URL` (`api.anthropic.com`)                                                                                                                             |
+| `claude@openrouter`  | Claude Code through OpenRouter, as a [fallback](fallbacks.md)              | `OPENROUTER_API_KEY`                                                                | `OPENROUTER_BASE_URL` (`openrouter.ai`)                                                                                                                                |
+| `codex@openai`       | [Codex](codex.md) on OpenAI                                                | `OPENAI_API_KEY`, or `CODEX_AUTH_FILE` (a ChatGPT plan's login)                     | `OPENAI_BASE_URL` (`api.openai.com`), or ChatGPT's Codex backend with a plan                                                                                           |
+| `antigravity@google` | [Antigravity CLI](antigravity.md) on Google                                | `GEMINI_API_KEY`, or `AGY_AUTH_FILE` (a Google AI Pro/Ultra plan's login)           | `GEMINI_BASE_URL` (`generativelanguage.googleapis.com`), or `daily-cloudcode-pa.googleapis.com` and `www.googleapis.com` (handed over by the egress proxy) with a plan |
 
 With several Claude credentials set, runs take `ANTHROPIC_AUTH_TOKEN` (a gateway's) first,
 then a plan's `CLAUDE_CODE_OAUTH_TOKEN`, already paid for, then `ANTHROPIC_API_KEY`, billed
@@ -21,7 +28,7 @@ per token. An entry can name the credential it runs on: `claude@anthropic:plan`
 
 ## Which credential a run used
 
-**Which credential a run used:** the dashboard tags each Claude run on `anthropic` by its
+The dashboard tags each Claude run on `anthropic` by its
 model, in the run's outcome (and on a discussion's page): "Plan" (`CLAUDE_CODE_OAUTH_TOKEN`),
 "API key" (`ANTHROPIC_API_KEY`) or "Gateway" (`ANTHROPIC_AUTH_TOKEN`), whether the run named
 it or took the default. Settings › Server says which Claude credentials are set and which one
@@ -31,7 +38,7 @@ credential only when the entry names one, or after a fallback.
 
 ## What runs an issue
 
-What runs an issue, first match wins:
+First match wins:
 
 1. A comment's `/agent <entry>` line (`/agent codex`, `/agent claude@openrouter`; an agent
    alone is on its default provider, `/agent claude@anthropic:key` on that credential), among

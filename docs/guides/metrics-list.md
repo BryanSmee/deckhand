@@ -1,64 +1,80 @@
 # Metrics by service
 
-Every metric Deckhand's services serve, once [Metrics](metrics.md) has their port on. Look a metric up here when you write a query, a panel or an alert of your own.
+Every metric Deckhand's services serve, once [Metrics](metrics.md) has their port on. Look a
+metric up here when you write a query, a panel or an alert of your own.
 
-- **What every service says from the start**: `deckhand_build_info{service, version}` (always
-  1), and its process's `deckhand_process_resident_memory_bytes`,
-  `deckhand_process_cpu_seconds_total`, `deckhand_process_start_time_seconds`,
-  `deckhand_process_event_loop_lag_seconds` (p99 over the last 10 s or more) and
-  `deckhand_process_open_handles`. Where two copies share a lease (the orchestrator, the runner,
-  edge's redeliveries' poller), `deckhand_lease_held{lease}` is 1 on the copy holding it, 0 on
-  the one waiting: both answer, and what only the acting copy knows comes from it alone.
-  `deckhand_lease_takeovers_total{lease}` counts the times a copy took it (at its start, from
-  the other copy, again after losing it): a steady rate is copies taking it from each other, a
-  store too slow for their renewals.
-- **One `status` for every service's calls**: the orchestrator's to the other services, the
-  egress proxy's to them, the github service's to GitHub, the models service's to the
-  providers. The statuses worth telling apart as they are (`200`, `201`, `202`, `204`, `206`,
-  `301`, `302`, `304`, `307`, `308`, `400`, `401`, `402`, `403`, `404`, `409`, `410`, `413`,
-  `422`, `429`, `500`, `502`, `503`, `504`, `529`), any other by its class (`1xx` to `5xx`),
-  `unreachable` for no answer (refused, reset, timed out, lost), `other` for what isn't an
-  HTTP status: `status=~"5.*|unreachable"` is a failure wherever it is asked.
-- **The models service's**: the agents' API calls that go through it with your credentials.
-  - `deckhand_model_calls_total{provider, agent, status}`: `provider` anthropic, openrouter,
-    openai or google; `agent` claude, codex or antigravity; `status` as every service's calls
-    (above: `429` a rate or plan limit, `529` Anthropic overloaded, `unreachable` no answer), or
-    `credential` (not sent: a plan's login that can't be used or refreshed). Only `200`, `429`
-    and `529` are at 0 from the start, for each provider and agent: another status's first call
-    shows in an `increase()` from its second on.
-    `deckhand_model_call_duration_seconds{provider}` is a call's length, its answer streamed
-    whole; `deckhand_model_streams_interrupted_total{provider}` counts the answers the
-    provider cut short (its connection lost, or no byte for 10 minutes), not those the agent gave
-    up on.
-  - `deckhand_model_tokens_total{provider, direction}`: the tokens a successful answer says it
-    used, `direction` `input` (not read from the cache), `output`, `cache_read` and
-    `cache_write` (Anthropic's alone). An answer, or one line of a stream, over 4 MB isn't read.
-  - `deckhand_plan_usage_ratio{provider, window}`: how much of each plan's window the runs used
-    (0 to 1), what the dashboard's bars show: `5h`, `7d`… for Claude and ChatGPT, a model's for
-    the Antigravity CLI; 0 once a window's reset has passed.
-  - `deckhand_plan_login_refreshes_total{provider, result}`: the ChatGPT (`openai`) and Google AI
-    (`google`) plans' logins it refreshed, `ok`, `refused` (sign in again) or `failed`, counted
-    by the copy that refreshed.
-  - `deckhand_model_fallbacks_total{from, to}` comes from the orchestrator, which decides them:
-    a run whose provider failed, put back for the next entry of `FALLBACKS`
-    (`agent@provider[:credential]`).
-- **The egress proxy's**: every connection a sandbox, a container engine, a build or an agent's
-  install makes (a CONNECT, or a plain HTTP request), and the runs' calls it passes on.
+## Every service
 
-  | Metric                                                           | What                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
-  | ---------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-  | `deckhand_egress_connections_total{source, decision, reason}`    | `source`: `sandbox`, `engine`, `build`, `install`, `none` (no run at that address) or `unknown` (the policy didn't answer); `decision`: `allowed` (`reason` `granted`) or `denied`, `reason` then `not_granted`, `blocked` (the agent's), `no_run`, `no_build`, `not_forwarded` (a service's name, for a build or a tunnel), `private_address`, `unresolved`, `no_relay` (a relayed host with no CA or service) or `policy_error`. Never the host: a denied one is in the proxy's and the orchestrator's log lines |
-  | `deckhand_egress_bytes_total{source, direction}`                 | bytes between the clients and the proxy, `out` (sent by the client) and `in`, counted as they go: a long tunnel's too                                                                                                                                                                                                                                                                                                                                                                                              |
-  | `deckhand_egress_connections_open{source}`                       | client connections open (a kept-alive one carries several requests)                                                                                                                                                                                                                                                                                                                                                                                                                                                |
-  | `deckhand_egress_policy_duration_seconds`                        | how long the orchestrator's egress policy took, a histogram by `result`: `answered`, or `failed` (`policy_error`), whose time includes the wait for a restarting orchestrator (up to 5 minutes)                                                                                                                                                                                                                                                                                                                    |
-  | `deckhand_egress_cache_requests_total{result}`                   | requests to `cached_hosts`: `hit`, `revalidated` (the host said it hadn't changed), `miss`, `stored` (a miss kept), `bypassed` (credentials, a range, a body, `no-store`)                                                                                                                                                                                                                                                                                                                                          |
-  | `deckhand_egress_cache_bytes`, `deckhand_egress_cache_max_bytes` | the cache's size, kept and being written, and its limit (`EGRESS_CACHE_MAX`; 0 when it is off)                                                                                                                                                                                                                                                                                                                                                                                                                     |
-  | `deckhand_egress_gateway_calls_total{target, status}`            | the runs' calls passed on to the `broker`, `github` and `models` services, by the answer's status (above), or `unreachable`                                                                                                                                                                                                                                                                                                                                                                                        |
+What every service says from the start: `deckhand_build_info{service, version}` (always
+1), and its process's `deckhand_process_resident_memory_bytes`,
+`deckhand_process_cpu_seconds_total`, `deckhand_process_start_time_seconds`,
+`deckhand_process_event_loop_lag_seconds` (p99 over the last 10 s or more) and
+`deckhand_process_open_handles`. Where two copies share a lease (the orchestrator, the runner,
+edge's redeliveries' poller), `deckhand_lease_held{lease}` is 1 on the copy holding it, 0 on
+the one waiting: both answer, and what only the acting copy knows comes from it alone.
+`deckhand_lease_takeovers_total{lease}` counts the times a copy took it (at its start, from
+the other copy, again after losing it): a steady rate is copies taking it from each other, a
+store too slow for their renewals.
 
-- **Bounded labels**: never a run, issue, request or delivery ID, which stay fields of the
-  [log lines](logs.md): a metric declaring such a label (`run`, `issue`, `repo`, `host`, `…_id`:
-  `lib/metrics.mjs` `UNBOUNDED_LABELS`) doesn't start its service. A label value outside those its metric declares, or a series past 200 of
-  one metric, is counted as `other`, and the service logs it once.
+## Call statuses
+
+One `status` label for every service's calls: the orchestrator's to the other services, the
+egress proxy's to them, the github service's to GitHub, the models service's to the
+providers. The statuses worth telling apart as they are (`200`, `201`, `202`, `204`, `206`,
+`301`, `302`, `304`, `307`, `308`, `400`, `401`, `402`, `403`, `404`, `409`, `410`, `413`,
+`422`, `429`, `500`, `502`, `503`, `504`, `529`), any other by its class (`1xx` to `5xx`),
+`unreachable` for no answer (refused, reset, timed out, lost), `other` for what isn't an
+HTTP status: `status=~"5.*|unreachable"` is a failure wherever it is asked.
+
+## The models service's
+
+The agents' API calls that go through it with your credentials:
+
+- `deckhand_model_calls_total{provider, agent, status}`: `provider` anthropic, openrouter,
+  openai or google; `agent` claude, codex or antigravity; `status` as every service's calls
+  (above: `429` a rate or plan limit, `529` Anthropic overloaded, `unreachable` no answer), or
+  `credential` (not sent: a plan's login that can't be used or refreshed). Only `200`, `429`
+  and `529` are at 0 from the start, for each provider and agent: another status's first call
+  shows in an `increase()` from its second on.
+  `deckhand_model_call_duration_seconds{provider}` is a call's length, its answer streamed
+  whole; `deckhand_model_streams_interrupted_total{provider}` counts the answers the
+  provider cut short (its connection lost, or no byte for 10 minutes), not those the agent gave
+  up on.
+- `deckhand_model_tokens_total{provider, direction}`: the tokens a successful answer says it
+  used, `direction` `input` (not read from the cache), `output`, `cache_read` and
+  `cache_write` (Anthropic's alone). An answer, or one line of a stream, over 4 MB isn't read.
+- `deckhand_plan_usage_ratio{provider, window}`: how much of each plan's window the runs used
+  (0 to 1), what the dashboard's bars show: `5h`, `7d`… for Claude and ChatGPT, a model's for
+  the Antigravity CLI; 0 once a window's reset has passed.
+- `deckhand_plan_login_refreshes_total{provider, result}`: the ChatGPT (`openai`) and Google AI
+  (`google`) plans' logins it refreshed, `ok`, `refused` (sign in again) or `failed`, counted
+  by the copy that refreshed.
+- `deckhand_model_fallbacks_total{from, to}` comes from the orchestrator, which decides them:
+  a run whose provider failed, put back for the next entry of `FALLBACKS`
+  (`agent@provider[:credential]`).
+
+## The egress proxy's
+
+Every connection a sandbox, a container engine, a build or an agent's
+install makes (a CONNECT, or a plain HTTP request), and the runs' calls it passes on.
+
+| Metric                                                           | What                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| ---------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `deckhand_egress_connections_total{source, decision, reason}`    | `source`: `sandbox`, `engine`, `build`, `install`, `none` (no run at that address) or `unknown` (the policy didn't answer); `decision`: `allowed` (`reason` `granted`) or `denied`, `reason` then `not_granted`, `blocked` (the agent's), `no_run`, `no_build`, `not_forwarded` (a service's name, for a build or a tunnel), `private_address`, `unresolved`, `no_relay` (a relayed host with no CA or service) or `policy_error`. Never the host: a denied one is in the proxy's and the orchestrator's log lines |
+| `deckhand_egress_bytes_total{source, direction}`                 | bytes between the clients and the proxy, `out` (sent by the client) and `in`, counted as they go: a long tunnel's too                                                                                                                                                                                                                                                                                                                                                                                              |
+| `deckhand_egress_connections_open{source}`                       | client connections open (a kept-alive one carries several requests)                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| `deckhand_egress_policy_duration_seconds`                        | how long the orchestrator's egress policy took, a histogram by `result`: `answered`, or `failed` (`policy_error`), whose time includes the wait for a restarting orchestrator (up to 5 minutes)                                                                                                                                                                                                                                                                                                                    |
+| `deckhand_egress_cache_requests_total{result}`                   | requests to `cached_hosts`: `hit`, `revalidated` (the host said it hadn't changed), `miss`, `stored` (a miss kept), `bypassed` (credentials, a range, a body, `no-store`)                                                                                                                                                                                                                                                                                                                                          |
+| `deckhand_egress_cache_bytes`, `deckhand_egress_cache_max_bytes` | the cache's size, kept and being written, and its limit (`EGRESS_CACHE_MAX`; 0 when it is off)                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| `deckhand_egress_gateway_calls_total{target, status}`            | the runs' calls passed on to the `broker`, `github` and `models` services, by the answer's status (above), or `unreachable`                                                                                                                                                                                                                                                                                                                                                                                        |
+
+## Bounded labels
+
+Labels are bounded: never a run, issue, request or delivery ID, which stay fields of the
+[log lines](logs.md): a metric declaring such a label (`run`, `issue`, `repo`, `host`, `…_id`:
+`lib/metrics.mjs` `UNBOUNDED_LABELS`) doesn't start its service. A label value outside those its metric declares, or a series past 200 of
+one metric, is counted as `other`, and the service logs it once.
+
 ## The orchestrator's
 
 | Metric                                               | What                                                                                                                                                                                                                                                                                                                                                                                                          |
@@ -68,7 +84,7 @@ Every metric Deckhand's services serve, once [Metrics](metrics.md) has their por
 | `deckhand_run_duration_seconds{mode, outcome}`       | a histogram of the same runs' length, from leaving the queue to their end (30 s to 8 h buckets)                                                                                                                                                                                                                                                                                                               |
 | `deckhand_runs_running`                              | runs going: their sandbox started, or being prepared                                                                                                                                                                                                                                                                                                                                                          |
 | `deckhand_runs_queued{reason}`                       | tasks waiting: for a free `slot`, for their `repo`'s own `max_parallel`, for one of `AUTO_PICKUP_SLOTS` while auto-picked runs hold them all (`pickup`: an auto-picked task takes no other slot; with one of them free, it waits as a `slot`), in the `pause` that makes a burst of comments one run, for other issues (`after`, "/after #12"), for the `answers` to their open questions once those are done |
-| `deckhand_runs_ending{what}`                         | runs whose end waits for [the store](store.md), each holding its task and a parallel slot until it takes the write: their `summary`, the `queue`'s write, their `state`'s removal. The dashboard's status page and the orchestrator's log say which runs and the store's error                                                                                                                              |
+| `deckhand_runs_ending{what}`                         | runs whose end waits for [the store](store.md), each holding its task and a parallel slot until it takes the write: their `summary`, the `queue`'s write, their `state`'s removal. The dashboard's status page and the orchestrator's log say which runs and the store's error                                                                                                                                |
 | `deckhand_max_parallel`                              | `MAX_PARALLEL`                                                                                                                                                                                                                                                                                                                                                                                                |
 | `deckhand_auto_pickup_slots{state}`                  | `AUTO_PICKUP_SLOTS`: `used` by auto-picked tasks, `lent` to other runs while no auto-picked task waits, `free`                                                                                                                                                                                                                                                                                                |
 | `deckhand_deliveries_processed_total{event, result}` | verified deliveries: `taken` (a comment for a run, past the operator's checks, or a state it follows: issues, pull requests, CI, pushes, installations), `ignored` (a comment that asks nothing, a bot's, a ping), or `refused` by the operator's checks (a repo out of `ALLOWED_REPOS`, an author out of `ALLOWED_USERS`, not from an installation of the App), whatever the event                           |
@@ -101,10 +117,10 @@ answered: add the copies up, but for `deckhand_runs_live`, their shared store's 
 Its decisions and the operator's policies (`policy-service/metrics.mjs`). Each copy counts what
 it answered: add the copies up.
 
-| Metric                             | Labels             | What                                                                                                                                                                                                                                                                                                                                                                             |
-| ---------------------------------- | ------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `deckhand_policy_decisions_total`  | `policy`, `result` | decisions evaluated. `policy`: the decision (`run`, `merge`, `review`, `fix`, `link_branch`, `request_review`, `github`, `push`, `grant`), or `capabilities` (what a run gets as it starts). `result`: `allow`, `deny`, or `error` (the policies don't compile, took over 2 s, gave a rule the wrong type), which the caller refuses; the capabilities' `allow` is "evaluated"   |
-| `deckhand_policy_decision_seconds` | `policy`           | how long opa took on a decision, once its set was loaded: cut at 2 s, so the top buckets are the ones to watch                                                                                                                                                                                                                                                                   |
+| Metric                             | Labels             | What                                                                                                                                                                                                                                                                                                                                                                                |
+| ---------------------------------- | ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `deckhand_policy_decisions_total`  | `policy`, `result` | decisions evaluated. `policy`: the decision (`run`, `merge`, `review`, `fix`, `link_branch`, `request_review`, `github`, `push`, `grant`), or `capabilities` (what a run gets as it starts). `result`: `allow`, `deny`, or `error` (the policies don't compile, took over 2 s, gave a rule the wrong type), which the caller refuses; the capabilities' `allow` is "evaluated"      |
+| `deckhand_policy_decision_seconds` | `policy`           | how long opa took on a decision, once its set was loaded: cut at 2 s, so the top buckets are the ones to watch                                                                                                                                                                                                                                                                      |
 | `deckhand_policy_reloads_total`    | `result`           | loads of the operator's policies (the first a decision reads, then each change to `policy/` in the grants folder): `ok`, or `error` (they can't be read or don't compile), checked with an `opa check` of their own when `METRICS_PORT` is set. There is no last good set to fall back on: until they are fixed, every decision is refused, as [security.md](../security.md) has it |
 
 ## Edge's

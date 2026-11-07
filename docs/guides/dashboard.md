@@ -1,6 +1,8 @@
 # The dashboard
 
-The dashboard follows every task and run across your repositories, and starts, queues and stops them. This page goes through its views; open it at edge's public address.
+The dashboard follows every task and run across your repositories, and starts, queues and stops
+them. This page goes through its views, for when you first open it or look for one of its
+controls. An MCP client reads the same as you do: see [MCP clients](mcp-clients.md).
 
 ## Signing in
 
@@ -36,8 +38,8 @@ config's status, its tasks by state, its backlog and lanes, and its board (or On
 repository that isn't onboarded yet). Its **Tasks** view (`#/tasks`) lists every repository's
 tasks.
 
-|                                               | Light                                                                                                                                   | Dark                                                                                                                                  |
-| --------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+|                                               | Light                                                                                                                                      | Dark                                                                                                                                     |
+| --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------- |
 | The Overview                                  | <img src="../images/dashboard-overview-desktop-light.png" alt="The Overview, light theme" width="420">                                     | <img src="../images/dashboard-overview-desktop-dark.png" alt="The Overview, dark theme" width="420">                                     |
 | A live run's log                              | <img src="../images/dashboard-run-log-desktop-light.png" alt="A live run's log, light theme" width="420">                                  | <img src="../images/dashboard-run-log-desktop-dark.png" alt="A live run's log, dark theme" width="420">                                  |
 | A repository's config                         | <img src="../images/dashboard-config-desktop-light.png" alt="A repository's config, light theme" width="420">                              | <img src="../images/dashboard-config-desktop-dark.png" alt="A repository's config, dark theme" width="420">                              |
@@ -46,12 +48,12 @@ tasks.
 On a phone, a tab bar replaces the sidebar (the Overview and a run's log, then a repository's
 config and New request, in each theme):
 
-| Overview                                                                                                       |                                                                                                              | Run log                                                                                                           |                                                                                                                 |
-| -------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| Overview                                                                                                          |                                                                                                                 | Run log                                                                                                              |                                                                                                                    |
+| ----------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
 | <img src="../images/dashboard-overview-mobile-light.png" alt="The Overview, on a phone, light theme" width="180"> | <img src="../images/dashboard-overview-mobile-dark.png" alt="The Overview, on a phone, dark theme" width="180"> | <img src="../images/dashboard-run-log-mobile-light.png" alt="A live run's log, on a phone, light theme" width="180"> | <img src="../images/dashboard-run-log-mobile-dark.png" alt="A live run's log, on a phone, dark theme" width="180"> |
 
-| Config                                                                                                                |                                                                                                                     | New request                                                                                                                                        |                                                                                                                                                  |
-| --------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Config                                                                                                                   |                                                                                                                        | New request                                                                                                                                           |                                                                                                                                                     |
+| ------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
 | <img src="../images/dashboard-config-mobile-light.png" alt="A repository's config, on a phone, light theme" width="180"> | <img src="../images/dashboard-config-mobile-dark.png" alt="A repository's config, on a phone, dark theme" width="180"> | <img src="../images/dashboard-new-request-mobile-light.png" alt="New request: an idea for a repository's inbox, on a phone, light theme" width="180"> | <img src="../images/dashboard-new-request-mobile-dark.png" alt="New request: an idea for a repository's inbox, on a phone, dark theme" width="180"> |
 
 These pictures show made-up data (`acme/*`, `octocat`): `cd dashboard && npm run screenshots`
@@ -165,19 +167,20 @@ letting go does ("Queue #31 after #19"); each action shows at once as a dashed n
 
 Each task shows its state in the orchestrator:
 
-| State | What |
-| `queued` | comments wait for a run (a free slot, or the running one) |
-| `scheduled` | a run left the queue; its sandbox is set up, its agent not started yet |
-| `building image` | a run waits for the repository's image to build (a step of scheduling) |
-| `in review` | between the runs of its pull request's review-and-fix loop (`review.fix`) |
-| `waiting` | a comment waits for other issues to be done (`/after #12`) |
-| `working` | the run's agent is at work |
-| `stopping` | a brainstorm is wrapping up (`/stop`) |
-| `needs input` | the last run stopped to ask; the issue has the label |
-| `brainstorm` | a brainstorm waits for your next comment |
-| `idle brainstorm` | no comment for a while; the next one restores the session |
-| `done`, `error` | how the last run ended (`interrupted`: a restart came before its start) |
-| `cancelled` | someone stopped its last run (`/cancel` or the dashboard's Stop) |
+| State             | What                                                                      |
+| ----------------- | ------------------------------------------------------------------------- |
+| `queued`          | comments wait for a run (a free slot, or the running one)                 |
+| `scheduled`       | a run left the queue; its sandbox is set up, its agent not started yet    |
+| `building image`  | a run waits for the repository's image to build (a step of scheduling)    |
+| `in review`       | between the runs of its pull request's review-and-fix loop (`review.fix`) |
+| `waiting`         | a comment waits for other issues to be done (`/after #12`)                |
+| `working`         | the run's agent is at work                                                |
+| `stopping`        | a brainstorm is wrapping up (`/stop`)                                     |
+| `needs input`     | the last run stopped to ask; the issue has the label                      |
+| `brainstorm`      | a brainstorm waits for your next comment                                  |
+| `idle brainstorm` | no comment for a while; the next one restores the session                 |
+| `done`, `error`   | how the last run ended (`interrupted`: a restart came before its start)   |
+| `cancelled`       | someone stopped its last run (`/cancel` or the dashboard's Stop)          |
 
 Pick one to see the first line of its last reply and its latest run's log live (and the
 next runs as they start), or an earlier run. The address keeps the tab, task and run, so a

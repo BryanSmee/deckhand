@@ -1,6 +1,12 @@
 # Claude Code
 
-Claude Code (`claude`) is Deckhand's default agent. It runs on a Claude plan (`CLAUDE_CODE_OAUTH_TOKEN`), an Anthropic API key (`ANTHROPIC_API_KEY`) or a gateway's token (`ANTHROPIC_AUTH_TOKEN`): which one runs first, and how a run picks another, is in [Agents and providers](agents.md). This page has what is Claude Code's own: a gateway such as OpenRouter, and fast mode. To go on through OpenRouter only when Anthropic fails, see [Fallbacks](fallbacks.md).
+Claude Code (`claude`) is Deckhand's default agent. It runs on a Claude plan
+(`CLAUDE_CODE_OAUTH_TOKEN`), an Anthropic API key (`ANTHROPIC_API_KEY`) or a gateway's token
+(`ANTHROPIC_AUTH_TOKEN`), set in `.env`: which one runs first, and how a run picks another, is in
+[Agents and providers](agents.md); a plan is usually licensed to one person
+([A plan or an API key](install.md#a-plan-or-an-api-key)). This page has what is Claude Code's
+own: a gateway such as OpenRouter, and fast mode. To go through OpenRouter only when Anthropic
+fails, see [Fallbacks](fallbacks.md).
 
 ## Through a gateway
 

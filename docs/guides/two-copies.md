@@ -1,6 +1,8 @@
 # Running two copies
 
-Edge and the orchestrator can each run two copies, so an update stops nothing.
+Edge and the orchestrator can each run two copies, so an update stops nothing. Run them when an
+update mustn't pause the webhooks or the queue, or on Kubernetes, where the manifests run two
+of each.
 
 - **Edge's are both active**, on one store: either takes any request, a delivery GitHub sends
   twice (or that reaches both) goes on once, a sign-out ends the login's sessions on both, and

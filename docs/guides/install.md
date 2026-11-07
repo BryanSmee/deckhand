@@ -1,22 +1,25 @@
 # Install with Compose
 
-The full version of the [quick start](../get-started/quick-start.md): what each step does, and what the services are. Read it when you install Deckhand on a server of your own, or want to know what runs there.
+The full version of the [quick start](../get-started/quick-start.md): what each step does, and
+what runs on your server once it is done. Read it when you install Deckhand with Docker
+Compose; on a cluster, see [On Kubernetes](#on-kubernetes).
 
 Deckhand runs on your own server with your own private GitHub App and your own Claude
-credential (or OpenAI key, for [Codex](codex.md)). You need Docker Engine 26 or later with the compose plugin, and an HTTPS address
-that GitHub can reach (your reverse proxy, or a tunnel) forwarding to edge's port.
+credential (or OpenAI key, for [Codex](codex.md)). You need Docker Engine 26 or later with the
+compose plugin, and an HTTPS address that GitHub can reach (your reverse proxy, or a tunnel)
+forwarding to edge's port.
 
 ## Start Deckhand
 
 ```sh
 cp .env.example .env
 # CLAUDE_CODE_OAUTH_TOKEN (from `claude setup-token`) or ANTHROPIC_API_KEY (or a gateway's
-#   ANTHROPIC_AUTH_TOKEN: see Through a gateway below), or OPENAI_API_KEY for Codex (see
-#   Codex below): the secrets stay in .env
+#   ANTHROPIC_AUTH_TOKEN: see guides/claude-code.md), or OPENAI_API_KEY for Codex (see
+#   guides/codex.md): the secrets stay in .env
 cp -r server.example server
 # server/config.yaml: allowed_users, the GitHub logins allowed to start runs (required: no
 #   start without it), and the other settings; server/grants/: what you grant each
-#   repository. See The server folder below.
+#   repository. See settings.md, The server folder.
 docker compose pull
 docker compose up -d
 docker compose logs edge
@@ -44,19 +47,20 @@ To build the images from this checkout instead: `docker compose up -d --build`. 
 
 ## A plan or an API key
 
-**A plan's credential** (`CLAUDE_CODE_OAUTH_TOKEN`, from `claude setup-token`, for Codex
-a ChatGPT plan's login from `codex login`, or for the Antigravity CLI a Google AI plan's login,
-both in [the credentials folder](agents.md#the-credentials-folder)) works, and the orchestrator's and the
-models service's logs warn about it at each start. A subscription (Claude Pro/Max, a ChatGPT plan, Google AI Pro/Ultra) is
-usually licensed to one person, and Google's terms may not allow a plan to drive a bot at all. Serving a team, or repositories other people write to, may
-break your provider's terms: check them before you do. You are responsible for how your
-Deckhand uses your credential. For teams, use an API key.
+A plan's credential (`CLAUDE_CODE_OAUTH_TOKEN`, from `claude setup-token`, for Codex a ChatGPT
+plan's login from `codex login`, or for the Antigravity CLI a Google AI plan's login, both in
+[the credentials folder](agents.md#the-credentials-folder)) works, and the orchestrator's and
+the models service's logs warn about it at each start. A subscription (Claude Pro/Max, a ChatGPT
+plan, Google AI Pro/Ultra) is usually licensed to one person, and Google's terms may not allow a
+plan to drive a bot at all. Serving a team, or repositories other people write to, may break
+your provider's terms: check them before you do. You are responsible for how your Deckhand uses
+your credential. For teams, use an API key.
 
 ## On Kubernetes
 
 With `RUNNER=kubernetes`, each run's sandbox is a pod of the cluster the runner service runs
 in, rather than a container of the host's Docker. `deploy/kubernetes/` has the manifests (a
-kustomize base, with components for Redis and BuildKit), and [kubernetes.md](../kubernetes.md)
+kustomize base, with components for Redis and BuildKit), and [Deckhand on Kubernetes](../kubernetes.md)
 takes you from an empty cluster to a first run: the requirements (a network plugin that enforces
 NetworkPolicies, a storage class, the kubelet's settings), installing, updating, and what the
 manifests set up and why.

@@ -37,13 +37,13 @@ Focus on the error handling.
 Each mode of `modes:` takes these keys; any other key, a built-in name or a bad path is an
 error, listed in the reply:
 
-| Key            | Default  | What                                                                                                                                                                         |
-| -------------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `instructions` | required | Markdown file of the repo, read from the default branch, like `instructions`                                                                                                 |
-| `session`      | `issue`  | `issue`: the issue's session, kept; `fresh`: a new one each run, not kept                                                                                                    |
-| `agent`        | `agent`  | its agent, among the operator's (see [Agent](../repo-config.md#agent))                                                                                                       |
-| `model`        | `model`  | its model                                                                                                                                                                    |
-| `effort`       | `effort` | its thinking effort                                                                                                                                                          |
+| Key            | Default  | What                                                                                                                                                                                      |
+| -------------- | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `instructions` | required | Markdown file of the repo, read from the default branch, like `instructions`                                                                                                              |
+| `session`      | `issue`  | `issue`: the issue's session, kept; `fresh`: a new one each run, not kept                                                                                                                 |
+| `agent`        | `agent`  | its agent, among the operator's (see [Agent](../repo-config.md#agent))                                                                                                                    |
+| `model`        | `model`  | its model                                                                                                                                                                                 |
+| `effort`       | `effort` | its thinking effort                                                                                                                                                                       |
 | `speed`        | `normal` | `fast`: Claude Code's fast mode, as with `/speed fast` (which `/speed normal` overrides), within `fast_mode` and the operator's [`SANDBOX_FAST_MODE`](../guides/claude-code.md#fast-mode) |
 
 - **Names**: letters, digits, `-` and `_`. `work` and `brainstorm` can't be redefined (set

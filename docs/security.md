@@ -292,7 +292,7 @@ approval, no bypass for the App or GitHub Actions) and environments with require
 deployment branches limited to the default branch are still worth having: they cover what the
 checks don't, above.
 
-The App needs the Workflows permission for it ([Create the GitHub App](guides/github-app.md#what-each-permission-is-for)):
+The App needs the Workflows permission for it ([Create the GitHub App](guides/github-app.md#permissions-added-later)):
 without it, the gateway refuses every push of that repository, its runs' first one included,
 and says so, rather than pushing without it.
 

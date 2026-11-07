@@ -4,13 +4,14 @@ When the model's API fails, a run can go on elsewhere instead of ending with "Cl
 with an error". List where, in order, as `agent@provider` (`agent` alone is its default
 provider), or `agent@provider:credential` for one of the provider's credentials:
 
-| Entry | What | Needs |
-| `claude@anthropic` | Claude Code on your `ANTHROPIC_BASE_URL` (Anthropic, unless a gateway) | a Claude credential |
-| `claude@anthropic:plan` | The same, on your Claude plan | `CLAUDE_CODE_OAUTH_TOKEN` |
-| `claude@anthropic:key` | The same, on your Anthropic API key | `ANTHROPIC_API_KEY` |
-| `claude@openrouter` | Claude Code through OpenRouter, at `OPENROUTER_BASE_URL` | `OPENROUTER_API_KEY` |
-| `codex@openai` | Codex on your `OPENAI_BASE_URL` (OpenAI), or on a ChatGPT plan | `OPENAI_API_KEY` or `CODEX_AUTH_FILE` |
-| `antigravity@google` | The Antigravity CLI on your `GEMINI_BASE_URL` (Google), or on a Google AI plan | `GEMINI_API_KEY` or `AGY_AUTH_FILE` |
+| Entry                   | What                                                                           | Needs                                 |
+| ----------------------- | ------------------------------------------------------------------------------ | ------------------------------------- |
+| `claude@anthropic`      | Claude Code on your `ANTHROPIC_BASE_URL` (Anthropic, unless a gateway)         | a Claude credential                   |
+| `claude@anthropic:plan` | The same, on your Claude plan                                                  | `CLAUDE_CODE_OAUTH_TOKEN`             |
+| `claude@anthropic:key`  | The same, on your Anthropic API key                                            | `ANTHROPIC_API_KEY`                   |
+| `claude@openrouter`     | Claude Code through OpenRouter, at `OPENROUTER_BASE_URL`                       | `OPENROUTER_API_KEY`                  |
+| `codex@openai`          | Codex on your `OPENAI_BASE_URL` (OpenAI), or on a ChatGPT plan                 | `OPENAI_API_KEY` or `CODEX_AUTH_FILE` |
+| `antigravity@google`    | The Antigravity CLI on your `GEMINI_BASE_URL` (Google), or on a Google AI plan | `GEMINI_API_KEY` or `AGY_AUTH_FILE`   |
 
 In `.env`, the credentials, and in `config.yaml`:
 
@@ -35,7 +36,7 @@ changes: a run whose provider fails ends with an error, as before.
 
 ## Which errors count
 
-**Which errors count:** only the provider's. The run's agent ended with an error that says
+Only the provider's. The run's agent ended with an error that says
 overloaded (529), rate limited (429), a usage limit or quota reached (402, a plan's limit, no
 credit left), invalid or expired credentials (401, 403), or a server error (5xx), in its
 message or as the last answer Deckhand got from the provider. A failing test, a task the
@@ -47,7 +48,7 @@ it, runs go on, paid per token, only on the entries you list.
 
 ## What happens
 
-**What happens:** the run's comments are queued again for the first entry the run hasn't
+The run's comments are queued again for the first entry the run hasn't
 been on yet, each entry at most once (the run's own included, wherever it is in the list:
 `claude@anthropic` is the same as `claude@anthropic:plan` when the plan is the default). The
 same agent on another provider, or on another credential of it, continues its session. Another agent starts a new session,
@@ -60,7 +61,7 @@ When no entry is left, the run ends with the error.
 
 ## Later runs
 
-**Later runs** of the issue stay on the entry that took over, as long as it is in `FALLBACKS`:
+Later runs of the issue stay on the entry that took over, as long as it is in `FALLBACKS`:
 switching back would continue the session of the agent that failed, without what the other
 one did. A fallback from a plan to its API key (`claude@anthropic` on the plan, or `:plan`,
 then `claude@anthropic:key`) is the exception: the same session goes on either way, so later
@@ -71,7 +72,7 @@ from the plan to another provider or agent sticks like any other.
 
 A model's own name (`/model claude-opus-5-5`) may mean nothing on another provider: use
 tiers (`best`) with fallbacks. A Claude model on a run that falls back to Codex runs Codex's
-login (`UNAUTHENTICATED`, `PERMISSION_DENIED`) count as the
+`best`; the same for the Antigravity CLI. Its plan's quota (`RESOURCE_EXHAUSTED`) and a refused
 login (`UNAUTHENTICATED`, `PERMISSION_DENIED`, "Eligibility check failed") count as the
 provider's errors.
 

@@ -158,7 +158,10 @@ docs/         the docs, and the site built from them (VitePress, build-time only
               dashboard's, published to GitHub Pages by .github/workflows/docs.yml): index.md (the
               site's home), get-started/ (what Deckhand is, the quick start, core ideas),
               images/ (the pictures dashboard/screenshots/ takes, out of every image's build),
-              setup, per-repo config reference (repo-config.md: the core keys; repo-config/: modes,
+              guides/ (one page per task: install, the GitHub App, the dashboard, the agents,
+              logs and metrics, updating and its upgrade notes, the store…; setup.md, the page
+              they were split from, only says where each section went, #984), settings.md (the
+              server folder and every setting), per-repo config reference (repo-config.md: the core keys; repo-config/: modes,
               reviews, issues, policies, policy inputs), security model, architecture, the
               dashboard's languages (dashboard-languages.md); .vitepress/ (config.mjs: the
               sidebar, links out of docs/ sent to GitHub; slug.mjs: GitHub's heading slugs),

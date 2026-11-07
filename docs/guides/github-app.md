@@ -1,8 +1,10 @@
 # Create the GitHub App
 
-Deckhand acts on GitHub as a private GitHub App of your own, which `/setup` creates for you. You need this page once, right after the first start, and again when an update asks the App for a permission it didn't have.
+Deckhand acts on GitHub as a private GitHub App of your own, which `/setup` creates for you.
+You need this page once, right after the [first start](install.md#start-deckhand), and again
+when an update asks the App for a permission it didn't have.
 
-The logs print a one-time setup link: `…/setup?token=…`. Open it through your public
+Edge's logs print a one-time setup link: `…/setup?token=…`. Open it through your public
 address (for example `https://deckhand.example.com/setup?token=…`):
 
 1. Check the public URL (detected from your browser's address, or `PUBLIC_URL`), pick the
@@ -14,8 +16,8 @@ address (for example `https://deckhand.example.com/setup?token=…`):
    the App's ID, its webhook secret and its OAuth client's in its own volume
    (`edge-data`, `/data/app.json`), and gives the orchestrator the App's public parts alone
    (its ID, slug, owner, bot). Then on to the App's installation page: pick the repositories Deckhand
-   may work on. Each one without a `.deckhand.yaml` gets an onboarding issue (see Onboarding
-   below).
+   may work on. Each one without a `.deckhand.yaml` gets an onboarding issue (see
+   [Onboarding](repositories.md#onboarding)).
 
 Once an App is stored, `/setup` is closed. To start over, delete `/data/app.json` from the
 `edge-data` volume and `app.json` from the `github-key` volume, and restart edge and the github
@@ -25,14 +27,18 @@ sign anyone in.
 
 What the App asks for:
 
-| Permissions | Events |
-| Issues, Pull requests, Contents: read and write | `issues`, `issue_comment`, `pull_request` |
-| Deployments, Discussions: read and write | `pull_request_review` |
-| Workflows, Actions: read and write | `pull_request_review_comment`, `workflow_run` |
-| Checks, Commit statuses, Metadata: read | `discussion`, `discussion_comment` |
-| Organization projects: read and write | `push`, `repository`, `check_suite`, `status` |
+| Permissions                                     | Events                                        |
+| ----------------------------------------------- | --------------------------------------------- |
+| Issues, Pull requests, Contents: read and write | `issues`, `issue_comment`, `pull_request`     |
+| Deployments, Discussions: read and write        | `pull_request_review`                         |
+| Workflows, Actions: read and write              | `pull_request_review_comment`, `workflow_run` |
+| Checks, Commit statuses, Metadata: read         | `discussion`, `discussion_comment`            |
+| Organization projects: read and write           | `push`, `repository`, `check_suite`, `status` |
 
-## What each permission is for
+## Permissions added later
+
+These permissions came with later features. An App created before one of them lacks it, which
+only matters once you use the feature: each paragraph says what to add.
 
 Workflows lets the git gateway push changes to `.github/workflows/`, for the repositories
 your policies grant `workflows` only ([security model](../security.md#github-actions-on-deckhands-branches)):
@@ -111,7 +117,7 @@ An App created before Deckhand followed repositories' changes lacks the `reposit
 on **Repository** under _Subscribe to events_ in its settings. Without it, a repository deleted,
 transferred or made private keeps what the access decisions last read of it (whether it is
 private, its policy listing) up to a minute, or up to an hour while GitHub fails, rather than
-being read again at once ([docs/security.md](../security.md), Fail closed), and another branch made
+being read again at once ([Security model](../security.md), Fail closed), and another branch made
 the default in its settings isn't followed by a conflict check of its open pull requests until
 the next poll. A repository removed
 from the installation needs no event of its own.

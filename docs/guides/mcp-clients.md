@@ -1,7 +1,9 @@
 # MCP clients
 
 Deckhand is an MCP server too, at `<PUBLIC_URL>/mcp`: an MCP client (Claude Code, Codex,
-Cursor…) reads what the dashboard shows you, as you. In Claude Code:
+Cursor…) reads what the dashboard shows you, as you, and acts as you would there. Connect one
+when you'd rather ask your own agent about your runs than open the dashboard; a machine's
+driver connects the same way ([Your own machine](machines.md)). In Claude Code:
 
 ```sh
 claude mcp add --transport http deckhand https://deckhand.example.com/mcp

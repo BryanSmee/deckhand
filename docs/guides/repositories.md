@@ -1,10 +1,11 @@
 # Repositories and onboarding
 
-Which repositories Deckhand works on, and how each one gets its own `.deckhand.yaml`. Read it before you install the App on more repositories, or on an account's every repository.
+Which repositories Deckhand works on, and how each one gets its own `.deckhand.yaml`. Read it
+before you install the App on more repositories, or on every repository of an account.
 
 ## Onboarding
 
-**Onboarding.** When the App is installed on a repository (at creation, or added to the
+When the App is installed on a repository (at creation, or added to the
 installation later) that has no `.deckhand.yaml` on its default branch, the orchestrator opens an
 issue there, "Set up Deckhand for this repository", labelled `deckhand-onboarding`. Claude
 reads the repository and replies with a proposed `.deckhand.yaml` (and a Dockerfile or
@@ -17,11 +18,11 @@ warnings to its reply. Merge it, and the next runs use the config. See
 
 Only installations by someone in `ALLOWED_USERS`, on repositories `ALLOWED_REPOS` lets
 through, open an issue; the others are skipped, with the reason in the orchestrator's logs. A
-repository gets one onboarding issue, ever (kept in the orchestrator's [store](store.md)), so reinstalling the App
-opens no second one. `ONBOARDING=off` turns the automatic issue off; a `/mode onboarding`
+repository gets one onboarding issue, ever (kept in the orchestrator's [store](store.md)), so reinstalling the
+App opens no second one. `ONBOARDING=off` turns the automatic issue off; a `/mode onboarding`
 comment on any issue starts the same conversation by hand, for repositories installed
 before, or skipped. The dashboard's **Repositories** page lists them and starts it with a
-button (see [the dashboard](dashboard.md)).
+button (see [Repositories](dashboard.md#repositories) on the dashboard).
 
 ## Which repositories
 
