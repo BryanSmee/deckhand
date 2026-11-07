@@ -34,7 +34,7 @@ cached_hosts: [deb.debian.org, dl-cdn.alpinelinux.org, registry.npmjs.org, files
   a new CA, which the next runs get.
 
 What this implies (the proxy reads cached hosts' traffic, and holds a key sandboxes trust),
-and the rules in full: [The egress cache](../security.md#the-egress-cache) in the security
+and the rules in full: [The egress cache](../security/network.md#the-egress-cache) in the security
 model.
 
 To check it: `docker compose logs egress` says `cache on, HTTPS too` at start. Ask two runs

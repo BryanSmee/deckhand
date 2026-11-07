@@ -71,7 +71,7 @@ its own on it. A deployment that put several services on one prefix moves each t
 the services stopped: they start with an empty store, as when they first moved to Redis.
 
 **The runner's `deployment` key** is the ID that its prefix's marker holds (`<NAME_PREFIX>-deployment`,
-[security.md](../security.md#the-runner-service)). Copy it when you move the runner's store. A
+[security.md](../security/services.md#the-runner-service)). Copy it when you move the runner's store. A
 runner that starts with an empty store makes a new ID, and then refuses every call until the
 marker is removed: `docker volume rm <NAME_PREFIX>-deployment` on Docker, or
 `kubectl -n <sandboxes' namespace> delete secret <NAME_PREFIX>-deployment` on Kubernetes. Remove

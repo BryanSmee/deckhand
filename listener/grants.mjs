@@ -4,7 +4,7 @@
 // CPU, memory and pids limits. It lives in the operator's GRANTS_DIR, never in a repo: a repo's
 // .deckhand.yaml may request a mount, but only a grant here makes it happen. One file per repo,
 // so a team can own its repos' files (CODEOWNERS), and a mistake in one stops that repo's runs
-// only. Read again at each run, so an edit applies without a restart. Format: ../docs/security.md.
+// only. Read again at each run, so an edit applies without a restart. Format: ../docs/security/policies.md#the-grants-folder.
 //
 // The yes-or-no grants (its Dockerfile and its pull requests' branches', a container engine,
 // research runs, pushes that change workflows, auto-merge, users' own machines) are the
@@ -153,7 +153,7 @@ function moved(key, file, value) {
   const name = publicMerge ? "auto_merge_public" : MOVED[key];
   const repo = REPO_FILE.exec(file);
   const own = repo && `${repo[1]}/${repo[2]}`.toLowerCase();
-  const where = "in policy/ of the grants folder (docs/security.md#the-grants)";
+  const where = "in policy/ of the grants folder (docs/security/policies.md#the-grants)";
   // Neither true, false nor (auto-merge's) public: never valid, and no rule to copy from it.
   if (value !== true && value !== false && !publicMerge) {
     const allowed = key === "allow_auto_merge" ? "true, false or public" : "true or false";

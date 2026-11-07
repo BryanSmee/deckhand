@@ -2,7 +2,7 @@
 // its own, with no route out; the egress proxy (../proxy/proxy.mjs) is their only way out, and asks the
 // listener, for each connection, whether that sandbox may reach that host. The answer comes
 // from here: the mandatory hosts and what the operator grants the repo in the grants folder
-// (grants.mjs: default.yaml's hosts and its own file's). Security model: ../docs/security.md.
+// (grants.mjs: default.yaml's hosts and its own file's). Security model: ../docs/security/network.md.
 import { agentFor } from "./agents/index.mjs";
 
 // "name", "*.domain" (any subdomain, not the domain itself) or "*" (anything).

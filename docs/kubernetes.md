@@ -776,7 +776,7 @@ Two settings, which may name one namespace (the default) or two:
   sessions', agents' and caches' claims, and the sandboxes' NetworkPolicies. The runner also
   keeps a Secret there, `<NAME_PREFIX>-deployment`, labelled `deckhand.role: deployment`. It
   holds no data, only the deployment's ID in a label: it claims the prefix for this deployment
-  ([the runner service](security.md#the-runner-service)). Each deployment sharing the namespace
+  ([the runner service](security/services.md#the-runner-service)). Each deployment sharing the namespace
   needs a `NAME_PREFIX` of its own. Nothing else runs there, so it can enforce Pod Security
   `restricted` (`pod-security.kubernetes.io/enforce: restricted` on the namespace), a last line should a
   pod's own spec ever be wrong.

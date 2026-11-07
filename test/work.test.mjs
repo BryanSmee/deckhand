@@ -2019,7 +2019,7 @@ test("wait_for_answers off: an issue with open questions starts and queues witho
   assert.deepEqual(w.labels, []);
 });
 
-// docs/security.md, Dashboard: a set-aside goes by the needs-input label, which anyone with the
+// docs/security/webhooks-and-sign-in.md#the-dashboards-actions: a set-aside goes by the needs-input label, which anyone with the
 // repo's triage permission can take off, and the gate goes by the board's state, which follows.
 test("wait_for_answers and a run's questions set aside: the start no longer held, nor its answers taken", async () => {
   const w = setup({ issues: { 5: open("Five") }, board: ["org/app#5"] });

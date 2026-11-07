@@ -26,7 +26,7 @@
 // redacted with the operator's secrets, which the service never holds). Fail closed: a policy
 // that doesn't compile, times out or gives a rule anything but its type refuses, with that
 // reason, and so do a decision no allow rule matches and a policy service that can't be reached.
-// Format: ../docs/repo-config/policies.md#policies; trust: ../docs/security.md#policies.
+// Format: ../docs/repo-config/policies.md#policies; trust: ../docs/security/policies.md#policies.
 import { createHash } from "node:crypto";
 import { getJson, rateLimited } from "./github.mjs";
 import {

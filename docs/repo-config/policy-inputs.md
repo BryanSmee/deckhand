@@ -382,7 +382,7 @@ evaluated once per run and the answer kept (`gh pr checks --watch` polls):
 
 A deny rule refusing what isn't in a list (`not input.target.kind in {…}`) refuses them too:
 guard it with `not input.action in {"read_checks", "read_projects"}`. More (REST paths, GraphQL types,
-the permissions, what stays readable): [security model](../security.md#the-github-gateway).
+the permissions, what stays readable): [security model](../security/github.md#the-github-gateway).
 
 ### The push input
 

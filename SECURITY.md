@@ -56,7 +56,7 @@ they can, in any of Deckhand's parts:
 Out of scope:
 
 - What [docs/security.md](docs/security.md) already lists as accepted or not covered (its
-  "Not covered" section): image builds and the agents' install outside the sandboxes' networks,
+  [Not covered](docs/security/not-covered.md) page): image builds and the agents' install outside the sandboxes' networks,
   DNS lookups leaving the internal networks, data sent to a host the operator granted.
 - A deployment the operator configured against the docs: a grant marked UNSAFE, a host mount
   of a secret, an allowlist that lets strangers start runs.

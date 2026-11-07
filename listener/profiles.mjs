@@ -7,7 +7,7 @@
 // policy no longer gives). Data only, tied to no sandbox: in one, the orchestrator narrows the
 // run's capabilities, hosts and mounts with it, which the GitHub gateway, the egress proxy and the
 // runner then enforce (preparation.mjs); on a user's own machine (#601), it would narrow the
-// settings the driver suggests, advisory there. Format: ../docs/security.md#chats.
+// settings the driver suggests, advisory there. Format: ../docs/security/policies.md#chats.
 import { CAPABILITIES } from "./capabilities.mjs";
 import { hostProblem, matchHost } from "./egress.mjs";
 

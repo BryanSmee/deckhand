@@ -87,18 +87,18 @@ No sandbox gets a GitHub token, an SSH key or the host's git configuration:
   the proxy, which vouches for the sandbox's network there), which sends it on with an
   installation token limited to the run's repository,
   which the sandbox never sees, and redacts secrets from what it writes (see
-  [The GitHub gateway](../security.md#the-github-gateway)). A run's token only reads: contents,
+  [The GitHub gateway](../security/github.md#the-github-gateway)). A run's token only reads: contents,
   issues, pull requests, actions, checks, commit statuses and metadata (discussion runs their
   discussions too). Each write the gateway checked and the policies allowed gets a token of its
   own, with only the write permission it needs (`issues: write` for a comment, `pull_requests:
-write` to open or edit a pull request…): see [Tokens](../security.md#tokens). Installation tokens last an hour; the gateway renews them before
+write` to open or edit a pull request…): see [Tokens](../security/tokens.md#tokens). Installation tokens last an hour; the gateway renews them before
   that, so a run can go on for hours. Every run but a research one trusts the egress
   proxy's CA, which certifies GitHub's hosts for the relay.
 - Git fetches from GitHub over HTTPS through the GitHub gateway, and pushes through the github
   service's git gateway (to `http://github:8080`, the name the proxy sends there, with the run
   token), which pushes the run's own branch only (its
   issue's `issue-<n>-*`, or its pull request's head), never the default one, with a token of
-  its own (see [Security model](../security.md#the-default-branch)): contents only, and
+  its own (see [Security model](../security/github.md#the-default-branch)): contents only, and
   workflows too for a repository granted `workflows`. A run's
   `gh pr create`, `edit` and `ready` go through the GitHub gateway like its other calls, for
   its own pull requests only, with a token that writes them for that one checked call: no
@@ -110,14 +110,14 @@ The branches and pull requests a sandbox pushes run the repository's GitHub Acti
 anyone's, with its secrets and a `GITHUB_TOKEN`. Before installing the App on a repository,
 set its default workflow permissions to read-only and keep deploy secrets behind
 environments with required reviewers: see
-[GitHub Actions on Deckhand's branches](../security.md#github-actions-on-deckhands-branches).
+[GitHub Actions on Deckhand's branches](../security/github.md#github-actions-on-deckhands-branches).
 
 Nor does a sandbox get your Claude credential. Its Claude Code calls the broker's address
 (`ANTHROPIC_BASE_URL=<broker>/anthropic`, which the egress proxy sends to the models service)
 with the run's agent token where the credential would be; the models service checks the token,
 puts your credential in its place and forwards the call
 
-to Anthropic, streaming the answer back (see [Security model](../security.md#tokens)). Codex
+to Anthropic, streaming the answer back (see [Security model](../security/tokens.md#tokens)). Codex
 does the same with `OPENAI_BASE_URL=<broker>/openai` and your `OPENAI_API_KEY`, and the
 Antigravity CLI with `GOOGLE_GEMINI_BASE_URL=<broker>/google` and your `GEMINI_API_KEY`, or
 through the egress proxy with a Google AI plan's login (see

@@ -199,9 +199,9 @@ Anything else is refused with a `403` saying so. This file has no `hosts`: anyon
 push to the default branch could otherwise open the sandbox's network, so only the operator
 lists them (one here is ignored, with a warning). The same goes for `cached_hosts`, those of
 them whose answers (HTTPS too) the egress proxy keeps for every run
-([The egress cache](security.md#the-egress-cache)). Ask the operator for the registries and
+([The egress cache](security/network.md#the-egress-cache)). Ask the operator for the registries and
 APIs the repository needs; the onboarding issue lists them. See
-[Where a sandbox's hosts come from](security.md#where-a-sandboxs-hosts-come-from).
+[Where a sandbox's hosts come from](security/network.md#where-a-sandboxs-hosts-come-from).
 
 A `mounts` entry is only a request: it is mounted when the operator grants the repository a
 root holding it, after resolving `..` and symlinks. Otherwise the run stops and the reply
@@ -217,7 +217,7 @@ with the line number.
 ## Workflow files
 
 A run's pushes can't add or change files under `.github/workflows/` unless the operator grants
-the repository `workflows` ([the grants](security.md#the-grants): an `allow_grant` rule of its policies). With the
+the repository `workflows` ([the grants](security/policies.md#the-grants): an `allow_grant` rule of its policies). With the
 grant, the git gateway reads each workflow file a push changes from the default branch's before
 GitHub gets it, and refuses the push, naming the file and the rule, unless the workflow:
 
@@ -259,7 +259,7 @@ or `tags-ignore` keeps the rules above, and the refusal names it. A workflow it 
 too (its `on:` is `workflow_call`), so it can't use secrets in this version: use them in the
 lifted workflow's own jobs. Names are compared exactly (`push`, not `Push`). A pull request that
 changes a workflow is never merged automatically (`review.merge`). See [GitHub Actions on
-Deckhand's branches](security.md#github-actions-on-deckhands-branches).
+Deckhand's branches](security/github.md#github-actions-on-deckhands-branches).
 
 ## Images
 
@@ -334,7 +334,7 @@ docker compose up -d
 ```
 
 - **The grant**: only when the operator's policies grant this repository `docker` (one
-  repository at a time: [the grants](security.md#the-grants)); `docker` without it is an error that stops the runs, like
+  repository at a time: [the grants](security/policies.md#the-grants)); `docker` without it is an error that stops the runs, like
   `dockerfile`. With the grant but no engine set up (`SANDBOX_ENGINE`), runs start without
   one, and their log says so.
 - **The network**: the engine pulls and its containers connect through the egress proxy,

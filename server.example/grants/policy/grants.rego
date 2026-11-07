@@ -1,5 +1,5 @@
 # What the operator grants each repository beyond hosts, mounts and limits (#498,
-# docs/security.md#the-grants): one `allow_grant` rule per set of repositories, asked with
+# docs/security/policies.md#the-grants): one `allow_grant` rule per set of repositories, asked with
 # input.grant (the grant's name) and input.repo.name (lower case). Nothing granted unless a rule
 # here says so; a `deny_grant` rule wins over them. Read again at each decision: an edit applies
 # without a restart. A repository's own policies never grant these.

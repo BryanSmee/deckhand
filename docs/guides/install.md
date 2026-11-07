@@ -34,7 +34,7 @@ holding the key that signs the runs' tokens, see [The broker service](services.m
 github service's (the only one holding the GitHub App's key, see
 [The github service](services.md#the-github-service)), the models service's (the only one holding your agents' credentials, see
 [The models service](services.md#the-models-service)), the policy service's (which evaluates the
-[policies](../security.md#policies), on internal networks shared with the orchestrator alone, the
+[policies](../security/policies.md#policies), on internal networks shared with the orchestrator alone, the
 github service alone and the runner alone), the egress proxy's (the only way out of the sandboxes' internal
 networks, see [Security model](../security.md)), and the base sandbox image runs start from (the
 `sandbox` service only pulls it and exits); with the `engine` profile, the

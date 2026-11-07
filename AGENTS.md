@@ -162,7 +162,8 @@ docs/         the docs, and the site built from them (VitePress, build-time only
               logs and metrics, updating and its upgrade notes, the store…; setup.md, the page
               they were split from, only says where each section went, #984), settings.md (the
               server folder and every setting), per-repo config reference (repo-config.md: the core keys; repo-config/: modes,
-              reviews, issues, policies, policy inputs), security model, architecture, the
+              reviews, issues, policies, policy inputs), the security model (security.md: a one-page
+              overview; security/: the threat model by area, #985), architecture, the
               dashboard's languages (dashboard-languages.md); .vitepress/ (config.mjs: the
               sidebar, links out of docs/ sent to GitHub; slug.mjs: GitHub's heading slugs),
               kept out of the images (.dockerignore). test/docs-links.test.mjs holds every
@@ -242,7 +243,7 @@ docs/         the docs, and the site built from them (VitePress, build-time only
 - **No GitHub token in a sandbox:** it holds only a run token (and its agent's token), signed
   by the broker service, which alone holds the key, bound to its network or pod and dead with
   the run (`lib/tokens.mjs`,
-  docs/security.md, Run tokens). The egress proxy relays its GitHub calls to the GitHub gateway
+  docs/security/tokens.md#run-tokens). The egress proxy relays its GitHub calls to the GitHub gateway
   (`listener/github-gateway.mjs`) in the github service (`github/`, #502), the only one holding
   the App's key, which adds a short-lived installation token for that run's repo and redacts
   what it writes. That token only reads: a write the policies allowed
