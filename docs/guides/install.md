@@ -69,4 +69,4 @@ manifests set up and why.
 
 - [Create the GitHub App](github-app.md), from the link edge's logs print.
 - [Start runs](runs.md) on an issue, and [onboard the repositories](repositories.md).
-- [Server settings](../settings.md): every setting, and the server folder.
+- [Server settings](../reference/settings.md): every setting, and the server folder.

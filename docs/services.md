@@ -87,7 +87,7 @@ diagram leaves out; the policy service calls none, and checks the tokens it gets
 arrows are narrow: the runner fetches a repository's tarball from the github service for build
 contexts (the App's key stays there), models has the runner start the plan logins' refresh, and the runner copies each run's inbox and
 files to the broker as they change (`listener/runner/inbox.mjs` `mirror`), and the runner asks the
-policy service what the operator's policies [grant](security/policies.md#the-grants) a repository
+policy service what the operator's policies [grant](reference/server-folder.md#the-grants) a repository
 (`GET /policies`, `POST /evaluate`, the operator's layer only), to check every sandbox spec
 and image build against it again. A run's live log reaches the dashboard through
 the orchestrator, which reads it from the runner and answers what edge passes on: edge calls the

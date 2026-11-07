@@ -530,7 +530,7 @@ client, and no sandbox service, run token or git gateway is on the machine.
   edge and at the orchestrator, as their dashboard session is; their machines are listed to
   nobody and offered nothing until they are back.
 - **Opt-in per repository, both needed**: the operator's `machines` grant ([the
-  grants](policies.md#the-grants), an `allow_grant` rule, nothing by default) and a `machines:` block in
+  grants](../reference/server-folder.md#the-grants), an `allow_grant` rule, nothing by default) and a `machines:` block in
   the repository's `.deckhand.yaml` on its default branch, whose `labels` narrow the machines
   it takes, never widen the grant. A machine is offered a repository only while its owner may
   start work runs there (`runs:start:work`, the repository's `users` narrowing it): never more

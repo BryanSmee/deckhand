@@ -84,7 +84,7 @@ your machine's, and Deckhand's default policy never merges it by itself
 ([`machines.rego`](../repo-config/policies.md#machinesrego)).
 
 A repository is offered to a machine only when the operator's policies grant it `machines`
-([security.md](../security/policies.md#the-grants)) and its `.deckhand.yaml` has a `machines:` block
+([the grants](../reference/server-folder.md#the-grants)) and its `.deckhand.yaml` has a `machines:` block
 ([repo-config/issues.md](../repo-config/issues.md#machines)), and only where you may start runs.
 
 ## Scopes

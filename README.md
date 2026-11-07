@@ -53,8 +53,8 @@ Open the setup link through your public address, create the GitHub App and insta
 repository. Then comment `Deckhand` on one of its issues.
 
 The [quick start](docs/get-started/quick-start.md) walks through each step;
-the [guides](docs/guides/install.md) go further, [Server settings](docs/settings.md) has every
-setting, and the [security model](docs/security.md) what to read before you install it on a
+the [guides](docs/guides/install.md) go further, [Server settings](docs/reference/settings.md) has every
+setting and [Comment commands](docs/reference/comment-commands.md) every command, and the [security model](docs/security.md) what to read before you install it on a
 repository other people write to. To report a vulnerability privately, see [SECURITY.md](SECURITY.md).
 
 ## Claude Code and naming

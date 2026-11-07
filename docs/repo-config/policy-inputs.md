@@ -5,7 +5,7 @@
 Part of the [`.deckhand.yaml` reference](../repo-config.md): the `input` each decision of the
 [policies](policies.md) gets, field by field, to look up while writing a rule.
 
-### The run input
+## The run input
 
 `input` of `deny_run`, asked once per run a person asks for, before it is queued (not
 Deckhand's reviews and fix runs): `version`, `decision: "run"`, `time`, `repo` (`"owner/repo"`,
@@ -20,7 +20,7 @@ files alone and no repository file, Deckhand decides as `run.rego` would, withou
 reading the comment's issue: it only lists the repository's policy folder (kept 10 minutes,
 and up to an hour when GitHub can't list it again).
 
-### The merge input
+## The merge input
 
 `input` of `deny_merge`, read from GitHub at the merge (the pull request, its files, its
 issue, its Actions runs) and the review that decides it (`deny_review` and `deny_fix`
@@ -41,7 +41,7 @@ issue, its Actions runs) and the review that decides it (`deny_review` and `deny
 | `fixes`             | How many fix runs came before this review (`review.fix`'s rounds), `0` without any.                                                                                                                                                                                                                                                                                        |
 | `checks[]`          | The head commit's GitHub Actions runs: `name`, `status`, `conclusion`; without a run cancelled and replaced by a newer one of its workflow and event.                                                                                                                                                                                                                      |
 
-### The review and fix input
+## The review and fix input
 
 `input` of `deny_review` and `deny_fix`: the [merge input](#the-merge-input)'s `version`,
 `time`, `repo`, `pr` (with `pr.files[]`), `issue` and `review`, read from GitHub when the
@@ -95,7 +95,7 @@ deny_fix contains "too large to rebase unattended" if {
 }
 ```
 
-### The reviewers input
+## The reviewers input
 
 `input` of `deny_request_review`: the [merge input](#the-merge-input)'s `version`, `time`,
 `repo`, `pr` (with `pr.files[]`) and `issue`, read from GitHub when the decision is made (only
@@ -118,7 +118,7 @@ deny_request_review contains "not on docs-only changes" if {
 deny_request_review contains "the first request only" if input.when == "fix"
 ```
 
-### The GitHub input
+## The GitHub input
 
 A run's sandbox holds no GitHub token: its calls go through the github service's GitHub gateway
 ([security model](../security.md)). Each **REST write** (anything but `GET` and `HEAD`, whatever
@@ -342,7 +342,7 @@ and a write the gateway can't classify.
 }
 ```
 
-#### Reruns
+### Reruns
 
 A work run may rerun the failed jobs of a GitHub Actions run on its own pull request's head
 (`gh run rerun <id> --failed` or `--job <id>`): action `rerun`, `actions: write` for that call
@@ -357,7 +357,7 @@ across a restart). Deckhand's default, `policy/mode-work.rego`, allows reruns to
 the repository's modes it allows, and denies all but a first one (`target.attempt == 1`); the
 operator's file of that name broadens it.
 
-#### Reading CI's checks
+### Reading CI's checks
 
 `allow_github` and `deny_github` also see two reads. `read_checks`: CI's checks beyond Actions
 (`gh pr checks`, `gh pr view` without `--json`), over REST or GraphQL, which Deckhand's
@@ -384,7 +384,7 @@ A deny rule refusing what isn't in a list (`not input.target.kind in {…}`) ref
 guard it with `not input.action in {"read_checks", "read_projects"}`. More (REST paths, GraphQL types,
 the permissions, what stays readable): [security model](../security/github.md#the-github-gateway).
 
-### The push input
+## The push input
 
 A run pushes through Deckhand's git gateway ([security model](../security.md)), never to GitHub
 directly. Each push is checked there: only `refs/heads/` branches, never the default branch,
@@ -414,7 +414,7 @@ package deckhand
 deny_push contains "a run doesn't delete branches here" if input.deleted
 ```
 
-### The linked-branch input
+## The linked-branch input
 
 A work run's branch shows in its issue's Development sidebar from the run's start, not only
 once its pull request says `Closes #n`. GitHub links a branch to an issue only as it creates

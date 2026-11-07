@@ -98,6 +98,6 @@ Code's `WebFetch`, the browser), so it gets nothing of the repository's to leak:
   there): comments without a trigger or `/mode` line go on in it, `/mode work` switches.
 
 It only runs where the operator grants it: `research`, an `allow_grant` rule of their policies
-([the grants](../security/policies.md#the-grants)). Without it,
+([the grants](../reference/server-folder.md#the-grants)). Without it,
 `/mode research` gets a reply naming the grant, and nothing runs. Its agent and model are
 those of brainstorms (`brainstorm_agent`, `brainstorm_model`).

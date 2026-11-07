@@ -15,7 +15,7 @@ installed on.
 - **Comment triggers.** The first line of a comment is the command, the rest are instructions.
   `Deckhand` starts a run; later comments on the issue or its pull request continue the same
   session. `/mode brainstorm` discusses the issue without code, `/after #77` waits for another
-  issue, `/cancel` stops the run ([Start runs](../guides/runs.md)).
+  issue, `/cancel` stops the run ([Comment commands](../reference/comment-commands.md)).
 - **Needs input.** A run that hits a decision only you can make pushes its work in progress,
   asks numbered questions and labels the issue `needs-input`. Your answer continues it.
 - **Live feedback.** Reactions on your comment (👀, then 🚀, 😕 or 👎), and the final message as a

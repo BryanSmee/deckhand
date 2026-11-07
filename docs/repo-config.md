@@ -217,7 +217,7 @@ with the line number.
 ## Workflow files
 
 A run's pushes can't add or change files under `.github/workflows/` unless the operator grants
-the repository `workflows` ([the grants](security/policies.md#the-grants): an `allow_grant` rule of its policies). With the
+the repository `workflows` ([the grants](reference/server-folder.md#the-grants): an `allow_grant` rule of its policies). With the
 grant, the git gateway reads each workflow file a push changes from the default branch's before
 GitHub gets it, and refuses the push, naming the file and the rule, unless the workflow:
 
@@ -334,7 +334,7 @@ docker compose up -d
 ```
 
 - **The grant**: only when the operator's policies grant this repository `docker` (one
-  repository at a time: [the grants](security/policies.md#the-grants)); `docker` without it is an error that stops the runs, like
+  repository at a time: [the grants](reference/server-folder.md#the-grants)); `docker` without it is an error that stops the runs, like
   `dockerfile`. With the grant but no engine set up (`SANDBOX_ENGINE`), runs start without
   one, and their log says so.
 - **The network**: the engine pulls and its containers connect through the egress proxy,
@@ -453,3 +453,7 @@ of their own in [`repo-config/`](repo-config/):
   access, the default policies, and their dry run on the dashboard.
 - [Policy inputs](repo-config/policy-inputs.md): each decision's `input`, field by field, for
   writing a rule.
+
+What a repository's config narrows is the operator's: their [server settings](reference/settings.md)
+and [grants folder](reference/server-folder.md). The comments that start and steer runs are in
+[Comment commands](reference/comment-commands.md).
