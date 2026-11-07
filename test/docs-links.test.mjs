@@ -11,9 +11,10 @@ import { posix } from "./helpers.mjs";
 import { slugify } from "../docs/.vitepress/slug.mjs";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
-// What isn't the repository's own: packages, builds (the docs site's cache too), git's files,
-// Claude Code's worktrees.
-const SKIP = new Set(["node_modules", ".git", "dist", "cache", "coverage", ".claude"]);
+// What isn't the repository's own: packages, builds, git's files, Claude Code's worktrees, and
+// the docs site's cache (by its path: a cache/ of the repository's own is scanned).
+const SKIP = new Set(["node_modules", ".git", "dist", "coverage", ".claude"]);
+const SKIP_PATHS = new Set([join(root, "docs", ".vitepress", "cache")]);
 const TEXT = /\.(mjs|js|ts|tsx|md|rego|ya?ml|json|sh|css|html)$|Dockerfile$/;
 
 // The repository's files. Not `git ls-files`: the tests also run from a tarball without .git
@@ -21,8 +22,8 @@ const TEXT = /\.(mjs|js|ts|tsx|md|rego|ya?ml|json|sh|css|html)$|Dockerfile$/;
 // clone), its references resolved against its own docs/, not these.
 function files(dir = root) {
   return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
-    if (SKIP.has(entry.name)) return [];
     const path = join(dir, entry.name);
+    if (SKIP.has(entry.name) || SKIP_PATHS.has(path)) return [];
     if (entry.isDirectory()) return existsSync(join(path, ".git")) ? [] : files(path);
     return TEXT.test(entry.name) ? [path] : [];
   });
