@@ -108,6 +108,7 @@ import { createRunEvents } from "../listener/run-events.mjs";
 import { createDiscussionApi } from "../listener/discussions.mjs";
 import { askedOn, closedTasks, createDismissals, setAsideClosed } from "../listener/dismissals.mjs";
 import { createPicks } from "../listener/picks.mjs";
+import { createStopped } from "../listener/stopped.mjs";
 import { operatorSecrets } from "../listener/secrets.mjs";
 import { createRuns } from "../listener/runs.mjs";
 import { createStatus, serverInfo, serverSetup } from "../listener/status.mjs";
@@ -280,6 +281,7 @@ const MAPS = {
   machines: {},
   routes: {},
   admissions: {},
+  stopped: {},
 };
 const store = openStore(storeUrl, {
   password: env.REDIS_PASSWORD,
@@ -858,6 +860,8 @@ Object.assign(ctx, {
   issueModes: createIssueModes(maps.maps.modes),
   // Comments GitHub kept from being admitted, admitted again later (tasks.mjs holdAdmission()).
   admissions: maps.maps.admissions,
+  // Tasks whose run was stopped: nothing starts on them until a trigger (stopped.mjs).
+  stopped: createStopped({ stopped: maps.maps.stopped }),
 });
 Object.assign(ctx, createStatus(ctx), createTasks(ctx), createRuns(ctx), createRestart(ctx));
 // Open pull requests of opted-in repos that conflict with their base get a rebase run.
@@ -868,6 +872,8 @@ ctx.conflicts = createConflicts({
   github,
   repoSettings,
   busy: taskBusy,
+  // A stopped task gets no rebase run until a trigger (stopped.mjs).
+  stopped: (key) => ctx.stopped.has(key),
   accept: (item) => ctx.accept(item),
   // A conflict run is a fix run too: `deny_fix`, its refusal said on the pull request.
   policies,
@@ -914,6 +920,8 @@ ctx.reviews = createReviews({
   accept: (item) => ctx.accept(item),
   github,
   busy: taskBusy,
+  // A stopped task gets no fix run until a trigger (stopped.mjs).
+  stopped: (key) => ctx.stopped.has(key),
   reply: ctx.reply,
   policies,
   decided: (repo, pr, entry) => ctx.decisions.record(pullEntry(repo, pr).key, entry),
@@ -1208,6 +1216,7 @@ ctx.waits.dedupe(
         ...t.pending,
         ...(t.live?.handled ?? []),
         ...t.held,
+        ...(t.onHold ?? []),
         ...(t.claim?.items ?? []),
       ])
       .map((item) => item.queueId)

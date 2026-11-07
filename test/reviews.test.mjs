@@ -34,6 +34,7 @@ import {
   blockingText,
   stepsGoing,
 } from "../listener/reviews.mjs";
+import { createStopped } from "../listener/stopped.mjs";
 import {
   localService,
   policyEngine,
@@ -383,6 +384,7 @@ function setup(
     path = join(tempDir(t), "reviews.json"),
     github,
     busy = () => false,
+    stopped,
     settings = config,
     policies = null,
     reply = async () => {},
@@ -403,6 +405,7 @@ function setup(
     accept: async (item) => accepted.push(item),
     github,
     busy,
+    ...(stopped && { stopped }),
     policies,
     reply,
     metrics,
@@ -863,6 +866,23 @@ test("review.fix: not while the task is busy or waits for the maintainer's input
   // Its run over: the next review's fix goes ahead.
   lookups = 2;
   assert.ok(await late.fix());
+});
+
+test("review.fix: no fix run on a stopped task, until it is triggered again; a maintainer's Fix asks (#1003)", async (t) => {
+  const marks = createStopped();
+  marks.stop("org/repo#12", "alice");
+  const s = fixSetup(t, FIX, { stopped: (key) => marks.has(key) });
+  assert.equal(await s.fix(), null);
+  assert.equal(s.accepted.length, 0);
+  // Its round not used: once triggered again, the next review's fix goes ahead.
+  marks.clear("org/repo#12");
+  assert.ok(await s.fix());
+  // A maintainer's Fix asks for the run: queued, its queueing lifts the stop (tasks.mjs).
+  const asked = setup(t, "review:\n  on: ready\n  fix: 2\n", {
+    stopped: () => true,
+    github: async () => Response.json({ labels: [] }),
+  });
+  assert.equal((await askFix(asked)).item?.reason, "review-fix");
 });
 
 // A pull request's thread on a fake GitHub: `pr` and its lists by path.
@@ -2005,7 +2025,15 @@ const RED = {
 function ciSetup(
   t,
   yaml = CI,
-  { path, reviewed, busy = () => false, policies = null, log = () => {}, gh: over = {} } = {},
+  {
+    path,
+    reviewed,
+    busy = () => false,
+    stopped,
+    policies = null,
+    log = () => {},
+    gh: over = {},
+  } = {},
 ) {
   let time = 1_800_000_000_000;
   const gh = {
@@ -2059,6 +2087,7 @@ function ciSetup(
     },
     github,
     busy,
+    ...(stopped && { stopped }),
     policies,
     reply: async (repo, number, text) => replies.push(text),
     now: () => time,
@@ -2324,6 +2353,18 @@ test("review.ci: a failure starts a CI fix run, not a review, with the runs and 
   assert.equal(s.of("ci-fix").length, 1);
   // Each queued while the CI step was decided: the loop went on.
   assert.deepEqual(s.loops, ["ci", "ci"]);
+});
+
+test("review.ci: no CI fix run on a stopped task, its step saying why (#1003)", async (t) => {
+  const s = ciSetup(t, `${CI}  ci_fix: 2\n`, {
+    gh: { runs: [RED, GREEN] },
+    stopped: (key) => key === "org/repo#12",
+  });
+  assert.equal(await s.ready(), null);
+  assert.equal(s.accepted.length, 0);
+  assert.equal(s.entry().ciFixes, undefined);
+  assert.equal(s.replies.length, 1);
+  assert.match(s.replies[0], /#12's run was stopped: nothing starts until a trigger comment/);
 });
 
 test("a fix run's round in the store before its run is queued; a comment queued meanwhile gives it back", async (t) => {

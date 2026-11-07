@@ -49,7 +49,8 @@ export function noRebaseText(why, base) {
 
 // `github(repo, method, path, body, expected)`: the App's calls (server.mjs).
 // `repoSettings(repo, base)`: the repo's settings from its default branch.
-// `busy(key)`: the task has a run going or queued. `accept(item)`: queues a work item (tasks.mjs).
+// `busy(key)`: the task has a run going or queued; `stopped(key)`: its run was stopped and
+// nobody asked for one since (stopped.mjs). `accept(item)`: queues a work item (tasks.mjs).
 // `sleep(ms)`: soon()'s wait. `policies`: the policies' engine (policies.mjs), none without;
 // `decided(key, entry)`: a decision a policy was asked for, for the task's page (decisions.mjs);
 // `fixes(repo, number)`: the pull request's fix runs so far (reviews.mjs); `looping(repo,
@@ -63,6 +64,7 @@ export function createConflicts({
   github,
   repoSettings,
   busy,
+  stopped = () => false,
   accept,
   policies = null,
   decided = () => {},
@@ -206,11 +208,11 @@ export function createConflicts({
 
   // Starts a rebase run for the pull request if it conflicts. → "started"; "pending" when GitHub
   // doesn't know yet; "clean" when it merges; "refused" by the policies; "skipped" for the rest
-  // (a run going, its review loop deciding a step or waiting for CI, closed, its input awaited,
-  // this head and base tried already). Skipped before its attempt is kept: the next check
-  // tries again.
+  // (a run going, its review loop deciding a step or waiting for CI, its task stopped, closed,
+  // its input awaited, this head and base tried already). Skipped before its attempt is kept:
+  // the next check tries again.
   async function checkPull(repo, key, number, { base, settings }) {
-    if (busy(key) || looping(repo, number)) return "skipped";
+    if (busy(key) || looping(repo, number) || stopped(key)) return "skipped";
     const pr = await json(repo, `/repos/${repo}/pulls/${number}`, [404]);
     if (!pr || pr.state !== "open" || !headInRepo(pr, repo)) return "skipped";
     // What it found, for the dashboard (pulls.mjs): read here anyway.
@@ -238,7 +240,7 @@ export function createConflicts({
     // starts, and the pair isn't kept, so the next check asks again, as for any GitHub error.
     if (unread) throw new Error(`#${number}: ${policyWhy("deny_fix", denied)}`);
     // Checked again: a comment, or the loop's next step, may have come during the calls above.
-    if (busy(key) || looping(repo, number)) return "skipped";
+    if (busy(key) || looping(repo, number) || stopped(key)) return "skipped";
     const repeated = denied.length > 0 && JSON.stringify(said) === JSON.stringify(denied);
     attempts.set(key, { ...pair, at: now(), ...(repeated && { said }) });
     if (denied.length) {

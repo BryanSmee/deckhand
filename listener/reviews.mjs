@@ -1353,6 +1353,10 @@ export function policyWhy(rule, messages) {
 
 const short = (sha) => (sha ? sha.slice(0, 7) : "?");
 
+// Why no fix run starts on issue `issue`'s stopped task (stopped.mjs).
+const stoppedWhy = (issue) =>
+  `#${issue}'s run was stopped: nothing starts until a trigger comment or the dashboard asks`;
+
 // The comments an auto-merge posts on the pull request, for the maintainer to find later.
 // `fixes`: how many fix runs came before (a boolean in waits saved before the rounds).
 export function mergedText(sha, method, fixes, review = null) {
@@ -1936,7 +1940,8 @@ export function openedBy(config, pr) {
 
 // `repoSettings(repo, base)`: the repo's settings from its default branch; `accept(item)`:
 // queues a work item (tasks.mjs). `github`: the App's calls (server.mjs). `busy(key)`: the
-// task has a run going or queued. `now`: the clock, for forgetting old pull requests.
+// task has a run going or queued; `stopped(key)`: its run was stopped and nobody asked for one
+// since (stopped.mjs), no automatic fix run then. `now`: the clock, for forgetting old pull requests.
 // `reply(repo, number, text)`: a comment with the listener's token; `grantOf(repo)`: the
 // operator's grant for it, with what its policies grant (grants.mjs grantOf()): a promise of
 // it, or null when its grants have errors;
@@ -1951,6 +1956,7 @@ export function createReviews({
   accept,
   github,
   busy,
+  stopped = () => false,
   reply = async () => {},
   grantOf = () => null,
   merged = () => {},
@@ -2376,6 +2382,8 @@ export function createReviews({
     if (await waitsForInput(github, config, repo, pr, issue)) {
       return skip("it waits for the maintainer's input");
     }
+    // A maintainer's Fix asks for the run: it lifts the stop (tasks.mjs).
+    if (!asked && stopped(task)) return skip(stoppedWhy(issue));
     if (policies) {
       const gates = [
         passed("Review requests changes"),
@@ -3450,6 +3458,7 @@ export function createReviews({
     if (await waitsForInput(github, config, repo, pr, issue)) {
       return stop(`it or #${issue} waits for the maintainer's input`);
     }
+    if (stopped(task)) return stop(stoppedWhy(issue));
     if (policies) {
       const gates = [
         passed("CI failed"),

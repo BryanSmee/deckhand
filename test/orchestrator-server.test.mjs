@@ -2239,7 +2239,7 @@ mounts:
       )
       .map((r) => JSON.parse(r.body).content);
 
-  test("/cancel stops a working run: a short reply, no fallback, and what was queued runs next", async (t) => {
+  test("/cancel stops a working run: a short reply, no fallback, and nothing more until a trigger (#1003)", async (t) => {
     const ctx = await holding(t);
     const { dir, github, send } = ctx;
     // A brainstorm comment waits for the next run: it isn't the running session's mode.
@@ -2261,10 +2261,26 @@ mounts:
       /^Stopped by @alice\.\n\n<sub>🤖 Claude opus · medium effort · [\d.]+ min<\/sub>/,
     );
     assert.doesNotMatch(JSON.parse(stopped.body).body, /stopped with an error/);
-    // Then the brainstorm runs: what was queued wasn't dropped.
+    // What was queued behind it waits for a trigger, and a comment without one, which the kept
+    // session would take, starts nothing: no 👀, no reply.
+    await ctx.listener.until("1 comment(s) held until a trigger, its run stopped");
+    await send(followUp(102, "Still there?"));
+    await ctx.listener.until("#12: its run was stopped, and no trigger line");
+    assert.deepEqual(reactions(github, 102), []);
+    assert.equal(replies(github).length, 1);
+    // Kept in the store: the next orchestrator still holds them.
+    assert.deepEqual(Object.keys(await storedMap(dir, "stopped")), ["org/repo#12"]);
+    await ctx.restart();
+    await send(followUp(104, "Hello?"));
+    await ctx.listener.until("#12: its run was stopped, and no trigger line");
+    assert.deepEqual(reactions(github, 104), []);
+    // A trigger lifts the stop: the comment held goes with it, in one run.
+    await send(followUp(103, "Deckhand\n/mode brainstorm\nGo on."));
+    await ctx.listener.until("1 comment(s) held since its stop go with it");
     await ctx.listener.until("done (ok)");
-    await settled(github, [100]);
+    await settled(github, [100, 103]);
     assert.equal(replies(github).length, 2);
+    assert.deepEqual(await storedMap(dir, "stopped"), {});
     assert.deepEqual(reactions(github, 101), ["+1"]);
     // 👀 only: no error, no 🚀 for the comment of the stopped run.
     assert.deepEqual(reactions(github, 99), ["eyes"]);
