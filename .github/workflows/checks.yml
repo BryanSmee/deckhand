@@ -137,6 +137,19 @@ jobs:
       - run: npm test
       - run: npm run build
 
+  # The docs site (docs/, VitePress): its build, and every page's anchors as GitHub's, rendered
+  # as the site renders them (test/docs-links.test.mjs, which skips without docs/node_modules).
+  docs:
+    runs-on: [self-hosted, Linux] # TODO: change to ubuntu-latest on public release
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 26
+      - working-directory: docs
+        run: npm ci --no-audit --no-fund && npm run build
+      - run: node --test test/docs-links.test.mjs
+
   syntax:
     runs-on: [self-hosted, Linux] # TODO: change to ubuntu-latest on public release
     steps:

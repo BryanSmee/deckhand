@@ -4,18 +4,24 @@ Deckhand runs Claude Code on your GitHub issues and pull requests. Comment `Deck
 issue and it starts a sandbox, works on a branch, opens a draft pull request and answers on the
 issue when it is done, or stops to ask when only you can decide.
 
-It is self-hosted and bring-your-own-key: you create your own private GitHub App, run your
-own server with Docker, and use your own Claude credential. It can run
-[Codex](docs/setup.md#codex) instead, with your own OpenAI API key, or Google's
-[Antigravity CLI](docs/setup.md#antigravity-cli) with a Gemini API key or on your Google AI
-Pro/Ultra plan, for every
-repository or for those that pick it. One deployment serves one
-operator, across as many repositories as the App is installed on.
+It is self-hosted and bring-your-own-key: you create your own private GitHub App, run your own
+server, and use your own Claude credential (or [Codex](docs/setup.md#codex), or the
+[Antigravity CLI](docs/setup.md#antigravity-cli)). One deployment serves one operator, across
+as many repositories as the App is installed on.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/images/hero-dark.png">
   <img alt="The loop: a Deckhand comment on an issue, the run followed live, then the draft pull request and the reply on the issue" src="docs/images/hero-light.png">
 </picture>
+
+- **Comment triggers**: `Deckhand` starts a run, and later comments continue its session;
+  `/mode brainstorm` discusses without code, `/after #77` waits for another issue.
+- **Needs input**: a decision only you can make becomes numbered questions on the issue, and
+  your answer continues the run.
+- **A sandbox per issue**: no GitHub token, no host paths, and a network that reaches only the
+  hosts you grant. Every write goes through a gateway and your policies.
+- **Reviews, inboxes, onboarding, your own machines, and a dashboard** with every run's live
+  log.
 
 The dashboard follows every task and run, across your repositories ([the dashboard](docs/setup.md#4-the-dashboard)):
 
@@ -24,293 +30,45 @@ The dashboard follows every task and run, across your repositories ([the dashboa
   <img alt="The dashboard's Overview: running runs, what waits on you, a card per repository" src="docs/images/dashboard-overview-desktop-light.png">
 </picture>
 
-## What it does
-
-- **Comment triggers.** On an issue, the first line of a comment is the command and the rest
-  are instructions:
-  - `Deckhand`: a run in a sandbox, on the branch `issue-<n>-<slug>`, with a draft pull
-    request. Once started, any comment on the issue or its pull request (reviews and review
-    comments too) continues the same session. The trigger is the whole first line (any case or
-    punctuation: `@deckhand:` too), so "Deckhand is down" starts nothing.
-  - `Deckhand` then `/mode brainstorm` (on the next line, or the same one): a discussion of
-    the issue in its comments, without code. `/stop` wraps it up; `Deckhand` or `/mode work`
-    then implements, in a session of its own that starts from the issue and its comments.
-  - `/model <name>` and `/effort <level>` lines pick the model (`best`, `balanced`, `fast` or a
-    model's name) and thinking effort of that run. `/agent <name>` (`codex`,
-    `claude@openrouter`, among those the operator configured) picks the agent: the issue stays
-    with it, without fallbacks, until another `/agent` (`/agent default` goes back). Like
-    `/mode` and `/after`, they may follow the trigger on its line (`Deckhand /agent codex`).
-  - `/mode <name>` picks a mode: `work`, `brainstorm` or one the repository declares in its
-    `.deckhand.yaml` (a review that only comments, say). Alone on an issue with a session,
-    it switches modes and keeps the conversation (brainstorms keep theirs apart from work's).
-  - `/after #77` (on the trigger line or its own, `/after #77 #80` for several) holds the
-    comment back until those issues are closed as completed, or those pull requests merged,
-    then runs it as if just posted. A new trigger comment starts now instead; `/after none`
-    cancels.
-  - `/machine <name or label>` (on the trigger line or its own) runs the issue on one of your
-    own machines instead of a sandbox, as a `runs-on:<label>` label does for whoever added it
-    (in a repository that opts in: `machines:` in its `.deckhand.yaml`); `/machine none` goes
-    back to sandboxes. Other people's comments on it wait for you to deliver them.
-  - `/cancel` alone on its first line stops the issue's run now (a stuck one, say): the reply
-    says who stopped it, and the next comment resumes its session. The task's page on the
-    dashboard has the same **Stop** button.
-- **Onboarding.** Installing the App on a repository without a `.deckhand.yaml` opens an
-  issue there where Claude proposes one, grounded in the repository; your comments refine it
-  and `Deckhand` turns it into a pull request. `/mode onboarding` starts it on any issue, and
-  the dashboard lists the repositories not onboarded yet, with a button that starts it.
-- **Live feedback.** The comment gets 👀 when it is received, then 🚀 (done), 😕 (needs
-  input) or 👎 (error). A burst of comments is one message, and one that arrives while
-  Claude works reaches the running session; an entry on the ideas or bugs inbox is always a
-  run of its own, with its own reply. The final message comes back as a comment from the
-  App's bot.
-- **Needs input.** A run that hits a decision only you can make pushes its work in progress,
-  asks numbered questions and labels the issue `needs-input`; your answer continues the same
-  session. A run whose work is done but for a step only you can take (a write Deckhand
-  refused, a file it may not edit, a secret to add) asks too, one question per step, its pull
-  request ready.
-- **Inboxes.** An ideas issue and a bug reports issue, where each of your comments becomes a
-  filed GitHub issue, and a GitHub Discussions category (for example "Ask Claude") where
-  Claude answers questions.
-- **Your own machines.** A project that needs what only your computer has (a game engine, a
-  GPU, licensed tools, large local assets) can run its issues there: `deckhand-machine` signs in
-  as you, claims the issues routed to it (`runs-on:<label>` or `/machine`), runs your own Claude
-  Code and pushes with your git, while Deckhand keeps the queue, the comments, needs-input and
-  the review loop. Opt-in three times (the operator's grant, the repository's `.deckhand.yaml`,
-  the machine's own config); see [Your own machine](docs/setup.md#your-own-machine).
-- **Dashboard.** Every issue, pull request and discussion Deckhand worked on, grouped by
-  project and repository, with its state and the live log of its runs, and a graph of what
-  waits for what (`/after`). Sign-in with GitHub.
-
-## How it works
-
-```mermaid
-sequenceDiagram
-  actor you as You
-  participant gh as GitHub
-  participant edge as edge
-  participant orch as orchestrator
-  participant runner as runner
-  participant sandbox as sandbox
-  participant proxy as egress proxy
-  participant github as github service
-  participant models as models service
-
-  you->>gh: comment "Deckhand" on an issue
-  gh->>edge: webhook (signature checked)
-  edge->>orch: the delivery
-  orch->>orch: allowlist, trigger line, policies, queue
-  orch->>runner: start a run
-  runner->>sandbox: one container, the run's token only
-  sandbox->>proxy: the agent's API, git, gh
-  proxy->>models: the agent's calls, your credential added there
-  proxy->>github: GitHub calls and pushes
-  github->>gh: with a token for that repository only
-  gh-->>you: 👀, a draft pull request, the reply on the issue
-```
-
-The services and what each holds: [services.md](docs/services.md), whose diagram shows
-the trust boundaries.
-
-- **Edge** (`edge/`) is the only service the internet reaches: it checks each webhook's
-  signature and hands the delivery on, runs `/setup` and the sign-in, and serves the
-  dashboard. It holds the webhook secret, the OAuth client's and the session key, nothing else.
-- The **orchestrator** (`orchestrator/`, with the modules in `listener/`) checks the
-  allowlist and the trigger line, queues the work and has the runner start one sandbox
-  container per run. It holds no secret.
-- The **github service** (`github/`) is the only one holding the App's private key: it makes
-  the orchestrator's GitHub calls, and the sandboxes' through its GitHub and git gateways, with
-  tokens no sandbox gets.
-- The **runner** (`runner/`) is the only service with the Docker socket: it starts, follows
-  and removes the sandboxes, builds repository images and keeps the runs' logs, for the
-  orchestrator alone, checking each sandbox against your grants again.
-- The **models service** (`models/`) is the only one holding your Claude (or OpenAI, Google)
-  credential: the sandboxes' agents call their API through it, with their run's token in its
-  place.
-- The **broker** (`broker/`) is the only one holding the key that signs the runs' tokens and
-  the services' own: every other service checks them offline. It keeps the live runs, and
-  answers what a sandbox asks about its own run (its token's renewal, its inbox, its files).
-- The **policy service** (`policy-service/`) evaluates your policies and the repositories'
-  (`opa`, long-lived), with no network but its callers' and no secret.
-- A **sandbox** (`sandbox/`) is a container from the base image, or the repository's own
-  image built `FROM` it. It runs Claude Code with permissions bypassed, in a clone of the
-  repository kept between the issue's runs.
-- The **egress proxy** (`proxy/`) is the sandboxes' only way out: Anthropic's API, GitHub,
-  and the hosts you allow.
-- **Prompts** (`prompts/`): the generic sandbox rules, and those of brainstorms, onboarding,
-  inboxes and discussions. A repository adds its own instructions through its config.
+**Documentation: [bryansmee.github.io/deckhand](https://bryansmee.github.io/deckhand/)**, from
+[`docs/`](docs/).
 
 ## Quick start
 
-You need:
-
-- a server with Docker Engine 26 or later and the compose plugin;
-- an HTTPS address GitHub can reach (your reverse proxy, or a tunnel), forwarding to
-  edge's port (8080);
-- a GitHub account (or organization) to own the App, and the repositories to use it on;
-- a Claude credential: a token from `claude setup-token` (your Claude plan) or an
-  `ANTHROPIC_API_KEY`; or an Anthropic-compatible gateway such as OpenRouter and its token
-  (see [Through a gateway](docs/setup.md#through-a-gateway)).
-
-**1. Configure and start.**
+You need a server with Docker Engine 26 or later and the compose plugin, an HTTPS address
+GitHub can reach forwarding to port 8080, and a Claude credential (a token from
+`claude setup-token`, or an `ANTHROPIC_API_KEY`).
 
 ```sh
 git clone https://github.com/BryanSmee/deckhand.git
 cd deckhand
-cp .env.example .env
-```
-
-In `.env`, set `ALLOWED_USERS` to your GitHub login (comma-separated for several: nobody
-else can start a run, and with none set nothing starts), and `CLAUDE_CODE_OAUTH_TOKEN` or
-`ANTHROPIC_API_KEY`. The other settings, and what you grant each repository, go in one
-folder you keep in git and `compose.yaml` mounts, `.env` overriding its settings: see
-[The server folder](docs/setup.md#the-server-folder). Then:
-
-```sh
-cp -r server.example server
+cp .env.example .env              # CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY
+cp -r server.example server       # your GitHub login in server/config.yaml's allowed_users
 docker compose pull
 docker compose up -d
-docker compose logs edge
+docker compose logs edge          # prints a one-time …/setup?token=… link
 ```
 
-This pulls the released images (edge, which alone the internet reaches, the orchestrator, the
-runner, which alone holds the Docker socket, the broker, which alone signs the runs' tokens, the
-github service, the models service, the policy service, the egress proxy and the base sandbox
-image, at `DECKHAND_VERSION`, by default `latest`) and starts all but the last; `docker compose up -d
---build` builds them from your checkout instead. The logs print a one-time setup link,
-`…/setup?token=…`.
+Open the setup link through your public address, create the GitHub App and install it on a
+repository. Then comment `Deckhand` on one of its issues.
 
-**2. Create the GitHub App.** Open the setup link through your public address (for example
-`https://deckhand.example.com/setup?token=…`). Check the public URL, pick the App's name and
-owner, and create it on GitHub: its permissions and events are filled in for you. GitHub
-then sends you to the App's installation page: pick the repositories Deckhand may work on.
-
-**3. First run.** On an issue of one of those repositories, comment:
-
-```
-Deckhand
-```
-
-The comment gets a 👀. The first run installs Claude Code (once, into a volume), then
-works: open edge's address to follow it on the dashboard. When it is done, the issue
-has a reply, and the branch `issue-<n>-<slug>` a draft pull request.
-
-[docs/setup.md](docs/setup.md) has the details: what the App asks for, the dashboard's
-states, every setting and how sandboxes reach GitHub.
-
-## Per-repo config
-
-A repository can add a `.deckhand.yaml` at its root: its own users (narrowing
-`ALLOWED_USERS`), trigger word, models, parallel runs, a setup command, project
-instructions, a Dockerfile for its image, caches, host mounts and inboxes. Its Dockerfile
-and host mounts only count once the operator grants them to it in the grants folder: mounts
-and the hosts its sandboxes may reach in its file there, the Dockerfile in the operator's
-policies (`allow_grant`).
-
-```yaml
-users: [alice]
-model: opus
-effort: high
-setup: npm ci
-instructions: AGENTS.md
-dockerfile: .deckhand/Dockerfile
-caches: [/home/node/.npm]
-```
-
-It is read from the **default branch** only, at every run, and can only narrow what you, the
-operator, allow. A repository without one gets an onboarding issue when the App is installed
-on it, where Claude proposes the file. See [docs/repo-config.md](docs/repo-config.md).
-
-## Isolation defaults
-
-Out of the box, without any configuration:
-
-- **Network:** each sandbox sits on an internal Docker network of its own, out of the
-  others' reach; the egress proxy lets them reach
-  `api.anthropic.com`, GitHub and nothing else. You add hosts in the grants folder, for
-  every repository (`grants/default.yaml`) or for one (`grants/<owner>/<repo>.yaml`); a
-  repository can't add its own (see
-  [Where a sandbox's hosts come from](docs/security.md#where-a-sandboxs-hosts-come-from)).
-- **Host paths:** none. No `~/.ssh`, `~/.gitconfig`, Docker socket or source tree. A host
-  path is only mounted when you grant the repository a root that holds it, and read-only
-  unless you say otherwise.
-- **Privileges:** containers run as `node` with `--cap-drop ALL`, `no-new-privileges`, and
-  CPU, memory and pids limits (2 CPUs, `4g`, 2048 processes; `limits` in the grants folder).
-- **GitHub:** no token or SSH key in a sandbox. Its GitHub calls carry a secret that dies
-  with the run; the egress proxy relays them to the github service's GitHub gateway, which sends
-  them on with an installation token limited to the run's repository, redacts secrets from
-  what they write, and keeps a review from reading outsiders' comments. That token only
-  reads the code: pushes go through its git gateway, which refuses the default branch, where
-  Deckhand reads its config.
-
-## Security model
-
-Read this before installing Deckhand on a repository.
-
-- **Permissions are bypassed inside a sandbox.** Claude Code runs unattended, without
-  permission prompts, on issues and comments other people may have written. Deckhand
-  assumes whatever runs in a sandbox may try to read what it shouldn't or send it out, and
-  limits what it can reach instead (above).
-- **The allowlist decides who starts runs.** Only `ALLOWED_USERS` (narrowed per repository)
-  start runs, answer brainstorms or feed inboxes; everyone else, unknown repositories and
-  unknown events are ignored. With no allowlist, nothing starts. Webhooks are checked with
-  their HMAC signature.
-- **The egress proxy decides where data can go.** Every allowed host is trusted entirely:
-  anything a sandbox can write to there (its own repository on GitHub, a bucket behind `*`)
-  is a way out. Keep the list short.
-- **Nothing is enforced on your own machines.** A machine's agent runs on its own with your
-  files, credentials and network: Deckhand suggests its settings, checks who claims what and
-  what the App writes, and never merges its pull requests by itself
-  ([Machines](docs/security.md#machines)).
-- **What isn't covered:** image builds and the Claude Code install run outside the
-  sandboxes' networks: a repository only gets its own Dockerfile built when its grants say so
-  (the `dockerfile` grant). DNS lookups may leave the internal networks.
-
-All of it, with the grants folder and the limits of each measure:
-[docs/security.md](docs/security.md).
-To report a vulnerability privately, see [SECURITY.md](SECURITY.md).
-
-## Updating
-
-Each release (a `v1.2.3` tag) publishes the images to GHCR, tagged `1.2.3`, `1.2` and
-`latest`. Update like any compose service, at any time:
-
-```sh
-docker compose pull
-docker compose up -d
-```
-
-Runs in progress keep going while the orchestrator restarts: their sandboxes run detached, and
-the new orchestrator finds them by their Docker labels, delivers the comments that arrive
-meanwhile and posts each final reply once. Webhooks wait in edge's store meanwhile; comments
-still waiting for a run and brainstorms between replies are kept. With two copies of edge and of the orchestrator, an update stops nothing
-([Two copies](docs/setup.md#two-copies)). Pin a release with `DECKHAND_VERSION` in `.env` (for Renovate), or
-leave it on `latest` (for Watchtower). See [Updating](docs/setup.md#updating).
-
-Claude Code's version is pinned by `CLAUDE_CODE_VERSION`: change it in `.env` (or
-`claude_code_version` in `config.yaml`) to move to
-another one, and the next run installs it. Codex's is `CODEX_VERSION`, the same way, and the
-Antigravity CLI's `AGY_VERSION`, with the sha256 of its tarballs in `AGY_SHA256`.
+The [quick start](docs/get-started/quick-start.md) walks through each step;
+[Setting up Deckhand](docs/setup.md) has every setting, and the
+[security model](docs/security.md) what to read before you install it on a repository other
+people write to. To report a vulnerability privately, see [SECURITY.md](SECURITY.md).
 
 ## Claude Code and naming
 
-- Deckhand runs Claude Code; it is not made by or affiliated with Anthropic. Its name,
-  images and logo don't use "Claude" or "Anthropic".
-- Claude Code is not bundled in any image: the runner installs it on first start, at the
-  pinned version, into a Docker volume. So are Codex and the Antigravity CLI, when they run.
-- Each operator uses their own `ANTHROPIC_API_KEY` or their own Claude login (a token from
-  `claude setup-token`), under their own agreement with Anthropic, and follows Anthropic's
-  [Usage Policy](https://www.anthropic.com/legal/aup).
+Deckhand runs Claude Code; it is not made by or affiliated with Anthropic, and Claude Code is
+not bundled in any image: it installs on first start, at a pinned version. Each operator uses
+their own Claude credential, under their own agreement with Anthropic, and follows Anthropic's
+[Usage Policy](https://www.anthropic.com/legal/aup).
 
-## Development
+## Contributing
 
-Node 26; no runtime dependencies but graphql-js, bundled into the github service's image. Tests: `node --test --test-force-exit --import ./test/blocking-stdout.mjs --test-timeout=120000`; syntax: `node --check
-edge/server.mjs orchestrator/server.mjs runner/server.mjs broker/server.mjs github/server.mjs models/server.mjs`, `bash -n` on `sandbox/`'s shell scripts and the tests' fake docker, and `node --check
-sandbox/deckhand-inbox sandbox/deckhand-files` (the list: [AGENTS.md](AGENTS.md#commands)); format: `npx --yes prettier@3 --check .`.
-The dashboard (`dashboard/`, Preact + Vite + TypeScript) is built into edge's image;
-locally: `cd dashboard && npm ci && npm test && npm run build`, or `npm run dev` against
-edge on port 8080.
-See [AGENTS.md](AGENTS.md) for the conventions and security rules, and
-[CONTRIBUTING.md](CONTRIBUTING.md) for how issues and pull requests are handled.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for how issues and pull requests are handled,
+[AGENTS.md](AGENTS.md) for the commands, conventions and security rules, and
+[Architecture](docs/architecture.md) for how the services work together.
 
 ## Licence
 

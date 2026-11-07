@@ -7,3 +7,5 @@ config.yaml
 /credentials/
 listener/vendor/graphql.mjs
 test/.compile-cache/
+docs/.vitepress/dist
+docs/.vitepress/cache

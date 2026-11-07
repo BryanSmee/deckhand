@@ -1,0 +1,88 @@
+# Quick start
+
+A first run in about 15 minutes, with Docker Compose. [Setting up Deckhand](../setup.md) has the
+details of each step, every setting, and the rest: other agents, two copies of each service,
+metrics. On a cluster, see [Deckhand on Kubernetes](../kubernetes.md).
+
+## What you need
+
+- A server with Docker Engine 26 or later and the compose plugin.
+- An HTTPS address GitHub can reach (your reverse proxy, or a tunnel), forwarding to edge's
+  port, 8080.
+- A GitHub account or organization to own the App, and a repository to try it on.
+- A Claude credential: a token from `claude setup-token` (your Claude plan) or an
+  `ANTHROPIC_API_KEY`. A plan is usually licensed to one person: for a team, use an API key
+  ([why](../setup.md#1-start-deckhand)).
+
+## 1. Configure
+
+```sh
+git clone https://github.com/BryanSmee/deckhand.git
+cd deckhand
+cp .env.example .env
+cp -r server.example server
+```
+
+- In `.env`, set `CLAUDE_CODE_OAUTH_TOKEN` or `ANTHROPIC_API_KEY`. The secrets stay there.
+- In `server/config.yaml`, put your GitHub login in `allowed_users`. Nobody else can start a
+  run, and with nobody there, nothing starts.
+
+The `server/` folder holds every other setting, and in `server/grants/` what each repository
+gets beyond a bare sandbox (hosts, a Dockerfile, mounts). It grants nothing until you change it:
+leave it for now ([The server folder](../setup.md#the-server-folder)).
+
+## 2. Start
+
+```sh
+docker compose pull
+docker compose up -d
+docker compose logs edge
+```
+
+This pulls the released images (`latest`, or the release `DECKHAND_VERSION` names in `.env`)
+and starts the services. Edge's logs print a one-time setup link, `…/setup?token=…`.
+
+## 3. Create the GitHub App
+
+Open the setup link through your public address, for example
+`https://deckhand.example.com/setup?token=…`:
+
+1. Check the public URL, pick the App's name, and the organization that owns it (empty: your
+   own account).
+2. GitHub shows the App with its permissions and events, filled in for you. Create it.
+3. GitHub then sends you to the App's installation page: pick the repositories Deckhand may
+   work on.
+
+Each repository without a `.deckhand.yaml` gets an onboarding issue, where Claude proposes one.
+You can leave it for later: a repository works without it.
+
+## 4. First run
+
+On an issue of one of those repositories, comment:
+
+```text
+Deckhand
+```
+
+The comment gets a 👀. The first run installs Claude Code (once, into a volume), then works.
+Open your public address to follow it on the dashboard, signed in with GitHub. When it is done,
+the issue has a reply from the App's bot, and the branch `issue-<n>-<slug>` a draft pull
+request. Comment again on the issue or the pull request to continue the same session.
+
+## When it doesn't start
+
+- **No 👀 on the comment:** GitHub didn't reach edge, or ignored you. Look at the App's
+  _Advanced_ tab on GitHub (its recent deliveries), and at `docker compose logs edge
+orchestrator`: a login missing from `allowed_users` is logged there.
+- **👀, then 👎:** the run failed. The dashboard's page for the issue has its log.
+
+[Logs](../setup.md#logs) and [Health checks](../setup.md#health-checks) have more.
+
+## Next
+
+- [Core ideas](core-ideas.md): runs, modes, the server folder, sandboxes and services.
+- [Per-repo config](../repo-config.md): a repository's own `.deckhand.yaml`.
+- [Security model](../security.md): read it before you install Deckhand on a repository other
+  people write to.
+- [Updating](../setup.md#updating): `docker compose pull` and `docker compose up -d`, at any
+  time.
