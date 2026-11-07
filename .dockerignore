@@ -9,6 +9,11 @@ test
 dashboard/node_modules
 dashboard/dist
 listener/vendor/node_modules
+# The docs site's build: the sandbox image copies docs/ for its pages alone.
+docs/node_modules
+docs/.vitepress
+docs/package.json
+docs/package-lock.json
 listener/vendor/graphql.mjs
 # The docs' pictures (dashboard/screenshots/): the sandbox image copies docs/, and no run reads them.
 docs/images
