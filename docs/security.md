@@ -3729,9 +3729,9 @@ it again when you change `AGY_VERSION`.
 - **Deckhand's own source** is in every sandbox, read-only (`/usr/local/share/deckhand/src`,
   for onboarding: see [Onboarding](architecture.md#onboarding)), repo images built from the
   base image included: whoever can steer a run can read it. In a one-operator deployment
-  those are the operator's own repositories and users, so it is accepted; it only matters
-  while Deckhand's repository is private. It holds no secret: those are in the operator's
-  settings and grants folder, never in the image. An image built from an operator's own
+  those are the operator's own repositories and users, so it is accepted: Deckhand's source is
+  public anyway. It holds no secret: those are in the operator's settings and grants folder,
+  never in the image. An image built from an operator's own
   checkout copies these folders as they are on disk: `.dockerignore` leaves out `.env`,
   `*.pem` and `*.key` files anywhere, but nothing else that isn't tracked.
 - **DNS**: Docker's embedded resolver may forward lookups from the internal network to the
