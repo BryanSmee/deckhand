@@ -1,0 +1,43 @@
+name: Docs
+
+# The docs site (docs/, VitePress) on GitHub Pages: on pushes to main that change it, and by hand
+# (Actions → Docs → Run workflow), as #402 does once right after the repository goes public.
+# Skipped while the repository is private, and from any branch but main.
+on:
+  push:
+    branches: [main]
+    paths: ["docs/**", ".github/workflows/docs.yml"]
+  workflow_dispatch:
+
+permissions: {}
+
+# One deployment at a time, none cut short.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    if: ${{ !github.event.repository.private && github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 26
+      - uses: actions/configure-pages@v5
+      - working-directory: docs
+        run: npm ci --no-audit --no-fund && npm run build
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: docs/.vitepress/dist
+      - id: deployment
+        uses: actions/deploy-pages@v4
