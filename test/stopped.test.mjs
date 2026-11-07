@@ -152,23 +152,20 @@ test("a close: the stop goes, the held comments too, their 👀 off; kept while 
   assert.equal(ctx.forgetStopped("org/repo#13"), false);
 });
 
-test("the sweep: the stops of tasks closed or merged as last heard of, not the open ones", (t) => {
+test("the sweep: the stops of tasks closed as last heard of, not the open or reopened ones", (t) => {
   const { ctx } = tasksOf(t);
   const closed = new Map([
     ["org/repo#1", "done"],
     ["org/repo#2", null],
   ]);
   ctx.titles = { keys: () => [...closed.keys()], closed: (key) => closed.get(key) ?? null };
-  const pulls = new Map([
-    ["org/repo#3", { state: "merged" }],
-    ["org/repo#4", { state: "ready" }],
-  ]);
-  ctx.pulls = { keys: () => [...pulls.keys()], get: (key) => pulls.get(key) ?? null };
-  for (const n of [1, 2, 3, 4, 5]) ctx.stopped.stop(`org/repo#${n}`, "bob");
-  assert.deepEqual(ctx.forgetClosedStops(), ["org/repo#1", "org/repo#3"]);
+  // #9's pull request merged, then #9 reopened (titles no longer says closed) and stopped again:
+  // its stop stays.
+  ctx.pulls = { keys: () => ["org/repo#9"], get: () => ({ state: "merged" }) };
+  for (const n of [1, 2, 5, 9]) ctx.stopped.stop(`org/repo#${n}`, "bob");
+  assert.deepEqual(ctx.forgetClosedStops(), ["org/repo#1"]);
   assert.deepEqual(
-    [2, 4, 5].map((n) => ctx.stopped.has(`org/repo#${n}`)),
-    [true, true, true],
+    [1, 2, 5, 9].map((n) => ctx.stopped.has(`org/repo#${n}`)),
+    [false, true, true, true],
   );
-  assert.equal(ctx.stopped.has("org/repo#1"), false);
 });

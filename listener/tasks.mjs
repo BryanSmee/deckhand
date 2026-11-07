@@ -707,7 +707,7 @@ export function createTasks(ctx) {
     return items.length;
   }
 
-  // Task `key`'s issue or pull request closed, or its pull request merged (http.mjs,
+  // Task `key`'s issue or pull request closed, or a pull request of its merged (http.mjs,
   // forgetClosedStops()): its stop mark goes, so the store keeps none for good, and the comments
   // held behind its stopped run with it, their 👀 off, rather than waiting for a trigger that may
   // never come. Kept while its task is busy (its stopped run still ending, whose teardown holds
@@ -725,16 +725,16 @@ export function createTasks(ctx) {
     return true;
   }
 
-  // The stop marks of the tasks closed or merged as titles.mjs and pulls.mjs last heard of them,
-  // dropped (forgetStopped()): those whose task was busy when they closed, or that closed while no
-  // copy was listening. Not at start: an issue reopened while none was would lose its stop before
+  // The stop marks of the tasks closed as titles.mjs last heard of them, dropped (forgetStopped()):
+  // those whose task was busy when they closed, or that closed while no copy was listening. As
+  // titles.mjs alone has it, which a reopen clears (pulls.mjs keeps an issue's merged pull request
+  // through a reopen). Not at start: an issue reopened while none was would lose its stop before
   // its delivery says so. → their keys.
   function forgetClosedStops() {
-    const closed = [
-      ...(ctx.titles?.keys?.() ?? []).filter((key) => ctx.titles.closed(key)),
-      ...(ctx.pulls?.keys?.() ?? []).filter((key) => ctx.pulls.get(key)?.state === "merged"),
-    ];
-    return [...new Set(closed)].filter((key) => forgetStopped(key)).map(taskId);
+    const titles = ctx.titles;
+    if (!titles?.keys) return [];
+    const closed = titles.keys().filter((key) => titles.closed(key));
+    return closed.filter((key) => forgetStopped(key)).map(taskId);
   }
 
   // A run apart from work (modes.mjs `volumes`) is what the task's next run will be: it goes
