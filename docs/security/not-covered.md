@@ -47,7 +47,7 @@ What Deckhand doesn't check, or accepts, across every area. Part of the [Securit
   (`<prefix>-repo-<owner>-<repo>-<hash>`): repositories whose names read alike (`acme/x.y`,
   `acme/x-y`) never run, or prune, each other's image.
 - **Deckhand's own source** is in every sandbox, read-only (`/usr/local/share/deckhand/src`,
-  for onboarding: see [Onboarding](../architecture.md#onboarding)), repo images built from the
+  for onboarding: see [Onboarding](../contributing/runs.md#onboarding)), repo images built from the
   base image included: whoever can steer a run can read it. In a one-operator deployment
   those are the operator's own repositories and users, so it is accepted: Deckhand's source is
   public anyway. It holds no secret: those are in the operator's settings and grants folder,

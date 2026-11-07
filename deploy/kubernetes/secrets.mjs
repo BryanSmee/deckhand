@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// The Secrets a Kubernetes deployment needs and the base doesn't hold (docs/kubernetes.md),
+// The Secrets a Kubernetes deployment needs and the base doesn't hold (docs/kubernetes/finish.md),
 // printed as manifests for `kubectl apply -f -`: nothing is written to disk.
 //
 //   node deploy/kubernetes/secrets.mjs keys | kubectl apply -f -
@@ -173,7 +173,7 @@ async function main(argv) {
     return;
   }
   console.error(
-    "Usage: secrets.mjs keys | secrets.mjs app --url <public URL> (docs/kubernetes.md)",
+    "Usage: secrets.mjs keys | secrets.mjs app --url <public URL> (docs/kubernetes/finish.md)",
   );
   process.exitCode = 2;
 }

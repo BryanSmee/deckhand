@@ -1,8 +1,8 @@
-# The sandboxes' namespace's NetworkPolicies (docs/kubernetes.md): nothing comes
+# The sandboxes' namespace's NetworkPolicies (docs/kubernetes/isolation.md): nothing comes
 # in, and the egress proxy's port is the only way out. The runner checks them before every run
 # and refuses to start one otherwise (listener/runner/kubernetes.mjs isolationProblem()). They
 # isolate nothing on a network plugin that doesn't enforce them: check yours with
-# check-isolation.sh (docs/kubernetes.md).
+# check-isolation.sh (docs/kubernetes/finish.md#checking-the-isolation).
 #
 # Everything in the namespace, the caches' check pods included: no way in or out.
 apiVersion: networking.k8s.io/v1
@@ -39,8 +39,8 @@ spec:
         - port: 3128
           protocol: TCP
 ---
-# The agents' installs (docs/kubernetes.md#agents-on-kubernetes): the proxy too, which lets them
-# reach their agent's install hosts only.
+# The agents' installs (docs/kubernetes/sandboxes.md#agents-on-kubernetes): the proxy too, which
+# lets them reach their agent's install hosts only.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:

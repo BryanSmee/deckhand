@@ -79,7 +79,7 @@ function inCluster(config, readNamespace, makeApi) {
   } catch (error) {
     if (error.code !== "ENOENT") throw error;
     throw new ConfigError(
-      `RUNNER: kubernetes, but there is no ServiceAccount at ${SERVICE_ACCOUNT} (${error.path}): the runner runs in the cluster, with its ServiceAccount's token mounted (docs/kubernetes.md)`,
+      `RUNNER: kubernetes, but there is no ServiceAccount at ${SERVICE_ACCOUNT} (${error.path}): the runner runs in the cluster, with its ServiceAccount's token mounted (docs/kubernetes/isolation.md)`,
     );
   }
 }

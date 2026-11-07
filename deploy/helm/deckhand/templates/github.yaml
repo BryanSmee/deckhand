@@ -52,7 +52,8 @@ spec:
             preStop:
               exec:
                 command: [sleep, "10"]
-          # Its /tmp is a tmpfs, charged to this pod (docs/kubernetes.md, Temporary files).
+          # Its /tmp is a tmpfs, charged to this pod (docs/kubernetes/isolation.md, Temporary files
+          # in memory).
           resources:
             requests:
               memory: 3Gi

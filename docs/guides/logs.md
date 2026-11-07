@@ -108,5 +108,5 @@ The orchestrator's and the runner's check `/health`, which a copy waiting for th
 too (its `/ready` is 503 until it acts, [Two copies](two-copies.md)); the others' check `/ready`,
 which turns 503 once a stopping copy drains (and answers 503 on edge, the github and models
 services and the egress proxy until the broker has answered them,
-[services.md](../services.md)). Docker
+[Services](../contributing/services.md)). Docker
 doesn't restart an unhealthy container by itself: its logs say why.

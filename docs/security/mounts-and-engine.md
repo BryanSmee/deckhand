@@ -196,7 +196,7 @@ in the engine only:
   `deckhand.run`: an engine is never taken for a sandbox). They go with the run, and the
   orchestrator's check every minute removes those whose run is gone, after a restart too.
 
-On Kubernetes ([kubernetes.md](../kubernetes.md#container-engine-on-kubernetes)), Sysbox alone, and the
+On Kubernetes ([Container engine on Kubernetes](../kubernetes/components.md#container-engine-on-kubernetes)), Sysbox alone, and the
 sandboxes' namespace stays Pod Security `restricted`:
 
 - **A sidecar in the sandbox's pod**, under Sysbox's RuntimeClass, the pod in a user namespace

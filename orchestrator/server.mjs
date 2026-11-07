@@ -17,8 +17,8 @@
 //
 // This file only wires it together: its settings, the shared state (`ctx`) and the modules
 // that act on it, then the servers, and what a previous copy left. How a comment becomes a
-// run, and which module does what: ../docs/architecture.md. No dependencies: node:http,
-// node:crypto.
+// run, and which module does what: ../docs/contributing/architecture.md. No dependencies:
+// node:http, node:crypto.
 import { createHash, randomUUID } from "node:crypto";
 import { rmdirSync } from "node:fs";
 import { fingerprint, fingerprintRedactor } from "../lib/fingerprints.mjs";

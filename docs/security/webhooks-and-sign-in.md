@@ -4,7 +4,7 @@ What reaches Deckhand from outside (GitHub's deliveries, the dashboard, MCP clie
 
 ## Edge
 
-The internet reaches one service only: **edge** (`edge/`, #506, [services.md](../services.md)).
+The internet reaches one service only: **edge** (`edge/`, #506, [Services](../contributing/services.md)).
 Compose publishes its port (`PORT`, 8080) on `edge-out`, a network of its own. It serves GitHub's
 webhooks (`POST /webhook`), /setup, sign-in and sessions (`listener/auth.mjs`; MCP clients' too,
 [MCP clients](#mcp-clients)), the dashboard's
@@ -425,7 +425,7 @@ Comment triggers aren't held back for a run's questions either way (`tasks.mjs`
 again, and so does the dismiss API's `undo` for that run (the dashboard shows no Undo for
 these).
 
-A chat (`/api/chats`, `listener/chats.mjs`, [architecture.md](../architecture.md#chats)) is
+A chat (`/api/chats`, `listener/chats.mjs`, [Chats](../contributing/runs.md#chats)) is
 created, and each of its messages sent, with the repository's half of these checks (same
 origin, the repository in `ALLOWED_REPOS` and the App installed on it, a config without
 errors, the user in `ALLOWED_USERS` and the repository's `users`, with the
@@ -561,7 +561,7 @@ client, and no sandbox service, run token or git gateway is on the machine.
   is checked again first, as a sandbox run's are: one whose author left `ALLOWED_USERS` or the
   repository's `users`, or may no longer start its mode, is dropped. Pushes are the owner's own
   git's; the App writes what it writes for any run (#597), and opens its pull request (below).
-- **Its run** (#597, [External runs](../architecture.md#external-runs)): only the machine holding
+- **Its run** (#597, [External runs](../contributing/external-runs.md#external-runs)): only the machine holding
   the claim reports on it (`post_events`, `next_message`, `ask`, `finish`): each call names the
   machine, its owner's, and the claim's run; another login's machine, the owner's other one or
   another run is refused as one that doesn't exist. What it reports is the run's log and reply:

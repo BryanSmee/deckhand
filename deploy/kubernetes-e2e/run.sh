@@ -182,7 +182,7 @@ binaryData: { ca.crt: $(b64 ca.crt) }
 YAML
 kubectl apply -k "$overlay" >/dev/null
 # The API server's addresses, every one (a control plane may have several), the runner's and the
-# broker's way out (docs/kubernetes.md, step 2).
+# broker's way out (docs/kubernetes.md#the-api-servers-addresses).
 to=$(kubectl get endpointslices -n default -l kubernetes.io/service-name=kubernetes \
   -o jsonpath='{.items[*].endpoints[*].addresses[*]}' |
   node -e 'let t = ""; process.stdin.on("data", (c) => (t += c)).on("end", () => {
@@ -215,9 +215,9 @@ done
 kubectl -n deckhand get pods
 
 # Claude Code, installed with the sandbox image on Docker and copied into the agent's claim
-# (docs/kubernetes.md, Agents on Kubernetes: a claim filled beforehand), for a cluster whose pods
-# can't reach npm's registry (PREINSTALL_AGENT=1, the default with K3S: a cluster in Docker
-# may have no way out but its host's proxy). Runs install nothing then.
+# (docs/kubernetes/sandboxes.md, Agents on Kubernetes: a claim filled beforehand), for a cluster
+# whose pods can't reach npm's registry (PREINSTALL_AGENT=1, the default with K3S: a cluster in
+# Docker may have no way out but its host's proxy). Runs install nothing then.
 if [ "${PREINSTALL_AGENT:-${K3S:+1}}" = 1 ]; then
   step "Installing Claude Code into its claim"
   version=$(sed -n 's/^ *CLAUDE_CODE_VERSION: { default: "\(.*\)" },$/\1/p' "$root/listener/config.mjs")

@@ -74,7 +74,7 @@ callers apart there.
 
 Stopping it lets the agents' calls in flight finish, for up to 10 minutes (`DRAIN_SECONDS`,
 600; compose's `stop_grace_period` is 630 s): an update waits for the turns going, and new calls
-wait at the proxy, 5 minutes at most ([services](../services.md#the-models-service)).
+wait at the proxy, 5 minutes at most ([services](../contributing/upgrades.md#the-models-service)).
 
 ## How sandboxes reach GitHub
 

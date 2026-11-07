@@ -1,5 +1,5 @@
-# Blob storage (docs/kubernetes.md, Blob storage): BLOB_URL and its key pair for the runner and
-# the broker alone, the services that keep blobs, and their way to it. In your overlay,
+# Blob storage (docs/kubernetes/components.md, Blob storage): BLOB_URL and its key pair for the
+# runner and the broker alone, the services that keep blobs, and their way to it. In your overlay,
 # `components: [<this folder>]`, with the deckhand-blobs Secret made beforehand (its keys
 # access-key-id and secret-access-key), and patches of yours replacing BLOB_URL in the
 # deckhand-blobs ConfigMap and blobs.yaml's address with your blob storage's. The placeholders

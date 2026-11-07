@@ -626,7 +626,7 @@ export function createKubernetesRunner({
       // Its engine goes out on the proxy's engines' port, through the Service's cluster IP.
       if (engine && proxySvc && !proxySvc.ports.includes(ENGINE_PROXY_PORT)) {
         throw new Error(
-          `the Service ${proxySvc.hostnames[0]} in the namespace ${services.namespace} has no port ${ENGINE_PROXY_PORT}, the egress proxy's engines' port, through which a container engine goes out (see docs/kubernetes.md, Container engine on Kubernetes)`,
+          `the Service ${proxySvc.hostnames[0]} in the namespace ${services.namespace} has no port ${ENGINE_PROXY_PORT}, the egress proxy's engines' port, through which a container engine goes out (see docs/kubernetes/components.md, Container engine on Kubernetes)`,
         );
       }
       await checkEnforced(policies);
@@ -762,7 +762,7 @@ export function createKubernetesRunner({
     if (problem) {
       throw Object.assign(
         new Error(
-          `the namespace ${api.namespace} doesn't isolate its sandboxes: ${problem}. Deckhand's NetworkPolicy lets them reach the egress proxy only (see docs/kubernetes.md)`,
+          `the namespace ${api.namespace} doesn't isolate its sandboxes: ${problem}. Deckhand's NetworkPolicy lets them reach the egress proxy only (see docs/kubernetes/isolation.md)`,
         ),
         { reason: "not_isolated" },
       );
@@ -800,7 +800,7 @@ export function createKubernetesRunner({
     } catch (error) {
       throw Object.assign(
         new Error(
-          `the runner couldn't check that the cluster enforces the sandboxes' NetworkPolicies: ${error.message} (see docs/kubernetes.md)`,
+          `the runner couldn't check that the cluster enforces the sandboxes' NetworkPolicies: ${error.message} (see docs/kubernetes/isolation.md, The network probe)`,
         ),
         { reason: "isolation_unknown" },
       );
@@ -808,7 +808,7 @@ export function createKubernetesRunner({
     if (problem) {
       throw Object.assign(
         new Error(
-          `the cluster doesn't enforce the sandboxes' NetworkPolicies: ${problem}. The runner probes again when they change, or when it restarts (see docs/kubernetes.md)`,
+          `the cluster doesn't enforce the sandboxes' NetworkPolicies: ${problem}. The runner probes again when they change, or when it restarts (see docs/kubernetes/isolation.md, The network probe)`,
         ),
         { reason: "not_isolated" },
       );
@@ -1054,7 +1054,7 @@ export function createKubernetesRunner({
         const problem = gateProblem(gated, lastLine(said));
         log(`${name}: ${problem}`);
         throw new RunError(
-          `The sandbox couldn't start on the Kubernetes runner: ${problem}. Nothing of the run's ran. The operator can check that the cluster's network plugin enforces NetworkPolicies, and how long it takes to apply them to a new pod (see docs/kubernetes.md, The network gate). Comment again to retry.`,
+          `The sandbox couldn't start on the Kubernetes runner: ${problem}. Nothing of the run's ran. The operator can check that the cluster's network plugin enforces NetworkPolicies, and how long it takes to apply them to a new pod (see docs/kubernetes/isolation.md, The network gate). Comment again to retry.`,
         );
       }
       const code = failedInit(pod);
@@ -1091,7 +1091,7 @@ export function createKubernetesRunner({
           why === INSTALLING
             ? "The operator can check that the agent's install reaches its hosts through the egress proxy, or set KUBERNETES_AGENT_STORAGE_CLASS to install it once per version"
             : why === GATING
-              ? "The operator can check that the cluster's network plugin enforces NetworkPolicies, and how long it takes to apply them to a new pod (see docs/kubernetes.md, The network gate)"
+              ? "The operator can check that the cluster's network plugin enforces NetworkPolicies, and how long it takes to apply them to a new pod (see docs/kubernetes/isolation.md, The network gate)"
               : "The operator can make room in the cluster, or check the image";
         throw new RunError(
           `The sandbox couldn't start on the Kubernetes runner: its pod stayed Pending for ${minutes(pendingMs)} min (${why}). ${fix} (KUBERNETES_PENDING_MINUTES sets the wait). Comment again to retry.`,

@@ -17,7 +17,7 @@ tests:
           - exp_labels: { severity: critical }
             exp_annotations:
               summary: "Sandboxes aren't network-isolated: every run is refused"
-              description: "The network probe found a sandbox reaching something other than the egress proxy. Check the sandboxes' NetworkPolicies and that the cluster's network plugin enforces them (docs/kubernetes.md, The network probe; deploy/kubernetes/check-isolation.sh)."
+              description: "The network probe found a sandbox reaching something other than the egress proxy. Check the sandboxes' NetworkPolicies and that the cluster's network plugin enforces them (docs/kubernetes/isolation.md, The network probe; deploy/kubernetes/check-isolation.sh)."
 
   # edge:9464 stops answering, and stays down past the hour; orchestrator-a is replaced by
   # orchestrator-b (a rollout), which takes it out of the targets: no alert for it. Another

@@ -68,7 +68,7 @@ their own Claude credential, under their own agreement with Anthropic, and follo
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for how issues and pull requests are handled,
 [AGENTS.md](AGENTS.md) for the commands, conventions and security rules, and
-[Architecture](docs/architecture.md) for how the services work together.
+[Architecture](docs/contributing/architecture.md) for how the services work together.
 
 ## Licence
 

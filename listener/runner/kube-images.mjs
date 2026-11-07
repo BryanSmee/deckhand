@@ -149,7 +149,7 @@ export const writable = (path, ...command) => ["sh", "-c", WRITABLE, "sh", path,
 
 // What NOT_WRITABLE means, for an error: a claim the storage class doesn't hand to the pod.
 const notWritable = (claim, user, storageClass) =>
-  `the claim ${claim} isn't writable by uid ${user.uid}: its storage class${storageClass ? ` (${storageClass})` : ""} has to apply the pod's fsGroup (for a CSI driver, fsGroupPolicy: File) or give new volumes a root every user can write (docs/kubernetes.md)`;
+  `the claim ${claim} isn't writable by uid ${user.uid}: its storage class${storageClass ? ` (${storageClass})` : ""} has to apply the pod's fsGroup (for a CSI driver, fsGroupPolicy: File) or give new volumes a root every user can write (docs/kubernetes/sandboxes.md, Agents on Kubernetes)`;
 // An install pod that hasn't ended by then (stuck Pending, npm hanging) fails, and goes.
 const INSTALL_MS = 15 * 60_000;
 // How long a job may take in all, by default (runJob(): its caller's `timeoutMs`), and how
@@ -231,8 +231,9 @@ export function createKubernetesImages({
 
   // `hosts` and `trusted`: what the run may reach (access.mjs). Its RUN steps go through the
   // egress proxy; the daemon's own pulls and pushes do as its Deployment's environment says
-  // (docs/kubernetes.md), with the registries' hosts (builderHosts()). Not
-  // without the NetworkPolicies that make the proxy its only way out (builderIsolation()).
+  // (docs/kubernetes/components.md, Repo images on Kubernetes), with the registries' hosts
+  // (builderHosts()). Not without the NetworkPolicies that make the proxy its only way out
+  // (builderIsolation()).
   async function build({ dir, dockerfile, tag, labels = {}, output, hosts = [], trusted = [] }) {
     const problem = await builderIsolation();
     if (problem) return { code: 1, out: "", err: problem };
@@ -312,7 +313,7 @@ export function createKubernetesImages({
       }
     }
     if (problem) {
-      problem = `the BuildKit daemon isn't isolated: ${problem}. Its NetworkPolicies let it reach the egress proxy only, and only the runner reach it (see docs/kubernetes.md, Repo images on Kubernetes)`;
+      problem = `the BuildKit daemon isn't isolated: ${problem}. Its NetworkPolicies let it reach the egress proxy only, and only the runner reach it (see docs/kubernetes/components.md, Repo images on Kubernetes)`;
     }
     isolation = { at: now(), problem };
     return problem;

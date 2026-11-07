@@ -595,8 +595,8 @@ test("deploy/kubernetes: no two services share a writable volume", () => {
   }
 });
 
-// What a copy's update takes (docs/services.md, Upgrades without downtime): its next copy is
-// ready before the old one stops, which drains within its grace period.
+// What a copy's update takes (docs/contributing/upgrades.md, Upgrades without downtime): its next
+// copy is ready before the old one stops, which drains within its grace period.
 const GRACE = {
   edge: 40,
   orchestrator: 300,
@@ -652,7 +652,7 @@ test("deploy/kubernetes: two copies of each service, one of the proxy, each upda
   // the ingress learn it a few seconds later), then drain within their grace period: a refused
   // connection meanwhile fails the internet's callers and the dashboard's health probe (#560),
   // which don't try it again. The proxy drains as long as an agent's call lasts.
-  // The pause is docs/services.md's 10 s.
+  // The pause is docs/contributing/upgrades.md's 10 s (Draining).
   for (const service of PAUSED) {
     const pause = Number(container(service).lifecycle?.preStop?.exec?.command?.[1]);
     assert.equal(pause, 10, `${service} pauses 10 s before its drain`);

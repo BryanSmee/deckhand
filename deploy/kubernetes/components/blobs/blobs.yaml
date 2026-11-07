@@ -2,7 +2,7 @@
 # which your overlay sets. The placeholder (192.0.2.2, a documentation address) reaches nothing.
 # A server in the cluster (Garage's pods, say) is a podSelector, with a namespaceSelector when
 # it runs in another namespace; a hosted one, its addresses (or 0.0.0.0/0 on 443 when they
-# aren't fixed: docs/kubernetes.md, Blob storage).
+# aren't fixed: docs/kubernetes/components.md, Blob storage).
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:

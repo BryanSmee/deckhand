@@ -1,7 +1,7 @@
 // The dashboard's languages: a catalog each, typed from the English one (en.ts). Another
 // catalog is written `export const fr = { … } satisfies Catalog`: a key missing or one too many
 // fails `tsc`, and so `npm run build`. Adding a language is its catalog here and its code in
-// public/theme.js's list (a spec keeps the two in step): docs/dashboard-languages.md.
+// public/theme.js's list (a spec keeps the two in step): docs/contributing/dashboard-languages.md.
 import { en } from "./en";
 import { fr } from "./fr";
 

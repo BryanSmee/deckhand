@@ -37,8 +37,8 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 // A 5xx, a 401 or a 403 may be the listener taking the run back: asked again for a minute. A
 // refused connection is the listener restarting, whose drain may last nearly 5 minutes, and the
-// next one's start after it (docs/architecture.md, Restarts): asked again for 6. A 404 (the run
-// has no such file) fails at once.
+// next one's start after it (docs/contributing/restarts.md, Restarts): asked again for 6. A 404
+// (the run has no such file) fails at once.
 const ANSWERED_MS = 60_000;
 const UNREACHED_MS = 360_000;
 

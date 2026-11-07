@@ -1,6 +1,6 @@
-// Settings › Server's Services (#560): docs/services.md's diagram, drawn here in SVG, each
-// service in its state's colour with its state in words (colour is never alone), and a legend; a
-// phone gets a list instead. The outside parts and the sandboxes are grey: nothing checks them.
+// Settings › Server's Services (#560): docs/contributing/services.md's diagram, drawn here in SVG,
+// each service in its state's colour with its state in words (colour is never alone), and a legend;
+// a phone gets a list instead. The outside parts and the sandboxes are grey: nothing checks them.
 // The state is api/health's (listener/health.mjs), which the orchestrator probes; the shell's
 // alert (HealthAlert) says when a service is down or starting.
 import { ago, type Tone, uptime } from "./format";
@@ -25,7 +25,7 @@ const STATE_LABELS: Record<ServiceState, Plain> = {
 };
 
 // Each service's name (not translated: the service's own) and what it does, as
-// docs/services.md's diagram says them.
+// docs/contributing/services.md's diagram says them.
 const SERVICES: Record<ServiceName, { label: string; role: Plain }> = {
   edge: { label: "edge", role: "health.roleEdge" },
   orchestrator: { label: "orchestrator", role: "health.roleOrchestrator" },
@@ -136,13 +136,13 @@ interface Arrow {
   to: NodeId;
   // Bent sideways by this many steps (45 px each), left of its way for a positive one.
   bend?: number;
-  // A narrow call (docs/services.md's dotted arrows), and what it is for.
+  // A narrow call (docs/contributing/services.md's dotted arrows), and what it is for.
   narrow?: Plain;
   // Both ways: the call back is drawn on the same line.
   both?: Plain;
 }
 
-// docs/services.md's arrows.
+// docs/contributing/services.md's arrows.
 const ARROWS: Arrow[] = [
   { from: "web", to: "edge" },
   { from: "edge", to: "orchestrator", both: "health.arrowDeliveries" },

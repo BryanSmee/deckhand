@@ -1,7 +1,7 @@
-# The sandboxes' egress proxy (docs/services.md#the-proxys-handover): their only way out, which
-# asks the orchestrator about each connection. One copy, and a second during an update: the new
-# one takes the new connections once ready, the old one drains as long as an agent's call lasts
-# (DRAIN_SECONDS, 600). Not two at all times: each copy makes the CA sandboxes trust in its
+# The sandboxes' egress proxy (docs/contributing/upgrades.md#the-proxys-handover): their only way
+# out, which asks the orchestrator about each connection. One copy, and a second during an update:
+# the new one takes the new connections once ready, the old one drains as long as an agent's call
+# lasts (DRAIN_SECONDS, 600). Not two at all times: each copy makes the CA sandboxes trust in its
 # volume when there is none, or near its end, so two would make two.
 apiVersion: apps/v1
 kind: Deployment
@@ -22,7 +22,7 @@ spec:
       app: deckhand-egress
   template:
     metadata:
-      # Its metrics, for the scrape jobs that read these (docs/kubernetes.md#metrics).
+      # Its metrics, for the scrape jobs that read these (docs/kubernetes/metrics.md#metrics).
       annotations:
         prometheus.io/scrape: "true"
         prometheus.io/port: "9464"
