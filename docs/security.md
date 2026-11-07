@@ -15,7 +15,7 @@ report a vulnerability, see [SECURITY.md](../SECURITY.md).
 ## Trust boundaries
 
 Deckhand runs as services split by the secret each one holds and what each one can reach (the
-diagram is in [services.md](services.md)). Each secret is in one service; each service takes
+diagram is in [contributing/services.md](contributing/services.md)). Each secret is in one service; each service takes
 from each caller only the endpoints that caller needs, and shares a network only with the
 services it calls or is called by.
 

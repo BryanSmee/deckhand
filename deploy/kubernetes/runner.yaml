@@ -1,7 +1,7 @@
-# The runner (docs/architecture.md#the-runner-service): the only pods with the Kubernetes API's
-# credentials (rbac.yaml's Roles, nothing cluster-wide), which start, follow and remove the
-# sandboxes' pods in deckhand-sandboxes. Two copies, active/passive through its lease: as the
-# orchestrator's, the waiting one answers 503 with the connection closed, and the readiness
+# The runner (docs/contributing/each-service.md#the-runner-service): the only pods with the
+# Kubernetes API's credentials (rbac.yaml's Roles, nothing cluster-wide), which start, follow and
+# remove the sandboxes' pods in deckhand-sandboxes. Two copies, active/passive through its lease: as
+# the orchestrator's, the waiting one answers 503 with the connection closed, and the readiness
 # probe is /health, so a rolling update can start the next copy before the old one releases it.
 apiVersion: apps/v1
 kind: Deployment
@@ -22,7 +22,7 @@ spec:
       app: deckhand-runner
   template:
     metadata:
-      # Its metrics, for the scrape jobs that read these (docs/kubernetes.md#metrics).
+      # Its metrics, for the scrape jobs that read these (docs/kubernetes/metrics.md#metrics).
       annotations:
         prometheus.io/scrape: "true"
         prometheus.io/port: "9464"
@@ -93,7 +93,8 @@ spec:
             failureThreshold: 6
           # Its /tmp is a tmpfs (below), charged to this pod: its memory request covers it and
           # the process's own, so the scheduler keeps the room, and the limit bounds both by the
-          # pod's own cgroup. Raise the three together (docs/kubernetes.md, Temporary files).
+          # pod's own cgroup. Raise the three together (docs/kubernetes/isolation.md, Temporary
+          # files in memory).
           resources:
             requests:
               memory: 3Gi

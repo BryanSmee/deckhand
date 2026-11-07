@@ -34,7 +34,7 @@ egress proxy with the repo's hosts only, and pushed to the operator's registry; 
 refuses to build unless NetworkPolicies make the proxy the daemon's only way out, but that
 the daemon's own pulls use the proxy rests on its Deployment's `HTTPS_PROXY`, which the
 runner can't see. The registry has to require credentials to pull, push and delete (Deckhand doesn't start with `KUBERNETES_REGISTRY` and no `KUBERNETES_REGISTRY_SECRET`): a repo image runs in its repository's sandboxes, so whoever could push over its tag would run code with that repository's grant, and it holds what its Dockerfile copied of the checkout, which any sandbox that could pull it would read:
-[Repo images on Kubernetes](../kubernetes.md#repo-images-on-kubernetes)). A repository whose config has `dockerfile`
+[Repo images on Kubernetes](../kubernetes/components.md#repo-images-on-kubernetes)). A repository whose config has `dockerfile`
 without the `dockerfile` grant doesn't get it: its runs stop and the reply on the issue says
 which grant is missing, like refused mounts. Grant it to repositories whose default branch you
 trust as much as the host itself. `branch_docker_images`

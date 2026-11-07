@@ -107,9 +107,9 @@ orchestrator/ the orchestrator (#506): server.mjs (wiring: its lease, then the q
               lives, from ../listener/'s modules); two copies, active/passive
 listener/     the modules edge and the orchestrator run (no entry point of its own): http.mjs (the
               dashboard's API and the deliveries, the orchestrator's), tasks.mjs (queue),
-              runs.mjs, restart.mjs, … (docs/architecture.md), runner/ (Docker and Kubernetes backends),
-                agents/ (each agent's specifics: install, env, hosts, session, normalize(); the
-              credentials' names, credentials.mjs)
+              runs.mjs, restart.mjs, … (docs/contributing/architecture.md), runner/ (Docker and
+              Kubernetes backends), agents/ (each agent's specifics: install, env, hosts, session,
+              normalize(); the credentials' names, credentials.mjs)
 github/       the github service (#502): the only one with the GitHub App's key; server.mjs
               (wiring), service.mjs (its API, who may call what), runs.mjs (the runs' state in its
               store), app.mjs (the App's credentials), client.mjs (what the orchestrator and
@@ -137,8 +137,8 @@ machine/      deckhand-machine.mjs: the driver that runs a user's machine tasks 
               file, no dependency, attached to each release; its loop tested against a fake /mcp
               and test/fixtures/fake-claude.mjs
 broker/       the broker service: the tokens' signing key, the live runs and their files, the
-              endpoints sandboxes call about their own run (docs/services.md); metrics.mjs (the
-              tokens signed, renewed and refused, the live runs, the inbox polls)
+              endpoints sandboxes call about their own run (docs/contributing/services.md);
+              metrics.mjs (the tokens signed, renewed and refused, the live runs, the inbox polls)
 models/       the models service (#504): the only one holding the agents' credentials; the
               agents' API endpoints (upstream.mjs, anthropic.mjs, openai.mjs, google.mjs), the
               plans' logins (chatgpt.mjs, antigravity-login.mjs, logins.mjs: sealed in its
@@ -147,10 +147,11 @@ engine/       container engine sidecar images (dockerd for Sysbox, podman/ for P
 compose.yaml  what an operator runs (publishes a port; no reverse-proxy labels)
 deploy/       kubernetes/: the manifests for a cluster (#396), a kustomize base and its components
               (redis, buildkit, engine, blobs), secrets.mjs (the Secrets the base doesn't hold) and
-              check-isolation.sh; test/kubernetes-manifests.test.mjs holds them to CALLS (docs/kubernetes.md);
+              check-isolation.sh; test/kubernetes-manifests.test.mjs holds them to CALLS (docs/kubernetes/isolation.md);
               helm/deckhand/: the same as a Helm chart (#570), whose default values render the
               base's objects (test/helm-chart.test.mjs); kubernetes-e2e/: a run from start to end on a
-              cluster, every service updated mid-run (run.sh, its fakes; docs/kubernetes.md);
+              cluster, every service updated mid-run (run.sh, its fakes;
+              docs/contributing/kubernetes-e2e.md);
               grafana/deckhand.json: the Grafana dashboard, alerts/: the alert rules and their
               promtool tests (#661; docs/guides/metrics.md), the chart carrying copies of both in
               helm/deckhand/files/, held the same by test/metrics-deploy.test.mjs
@@ -165,8 +166,13 @@ docs/         the docs, and the site built from them (VitePress, build-time only
               the server folder, the grants, the operator's policies; comment-commands.md), per-repo
               config reference (repo-config.md: the core keys; repo-config/: modes,
               reviews, issues, policies, policy inputs), the security model (security.md: a one-page
-              overview; security/: the threat model by area, #985), architecture, the
-              dashboard's languages (dashboard-languages.md); .vitepress/ (config.mjs: the
+              overview; security/: the threat model by area, #985), Kubernetes (kubernetes.md:
+              the overview and requirements; kubernetes/: installing with Helm or kustomize,
+              updating, components, sandboxes, isolation, metrics), contributing/ (index.md; the
+              architecture split into short pages: architecture.md, runs, replies, run-logs, queue,
+              reviews, external-runs, restarts, agents, modules; services.md, each-service.md,
+              upgrades.md; the dashboard's languages; the end-to-end check on a cluster), design/
+              (the dashboard's redesign); .vitepress/ (config.mjs: the
               sidebar, links out of docs/ sent to GitHub; slug.mjs: GitHub's heading slugs),
               kept out of the images (.dockerignore). test/docs-links.test.mjs holds every
               docs/<page>.md#<anchor> reference to a heading that exists, and the site's anchors
@@ -206,7 +212,7 @@ docs/         the docs, and the site built from them (VitePress, build-time only
   update that stops calling it, so the sandboxes in flight while it happens still reach it.
   The next update may remove it: its last callers were started before the one that stopped
   calling it (`docker ps --filter label=deckhand.run` lists the running sandboxes;
-  `docs/architecture.md`, Restarts). Not every older release's sandboxes. That is one of the
+  `docs/contributing/restarts.md`, Restarts). Not every older release's sandboxes. That is one of the
   cases of [Runs in flight](#runs-in-flight) below.
 - **GitHub only.** Issues, labels and sub-issues; branches `issue-<n>-<slug>`.
 - **Naming.** Never use "Claude" or "Anthropic" in the product, image or repo names; "runs
@@ -301,7 +307,7 @@ GitHub's TLS, without a word.
 - **Never fail silently.** A run that can't work stops at its start with a message saying why,
   not at its first GitHub call with a TLS error.
 
-The details, and how to find the runs an update broke: `docs/architecture.md`, Runs in flight.
+The details, and how to find the runs an update broke: `docs/contributing/restarts.md`, Runs in flight.
 
 ## Testing
 

@@ -1,7 +1,7 @@
 # The models service (docs/guides/services.md#the-models-service): the only pods with your agents'
-# credentials (the deckhand-models Secret, docs/kubernetes.md), which add them to the sandboxes'
-# API calls the egress proxy sends here. The plans' refreshed logins are sealed in its store
-# with models.key, a Secret both copies mount: a copy with another key refuses them.
+# credentials (the deckhand-models Secret, docs/kubernetes/finish.md#the-secrets), which add them to
+# the sandboxes' API calls the egress proxy sends here. The plans' refreshed logins are sealed in
+# its store with models.key, a Secret both copies mount: a copy with another key refuses them.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -21,7 +21,7 @@ spec:
       app: deckhand-models
   template:
     metadata:
-      # Its metrics, for the scrape jobs that read these (docs/kubernetes.md#metrics).
+      # Its metrics, for the scrape jobs that read these (docs/kubernetes/metrics.md#metrics).
       annotations:
         prometheus.io/scrape: "true"
         prometheus.io/port: "9464"
@@ -61,7 +61,8 @@ spec:
           envFrom:
             - configMapRef:
                 name: deckhand-env
-            # CLAUDE_CODE_OAUTH_TOKEN, ANTHROPIC_API_KEY, OPENAI_API_KEY… (docs/kubernetes.md).
+            # CLAUDE_CODE_OAUTH_TOKEN, ANTHROPIC_API_KEY, OPENAI_API_KEY…
+            # (docs/kubernetes/finish.md#the-secrets).
             - secretRef:
                 name: deckhand-models
           env:
@@ -89,7 +90,7 @@ spec:
             periodSeconds: 10
             failureThreshold: 6
           # The old copy keeps taking connections until the Service no longer sends it any
-          # (lifecycle.preStop: docs/services.md, Draining).
+          # (lifecycle.preStop: docs/contributing/upgrades.md, Draining).
           lifecycle:
             preStop:
               exec:

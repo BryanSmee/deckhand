@@ -1,7 +1,7 @@
-# Deckhand's chart (docs/kubernetes.md#install-with-helm). These defaults render the kustomize
+# Deckhand's chart (docs/kubernetes/helm.md#install-with-helm). These defaults render the kustomize
 # base, deploy/kubernetes: set what is yours in a values file of your own (`-f`), as an overlay
 # would patch it. Secrets are never values: make them with kubectl and secrets.mjs, as with the
-# base (docs/kubernetes.md, Install, step 3).
+# base (docs/kubernetes/finish.md#the-secrets).
 
 image:
   # Every service's image is <repository>-<service>:<tag> (deckhand-edge, deckhand-runner…).
@@ -12,8 +12,8 @@ image:
   # to match the services' release.
   sandbox: ""
 
-# The services' namespace and the sandboxes' (docs/kubernetes.md#namespaces): two, never one.
-# The chart makes both, with their Pod Security labels, so install its release in another
+# The services' namespace and the sandboxes' (docs/kubernetes/sandboxes.md#namespaces): two, never
+# one. The chart makes both, with their Pod Security labels, so install its release in another
 # namespace (your context's, `default`), not with `--namespace deckhand --create-namespace`.
 # `create: false` if you make them yourself, labelled as namespaces.yaml labels them.
 namespaces:
@@ -28,8 +28,8 @@ server:
   config: |
     # Deckhand's settings, as server.example/config.yaml (every key: docs/reference/settings.md), under
     # the key config.yaml: your overlay or the chart's values replace them with yours
-    # (docs/kubernetes.md, Install). Read at start: the pods restart when it changes, as the
-    # ConfigMap's name has a hash of it.
+    # (docs/kubernetes/install.md#1-your-overlay). Read at start: the pods restart when it changes,
+    # as the ConfigMap's name has a hash of it.
 
     # GitHub logins allowed to start runs and sign in: required, none starts otherwise.
     allowed_users: []
@@ -45,15 +45,17 @@ server:
 # One the values below set (KUBERNETES_NAMESPACE, SANDBOX_IMAGE…) is refused, naming the value.
 env: {}
 
-# The API server's addresses, the runner's and the broker's only way out (docs/kubernetes.md,
-# Install, step 2). The placeholder reaches nothing: neither works until you set yours.
+# The API server's addresses, the runner's and the broker's only way out
+# (docs/kubernetes.md#the-api-servers-addresses). The placeholder reaches nothing: neither works
+# until you set yours.
 apiServer:
   cidrs: [192.0.2.1/32]
 
 # Fixed at install, as the claims' storage classes below: a claim's access mode and class can't
-# change (docs/kubernetes.md#install-with-helm says how to move). Where the services keep their stores: `file`, each on its own claim, its copies on one node;
-# or `redis`, in Valkey (components/redis), for copies on several nodes, with the deckhand-redis
-# Secret made beforehand (docs/kubernetes.md#several-nodes).
+# change (docs/kubernetes/helm.md#changing-the-storage says how to move). Where the services keep
+# their stores: `file`, each on its own claim, its copies on one node; or `redis`, in Valkey
+# (components/redis), for copies on several nodes, with the deckhand-redis Secret made beforehand
+# (docs/kubernetes/components.md#several-nodes).
 store: file
 
 redis:
@@ -77,7 +79,7 @@ persistence:
     models-store: 1Gi
     egress-cache: 12Gi
 
-# The sandboxes' claims, which the runner makes (docs/kubernetes.md): each issue's session
+# The sandboxes' claims, which the runner makes (docs/kubernetes/sandboxes.md): each issue's session
 # (KUBERNETES_STORAGE_CLASS), the caches' and the agents' (ReadWriteMany:
 # KUBERNETES_CACHE_STORAGE_CLASS, KUBERNETES_AGENT_STORAGE_CLASS). Empty: unset, so the sessions
 # on the cluster's default class, no caches, and each sandbox installs its agent itself.
@@ -86,8 +88,8 @@ sandboxes:
   cacheStorageClass: ""
   agentStorageClass: ""
 
-# Repositories' own images (docs/kubernetes.md#repo-images): rootless BuildKit (the buildkit
-# component), which lowers the services' namespace's Pod Security to `privileged`, and the
+# Repositories' own images (docs/kubernetes/components.md#repo-images): rootless BuildKit (the
+# buildkit component), which lowers the services' namespace's Pod Security to `privileged`, and the
 # registry the runner pushes to (`registry`, read with BuildKit alone), whose pull Secret you
 # make beforehand.
 buildkit:
@@ -104,9 +106,10 @@ registry:
   # namespace.
   secretName: deckhand-registry
 
-# A container engine for the runs granted one (docs/kubernetes.md#container-engine-on-kubernetes):
-# the engine component, Sysbox's dockerd as a sidecar under its RuntimeClass, and the egress
-# proxy's engines' port (3129). Once Sysbox runs on the nodes.
+# A container engine for the runs granted one
+# (docs/kubernetes/components.md#container-engine-on-kubernetes): the engine component, Sysbox's
+# dockerd as a sidecar under its RuntimeClass, and the egress proxy's engines' port (3129). Once
+# Sysbox runs on the nodes.
 engine:
   enabled: false
   # ENGINE_IMAGE; empty: <image.repository>-engine:<image.tag>, the services' release.
@@ -114,9 +117,9 @@ engine:
   # KUBERNETES_ENGINE_RUNTIME_CLASS: the RuntimeClass Sysbox's install makes.
   runtimeClass: sysbox-runc
 
-# Blob storage (docs/kubernetes.md#blob-storage, docs/guides/blob-storage.md): the blobs component,
-# BLOB_URL and its key pair for the runner and the broker alone, and their way to it. The Secret
-# (keys access-key-id and secret-access-key) you make beforehand. The placeholders reach
+# Blob storage (docs/kubernetes/components.md#blob-storage, docs/guides/blob-storage.md): the blobs
+# component, BLOB_URL and its key pair for the runner and the broker alone, and their way to it. The
+# Secret (keys access-key-id and secret-access-key) you make beforehand. The placeholders reach
 # nothing: neither service starts until url, to and ports are yours.
 blobs:
   enabled: false
@@ -131,9 +134,9 @@ blobs:
   # Its port: 443 for a hosted service over HTTPS, 3900 for Garage's.
   ports: [443]
 
-# Every service's Prometheus metrics (docs/kubernetes.md#metrics): METRICS_PORT on each, its pods
-# annotated for annotation-based scrape jobs (prometheus.io/scrape, port, path), and the port open
-# to your monitoring namespace alone.
+# Every service's Prometheus metrics (docs/kubernetes/metrics.md#metrics): METRICS_PORT on each, its
+# pods annotated for annotation-based scrape jobs (prometheus.io/scrape, port, path), and the port
+# open to your monitoring namespace alone.
 metrics:
   port: 9464
   # Your scraper's namespace (Prometheus', VictoriaMetrics'), by its kubernetes.io/metadata.name:

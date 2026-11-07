@@ -20,7 +20,7 @@ spec:
       app: deckhand-github
   template:
     metadata:
-      # Its metrics, for the scrape jobs that read these (docs/kubernetes.md#metrics).
+      # Its metrics, for the scrape jobs that read these (docs/kubernetes/metrics.md#metrics).
       annotations:
         prometheus.io/scrape: "true"
         prometheus.io/port: "9464"
@@ -81,14 +81,15 @@ spec:
             periodSeconds: 10
             failureThreshold: 6
           # The old copy keeps taking connections until the Service no longer sends it any
-          # (lifecycle.preStop: docs/services.md, Draining).
+          # (lifecycle.preStop: docs/contributing/upgrades.md, Draining).
           lifecycle:
             preStop:
               exec:
                 command: [sleep, "10"]
           # Its /tmp is a tmpfs (below), charged to this pod: its memory request covers it and
           # the process's own, so the scheduler keeps the room, and the limit bounds both by the
-          # pod's own cgroup. Raise the three together (docs/kubernetes.md, Temporary files).
+          # pod's own cgroup. Raise the three together (docs/kubernetes/isolation.md, Temporary
+          # files in memory).
           resources:
             requests:
               memory: 3Gi
@@ -115,7 +116,8 @@ spec:
               readOnly: true
       volumes:
         # app.json, the App's key with its credentials: deckhand-github, which secrets.mjs makes
-        # (docs/kubernetes.md), mounted here alone. Read only: /setup stays closed.
+        # (docs/kubernetes/finish.md#the-github-app), mounted here alone. Read only: /setup stays
+        # closed.
         - name: app-key
           secret:
             secretName: deckhand-github

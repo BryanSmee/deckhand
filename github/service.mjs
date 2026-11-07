@@ -1,5 +1,5 @@
-// The github service (#502, docs/services.md): the one service holding the GitHub App's key and
-// its installation tokens. It serves
+// The github service (#502, docs/contributing/services.md): the one service holding the GitHub
+// App's key and its installation tokens. It serves
 //
 //   - the runs' GitHub gateway (/relay/<host>/…, ../listener/github-gateway.mjs) and git gateway
 //     (/git/…, ../listener/git-gateway.mjs), which the egress proxy sends a sandbox's calls to,

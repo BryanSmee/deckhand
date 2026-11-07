@@ -1,6 +1,6 @@
-# Repo images (docs/kubernetes.md, Repo images): rootless BuildKit in the services' namespace,
-# its NetworkPolicies, and what the runner needs to push and pull through your registry. In
-# your overlay, `components: [<this folder>]`, with KUBERNETES_REGISTRY set in deckhand-env and
+# Repo images (docs/kubernetes/components.md, Repo images): rootless BuildKit in the services'
+# namespace, its NetworkPolicies, and what the runner needs to push and pull through your registry.
+# In your overlay, `components: [<this folder>]`, with KUBERNETES_REGISTRY set in deckhand-env and
 # the deckhand-registry pull Secret made beforehand (a kubernetes.io/dockerconfigjson one).
 apiVersion: kustomize.config.k8s.io/v1alpha1
 kind: Component

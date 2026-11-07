@@ -340,7 +340,7 @@ changes for you:
   (`deckhand.role=sandbox`).
 - **Kubernetes NetworkPolicy**: sandboxes may reach the egress proxy alone now. A policy that
   also lets them reach the orchestrator on 8081, as these docs said before, is refused, and no
-  run starts until it names the proxy's port only ([kubernetes.md](../kubernetes.md#what-the-manifests-set-up-and-why)). The
+  run starts until it names the proxy's port only ([What the manifests set up, and why](../kubernetes/isolation.md#what-the-manifests-set-up-and-why)). The
   orchestrator's Service named `listener` can go.
 - **Settings no longer read**: `BROKER_URL` and `BROKER_PORT` (the orchestrator, the runner, the
   egress proxy), `RELAY_URL` (the egress proxy) and `RUNS_VOLUME`. Remove them from your `.env`,
@@ -388,7 +388,7 @@ as edge does. What changes for you:
 - **On Kubernetes**, the orchestrator's pod refuses to start the same way on a claim the
   earlier release wrote. A rolling update would start the new pod beside the old one, still
   root, so: scale the orchestrator to 0, give its pod the security context in
-  [kubernetes.md](../kubernetes.md#what-the-manifests-set-up-and-why) (`fsGroup: 1000` hands its claims over as they are
+  [What the manifests set up, and why](../kubernetes/isolation.md#what-the-manifests-set-up-and-why) (`fsGroup: 1000` hands its claims over as they are
   mounted, or a one-time `chown` init container where the storage ignores `fsGroup`), then
   update its image and scale it back.
 

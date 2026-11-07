@@ -39,10 +39,10 @@ x-logging: &logging
     max-file: "5"
 
 services:
-  # The only service the internet reaches (#506, docs/services.md): GitHub's webhooks (their HMAC
-  # checked, each taken once, put on the stream the orchestrator reads), /setup, sign-in and the
-  # dashboard, whose API it passes on to the orchestrator with the signed-in user. It holds the
-  # webhook secret, the session key and the OAuth client's (its own volume), nothing else.
+  # The only service the internet reaches (#506, docs/contributing/services.md): GitHub's webhooks
+  # (their HMAC checked, each taken once, put on the stream the orchestrator reads), /setup, sign-in
+  # and the dashboard, whose API it passes on to the orchestrator with the signed-in user. It holds
+  # the webhook secret, the session key and the OAuth client's (its own volume), nothing else.
   edge:
     build:
       context: .
@@ -108,7 +108,7 @@ services:
   # The queue and the runs' lives (#506): it reads the deliveries edge verified, has the runner
   # start the sandboxes, posts their replies through the github service, and answers the
   # dashboard's API. It holds no secret. Two copies may run, one acting and the other waiting for
-  # its lease (docs/services.md); with Compose, one.
+  # its lease (docs/contributing/upgrades.md#edge-and-the-orchestrator); with Compose, one.
   orchestrator:
     build:
       context: .
@@ -116,7 +116,8 @@ services:
     image: ${DECKHAND_REGISTRY:-ghcr.io/bryansmee}/deckhand-orchestrator:${DECKHAND_VERSION:-latest}
     restart: unless-stopped
     # Stopping saves the queue and the runs' state (sandboxes keep running) and releases its
-    # lease; the egress proxy's questions wait for the next copy (docs/architecture.md#restarts).
+    # lease; the egress proxy's questions wait for the next copy
+    # (docs/contributing/restarts.md#restarts).
     stop_grace_period: 5m
     # The broker service signs the runs' tokens: the orchestrator asks it for them as runs start.
     # Every policy decision goes to the policy service, every GitHub call to the github service,
@@ -319,8 +320,9 @@ services:
 
   # The runs' tokens and the services' own, signed with a key only this service holds; the live
   # runs and their files (inbox, CA, digest, screenshots), which sandboxes reach through the
-  # egress proxy (docs/services.md). One copy here: an update is a wait of a few seconds for
-  # the runs' calls to it, which the proxy waits through (docs/architecture.md#restarts).
+  # egress proxy (docs/contributing/services.md). One copy here: an update is a wait of a few
+  # seconds for the runs' calls to it, which the proxy waits through
+  # (docs/contributing/restarts.md#restarts).
   broker:
     build:
       context: .
@@ -389,7 +391,7 @@ services:
   # The only service with the host's Docker socket (#503): it starts, follows and removes the
   # sandboxes, builds repo images and keeps the runs' logs, for the orchestrator alone, on a
   # network nothing else is on and that has no way out. Two copies may run, one acting and the
-  # other waiting for its lease (docs/architecture.md, The runner service).
+  # other waiting for its lease (docs/contributing/each-service.md, The runner service).
   runner:
     build:
       context: .
@@ -500,9 +502,9 @@ services:
       start_interval: 1s
     logging: *logging
 
-  # The only service with the GitHub App's key (#502, docs/services.md): the runs' GitHub and git
-  # gateways (the egress proxy sends their calls here), the orchestrator's and edge's own GitHub
-  # calls, and the
+  # The only service with the GitHub App's key (#502, docs/contributing/services.md): the runs'
+  # GitHub and git gateways (the egress proxy sends their calls here), the orchestrator's and edge's
+  # own GitHub calls, and the
   # runner's tarballs. Its way out is GitHub's; each caller reaches it over a network of its own.
   github:
     build:
@@ -511,7 +513,7 @@ services:
     image: ${DECKHAND_REGISTRY:-ghcr.io/bryansmee}/deckhand-github:${DECKHAND_VERSION:-latest}
     restart: unless-stopped
     # Stopping lets the calls in flight finish (pushes, clones, an Actions log): the proxy and the
-    # orchestrator wait for the next copy meanwhile (docs/architecture.md#restarts).
+    # orchestrator wait for the next copy meanwhile (docs/contributing/restarts.md#restarts).
     stop_grace_period: 5m
     depends_on:
       broker:
@@ -571,8 +573,8 @@ services:
     cap_drop: [ALL]
     security_opt: ["no-new-privileges:true"]
 
-  # The only service with the operator's agent credentials (#504, docs/services.md): the
-  # sandboxes' agents call their APIs through it, by the egress proxy, with their run's token in
+  # The only service with the operator's agent credentials (#504, docs/contributing/services.md):
+  # the sandboxes' agents call their APIs through it, by the egress proxy, with their run's token in
   # place of the credential. The plans' logins it refreshes are kept sealed in its store, with a
   # key of its own. Its way out is the agents' APIs; its other networks are internal, each its
   # callers' (the proxy, the orchestrator) or its callees' (the broker, the runner).
@@ -584,7 +586,7 @@ services:
     restart: unless-stopped
     # Stopping lets the agents' calls in flight finish: one streams for up to 10 minutes
     # (DRAIN_SECONDS, 600). New ones wait for the next copy meanwhile, 5 minutes at most at the
-    # proxy (docs/services.md, Upgrades without downtime).
+    # proxy (docs/contributing/upgrades.md, Upgrades without downtime).
     stop_grace_period: 630s
     depends_on:
       broker:
@@ -664,10 +666,10 @@ services:
     cap_drop: [ALL]
     security_opt: ["no-new-privileges:true"]
 
-  # The policy service (docs/services.md): Deckhand's, the operator's and the repositories' Rego
-  # policies, evaluated by long-lived `opa` servers for the orchestrator, and for the runner the
-  # grants the operator's give a repository. No secret, no state, and no network but its
-  # callers': internal ones, without a way out.
+  # The policy service (docs/contributing/services.md): Deckhand's, the operator's and the
+  # repositories' Rego policies, evaluated by long-lived `opa` servers for the orchestrator, and for
+  # the runner the grants the operator's give a repository. No secret, no state, and no network but
+  # its callers': internal ones, without a way out.
   policy:
     build:
       context: .
@@ -675,7 +677,8 @@ services:
     image: ${DECKHAND_REGISTRY:-ghcr.io/bryansmee}/deckhand-policy:${DECKHAND_VERSION:-latest}
     restart: unless-stopped
     # Stopping lets the decisions in flight finish (2 s each at most): the orchestrator waits for the
-    # next copy meanwhile, up to 30 s, rather than refuse them (docs/architecture.md#restarts).
+    # next copy meanwhile, up to 30 s, rather than refuse them
+    # (docs/contributing/restarts.md#restarts).
     stop_grace_period: 30s
     # The orchestrator's network to it, the github service's (the runs' writes and pushes) and the
     # runner's (what the operator's policies grant a repository).
@@ -724,7 +727,8 @@ services:
     image: ${DECKHAND_REGISTRY:-ghcr.io/bryansmee}/deckhand-egress:${DECKHAND_VERSION:-latest}
     restart: unless-stopped
     # Stopping gives the requests in flight 25 s to finish (DRAIN_SECONDS,
-    # docs/architecture.md#restarts): new connections are refused until the next proxy starts.
+    # docs/contributing/restarts.md#restarts): new connections are refused until the next proxy
+    # starts.
     stop_grace_period: 30s
     environment:
       # Its log lines: text, as `docker compose logs` reads them, or json for a collector
@@ -734,7 +738,7 @@ services:
       # Its Prometheus metrics: a setting of its own, off unless set, as every sandbox reaches
       # the proxy, and so its metrics port (docs/guides/metrics.md, docs/security/not-covered.md).
       METRICS_PORT: ${EGRESS_METRICS_PORT:-}
-      # The orchestrator's egress policy, on its own port (docs/architecture.md#restarts).
+      # The orchestrator's egress policy, on its own port (docs/contributing/restarts.md#restarts).
       POLICY_URL: http://orchestrator:8082/egress
       # Where the sandboxes' calls about their own run go: their token's renewal, their inbox
       # and files (#505).

@@ -1,8 +1,8 @@
 # The broker (docs/guides/services.md#the-broker-service): the key that signs the runs' tokens and the
 # services' own, the live runs and their files. Its key is a Secret you make once
-# (deckhand-broker-key, docs/kubernetes.md), which both copies mount: a copy with another key
-# would sign tokens the other refuses. Its public key is the deckhand-service-keys ConfigMap,
-# for the services that check tokens offline.
+# (deckhand-broker-key, docs/kubernetes/finish.md#the-secrets), which both copies mount: a copy with
+# another key would sign tokens the other refuses. Its public key is the deckhand-service-keys
+# ConfigMap, for the services that check tokens offline.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -22,7 +22,7 @@ spec:
       app: deckhand-broker
   template:
     metadata:
-      # Its metrics, for the scrape jobs that read these (docs/kubernetes.md#metrics).
+      # Its metrics, for the scrape jobs that read these (docs/kubernetes/metrics.md#metrics).
       annotations:
         prometheus.io/scrape: "true"
         prometheus.io/port: "9464"
@@ -79,7 +79,7 @@ spec:
             periodSeconds: 10
             failureThreshold: 6
           # The old copy keeps taking connections until the Service no longer sends it any
-          # (lifecycle.preStop: docs/services.md, Draining).
+          # (lifecycle.preStop: docs/contributing/upgrades.md, Draining).
           lifecycle:
             preStop:
               exec:

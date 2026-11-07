@@ -1,6 +1,7 @@
-# The policy service (docs/services.md#the-policy-service): long-lived opa servers, no secret,
-# no state, no way out. It reads your policies in the grants folder's policy/ (deckhand-server's
-# items, as the orchestrator has them: it refuses every decision when they differ).
+# The policy service (docs/contributing/upgrades.md#the-policy-service): long-lived opa servers, no
+# secret, no state, no way out. It reads your policies in the grants folder's policy/
+# (deckhand-server's items, as the orchestrator has them: it refuses every decision when they
+# differ).
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -20,7 +21,7 @@ spec:
       app: deckhand-policy
   template:
     metadata:
-      # Its metrics, for the scrape jobs that read these (docs/kubernetes.md#metrics).
+      # Its metrics, for the scrape jobs that read these (docs/kubernetes/metrics.md#metrics).
       annotations:
         prometheus.io/scrape: "true"
         prometheus.io/port: "9464"
@@ -65,7 +66,7 @@ spec:
             periodSeconds: 10
             failureThreshold: 6
           # The old copy keeps taking connections until the Service no longer sends it any
-          # (lifecycle.preStop: docs/services.md, Draining).
+          # (lifecycle.preStop: docs/contributing/upgrades.md, Draining).
           lifecycle:
             preStop:
               exec:

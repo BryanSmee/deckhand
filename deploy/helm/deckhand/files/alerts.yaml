@@ -18,7 +18,8 @@ groups:
           description: >-
             The network probe found a sandbox reaching something other than the egress proxy.
             Check the sandboxes' NetworkPolicies and that the cluster's network plugin enforces
-            them (docs/kubernetes.md, The network probe; deploy/kubernetes/check-isolation.sh).
+            them (docs/kubernetes/isolation.md, The network probe;
+            deploy/kubernetes/check-isolation.sh).
 
       # A target that doesn't answer: crashed, or its metrics port unreachable, for as long as it
       # stays down. A copy replaced by a rollout leaves the targets, and doesn't fire it; nor

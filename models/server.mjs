@@ -1,8 +1,8 @@
-// Deckhand's models service (#504, docs/services.md): the only one holding the operator's agent
-// credentials (Claude, OpenAI, Google: keys, a gateway's token, the plans' logins). Sandboxes'
-// agents call their API through it, by the egress proxy, with their run's agent token in place
-// of the credential (upstream.mjs); it puts the credential in and streams the answer back. Two
-// copies may run side by side on one store: a login's refresh is done once for both
+// Deckhand's models service (#504, docs/contributing/services.md): the only one holding the
+// operator's agent credentials (Claude, OpenAI, Google: keys, a gateway's token, the plans'
+// logins). Sandboxes' agents call their API through it, by the egress proxy, with their run's agent
+// token in place of the credential (upstream.mjs); it puts the credential in and streams the answer
+// back. Two copies may run side by side on one store: a login's refresh is done once for both
 // (logins.mjs), and either one takes any call.
 //
 // Settings, from the environment (and config.yaml, as the listener reads them: the agents'

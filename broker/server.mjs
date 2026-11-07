@@ -1,6 +1,6 @@
-// Deckhand's broker service (#505, docs/services.md): the one service holding the tokens'
-// signing key. It signs and renews the runs' tokens and the services' own, keeps the live runs
-// and their files in its store, and serves the endpoints a sandbox calls about its own run,
+// Deckhand's broker service (#505, docs/contributing/services.md): the one service holding the
+// tokens' signing key. It signs and renews the runs' tokens and the services' own, keeps the live
+// runs and their files in its store, and serves the endpoints a sandbox calls about its own run,
 // through the egress proxy. Two copies may run side by side on one store (Redis, #509): every
 // call either one answers, the other could have.
 //

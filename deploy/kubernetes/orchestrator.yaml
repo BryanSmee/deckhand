@@ -1,7 +1,7 @@
-# The orchestrator (docs/services.md#edge-and-the-orchestrator): the queue and the runs' lives.
-# It holds no secret and has no way out (network-policies.yaml). Two copies, active/passive
-# through its lease: the one waiting answers its probes and 503 to every call, with the
-# connection closed, so a caller's next try reaches the copy that acts, and its egress policy's
+# The orchestrator (docs/contributing/upgrades.md#edge-and-the-orchestrator): the queue and the
+# runs' lives. It holds no secret and has no way out (network-policies.yaml). Two copies,
+# active/passive through its lease: the one waiting answers its probes and 503 to every call, with
+# the connection closed, so a caller's next try reaches the copy that acts, and its egress policy's
 # port (8082) opens once it acts. Its readiness is /health, not /ready (200 on the acting copy
 # alone): a rolling update starts the next copy, which only takes the lease once the old one
 # releases it, so a probe on /ready would never let the update go on.
@@ -24,7 +24,7 @@ spec:
       app: deckhand-orchestrator
   template:
     metadata:
-      # Its metrics, for the scrape jobs that read these (docs/kubernetes.md#metrics).
+      # Its metrics, for the scrape jobs that read these (docs/kubernetes/metrics.md#metrics).
       annotations:
         prometheus.io/scrape: "true"
         prometheus.io/port: "9464"
@@ -108,7 +108,8 @@ spec:
         - name: data
           persistentVolumeClaim:
             claimName: orchestrator-data
-        # config.yaml and the grants folder: deckhand-server's items (docs/kubernetes.md).
+        # config.yaml and the grants folder: deckhand-server's items
+        # (docs/kubernetes/install.md#1-your-overlay).
         - name: server
           projected:
             sources:

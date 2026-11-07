@@ -51,4 +51,4 @@ engine:<port>`, and `docker compose up` its stack; the run's log on the dashboar
 and `docker volume ls --filter label=deckhand.engine` are empty once the run is over.
 
 On Kubernetes, the engine is Sysbox's alone, in the sandbox's pod: see
-[Container engine on Kubernetes](../kubernetes.md#container-engine-on-kubernetes).
+[Container engine on Kubernetes](../kubernetes/components.md#container-engine-on-kubernetes).

@@ -1,10 +1,11 @@
 #!/bin/sh
-# Whether the cluster enforces the sandboxes' NetworkPolicies (docs/kubernetes.md): a network
-# plugin that doesn't (Flannel alone, say) takes them and isolates nothing. From a pod labelled
-# as a sandbox, in the sandboxes' namespace, every port of every service's pod must be out of
-# reach (their metrics port, 9464, the monitoring namespace's alone, included), and the egress
-# proxy's port the only one reached (its engines' port, 3129, too when its Service publishes it:
-# the engine component); the internet and another sandbox's pod, listening, too stay out of reach.
+# Whether the cluster enforces the sandboxes' NetworkPolicies
+# (docs/kubernetes/finish.md#checking-the-isolation): a network plugin that doesn't (Flannel alone,
+# say) takes them and isolates nothing. From a pod labelled as a sandbox, in the sandboxes'
+# namespace, every port of every service's pod must be out of reach (their metrics port, 9464, the
+# monitoring namespace's alone, included), and the egress proxy's port the only one reached (its
+# engines' port, 3129, too when its Service publishes it: the engine component); the internet and
+# another sandbox's pod, listening, too stay out of reach.
 #
 #   sh deploy/kubernetes/check-isolation.sh [services' namespace] [sandboxes' namespace]
 #

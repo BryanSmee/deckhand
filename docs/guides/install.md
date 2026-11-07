@@ -29,7 +29,7 @@ Compose runs nine images, published for each release (`DECKHAND_VERSION`, defaul
 `latest`): edge's (the only one the internet reaches: GitHub's webhooks, `/setup`, sign-in and
 the dashboard's files), the orchestrator's (the queue, the runs and the dashboard's data,
 behind edge), the runner's (the only one with the Docker socket: it starts the
-sandboxes, [architecture](../architecture.md#the-runner-service)), the broker's (the only service
+sandboxes, [architecture](../contributing/each-service.md#the-runner-service)), the broker's (the only service
 holding the key that signs the runs' tokens, see [The broker service](services.md#the-broker-service)), the
 github service's (the only one holding the GitHub App's key, see
 [The github service](services.md#the-github-service)), the models service's (the only one holding your agents' credentials, see

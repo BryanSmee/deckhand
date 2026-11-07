@@ -1,8 +1,8 @@
 # The services' stores on Redis (Valkey, which speaks it: docs/guides/store.md), for their
 # copies on several nodes. One primary, kept on disk (append-only, fsync every second: a crash
 # loses at most the last second), never evicting, and one user per service, each with its own
-# password (the deckhand-redis Secret, docs/kubernetes.md), allowed the store's commands on its
-# own keys alone (`deckhand:<service>:`): a service reads no other's store.
+# password (the deckhand-redis Secret, docs/kubernetes/components.md#several-nodes), allowed the
+# store's commands on its own keys alone (`deckhand:<service>:`): a service reads no other's store.
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:

@@ -1,6 +1,6 @@
-# The container engine (docs/kubernetes.md, Container engine on Kubernetes): Sysbox's dockerd
-# as a sidecar in the sandboxes' pods granted `docker`, under the RuntimeClass Sysbox's install
-# makes, and the egress proxy's engines' port (3129), through which it goes out. In your
+# The container engine (docs/kubernetes/components.md, Container engine on Kubernetes): Sysbox's
+# dockerd as a sidecar in the sandboxes' pods granted `docker`, under the RuntimeClass Sysbox's
+# install makes, and the egress proxy's engines' port (3129), through which it goes out. In your
 # overlay, `components: [<this folder>]`, once Sysbox runs on the nodes; ENGINE_IMAGE pinned to
 # your version.
 apiVersion: kustomize.config.k8s.io/v1alpha1

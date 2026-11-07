@@ -57,7 +57,8 @@ spec:
             {{- include "deckhand.blobsEnv" . | nindent 12 }}
             {{- end }}
           {{- include "deckhand.probes" (list "http" "/health" "/health") | nindent 10 }}
-          # Its /tmp is a tmpfs, charged to this pod (docs/kubernetes.md, Temporary files).
+          # Its /tmp is a tmpfs, charged to this pod (docs/kubernetes/isolation.md, Temporary files
+          # in memory).
           resources:
             requests:
               memory: 3Gi

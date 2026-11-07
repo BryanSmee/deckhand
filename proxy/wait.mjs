@@ -1,6 +1,7 @@
 // Waiting for the orchestrator's egress policy, or a service the proxy forwards to, while it
-// restarts (docs/architecture.md, Restarts): a connection it refused, or that failed before it was made, never reached it, so trying again is safe for
-// any call, a push or a POST too. Once a request is sent on a connection, it never is again.
+// restarts (docs/contributing/restarts.md, Restarts): a connection it refused, or that failed
+// before it was made, never reached it, so trying again is safe for any call, a push or a POST too.
+// Once a request is sent on a connection, it never is again.
 
 // How long a call waits for one before the sandbox hears it is unreachable: as long as
 // the previous one may drain (DRAIN_MS, ../lib/drain.mjs) and the next one start, as with

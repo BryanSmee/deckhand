@@ -1,8 +1,8 @@
-# Edge (docs/services.md#edge-and-the-orchestrator): the only pods the internet reaches, through
-# your ingress to the Service's port 8080. Its internal port, 8083, is the orchestrator's alone
-# (network-policies.yaml). It holds the webhook secret, the session key and the OAuth client's,
-# in its own Secret (deckhand-edge). Two copies, both active on one store. Its readiness is
-# /ready: 503 as it drains, and until the broker has answered it (its keys, which the
+# Edge (docs/contributing/upgrades.md#edge-and-the-orchestrator): the only pods the internet
+# reaches, through your ingress to the Service's port 8080. Its internal port, 8083, is the
+# orchestrator's alone (network-policies.yaml). It holds the webhook secret, the session key and the
+# OAuth client's, in its own Secret (deckhand-edge). Two copies, both active on one store. Its
+# readiness is /ready: 503 as it drains, and until the broker has answered it (its keys, which the
 # orchestrator's service tokens are checked with, and its own service tokens).
 apiVersion: apps/v1
 kind: Deployment
@@ -23,7 +23,7 @@ spec:
       app: deckhand-edge
   template:
     metadata:
-      # Its metrics, for the scrape jobs that read these (docs/kubernetes.md#metrics).
+      # Its metrics, for the scrape jobs that read these (docs/kubernetes/metrics.md#metrics).
       annotations:
         prometheus.io/scrape: "true"
         prometheus.io/port: "9464"
@@ -122,7 +122,8 @@ spec:
           persistentVolumeClaim:
             claimName: edge-data
         # app.json (the webhook secret, the OAuth client's) and session.key: deckhand-edge,
-        # which secrets.mjs makes (docs/kubernetes.md). Read only: /setup stays closed.
+        # which secrets.mjs makes (docs/kubernetes/finish.md#the-github-app). Read only: /setup
+        # stays closed.
         - name: app
           secret:
             secretName: deckhand-edge
@@ -154,7 +155,7 @@ spec:
     requests:
       storage: 1Gi
 ---
-# Your ingress sends the webhooks and browsers to port 8080 (docs/kubernetes.md, Ingress); 8083
+# Your ingress sends the webhooks and browsers to port 8080 (docs/kubernetes.md, Requirements); 8083
 # is the orchestrator's EDGE_URL.
 apiVersion: v1
 kind: Service
