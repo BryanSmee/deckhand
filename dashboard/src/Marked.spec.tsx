@@ -221,7 +221,16 @@ test("the task page's `a` finds its questions' form by what it is, not by its la
   expect(form.contains(document.activeElement)).toBe(true);
 });
 
-test("a task's Review tab, before and after its merge, with each follow-up's filing", async () => {
+// Not merged; then merged by Deckhand, by someone, by no one known. One test each: each renders
+// the dashboard and reads the whole page, and four in one test ran past its 5 s on a busy runner.
+const MERGES: [string, (now: number) => ReviewFindings["merged"]][] = [
+  ["not merged", () => null],
+  ["merged by Deckhand", (now) => ({ at: now - 1000, by: "deckhand-app[bot]", deckhand: true })],
+  ["merged by someone", (now) => ({ at: now - 1000, by: "alice", deckhand: false })],
+  ["merged by no one known", (now) => ({ at: now - 1000, by: null, deckhand: false })],
+];
+
+test.each(MERGES)("a task's Review tab, %s, with each follow-up's filing", async (_, merge) => {
   const head = "aaaaaaa1111111111111111111111111111111";
   const url = "https://github.example.com/acme/app/pull/25";
   const item = { path: "lib/cache.mjs", line: 20, text: "A miss goes out?" };
@@ -255,7 +264,7 @@ test("a task's Review tab, before and after its merge, with each follow-up's fil
       { ...item, blocking: true },
       { ...item, blocking: false },
     ],
-    merged: null,
+    merged: merge(state.now),
   };
   const reviewed: State = {
     ...state,
@@ -271,30 +280,20 @@ test("a task's Review tab, before and after its merge, with each follow-up's fil
         : task,
     ),
   };
-  // Not merged; then merged by Deckhand, by someone, by no one known.
-  for (const merged of [
-    null,
-    { at: state.now - 1000, by: "deckhand-app[bot]", deckhand: true },
-    { at: state.now - 1000, by: "alice", deckhand: false },
-    { at: state.now - 1000, by: null, deckhand: false },
-  ]) {
-    const shown = { ...review, merged };
-    mockApi({ "api/review": () => shown });
-    history.replaceState(null, "", `#/tasks?task=${encodeURIComponent("acme/app#22")}`);
-    const view = render(<Dashboard state={reviewed} error={null} />);
-    fireEvent.click(screen.getByRole("tab", { name: t("detail.reviewTab") }));
-    await screen.findByRole("region", { name: t("reviewTab.comments") });
-    // Only what the tab shows as it was sent: the review's own texts, not its verdict, filings or
-    // issue states, which the catalog writes. `allowed` is the repo's config value, shown so.
-    const sent = [
-      ...[...review.findings, ...review.followUps, ...review.comments].flatMap((f) => [
-        f.text,
-        `${f.path}:${f.line}`,
-      ]),
-      ...review.followUps.map((f) => f.title),
-      ...[review.allowed, "@alice", head.slice(0, 7), "bbbbbbb"],
-    ];
-    checked(document.body, sent);
-    view.unmount();
-  }
+  mockApi({ "api/review": () => review });
+  history.replaceState(null, "", `#/tasks?task=${encodeURIComponent("acme/app#22")}`);
+  render(<Dashboard state={reviewed} error={null} />);
+  fireEvent.click(screen.getByRole("tab", { name: t("detail.reviewTab") }));
+  await screen.findByRole("region", { name: t("reviewTab.comments") });
+  // Only what the tab shows as it was sent: the review's own texts, not its verdict, filings or
+  // issue states, which the catalog writes. `allowed` is the repo's config value, shown so.
+  const sent = [
+    ...[...review.findings, ...review.followUps, ...review.comments].flatMap((f) => [
+      f.text,
+      `${f.path}:${f.line}`,
+    ]),
+    ...review.followUps.map((f) => f.title),
+    ...[review.allowed, "@alice", head.slice(0, 7), "bbbbbbb"],
+  ];
+  checked(document.body, sent);
 });
