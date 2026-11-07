@@ -52,13 +52,15 @@ function relativeImages(md) {
 
 // A ```mermaid block, a diagram on GitHub, is one here too: the Mermaid component
 // (theme/Mermaid.vue) draws it in the browser. The source goes encoded, so neither the markdown's
-// HTML nor Vue's templates read it.
+// HTML nor Vue's templates read it, and as text in the slot too: the code shown until the diagram
+// is drawn, and what the local search indexes (it strips the tags of the rendered page).
 function mermaidDiagrams(md) {
   const fence = md.renderer.rules.fence;
   md.renderer.rules.fence = (tokens, i, options, env, self) => {
     const token = tokens[i];
     if (token.info.trim() !== "mermaid") return fence(tokens, i, options, env, self);
-    return `<Mermaid code="${encodeURIComponent(token.content)}" />\n`;
+    const source = md.utils.escapeHtml(token.content);
+    return `<Mermaid code="${encodeURIComponent(token.content)}"><pre v-pre><code>${source}</code></pre></Mermaid>\n`;
   };
 }
 

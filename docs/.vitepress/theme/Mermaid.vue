@@ -10,6 +10,7 @@ const box = ref();
 const svg = ref("");
 const failed = ref(false);
 const id = `mermaid-${useId()}`;
+const source = decodeURIComponent(props.code);
 let rendering = Promise.resolve();
 
 function draw() {
@@ -19,12 +20,9 @@ function draw() {
       startOnLoad: false,
       securityLevel: "strict",
       theme: isDark.value ? "dark" : "default",
-      // Sized below (fit()): fitted to the column, the wide ones are unreadable.
-      flowchart: { useMaxWidth: false },
-      sequence: { useMaxWidth: false },
     });
     try {
-      svg.value = (await mermaid.render(id, decodeURIComponent(props.code))).svg;
+      svg.value = (await mermaid.render(id, source)).svg;
       failed.value = false;
       await nextTick();
       fit(box.value?.querySelector("svg"));
@@ -36,7 +34,8 @@ function draw() {
 }
 
 // The column's width, never wider than the diagram, nor below three quarters of its size (its
-// text at 12px): a wider one scrolls sideways.
+// text at 12px): a wider one scrolls sideways. Whatever its type: the size mermaid gives it
+// (useMaxWidth) is replaced.
 function fit(el) {
   if (!el) return;
   const width = el.viewBox.baseVal.width;
@@ -52,7 +51,8 @@ watch(isDark, draw);
 
 <template>
   <div v-if="svg && !failed" ref="box" class="mermaid" v-html="svg" />
-  <pre v-else class="mermaid-source"><code>{{ decodeURIComponent(code) }}</code></pre>
+  <!-- The source, as the markdown rendered it (config.mjs), until the diagram is drawn. -->
+  <div v-else class="mermaid-source"><slot /></div>
 </template>
 
 <style scoped>
@@ -65,7 +65,7 @@ watch(isDark, draw);
 .mermaid :deep(p) {
   line-height: inherit;
 }
-.mermaid-source {
+.mermaid-source :deep(pre) {
   margin: 16px 0;
   padding: 16px;
   overflow-x: auto;

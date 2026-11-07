@@ -144,3 +144,26 @@ test(
     assert.deepEqual(missing, []);
   },
 );
+
+// A ```mermaid block is drawn in the browser (docs/.vitepress/theme/Mermaid.vue), but its source
+// stays text in the rendered page: the local search indexes the page with its tags stripped.
+test(
+  "a diagram's text stays in the page the site's search indexes",
+  { skip: !existsSync(vitepress) && "no docs/node_modules (npm ci in docs/)" },
+  async () => {
+    const docs = join(root, "docs");
+    const from = createRequire(join(docs, "package.json"));
+    const { createMarkdownRenderer } = await import(pathToFileURL(from.resolve("vitepress")));
+    const { default: site } = await import("../docs/.vitepress/config.mjs");
+    const md = await createMarkdownRenderer(docs, site.markdown, site.base);
+    const html = md.render('```mermaid\nflowchart LR\n  a["edge <b>&</b> {{ x }}"] --> b\n```\n', {
+      relativePath: "page.md",
+    });
+    assert.match(html, /^<Mermaid code="[^"<>]+">/);
+    assert.match(html, /<pre v-pre>/);
+    assert.equal(
+      html.replace(/<[^>]*>/g, "").trim(),
+      "flowchart LR\n  a[&quot;edge &lt;b&gt;&amp;&lt;/b&gt; {{ x }}&quot;] --&gt; b",
+    );
+  },
+);
