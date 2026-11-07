@@ -688,8 +688,10 @@ export function createRuns(ctx) {
   // Stops the task's run now (a `/cancel` comment, the dashboard's Stop): marked cancelled in
   // its log and saved state first, so a listener restarting before the sandbox exits still
   // knows, then its sandbox is stopped. The follow loop sees it exit and finish() ends the
-  // run as cancelled. Comments waiting for a follow-up run stay queued. A task with no run
-  // going loses its queued comments instead. `by`: who stopped it. Returns "running",
+  // run as cancelled. The task is marked stopped (stopped.mjs): nothing starts on it again
+  // until something asks for a run, and comments waiting for a follow-up run wait for that too
+  // (tasks.mjs holdStopped()). A task with no run going loses its queued comments instead, and
+  // those held since a stop. `by`: who stopped it. Returns "running",
   // "queued" (no run: the task is back in the backlog), "following" (comments behind a run
   // that is ending) or null when there was nothing to stop.
   function cancel(key, by) {
@@ -703,13 +705,19 @@ export function createRuns(ctx) {
       live.open = false;
       writeEvent(live.logFile, "cancelled", live.cancelled);
       log(`${key}: cancelled by ${by}`);
+      ctx.stopped?.stop(key, by, live.cancelled.at);
       end(task);
       return "running";
     }
     // A machine's claim without a run (claims.mjs): over, its machine told at its next heartbeat.
-    if (task.claim && !live && ctx.claims?.cancel(task, by)) return "running";
+    if (task.claim && !live && ctx.claims?.cancel(task, by)) {
+      ctx.stopped?.stop(key, by);
+      return "running";
+    }
     if (live && !live.finishing && !live.cancelled) {
       live.cancelled = { by, at: Date.now() };
+      // Before its sandbox goes: a comment meanwhile mustn't go on in its session.
+      ctx.stopped?.stop(key, by, live.cancelled.at);
       clearTimeout(live.lingering);
       // Nothing more goes to its inbox: what waits is for the next run.
       live.open = false;
@@ -723,21 +731,22 @@ export function createRuns(ctx) {
       return "running";
     }
     if (live?.cancelled) return "running";
-    if (!task.pending.length) return null;
+    if (!task.pending.length && !task.onHold?.length) return null;
     const following = task.running;
     dropPending(task, key);
     log(`${key}: queued comments dropped by ${by}`);
     return following ? "following" : "queued";
   }
 
-  // The task's queued comments go, their 👀 off (but `keep`'s), and it leaves the run order.
-  // Waiting for a slot or their pause, or for a run that is ending. An auto-picked one frees
-  // its reserved slot: the next labelled issue, without waiting for the next sweep.
+  // The task's queued comments go, and those held since a stop, their 👀 off (but `keep`'s),
+  // and it leaves the run order. Waiting for a slot or their pause, or for a run that is
+  // ending. An auto-picked one frees its reserved slot: the next labelled issue, without
+  // waiting for the next sweep.
   function dropPending(task, key, keep = null) {
     const picked = !task.running && pickedTask(task);
     clearTimeout(task.timer);
     task.ready = false;
-    for (const item of task.pending.splice(0)) {
+    for (const item of [...task.pending.splice(0), ...(task.onHold?.splice(0) ?? [])]) {
       if (item !== keep) ctx.track(ctx.settle(item, "cancelled"));
     }
     ctx.saveQueue?.();
@@ -1146,7 +1155,9 @@ export function createRuns(ctx) {
     if (live.external && task.claim?.id === live.id) task.claim = null;
     // What it puts back in the queue (unanswered comments, a fallback's) is saved before its
     // own state goes, tried again until it is (restart.mjs removeLive()): a listener killed
-    // between the two finds them in both, and the run's win.
+    // between the two finds them in both, and the run's win. A stopped run's follow-up comments
+    // wait for the next trigger (tasks.mjs holdStopped()), in that same write.
+    if (live.cancelled) ctx.holdStopped?.(task);
     await ctx.removeLive(task);
     task.live = null;
     task.running = false;

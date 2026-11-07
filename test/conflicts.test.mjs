@@ -7,6 +7,7 @@ import {
   rebaseMessage,
 } from "../listener/conflicts.mjs";
 import { parseRepoConfig } from "../listener/repo-config.mjs";
+import { createStopped } from "../listener/stopped.mjs";
 import { busyTask } from "../listener/tasks.mjs";
 import { mapStore, policyEngine, testConfig } from "./helpers.mjs";
 
@@ -47,6 +48,7 @@ function setup({
   baseSha = "base-1",
   settings = optedIn(),
   busy = () => false,
+  stopped,
   c = config,
   attempts = new Map(),
   routes: more = {},
@@ -100,6 +102,7 @@ function setup({
     },
     repoSettings: async () => w.settings,
     busy,
+    ...(stopped && { stopped }),
     accept: async (item) => accepted.push(item),
     policies,
     decided: (key, entry) => decided.push({ key, ...entry }),
@@ -171,6 +174,25 @@ test("no rebase run while the pull request's review loop decides a step or waits
   calls = -10;
   await late.conflicts.tick();
   assert.equal(late.accepted.length, 1);
+});
+
+test("a stopped task gets no rebase run until it is triggered again (#1003)", async () => {
+  const marks = createStopped();
+  marks.stop("Org/Repo#30", "alice");
+  const w = setup({ stopped: (key) => marks.has(key) });
+  assert.deepEqual(await w.conflicts.tick(), { started: 0, pending: 0, errors: [] });
+  assert.deepEqual(w.accepted, []);
+  // Not even asked about, and its attempt not kept: the next check after a trigger rebases.
+  assert.ok(!w.calls.some((u) => u.includes("/pulls/")));
+  w.advance(10 * MIN);
+  marks.clear("org/repo#30");
+  await w.conflicts.tick();
+  assert.equal(w.accepted.length, 1);
+  // Stopped during the watcher's own calls: checked again before it starts.
+  let calls = 0;
+  const late = setup({ stopped: () => ++calls > 1 });
+  await late.conflicts.tick();
+  assert.deepEqual([late.accepted, calls], [[], 2]);
 });
 
 test("a pull request without an issue is its own task", async () => {

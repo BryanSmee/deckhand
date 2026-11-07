@@ -10,6 +10,7 @@ import { sessionNames } from "./sandbox-spec.mjs";
 import { CONFIG_FILE, modeNames } from "./repo-config.mjs";
 import { itemMay, startAction } from "./permissions.mjs";
 import { createRunPolicy, personStarted } from "./run-policy.mjs";
+import { asksForRun } from "./stopped.mjs";
 
 // `ctx` (server.mjs): the listener's state and services, read at call time.
 export function createTaskModes(ctx) {
@@ -40,6 +41,11 @@ export function createTaskModes(ctx) {
     // ready (reviews.mjs, the listener's own: allowed() doesn't ask).
     if (INBOX.has(item.trigger) || ["analyze", "review"].includes(item.trigger)) {
       return (await allowed(item, item.trigger, key)) ? item.trigger : null;
+    }
+    // A task whose run was stopped (stopped.mjs): its kept session doesn't go on with a plain
+    // comment, nor with the listener's own runs. What asks for a run lifts the stop (tasks.mjs).
+    if (ctx.stopped?.has(key) && !asksForRun(item)) {
+      return skip(`#${item.replyTo}: its run was stopped, and no trigger line`);
     }
     if (item.trigger === "stop") return stopBrainstorm(item, key);
     let wanted = item.trigger;

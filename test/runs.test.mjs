@@ -11,6 +11,7 @@ import { RunError } from "../listener/access.mjs";
 import { GitHubUnavailable } from "../listener/github.mjs";
 import { createRuns, GITHUB_REQUEUE_MS, reopenedMode } from "../listener/runs.mjs";
 import { openLog } from "../listener/runlog.mjs";
+import { createStopped } from "../listener/stopped.mjs";
 import { parseRepoConfig } from "../listener/repo-config.mjs";
 import { recordingFetch, tempDir, testConfig, until } from "./helpers.mjs";
 
@@ -609,6 +610,35 @@ test("a Stop after the answer posts it with the Stopped by line", async (t) => {
   assert.equal(answers.length, 1);
   assert.match(answers[0], /^I filed #195\.\n\nStopped by @bryansmee after its answer\.\n\n<sub>/);
   assert.ok(logs.some((l) => /done \(cancelled\)/.test(l)));
+});
+
+test("a Stop marks the task stopped, and holds what was queued behind it at its end (#1003)", async (t) => {
+  const { ctx, runs, runner, task, following } = setup(t, { graceMs: 5000 });
+  ctx.stopped = createStopped();
+  const held = [];
+  const later = [];
+  ctx.holdStopped = (task) => held.push(...task.pending.splice(0));
+  ctx.startLater = (task) => later.push(task.id);
+  runner.out(result("Half way."));
+  task.pending.push({ repo: "org/repo", id: "12", text: "And this too." });
+  assert.equal(runs.cancel("org/repo#12", "bryansmee"), "running");
+  // At once, before its sandbox is gone: a comment meanwhile doesn't go on in its session.
+  assert.equal(ctx.stopped.get("org/repo#12").by, "bryansmee");
+  await following;
+  assert.deepEqual([held.map((i) => i.text), later], [["And this too."], []]);
+});
+
+test("a task stopped and queued no more: a Stop drops the comments held since (#1003)", async (t) => {
+  const { ctx, runs, task, settled, following } = setup(t, { graceMs: 5000 });
+  runs.cancel("org/repo#12", "bryansmee");
+  await following;
+  assert.equal(task.live, null);
+  settled.length = 0;
+  task.onHold = [{ text: "Held." }];
+  ctx.saveQueue = () => {};
+  assert.equal(runs.cancel("org/repo#12", "bryansmee"), "queued");
+  assert.deepEqual([task.onHold, settled], [[], ["cancelled"]]);
+  assert.equal(runs.cancel("org/repo#12", "bryansmee"), null);
 });
 
 test("a run's end counted with its outcome (deckhand_runs_finished_total)", async (t) => {

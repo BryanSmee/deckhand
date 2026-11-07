@@ -6,6 +6,7 @@ import { test } from "node:test";
 import { createBrainstorms, createIssueModes } from "../listener/brainstorms.mjs";
 import { createOnboardingStore } from "../listener/onboarding.mjs";
 import { parseRepoConfig } from "../listener/repo-config.mjs";
+import { createStopped } from "../listener/stopped.mjs";
 import { createTaskModes } from "../listener/task-modes.mjs";
 import { grantedOf, tempDir, testConfig } from "./helpers.mjs";
 
@@ -15,7 +16,8 @@ const config = testConfig();
 // `issueModes`: the issues' current modes, kept across calls. `sessions`: the volumes that hold an
 // agent session (the runner's hasSession()). `grants`: what the operator's policies grant the repo
 // (grants.mjs GRANTS), with policies that are Deckhand's alone otherwise; none: no policies.
-// `brainstorms`, `onboarded`: brainstorms.mjs's and onboarding.mjs's, when a test follows them.
+// `brainstorms`, `onboarded`, `stopped`: brainstorms.mjs's, onboarding.mjs's and stopped.mjs's,
+// when a test follows them; `skipped`: what ctx.skip() logged.
 async function modeOf(
   fields,
   yaml = "",
@@ -29,13 +31,19 @@ async function modeOf(
     grants = null,
     brainstorms = { get: () => null, end: () => {} },
     onboarded = null,
+    stopped = null,
+    skipped = [],
   } = {},
 ) {
   const replies = [];
   const ctx = {
     config: cfg,
     log: () => {},
-    skip: () => null,
+    skip: (why) => {
+      skipped.push(why);
+      return null;
+    },
+    stopped,
     tasks: new Map(),
     issueModes,
     brainstorms,
@@ -233,6 +241,40 @@ test("a comment without a trigger line goes on with a session in any volume a wo
     const sessions = new Set([`deckhand-org-repo-12-${volume}`]);
     assert.equal((await modeOf({}, "", { sessions })).mode, null, volume);
   }
+});
+
+test("a stopped task: a comment without a trigger line starts nothing, what asks for a run does (#1003)", async () => {
+  const stopped = createStopped();
+  stopped.stop("org/repo#12", "alice");
+  const sessions = new Set(["deckhand-org-repo-12-claude"]);
+  const skipped = [];
+  const opts = { sessions, stopped, skipped };
+  const plain = await modeOf({ author: "bob" }, "", opts);
+  assert.deepEqual([plain.mode, plain.replies], [null, []]);
+  assert.deepEqual(skipped, ["#12: its run was stopped, and no trigger line"]);
+  // Nor in the repo's own mode the issue is in, nor on its pull request.
+  const modes = "modes:\n  audit:\n    instructions: .deckhand/audit.md\n";
+  const issueModes = new Map([["org/repo#12", "audit"]]);
+  assert.equal((await modeOf({ author: "bob" }, modes, { ...opts, issueModes })).mode, null);
+  assert.equal((await modeOf({ author: "bob", replyTo: 31 }, "", opts)).mode, null);
+  // The listener's own runs: a rebase, a fix round.
+  for (const reason of ["conflict", "review-fix", "ci-fix"]) {
+    assert.equal((await modeOf({ trigger: "work", reason }, "", opts)).mode, null, reason);
+  }
+  // A trigger line, a `/mode` line, the dashboard's answers or Fix: they run (tasks.mjs lifts
+  // the stop as they are queued).
+  assert.equal((await modeOf({ author: "bob", trigger: "work" }, "", opts)).mode, "work");
+  assert.equal(
+    (await modeOf({ author: "bob", modeLine: "audit" }, modes, { ...opts, issueModes })).mode,
+    "audit",
+  );
+  assert.equal((await modeOf({ author: "bob", dashboard: true }, "", opts)).mode, "work");
+  const fix = { author: "bob", dashboard: true, trigger: "work", reason: "review-fix" };
+  assert.equal((await modeOf(fix, "", opts)).mode, "work");
+  assert.equal(stopped.has("org/repo#12"), true);
+  // Once the stop is lifted, a comment goes on in the session again.
+  stopped.clear("org/repo#12");
+  assert.equal((await modeOf({ author: "bob" }, "", opts)).mode, "work");
 });
 
 // The issue's brainstorm as brainstorms.mjs keeps it, its idle timer under the test's clock.
