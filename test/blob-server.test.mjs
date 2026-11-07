@@ -3,7 +3,7 @@
 // BLOB_URL, s3://…), TEST_BLOB_ACCESS_KEY_ID and TEST_BLOB_SECRET_ACCESS_KEY name one: no CI job
 // runs a server. Each run writes under a prefix of its own, and deletes what it wrote.
 //
-//   docker run -d --name garage -p 3900:3900 … (docs/guides/blob-storage.md, Garage)
+//   docker run -d --name garage -p 3900:3900 … (docs/guides/blob-storage.md, Garage on its own)
 //   TEST_BLOB_URL='s3://deckhand?endpoint=http://localhost:3900&region=garage' \
 //   TEST_BLOB_ACCESS_KEY_ID=… TEST_BLOB_SECRET_ACCESS_KEY=… node --test test/blob-server.test.mjs
 import assert from "node:assert/strict";
