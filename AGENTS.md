@@ -159,7 +159,7 @@ docs/         the docs, and the site built from them (VitePress, build-time only
               dashboard's, published to GitHub Pages by .github/workflows/docs.yml): index.md (the
               site's home), get-started/ (what Deckhand is, the quick start, core ideas),
               images/ (the pictures dashboard/screenshots/ takes, out of every image's build),
-              guides/ (one page per task: install, the GitHub App, the dashboard, the agents,
+              guides/ (one page per task: install, the GitHub App, the dashboard, inboxes, the agents,
               logs and metrics, updating and its upgrade notes, the store…; setup.md, the page
               they were split from, only says where each section went, #984), reference/
               (settings.md and settings/: the server settings, a page per area; server-folder.md:

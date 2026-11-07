@@ -132,6 +132,7 @@ export default defineConfig({
           { text: "Your own machine", link: "/guides/machines" },
           { text: "Chats", link: "/guides/chats" },
           { text: "Auto-pickup", link: "/guides/auto-pickup" },
+          { text: "Inboxes", link: "/guides/inboxes" },
         ],
       },
       {
