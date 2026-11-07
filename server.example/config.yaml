@@ -2,7 +2,7 @@
 # of server.example/: git-ignored here, commit it in your own deployment's repository).
 # Each key is a setting's environment variable in lowercase; a variable set (non-empty) in
 # .env wins over it. Read at start: restart the listener after an edit. Secrets stay in
-# .env. Every key: docs/setup.md#settings.
+# .env. Every key: docs/settings.md.
 
 # GitHub logins allowed to start runs (required, here or in ALLOWED_USERS): add yours.
 # Empty in both: no start.
@@ -12,11 +12,11 @@ allowed_repos: []
 # What every sandbox may reach and its limits are in grants/default.yaml.
 
 trigger: Deckhand
-# claude (Claude Code), codex (with OPENAI_API_KEY in .env: docs/setup.md#codex) or
-# antigravity (with GEMINI_API_KEY or AGY_AUTH_FILE in .env: docs/setup.md#antigravity-cli).
+# claude (Claude Code), codex (with OPENAI_API_KEY in .env: docs/guides/codex.md) or
+# antigravity (with GEMINI_API_KEY or AGY_AUTH_FILE in .env: docs/guides/antigravity.md).
 sandbox_agent: claude
 sandbox_model: opus
-# Through an Anthropic-compatible gateway (docs/setup.md#through-a-gateway), with
+# Through an Anthropic-compatible gateway (docs/guides/claude-code.md#through-a-gateway), with
 # ANTHROPIC_AUTH_TOKEN in .env:
 # anthropic_base_url: https://openrouter.ai/api
 # anthropic_default_opus_model: anthropic/claude-opus-4.1
@@ -26,11 +26,11 @@ sandbox_effort: medium
 max_parallel: 2
 
 # A container engine next to the sandboxes of repositories granted allow_docker: sysbox,
-# podman or auto (docs/setup.md#container-engine). None by default.
+# podman or auto (docs/guides/container-engine.md). None by default.
 # sandbox_engine: sysbox
 
 # Where the runs' networks take their subnets from, instead of Docker's default address
-# pools (docs/setup.md): blocks of /28 by default (sandbox_subnet_size). Empty: Docker's.
+# pools (docs/settings.md): blocks of /28 by default (sandbox_subnet_size). Empty: Docker's.
 # sandbox_subnets: 10.200.0.0/16
 # sandbox_subnet_size: 28
 

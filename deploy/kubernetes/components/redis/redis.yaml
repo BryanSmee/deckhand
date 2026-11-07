@@ -1,4 +1,4 @@
-# The services' stores on Redis (Valkey, which speaks it: docs/setup.md#the-store), for their
+# The services' stores on Redis (Valkey, which speaks it: docs/guides/store.md), for their
 # copies on several nodes. One primary, kept on disk (append-only, fsync every second: a crash
 # loses at most the last second), never evicting, and one user per service, each with its own
 # password (the deckhand-redis Secret, docs/kubernetes.md), allowed the store's commands on its

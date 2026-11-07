@@ -3,7 +3,7 @@
 // move: how much waits meanwhile is the servers' speed, reported, not asserted), and its whole
 // log reads back as the dashboard reads it (GET /logs of the runner service, through its client,
 // as edge calls it).
-// The runner service in process, on a real Redis and a real S3 server (Garage, docs/setup.md):
+// The runner service in process, on a real Redis and a real S3 server (Garage, docs/guides/blob-storage.md):
 // skipped unless TEST_REDIS_URL and TEST_BLOB_URL (with TEST_BLOB_ACCESS_KEY_ID and
 // TEST_BLOB_SECRET_ACCESS_KEY, as test/blob-server.test.mjs) name them; no CI job runs them.
 // TEST_LOG_MB: the log's size, 500 by default. Each run writes under prefixes of its own, and

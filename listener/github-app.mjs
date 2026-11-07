@@ -78,7 +78,7 @@ const covers = (has, level) => LEVELS.indexOf(has) >= Math.max(LEVELS.indexOf(le
 // The App's settings (`asApp`, the App's own calls), read at start and with each listing of its
 // repositories (repos.mjs): a warning for each event of APP_EVENTS it isn't subscribed to, and
 // each permission of APP_PERMISSIONS it lacks. An App created before a feature lacks its events
-// and permissions, and nothing else tells the operator (docs/setup.md); what its installations
+// and permissions, and nothing else tells the operator (docs/guides/github-app.md); what its installations
 // have yet to accept is the listing's to say. Resolves to the missing ones and what the
 // dashboard's links need, { missing, permissions, app: { name, owner, ownerType } } (app null
 // when GitHub refused). `credentials`: the stored App, the fallback for its slug and owner.
@@ -96,14 +96,14 @@ export async function checkAppSettings(asApp, log, { githubUrl, credentials = {}
   const missing = APP_EVENTS.filter((e) => !events.includes(e));
   if (missing.length) {
     log(
-      `The GitHub App isn't subscribed to ${missing.join(", ")}: turn ${missing.length > 1 ? "them" : "it"} on under Subscribe to events in its settings${where} (docs/setup.md)`,
+      `The GitHub App isn't subscribed to ${missing.join(", ")}: turn ${missing.length > 1 ? "them" : "it"} on under Subscribe to events in its settings${where} (docs/guides/github-app.md)`,
     );
   }
   const permissions = missingPermissions(has);
   if (permissions.length) {
     const them = permissions.length > 1 ? "them" : "it";
     log(
-      `The GitHub App lacks the permission${permissions.length > 1 ? "s" : ""} ${permissions.join(", ")}: add ${them} under Permissions in its settings${where}, then accept ${them} on each installation (docs/setup.md)`,
+      `The GitHub App lacks the permission${permissions.length > 1 ? "s" : ""} ${permissions.join(", ")}: add ${them} under Permissions in its settings${where}, then accept ${them} on each installation (docs/guides/github-app.md)`,
     );
   }
   return { missing, permissions, app };

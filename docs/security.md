@@ -4,7 +4,7 @@ Sandboxes run Claude Code without permission prompts, on issues anyone may have 
 Deckhand assumes that whatever runs inside one may try to read what it shouldn't or send it
 out, and limits what it can reach: no GitHub token, only calls through a gateway that adds
 one for its own repository (see [Tokens](#tokens) and
-[Setup](setup.md#how-sandboxes-reach-github)), no pushes to its default branch, no host
+[How sandboxes reach GitHub](guides/services.md#how-sandboxes-reach-github)), no pushes to its default branch, no host
 paths unless you grant them, a restricted network, and no privileges.
 
 ## The services
@@ -292,7 +292,7 @@ approval, no bypass for the App or GitHub Actions) and environments with require
 deployment branches limited to the default branch are still worth having: they cover what the
 checks don't, above.
 
-The App needs the Workflows permission for it ([setup](setup.md#2-create-the-github-app)):
+The App needs the Workflows permission for it ([Create the GitHub App](guides/github-app.md#what-each-permission-is-for)):
 without it, the gateway refuses every push of that repository, its runs' first one included,
 and says so, rather than pushing without it.
 
@@ -835,7 +835,7 @@ NetworkPolicies keep it there, and both copies mount the same key's Secret
 
 ### Blob storage
 
-Blob storage (`BLOB_URL`, [setup.md](setup.md#blob-storage), #604) holds what the runner and the
+Blob storage (`BLOB_URL`, [Blob storage](guides/blob-storage.md), #604) holds what the runner and the
 broker keep and will never change again: the runs' closed log segments (`logs/`) and their
 screenshots (`shots/`). Its key pair (`BLOB_ACCESS_KEY_ID`, `BLOB_SECRET_ACCESS_KEY`, or their
 `_FILE` forms) is **the runner's and the broker's alone**: no other service's environment,
@@ -847,7 +847,7 @@ key shorter than 16 characters, which redaction couldn't tell from ordinary text
 service.
 
 **What a leaked key reaches**: that bucket (or prefix), to read, overwrite and delete, and
-nothing else when the key is allowed that bucket alone ([setup.md](setup.md#what-a-server-needs)).
+nothing else when the key is allowed that bucket alone ([What a server needs](guides/blob-storage.md#what-a-server-needs)).
 What is there was redacted before it was written: the logs as every run log is (the operator's
 credentials, the run's tokens and its GitHub tokens, [Output](#output)), the screenshots are
 what the agents saved, which edge serves to anyone with their link anyway. Overwriting a log's
@@ -865,7 +865,7 @@ reach beyond the blobs they hold.
 
 With Compose, the runner and the broker reach Garage (the `garage` profile) over a network each
 (`blobs-runner`, `blobs-broker`), internal, with Garage alone on the other side; a server elsewhere
-needs a way out for both, which an override of the operator's adds ([setup.md](setup.md#a-server-outside-compose)).
+needs a way out for both, which an override of the operator's adds ([A server outside Compose](guides/blob-storage.md#a-server-outside-compose)).
 On Kubernetes, `components/blobs` lets them out to its address alone (`deckhand-blobs`,
 [On Kubernetes](#on-kubernetes)).
 
@@ -1206,7 +1206,7 @@ to GitHub: the proxy never tunnels those hosts for it, and its plain HTTP to the
   GitHub unchecked (`token …` for the
   API, Basic with `x-access-token` for git, as GitHub expects an App's), the sandbox's `Authorization` and
   cookies dropped. An optional permission its installation hasn't accepted
-  (`OPTIONAL_PERMISSIONS`, [setup](setup.md#when-the-app-needs-a-new-permission)) is left
+  (`OPTIONAL_PERMISSIONS`, [When the App needs a new permission](guides/github-app.md#when-the-app-needs-a-new-permission)) is left
   out of the token, and a call that needs it (`NEEDS`, `listener/github-gateway.mjs`) refused,
   naming it: a required one it lacks fails the token, as GitHub refuses it. A read whose
   permission the run's capabilities don't give (CI without `read:actions`) is refused naming the
@@ -1488,7 +1488,7 @@ terms:
 | Hardened containers                                         | `cap_drop: ALL`, `no-new-privileges`, uid 1000, read-only roots                            | the same in each pod's security context; the sandboxes' namespace enforces Pod Security `restricted`, and every sandbox pod meets it                                                                               |
 | The broker's public key, read only                          | the `service-keys` volume, which the broker writes                                         | a ConfigMap the operator makes beside the signing key's Secret: no volume shared between services                                                                                                                  |
 | Blob storage's key pair, the runner's and the broker's      | their environment alone (`BLOB_*`)                                                         | `components/blobs`: the `deckhand-blobs` Secret, mounted read only by their pods alone (`BLOB_*_FILE`), `BLOB_URL` from a ConfigMap no other pod reads, a NetworkPolicy out to its address alone                   |
-| The metrics port, the scraper's alone                       | off; on, a network of each service's with the scraper alone ([setup.md](setup.md#metrics)) | `deckhand-metrics`: every service's 9464 from the monitoring namespace alone, never the sandboxes', which the network probe tries it from ([kubernetes.md](kubernetes.md#metrics))                                 |
+| The metrics port, the scraper's alone                       | off; on, a network of each service's with the scraper alone ([Metrics](guides/metrics.md)) | `deckhand-metrics`: every service's 9464 from the monitoring namespace alone, never the sandboxes', which the network probe tries it from ([kubernetes.md](kubernetes.md#metrics))                                 |
 
 **NetworkPolicies need a network plugin that enforces them** (Calico, Cilium, k3s's own). One
 that doesn't (Flannel alone) takes them and enforces nothing: a sandbox could then call the
@@ -1878,7 +1878,7 @@ can't see grants nothing.
 
 What you give a repository beyond what every sandbox gets lives in `GRANTS_DIR`
 (`/etc/deckhand/grants` in the orchestrator and the services that read it: `grants/` in the
-[server folder](setup.md#the-server-folder) `compose.yaml` mounts read-only, with
+[server folder](settings.md#the-server-folder) `compose.yaml` mounts read-only, with
 [`server.example/grants/`](../server.example/grants) to start from): one file per
 repository for its hosts, projects, mounts and limits, `default.yaml` for every repository,
 and your policies in `policy/`, which hold [the grants](#the-grants) (a Dockerfile, an engine,
@@ -1936,9 +1936,9 @@ repository at a time. The yes-or-no keys these files had before #498 (`allow_doc
 `allow_branch_docker_images`, `allow_docker`, `allow_research`, `allow_workflows`,
 `allow_auto_merge`) are errors too, each saying what to do instead: for `true`, the
 `allow_grant` rule to write; for `false`, which granted nothing, to remove it
-([Upgrading](setup.md#upgrading-the-grants-498)). The preview hook's, `allow_preview` and
+([Upgrading](guides/upgrade-notes.md#upgrading-the-grants-498)). The preview hook's, `allow_preview` and
 `acknowledge_automerge_and_preview_is_highly_dangerous`, are only warnings: the hook is gone,
-so they grant nothing ([Upgrading](setup.md#upgrading-the-preview-hook-is-gone-574)).
+so they grant nothing ([Upgrading](guides/upgrade-notes.md#upgrading-the-preview-hook-is-gone-574)).
 
 **Errors stop runs, file by file.** A repository's file with errors grants that repository
 nothing: its runs stop, with a reply naming the file (the details are in the orchestrator's logs,
@@ -2089,7 +2089,7 @@ whose acknowledgement was lost included ([Edge](#edge), [The orchestrator](#the-
 
 With `AUTO_PICKUP_SLOTS` set and a repository's `auto_pickup: true`, a label starts a run
 with no comment: the orchestrator picks the open issues labelled `AUTO_PICKUP_LABEL` by itself
-(`listener/auto-pickup.mjs`, [setup.md](setup.md#auto-pickup)). The label stands for an
+(`listener/auto-pickup.mjs`, [Auto-pickup](guides/auto-pickup.md)). The label stands for an
 allowed user's trigger comment, so the orchestrator checks what it would check of one, and what
 it couldn't see of a label:
 
@@ -2209,7 +2209,7 @@ its MCP clients' tokens ([The dashboard](#the-dashboard), [MCP clients](#mcp-cli
 
 **Upgrading changes nothing**: Deckhand's `access.rego` gives every allowed user every action,
 server views included, as before access had rules; the repositories' `users` narrow as they did.
-To narrow, see [setup.md](setup.md#upgrading-access-control-725).
+To narrow, see [Upgrading: access control (#725)](guides/upgrade-notes.md#upgrading-access-control-725).
 
 ## The dashboard
 
@@ -2484,7 +2484,7 @@ session key. What people wrote (a delivery's payload, a queued comment, one wait
 issues) is kept with them redacted (`storable()`), rather than refused whole. A comment that
 waits (`/after`) was in a file of its own, `waits.json`, the owner's only (`0600`); in the store
 (#616), what keeps it is the store's own access: its folder, its file in its folder of `keys/` the owner's only, or
-Redis's user and network (docs/setup.md, The store). The file backend (`lib/store-file.mjs`) may
+Redis's user and network (docs/guides/store.md). The file backend (`lib/store-file.mjs`) may
 be shared by several processes on one node: two copies of a service on one volume
 (`docker compose up -d --scale orchestrator=2`, or edge), or one starting while the last
 drains. Each call holds the folder's lock (`state.lock`, taken over once 10 seconds stale, one process at a time), reads
@@ -2741,7 +2741,7 @@ A run whose repository the operator's policies grant `docker` ([the grants](#the
 repository at a time), whose
 `.deckhand.yaml` asks for `docker`, and for which the operator set `SANDBOX_ENGINE`, gets a
 second container next to its sandbox: an engine serving Docker's API
-([Setup](setup.md#container-engine)). The sandbox keeps everything above (uid 1000, no
+([Container engine](guides/container-engine.md)). The sandbox keeps everything above (uid 1000, no
 capabilities, `no-new-privileges`, its limits); whatever an engine needs relaxed is relaxed
 in the engine only:
 
@@ -3403,7 +3403,7 @@ sandbox ──(its run's network, internal: no route out)──▶ egress proxy 
 - That network is **internal**: Docker gives it no route out. The runner creates it with
   `--internal`, checks it (`docker network inspect`) and refuses to start the run otherwise.
   Its subnet comes from Docker's address pools, or from `SANDBOX_SUBNETS` when set (a block
-  no other network on the host uses, [Setup](setup.md#settings)): either way the network is
+  no other network on the host uses, [Sandbox networks](settings.md#sandbox-networks)): either way the network is
   internal, so the range changes addresses, not what a sandbox can reach. It must lie inside
   `10/8`, `172.16/12`, `192.168/16` or `100.64/10`: Deckhand refuses to start with
   another.
@@ -3520,7 +3520,7 @@ mandatory): `cached_hosts` alone opens nothing.
   URLs (a query string changed each time, say) can still push every other repository's
   answers out. The cache stays within its size, not its contents.
   `EGRESS_CACHE_MAX=0` turns the cache off
-  ([Setup](setup.md#advanced-settings)).
+  ([Advanced settings](settings.md#advanced-settings)).
 - **Trust**: plain HTTP can be tampered with on the way, cached or not, and a cached answer
   then reaches every run. Cache only what the client checks itself (apt's signed indexes and
   their package checksums do) or hosts you would trust over plain HTTP anyway.
@@ -3740,7 +3740,7 @@ it again when you change `AGY_VERSION`.
 - **The proxy is on every run's network**: a sandbox reaches the proxy's port, as every
   other sandbox does, but not the other sandboxes behind it. With metrics on for it
   (`EGRESS_METRICS_PORT` with Compose, its own setting and off by default,
-  [Metrics](setup.md#metrics)), a sandbox reaches that port too: `GET /metrics` alone, nothing
+  [Metrics](guides/metrics.md)), a sandbox reaches that port too: `GET /metrics` alone, nothing
   secret, but what it counts is every run's together: its memory, CPU and event loop lag, and
   its connections, denials, bytes and cache requests (by source and reason, never a host or a
   run) move with other runs' traffic. The other services' metrics ports are on no run's network.
@@ -3752,7 +3752,7 @@ it again when you change `AGY_VERSION`.
   `research` to a repository whose issues hold what must not leave.
 - Edge's port (8080: dashboard, webhook) is on no run's network, but a sandbox may reach its
   published address through the proxy, as any host its run may reach; it needs a dashboard
-  session (a signed-in allowed user, see [Setup](setup.md#4-the-dashboard)) or the webhook's
+  session (a signed-in allowed user, see [The dashboard](guides/dashboard.md#signing-in)) or the webhook's
   signature. `/status` also answers calls from inside edge's container (see
   [The dashboard](#the-dashboard)).
   Deliveries without a signature or over 5 MB are refused before their body is read (a push

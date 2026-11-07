@@ -7,7 +7,7 @@ copies on several nodes), `blobs` (blob storage for the logs and screenshots), `
 the same as a Helm chart, with values instead of patches ([Install with Helm](#install-with-helm)).
 Each run's sandbox is a pod
 (`RUNNER=kubernetes`): runs spread over the cluster's nodes, and `MAX_PARALLEL` still caps how
-many run at once. [setup.md](setup.md) has the rest (the GitHub App's permissions, the settings,
+many run at once. [The guides](guides/install.md) have the rest (the GitHub App's permissions, the settings,
 the agents): this page is what differs on a cluster.
 
 The same services either way; what changes is who starts the sandboxes and where the state
@@ -179,10 +179,10 @@ NetworkPolicies. The pods wait for their Secrets, next.
 # the services that check tokens offline), and models.key. Once: new keys would refuse the
 # running sandboxes' tokens and the sealed plan logins.
 node deploy/kubernetes/secrets.mjs keys | kubectl apply -f -
-# Your agents' credentials, the models service's alone (setup.md, Agents and providers).
+# Your agents' credentials, the models service's alone (docs/guides/agents.md).
 kubectl -n deckhand create secret generic deckhand-models \
   --from-literal=CLAUDE_CODE_OAUTH_TOKEN=<from claude setup-token>
-# Optional: the plans' logins (codex-auth.json, agy-auth.json: setup.md#the-credentials-folder).
+# Optional: the plans' logins (codex-auth.json, agy-auth.json: guides/agents.md#the-credentials-folder).
 kubectl -n deckhand create secret generic deckhand-credentials --from-file=codex-auth.json
 ```
 
@@ -215,7 +215,7 @@ pod from there (their [metrics](#metrics) port too), the egress proxy's, and a s
 it starts beside it, listening, and expects the proxy's alone to answer: 3128, and 3129 too when
 its Service publishes it (the `engine` component). A plugin that doesn't enforce NetworkPolicies fails it. The runner makes a check of its own as it starts
 ([The network probe](#the-network-probe)): its log says what it found. Then mention Deckhand on an issue
-([setup.md, Use it](setup.md#3-use-it)): its first run starts a sandbox pod.
+([Start runs](guides/runs.md)): its first run starts a sandbox pod.
 
 ## Install with Helm
 
@@ -272,7 +272,7 @@ first install.
 | `image.sandbox`                             | `<repository>-sandbox:<tag>` | `SANDBOX_IMAGE` ([below](#what-the-manifests-set-up-and-why)), for a mirror of yours                                                                                                                                                                                                           |
 | `namespaces`                                | `deckhand`, `-sandboxes`     | the services' namespace and the sandboxes' ([Namespaces](#namespaces)), two different ones, and whether the chart makes them                                                                                                                                                                   |
 | `server.config`, `server.grants`            | the examples                 | `config.yaml` and the grants folder's files, by their path in it; `--set-file server.config=config.yaml` reads yours                                                                                                                                                                           |
-| `env`                                       | none                         | any other setting in `deckhand-env` ([setup.md](setup.md#settings)); one the other values set (`KUBERNETES_NAMESPACE`, `SANDBOX_IMAGE`…) is refused, naming the value to use                                                                                                                   |
+| `env`                                       | none                         | any other setting in `deckhand-env` ([Server settings](settings.md)); one the other values set (`KUBERNETES_NAMESPACE`, `SANDBOX_IMAGE`…) is refused, naming the value to use                                                                                                                   |
 | `apiServer.cidrs`                           | a placeholder                | the API server's addresses ([Install](#install), step 2)                                                                                                                                                                                                                                       |
 | `store`                                     | `file`                       | `redis` for the `redis` component ([Several nodes](#several-nodes)), with `redis.image`, `redis.size` and `redis.storageClass`                                                                                                                                                                 |
 | `persistence.storageClass`, `.sizes`        | the cluster's default        | the services' claims; with `redis`, `persistence.sharedStorageClass` for the `ReadWriteMany` ones                                                                                                                                                                                              |
@@ -288,10 +288,10 @@ first install.
 mode and class can't change, so an upgrade that changes them fails on the claims it would
 change, and going to `redis` leaves the stores' claims (kept, with what they hold) unused. To
 move, scale the services to 0, copy what the claims hold (or let the stores start empty,
-losing what they hold: [setup.md](setup.md#the-store)), delete the claims that change, then
+losing what they hold: [The store](guides/store.md)), delete the claims that change, then
 upgrade. A runner with an empty store refuses every call until its prefix's marker is removed
 (`kubectl -n deckhand-sandboxes delete secret <NAME_PREFIX>-deployment`), unless its
-`deployment` key was copied ([setup.md](setup.md#the-store)). To update, change `image.tag` and
+`deployment` key was copied ([The store](guides/store.md)). To update, change `image.tag` and
 `helm upgrade deckhand deploy/helm/deckhand -f values.yaml`, from a checkout at the new release:
 the services update as [below](#updating). A change of `server` or `env` renames its ConfigMap,
 as kustomize's hash does, and the pods that read it restart. The old one stays, as
@@ -313,8 +313,8 @@ without stopping ([services.md](services.md#upgrades-without-downtime)): a rolli
 the next copy before the old one stops (`maxUnavailable: 0`, `maxSurge: 1`), which drains within
 its grace period. The orchestrator's and the runner's copies hand their lease over: the old one
 releases it on SIGTERM and the new one takes it at once. Running sandboxes go on. An update may
-have a step of its own ([setup.md](setup.md#updating), its "Upgrading:" sections): the
-orchestrator's volumes, for example ([#619](setup.md#upgrading-the-orchestrator-without-a-volume-619)).
+have a step of its own ([Updating](guides/updating.md), its "Upgrading:" sections): the
+orchestrator's volumes, for example ([#619](guides/upgrade-notes.md#upgrading-the-orchestrator-without-a-volume-619)).
 
 Every service has a liveness probe on `/health`: a process that stops answering is restarted
 after a minute. Edge, the github and models services and the egress proxy answer `/ready` only
@@ -323,7 +323,7 @@ service tokens, the proxy its service tokens): a new pod may not get out for a
 few seconds after it starts (k3s's kube-router applies its NetworkPolicies then), and the calls
 it took meanwhile would fail. The orchestrator's and the
 runner's readiness is `/health` too, not `/ready`, as Compose's health checks
-([setup.md](setup.md#health-checks)): `/ready` answers on the acting copy alone, and the
+([Health checks](guides/logs.md#health-checks)): `/ready` answers on the acting copy alone, and the
 next copy only acts once the old one has stopped, so a rolling update waiting for it never ends.
 Both copies sit behind their Service; the waiting one answers `503` with the connection closed
 (and opens no egress policy port), so a caller's next try reaches the copy that acts.
@@ -382,7 +382,7 @@ egress proxy. No CI job runs it: k3s needs a privileged container. With `K3S`, t
 
 The base keeps each service's store on its own `ReadWriteOnce` claim, which pods on one node
 share: each service's copies stay on one node (`podAffinity`), and the file store serves them
-both (setup.md, [The store](setup.md#the-store)). For copies on several nodes, add the `redis`
+both ([The store](guides/store.md)). For copies on several nodes, add the `redis`
 component:
 
 ```yaml
@@ -412,14 +412,14 @@ and their copies go to any node: the orchestrator has no volume at all (#619), i
 `storageClassName`), so a copy taking over on another node finds them. Coming from a release
 before #619, the orchestrator's first start on this one needs its old claim, which the
 component no longer mounts, and the claims stay until you delete them:
-[setup.md](setup.md#upgrading-the-orchestrator-without-a-volume-619). The proxy's copies stay on one node (their CA). Redis's own update is
+[Upgrading: the orchestrator without a volume (#619)](guides/upgrade-notes.md#upgrading-the-orchestrator-without-a-volume-619). The proxy's copies stay on one node (their CA). Redis's own update is
 a restart of a few seconds, which the services wait through.
 
 ## Blob storage
 
 With the `redis` component, the runs' logs and screenshots take Redis's memory: the runner and the
-broker say so at start, and on the dashboard's status page. Blob storage (setup.md,
-[Blob storage](setup.md#blob-storage)) takes them out of it; the `blobs` component gives it to
+broker say so at start, and on the dashboard's status page. [Blob storage](guides/blob-storage.md)
+ takes them out of it; the `blobs` component gives it to
 the runner and the broker, and to no other service:
 
 ```yaml
@@ -461,8 +461,8 @@ The placeholders (`BLOB_URL`'s `blobs.invalid`, the policy's `192.0.2.2`) reach 
 two services stop at start, saying what failed, until both are yours. The NetworkPolicy's way out
 is the one place to narrow: a hosted service's addresses when it publishes them (Amazon S3's
 ranges, `ip-ranges.json`), else `0.0.0.0/0` on 443 as above, which is a way to any HTTPS host
-for those two pods. Blob storage in the cluster (Garage's pods, setup.md's
-[Garage on its own](setup.md#garage-on-its-own)) is a `podSelector` instead, with a
+for those two pods. Blob storage in the cluster (Garage's pods,
+[Garage on its own](guides/blob-storage.md#garage-on-its-own)) is a `podSelector` instead, with a
 `namespaceSelector` when it runs in another namespace, and its port (Garage's S3 is on 3900):
 
 ```yaml
@@ -487,7 +487,7 @@ That namespace's own policies have to let them in. With Helm, `blobs.enabled`, `
 ## Metrics
 
 Every service serves Prometheus metrics on a port of its own, 9464 (`METRICS_PORT`, in each
-Deployment: [setup.md](setup.md#metrics) says what they say), for Prometheus or VictoriaMetrics
+Deployment: [Metrics](guides/metrics.md) says what they say), for Prometheus or VictoriaMetrics
 to scrape:
 
 - **The port**: a container port named `metrics` on each service's pods, the egress proxy's
@@ -523,9 +523,9 @@ in the services' namespace: each Service's `metrics` port, with `metrics.service
 for your operator's selector (`release: kube-prometheus-stack`, say) and `.interval`. Its CRD has
 to be in the cluster first: off by default. It keeps Deckhand's own `service` label
 (`honorLabels`), which is the Service's name already. Its targets' job is `deckhand` (`jobLabel`, the Services'
-`app.kubernetes.io/part-of`), which the [alerts](setup.md#alerts) select.
+`app.kubernetes.io/part-of`), which the [alerts](guides/metrics.md#alerts) select.
 
-The [dashboard](setup.md#the-dashboard) and the [alerts](setup.md#alerts) come with the chart
+The [dashboard](guides/metrics.md#the-grafana-dashboard) and the [alerts](guides/metrics.md#alerts) come with the chart
 too, both off by default. `metrics.dashboard.enabled` adds a ConfigMap, `deckhand-grafana-dashboard`,
 carrying `deploy/grafana/deckhand.json` and the label Grafana's sidecar loads dashboards by
 (`metrics.dashboard.labels`, `grafana_dashboard: "1"` as kube-prometheus-stack's and Grafana's
@@ -898,7 +898,7 @@ every sandbox mounts read-only, as on Docker:
   hosts only, nothing of the run's own; once the sandbox starts, those hosts are gone again.
   A failed install fails the run, with the installer's output in the run's log.
 
-The Antigravity CLI's plan login ([setup.md](setup.md#antigravity-cli)) is refreshed by a pod of its
+The Antigravity CLI's plan login ([Antigravity CLI](guides/antigravity.md)) is refreshed by a pod of its
 own, `<NAME_PREFIX>-job-antigravity-refresh`, in the sandboxes' namespace, at the models service's
 call (the runner's NetworkPolicy lets it in for that). It meets Pod Security `restricted` as the
 sandbox's user, with no ServiceAccount token and no Secret. The runner sends it the token file on
@@ -945,7 +945,7 @@ without caches, said once in the run's log.
 
 ## Container engine on Kubernetes
 
-A run granted a [container engine](setup.md#container-engine) gets one on Kubernetes through
+A run granted a [container engine](guides/container-engine.md) gets one on Kubernetes through
 [Sysbox](https://github.com/nestybox/sysbox) alone: `dockerd` is a sidecar in the sandbox's
 pod, under Sysbox's RuntimeClass, and the pod runs in a user namespace of its own
 (`hostUsers: false`). `dockerd` is root there, which Sysbox maps to an unprivileged user on the

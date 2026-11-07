@@ -18,7 +18,7 @@
 # Updating is the same two commands, at any time: running sandboxes go on, and the new
 # orchestrator and runner pick them up. `docker compose up -d --build` builds
 # them from this checkout instead. Edge's port is published as is: put your own reverse proxy
-# (TLS, host name) in front of it. See docs/setup.md.
+# (TLS, host name) in front of it. See docs/guides/install.md.
 
 name: deckhand
 
@@ -26,12 +26,12 @@ name: deckhand
 # orchestrator starts runs from it (through the runner).
 x-sandbox-image: &sandbox-image ${DECKHAND_REGISTRY:-ghcr.io/bryansmee}/deckhand-sandbox:${DECKHAND_VERSION:-latest}
 # The container engines runs of repositories granted `docker` get (SANDBOX_ENGINE): the
-# `engine` profile pulls or builds them (COMPOSE_PROFILES=engine in .env), docs/setup.md.
+# `engine` profile pulls or builds them (COMPOSE_PROFILES=engine in .env), docs/guides/container-engine.md.
 x-engine-image: &engine-image ${DECKHAND_REGISTRY:-ghcr.io/bryansmee}/deckhand-engine:${DECKHAND_VERSION:-latest}
 x-engine-podman-image: &engine-podman-image ${DECKHAND_REGISTRY:-ghcr.io/bryansmee}/deckhand-engine-podman:${DECKHAND_VERSION:-latest}
 # Every service's logs: Docker's json-file, which `docker compose logs` reads, rotated (five
 # files of 10 MB per container) so that a long-running deployment doesn't fill the disk. A
-# compose.override.yaml of yours sends them elsewhere instead (docs/setup.md#logs).
+# compose.override.yaml of yours sends them elsewhere instead (docs/guides/logs.md).
 x-logging: &logging
   driver: json-file
   options:
@@ -65,10 +65,10 @@ services:
     networks: [edge-out, edge-orchestrator, broker-edge, github-edge]
     environment:
       # Its log lines: text, as `docker compose logs` reads them, or json for a collector
-      # (docs/setup.md, Logs); debug, info, warn or error and above (LOG_LEVEL, info).
+      # (docs/guides/logs.md); debug, info, warn or error and above (LOG_LEVEL, info).
       LOG_FORMAT: ${LOG_FORMAT:-text}
       LOG_LEVEL: ${LOG_LEVEL:-}
-      # Prometheus metrics on a port of their own, not published (docs/setup.md#metrics).
+      # Prometheus metrics on a port of their own, not published (docs/guides/metrics.md).
       METRICS_PORT: ${METRICS_PORT:-}
       # Who may sign in to the dashboard, as for runs (or in config.yaml): required.
       ALLOWED_USERS: ${ALLOWED_USERS:-}
@@ -148,13 +148,13 @@ services:
       orchestrator-proxy:
     environment:
       # Its log lines: text, as `docker compose logs` reads them, or json for a collector
-      # (docs/setup.md, Logs); debug, info, warn or error and above (LOG_LEVEL, info).
+      # (docs/guides/logs.md); debug, info, warn or error and above (LOG_LEVEL, info).
       LOG_FORMAT: ${LOG_FORMAT:-text}
       LOG_LEVEL: ${LOG_LEVEL:-}
-      # Prometheus metrics on a port of their own, not published (docs/setup.md#metrics).
+      # Prometheus metrics on a port of their own, not published (docs/guides/metrics.md).
       METRICS_PORT: ${METRICS_PORT:-}
       # Every setting but the secrets and the wiring below can be in config.yaml instead
-      # (docs/setup.md#settings). A variable set here, non-empty, wins over the file's key:
+      # (docs/settings.md). A variable set here, non-empty, wins over the file's key:
       # these pass .env's value, or nothing, so that the file's keys and the orchestrator's
       # defaults apply.
       # Required, here or in config.yaml: GitHub logins allowed to start runs
@@ -180,7 +180,7 @@ services:
       AGY_BALANCED_MODEL: ${AGY_BALANCED_MODEL:-}
       AGY_FAST_MODEL: ${AGY_FAST_MODEL:-}
       # Where a run goes when its provider fails (or fallbacks in config.yaml,
-      # docs/setup.md#fallbacks).
+      # docs/guides/fallbacks.md).
       FALLBACKS: ${FALLBACKS:-}
       # Optional: OpenRouter's names for opus, sonnet and haiku.
       OPENROUTER_OPUS_MODEL: ${OPENROUTER_OPUS_MODEL:-}
@@ -241,7 +241,7 @@ services:
       CLAUDE_CODE_VOLUME: ${CLAUDE_CODE_VOLUME:-}
       CODEX_VOLUME: ${CODEX_VOLUME:-}
       AGY_VOLUME: ${AGY_VOLUME:-}
-      # Advanced (docs/setup.md#advanced-settings).
+      # Advanced (docs/settings.md#advanced-settings).
       GRANTS_DIR: ${GRANTS_DIR:-}
       INSTALL_NETWORK: ${INSTALL_NETWORK:-}
       RUNNER: ${RUNNER:-}
@@ -292,10 +292,10 @@ services:
     volumes:
       # Its store's folder (/data/store, STORE_URL's default) and nothing else: its queue, lease,
       # maps, live runs' states and the runs' summaries. Nothing secret. With Redis as its store,
-      # no volume at all (docs/setup.md#the-store).
+      # no volume at all (docs/guides/store.md).
       - data:/data
       # Your configuration, one folder you keep in git (server.example/ to start from), read
-      # only: config.yaml, your settings, read at start (docs/setup.md#settings); grants/,
+      # only: config.yaml, your settings, read at start (docs/settings.md); grants/,
       # what you grant each repo (hosts, Dockerfile, host mounts, limits), one
       # file per repo and default.yaml, read at each run (docs/security.md). Both optional.
       # Readable by uid 1000, as the orchestrator runs (the usual 0644 files and 0755 folders).
@@ -304,7 +304,7 @@ services:
       # paths repos ask for (.., symlinks) in it before mounting them into a sandbox, as uid 1000.
       # - /nfs/work:/nfs/work:ro
     # Its services port's /health: /ready is 503 on a copy waiting for the lease
-    # (docs/setup.md#two-copies), which is still up.
+    # (docs/guides/two-copies.md), which is still up.
     healthcheck:
       test: node -e "fetch('http://127.0.0.1:8083/health').then(r=>process.exit(+!r.ok),()=>process.exit(1))"
       interval: 30s
@@ -331,17 +331,17 @@ services:
     stop_grace_period: 35s
     environment:
       # Its log lines: text, as `docker compose logs` reads them, or json for a collector
-      # (docs/setup.md, Logs); debug, info, warn or error and above (LOG_LEVEL, info).
+      # (docs/guides/logs.md); debug, info, warn or error and above (LOG_LEVEL, info).
       LOG_FORMAT: ${LOG_FORMAT:-text}
       LOG_LEVEL: ${LOG_LEVEL:-}
-      # Prometheus metrics on a port of their own, not published (docs/setup.md#metrics).
+      # Prometheus metrics on a port of their own, not published (docs/guides/metrics.md).
       METRICS_PORT: ${METRICS_PORT:-}
       # Who calls, by the network a call arrives on: each caller has one of its own to the
       # broker, whose subnet is fixed below (docs/security.md#service-tokens).
       SERVICE_NETWORKS: orchestrator=${BROKER_ORCHESTRATOR_SUBNET:-10.231.250.0/28},edge=${BROKER_EDGE_SUBNET:-10.231.250.208/28},proxy=${BROKER_PROXY_SUBNET:-10.231.250.16/28},runner=${BROKER_RUNNER_SUBNET:-10.231.250.32/28},models=${BROKER_MODELS_SUBNET:-10.231.250.64/28},github=${BROKER_GITHUB_SUBNET:-10.231.250.176/28}
       # Where it publishes its public key, which the policy service and the runner mount read-only.
       SERVICE_KEYS_DIR: /service-keys
-      # Blob storage (docs/setup.md, Blob storage): none by default, the blobs in its store.
+      # Blob storage (docs/guides/blob-storage.md): none by default, the blobs in its store.
       # s3://<bucket>[/<prefix>]?endpoint=https://…&region=…, with its key pair, which only the
       # runner and the broker get (and Garage, below, with the `garage` profile:
       # s3://deckhand?endpoint=http://garage:3900&region=garage).
@@ -415,10 +415,10 @@ services:
         required: false
     environment:
       # Its log lines: text, as `docker compose logs` reads them, or json for a collector
-      # (docs/setup.md, Logs); debug, info, warn or error and above (LOG_LEVEL, info).
+      # (docs/guides/logs.md); debug, info, warn or error and above (LOG_LEVEL, info).
       LOG_FORMAT: ${LOG_FORMAT:-text}
       LOG_LEVEL: ${LOG_LEVEL:-}
-      # Prometheus metrics on a port of their own, not published (docs/setup.md#metrics).
+      # Prometheus metrics on a port of their own, not published (docs/guides/metrics.md).
       METRICS_PORT: ${METRICS_PORT:-}
       # The settings the runner reads too, as the orchestrator does (config.yaml, below, has the
       # rest): what it names on Docker, where sandboxes run, their engines, networks and agents.
@@ -471,7 +471,7 @@ services:
       SERVICE_NETWORKS: orchestrator=${RUNNER_SUBNET:-10.231.250.48/28},models=${RUNNER_MODELS_SUBNET:-10.231.250.112/28}
       # The broker's public keys, which its callers' service tokens are checked with.
       SERVICE_KEYS_DIR: /service-keys
-      # Blob storage (docs/setup.md, Blob storage): none by default, the blobs in its store.
+      # Blob storage (docs/guides/blob-storage.md): none by default, the blobs in its store.
       # s3://<bucket>[/<prefix>]?endpoint=https://…&region=…, with its key pair, which only the
       # runner and the broker get (and Garage, below, with the `garage` profile:
       # s3://deckhand?endpoint=http://garage:3900&region=garage).
@@ -520,10 +520,10 @@ services:
         condition: service_healthy
     environment:
       # Its log lines: text, as `docker compose logs` reads them, or json for a collector
-      # (docs/setup.md, Logs); debug, info, warn or error and above (LOG_LEVEL, info).
+      # (docs/guides/logs.md); debug, info, warn or error and above (LOG_LEVEL, info).
       LOG_FORMAT: ${LOG_FORMAT:-text}
       LOG_LEVEL: ${LOG_LEVEL:-}
-      # Prometheus metrics on a port of their own, not published (docs/setup.md#metrics).
+      # Prometheus metrics on a port of their own, not published (docs/guides/metrics.md).
       METRICS_PORT: ${METRICS_PORT:-}
       # GitHub's addresses, the repositories let through, and the grants folder (workflows,
       # allow_projects), as the orchestrator has them.
@@ -595,10 +595,10 @@ services:
     networks: [models-out, models-proxy, models-orchestrator, broker-models, runner-models]
     environment:
       # Its log lines: text, as `docker compose logs` reads them, or json for a collector
-      # (docs/setup.md, Logs); debug, info, warn or error and above (LOG_LEVEL, info).
+      # (docs/guides/logs.md); debug, info, warn or error and above (LOG_LEVEL, info).
       LOG_FORMAT: ${LOG_FORMAT:-text}
       LOG_LEVEL: ${LOG_LEVEL:-}
-      # Prometheus metrics on a port of their own, not published (docs/setup.md#metrics).
+      # Prometheus metrics on a port of their own, not published (docs/guides/metrics.md).
       METRICS_PORT: ${METRICS_PORT:-}
       # Claude Code's credential: one of the three (ANTHROPIC_AUTH_TOKEN for a gateway such
       # as OpenRouter). Never in a file, and never in a sandbox, nor in the orchestrator: this
@@ -608,21 +608,21 @@ services:
       ANTHROPIC_AUTH_TOKEN: ${ANTHROPIC_AUTH_TOKEN:-}
       # Optional: where those calls go (an API gateway, say). Default: api.anthropic.com.
       ANTHROPIC_BASE_URL: ${ANTHROPIC_BASE_URL:-}
-      # Codex's OpenAI API key (docs/setup.md#codex), kept out of sandboxes the same way.
+      # Codex's OpenAI API key (docs/guides/codex.md), kept out of sandboxes the same way.
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
-      # Or a ChatGPT plan's login (docs/setup.md#with-a-chatgpt-plan), which this service alone
+      # Or a ChatGPT plan's login (docs/guides/codex.md#with-a-chatgpt-plan), which this service alone
       # holds and refreshes: codex-auth.json in the credentials folder below, or this file.
       CODEX_AUTH_FILE: ${CODEX_AUTH_FILE:-}
       OPENAI_BASE_URL: ${OPENAI_BASE_URL:-}
-      # The Antigravity CLI's Gemini API key (docs/setup.md#antigravity-cli), kept out of
+      # The Antigravity CLI's Gemini API key (docs/guides/antigravity.md), kept out of
       # sandboxes the same way.
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
-      # Or a Google AI plan's login (docs/setup.md#with-a-google-ai-plan), which this service
+      # Or a Google AI plan's login (docs/guides/antigravity.md#with-a-google-ai-plan), which this service
       # alone holds and refreshes: agy-auth.json in the credentials folder below, or this file.
       AGY_AUTH_FILE: ${AGY_AUTH_FILE:-}
       GEMINI_BASE_URL: ${GEMINI_BASE_URL:-}
       # OpenRouter's key and address, for claude@openrouter in FALLBACKS
-      # (docs/setup.md#fallbacks), which it checks as the orchestrator does.
+      # (docs/guides/fallbacks.md), which it checks as the orchestrator does.
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
       OPENROUTER_BASE_URL: ${OPENROUTER_BASE_URL:-}
       FALLBACKS: ${FALLBACKS:-}
@@ -646,7 +646,7 @@ services:
       # Its store: the plans' refreshed logins (sealed), the runs' API state, its stream.
       - models-store:/data/store
       # The plans' logins (codex-auth.json, agy-auth.json), one folder on the host, git-ignored,
-      # read only: you put them there when you sign in (docs/setup.md#the-credentials-folder).
+      # read only: you put them there when you sign in (docs/guides/agents.md#the-credentials-folder).
       # The refreshed ones go in the store.
       - ${DECKHAND_CREDENTIALS_DIR:-./credentials}:/data/credentials:ro
       # Your configuration, read only, as the orchestrator reads it: config.yaml's base URLs.
@@ -686,10 +686,10 @@ services:
         condition: service_healthy
     environment:
       # Its log lines: text, as `docker compose logs` reads them, or json for a collector
-      # (docs/setup.md, Logs); debug, info, warn or error and above (LOG_LEVEL, info).
+      # (docs/guides/logs.md); debug, info, warn or error and above (LOG_LEVEL, info).
       LOG_FORMAT: ${LOG_FORMAT:-text}
       LOG_LEVEL: ${LOG_LEVEL:-}
-      # Prometheus metrics on a port of their own, not published (docs/setup.md#metrics).
+      # Prometheus metrics on a port of their own, not published (docs/guides/metrics.md).
       METRICS_PORT: ${METRICS_PORT:-}
       # The operator's policies: GRANTS_DIR/policy/*.rego, below. Empty: /etc/deckhand/grants.
       GRANTS_DIR: ${GRANTS_DIR:-}
@@ -728,11 +728,11 @@ services:
     stop_grace_period: 30s
     environment:
       # Its log lines: text, as `docker compose logs` reads them, or json for a collector
-      # (docs/setup.md, Logs); debug, info, warn or error and above (LOG_LEVEL, info).
+      # (docs/guides/logs.md); debug, info, warn or error and above (LOG_LEVEL, info).
       LOG_FORMAT: ${LOG_FORMAT:-text}
       LOG_LEVEL: ${LOG_LEVEL:-}
       # Its Prometheus metrics: a setting of its own, off unless set, as every sandbox reaches
-      # the proxy, and so its metrics port (docs/setup.md#metrics, docs/security.md).
+      # the proxy, and so its metrics port (docs/guides/metrics.md, docs/security.md).
       METRICS_PORT: ${EGRESS_METRICS_PORT:-}
       # The orchestrator's egress policy, on its own port (docs/architecture.md#restarts).
       POLICY_URL: http://orchestrator:8082/egress
@@ -774,12 +774,12 @@ services:
     cap_drop: [ALL]
     security_opt: ["no-new-privileges:true"]
 
-  # Blob storage to try it with (docs/setup.md, Blob storage), with the `garage` profile alone:
+  # Blob storage to try it with (docs/guides/blob-storage.md), with the `garage` profile alone:
   # Garage on one node, its bucket (deckhand) and its key made as it starts, from the runner's and
   # the broker's key pair (BLOB_ACCESS_KEY_ID, BLOB_SECRET_ACCESS_KEY in .env, with
   # BLOB_URL=s3://deckhand?endpoint=http://garage:3900&region=garage). Reached by the runner and
   # the broker alone, each over an internal network of its own; no way out, no published port.
-  # Its data stays in the garage volume. Several nodes, or another server: docs/setup.md.
+  # Its data stays in the garage volume. Several nodes, or another server: docs/guides/blob-storage.md.
   garage:
     profiles: [garage]
     image: dxflrs/garage:v2.3.0

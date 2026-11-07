@@ -1,9 +1,9 @@
-// Blob storage against a real S3 server (#610): Garage in docs/setup.md's setup, or any other
+// Blob storage against a real S3 server (#610): Garage in docs/guides/blob-storage.md, or any other
 // the operator runs, rather than test/helpers.mjs's fakeS3. Skipped unless TEST_BLOB_URL (a
 // BLOB_URL, s3://…), TEST_BLOB_ACCESS_KEY_ID and TEST_BLOB_SECRET_ACCESS_KEY name one: no CI job
 // runs a server. Each run writes under a prefix of its own, and deletes what it wrote.
 //
-//   docker run -d --name garage -p 3900:3900 … (docs/setup.md, Blob storage, Garage)
+//   docker run -d --name garage -p 3900:3900 … (docs/guides/blob-storage.md, Garage)
 //   TEST_BLOB_URL='s3://deckhand?endpoint=http://localhost:3900&region=garage' \
 //   TEST_BLOB_ACCESS_KEY_ID=… TEST_BLOB_SECRET_ACCESS_KEY=… node --test test/blob-server.test.mjs
 import assert from "node:assert/strict";

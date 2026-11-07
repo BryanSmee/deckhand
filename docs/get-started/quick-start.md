@@ -1,8 +1,8 @@
 # Quick start
 
-A first run in about 15 minutes, with Docker Compose. [Setting up Deckhand](../setup.md) has the
-details of each step, every setting, and the rest: other agents, two copies of each service,
-metrics. On a cluster, see [Deckhand on Kubernetes](../kubernetes.md).
+A first run in about 15 minutes, with Docker Compose. [Install with Compose](../guides/install.md) and the other guides have
+the details of each step and the rest: other agents, two copies of each service, metrics;
+[Server settings](../settings.md) has every setting. On a cluster, see [Deckhand on Kubernetes](../kubernetes.md).
 
 ## What you need
 
@@ -12,7 +12,7 @@ metrics. On a cluster, see [Deckhand on Kubernetes](../kubernetes.md).
 - A GitHub account or organization to own the App, and a repository to try it on.
 - A Claude credential: a token from `claude setup-token` (your Claude plan) or an
   `ANTHROPIC_API_KEY`. A plan is usually licensed to one person: for a team, use an API key
-  ([why](../setup.md#1-start-deckhand)).
+  ([why](../guides/install.md#a-plan-or-an-api-key)).
 
 ## 1. Configure
 
@@ -29,7 +29,7 @@ cp -r server.example server
 
 The `server/` folder holds every other setting, and in `server/grants/` what each repository
 gets beyond a bare sandbox (hosts, a Dockerfile, mounts). It grants nothing until you change it:
-leave it for now ([The server folder](../setup.md#the-server-folder)).
+leave it for now ([The server folder](../settings.md#the-server-folder)).
 
 ## 2. Start
 
@@ -76,7 +76,7 @@ request. Comment again on the issue or the pull request to continue the same ses
 orchestrator`: a login missing from `allowed_users` is logged there.
 - **👀, then 👎:** the run failed. The dashboard's page for the issue has its log.
 
-[Logs](../setup.md#logs) and [Health checks](../setup.md#health-checks) have more.
+[Logs](../guides/logs.md) and [Health checks](../guides/logs.md#health-checks) have more.
 
 ## Next
 
@@ -84,5 +84,5 @@ orchestrator`: a login missing from `allowed_users` is logged there.
 - [Per-repo config](../repo-config.md): a repository's own `.deckhand.yaml`.
 - [Security model](../security.md): read it before you install Deckhand on a repository other
   people write to.
-- [Updating](../setup.md#updating): `docker compose pull` and `docker compose up -d`, at any
+- [Updating](../guides/updating.md): `docker compose pull` and `docker compose up -d`, at any
   time.

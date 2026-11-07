@@ -36,7 +36,7 @@ EXPOSE 8082 8083
 # as Docker copies this folder's owner into an empty volume. With Redis as the store, no volume
 # (#619): nothing is written in its read-only root, this folder stays empty. One from a release
 # before #536 is root's, which it refuses to start on, saying the one-time chown
-# (docs/setup.md#upgrading-the-orchestrator-runs-as-node-536).
+# (docs/guides/upgrade-notes.md#upgrading-the-orchestrator-runs-as-node-536).
 RUN mkdir /data && chown node:node /data
 USER node
 CMD ["node", "orchestrator/server.mjs"]

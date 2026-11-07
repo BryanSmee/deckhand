@@ -299,7 +299,7 @@ test("checkAppSettings: one permission the App lacks, said in the singular, ever
   assert.deepEqual(checked.missing, []);
   assert.deepEqual(checked.permissions, ["discussions: write"]);
   assert.deepEqual(logs, [
-    "The GitHub App lacks the permission discussions: write: add it under Permissions in its settings (https://github.com/organizations/acme/settings/apps/acme-deckhand), then accept it on each installation (docs/setup.md)",
+    "The GitHub App lacks the permission discussions: write: add it under Permissions in its settings (https://github.com/organizations/acme/settings/apps/acme-deckhand), then accept it on each installation (docs/guides/github-app.md)",
   ]);
 });
 

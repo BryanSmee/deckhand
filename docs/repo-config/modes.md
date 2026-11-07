@@ -44,7 +44,7 @@ error, listed in the reply:
 | `agent`        | `agent`  | its agent, among the operator's (see [Agent](../repo-config.md#agent))                                                                                                       |
 | `model`        | `model`  | its model                                                                                                                                                                    |
 | `effort`       | `effort` | its thinking effort                                                                                                                                                          |
-| `speed`        | `normal` | `fast`: Claude Code's fast mode, as with `/speed fast` (which `/speed normal` overrides), within `fast_mode` and the operator's [`SANDBOX_FAST_MODE`](../setup.md#fast-mode) |
+| `speed`        | `normal` | `fast`: Claude Code's fast mode, as with `/speed fast` (which `/speed normal` overrides), within `fast_mode` and the operator's [`SANDBOX_FAST_MODE`](../guides/claude-code.md#fast-mode) |
 
 - **Names**: letters, digits, `-` and `_`. `work` and `brainstorm` can't be redefined (set
   their agent and model with `agent`/`model`/`effort` and `brainstorm_agent`/

@@ -1,4 +1,4 @@
-# The github service (docs/setup.md#the-github-service): the only pods with the GitHub App's key,
+# The github service (docs/guides/services.md#the-github-service): the only pods with the GitHub App's key,
 # in their own Secret (deckhand-github, at APP_DIR). Its way out is GitHub's
 # (network-policies.yaml). Two copies, both active on one store.
 apiVersion: apps/v1

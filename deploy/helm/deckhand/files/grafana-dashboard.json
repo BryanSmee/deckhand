@@ -1,7 +1,7 @@
 {
   "title": "Deckhand",
   "uid": "deckhand",
-  "description": "Deckhand's runs, webhooks, GitHub, models, egress, sandboxes and services (docs/setup.md, Metrics).",
+  "description": "Deckhand's runs, webhooks, GitHub, models, egress, sandboxes and services (docs/guides/metrics.md).",
   "tags": ["deckhand"],
   "editable": true,
   "graphTooltip": 1,

@@ -244,7 +244,7 @@ test("storeMap: a file cut short, then edited, counts as written after the store
   reviews.set("o/r#1", { round: 4 });
   await reviews.settled();
 
-  // Mended in an editor: written now, so it wins (docs/setup.md says to remove it instead).
+  // Mended in an editor: written now, so it wins (docs/guides/upgrade-notes.md says to remove it instead).
   writeAt(file, { "o/r#1": { round: 2 } }, 300);
   const next = await storeMap(store, "reviews", { file, now: () => 400_000 });
   assert.deepEqual(Object.fromEntries(next), { "o/r#1": { round: 2 } });

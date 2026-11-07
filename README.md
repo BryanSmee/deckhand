@@ -5,8 +5,8 @@ issue and it starts a sandbox, works on a branch, opens a draft pull request and
 issue when it is done, or stops to ask when only you can decide.
 
 It is self-hosted and bring-your-own-key: you create your own private GitHub App, run your own
-server, and use your own Claude credential (or [Codex](docs/setup.md#codex), or the
-[Antigravity CLI](docs/setup.md#antigravity-cli)). One deployment serves one operator, across
+server, and use your own Claude credential (or [Codex](docs/guides/codex.md), or the
+[Antigravity CLI](docs/guides/antigravity.md)). One deployment serves one operator, across
 as many repositories as the App is installed on.
 
 <picture>
@@ -23,7 +23,7 @@ as many repositories as the App is installed on.
 - **Reviews, inboxes, onboarding, your own machines, and a dashboard** with every run's live
   log.
 
-The dashboard follows every task and run, across your repositories ([the dashboard](docs/setup.md#4-the-dashboard)):
+The dashboard follows every task and run, across your repositories ([the dashboard](docs/guides/dashboard.md)):
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/images/dashboard-overview-desktop-dark.png">
@@ -53,9 +53,9 @@ Open the setup link through your public address, create the GitHub App and insta
 repository. Then comment `Deckhand` on one of its issues.
 
 The [quick start](docs/get-started/quick-start.md) walks through each step;
-[Setting up Deckhand](docs/setup.md) has every setting, and the
-[security model](docs/security.md) what to read before you install it on a repository other
-people write to. To report a vulnerability privately, see [SECURITY.md](SECURITY.md).
+the [guides](docs/guides/install.md) go further, [Server settings](docs/settings.md) has every
+setting, and the [security model](docs/security.md) what to read before you install it on a
+repository other people write to. To report a vulnerability privately, see [SECURITY.md](SECURITY.md).
 
 ## Claude Code and naming
 

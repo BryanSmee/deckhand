@@ -1,4 +1,4 @@
-# The broker (docs/setup.md#the-broker-service): the key that signs the runs' tokens and the
+# The broker (docs/guides/services.md#the-broker-service): the key that signs the runs' tokens and the
 # services' own, the live runs and their files. Its key is a Secret you make once
 # (deckhand-broker-key, docs/kubernetes.md), which both copies mount: a copy with another key
 # would sign tokens the other refuses. Its public key is the deckhand-service-keys ConfigMap,

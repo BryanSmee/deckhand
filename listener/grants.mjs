@@ -143,7 +143,7 @@ const MOVED = {
 // whatever their value, and a grants file that still has them loads, with a warning.
 const REMOVED = ["allow_preview", "acknowledge_automerge_and_preview_is_highly_dangerous"];
 const removed = (key) =>
-  `${key}: the preview hook is gone (#574), ignored: remove it (docs/setup.md#upgrading-the-preview-hook-is-gone-574)`;
+  `${key}: the preview hook is gone (#574), ignored: remove it (docs/guides/upgrade-notes.md#upgrading-the-preview-hook-is-gone-574)`;
 // What a grants file's former key (`key`: `value`, in `file`) says to do now. Its value
 // decides: `false` granted nothing, and nothing is granted by default now, so the key goes (in a
 // repository's file, a `deny_grant` keeps out what a rule for every repository would give it);

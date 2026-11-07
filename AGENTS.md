@@ -152,7 +152,7 @@ deploy/       kubernetes/: the manifests for a cluster (#396), a kustomize base 
               base's objects (test/helm-chart.test.mjs); kubernetes-e2e/: a run from start to end on a
               cluster, every service updated mid-run (run.sh, its fakes; docs/kubernetes.md);
               grafana/deckhand.json: the Grafana dashboard, alerts/: the alert rules and their
-              promtool tests (#661; docs/setup.md, Metrics), the chart carrying copies of both in
+              promtool tests (#661; docs/guides/metrics.md), the chart carrying copies of both in
               helm/deckhand/files/, held the same by test/metrics-deploy.test.mjs
 docs/         the docs, and the site built from them (VitePress, build-time only like the
               dashboard's, published to GitHub Pages by .github/workflows/docs.yml): index.md (the

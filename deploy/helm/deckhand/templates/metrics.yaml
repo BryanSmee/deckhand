@@ -5,7 +5,7 @@
 # (Redis, BuildKit) picked by the selector and left out. honorLabels: Deckhand's own `service`
 # label is the Service's name already, kept as `service` rather than `exported_service`.
 # jobLabel: every Service's part-of label, `deckhand`, as the job of all their targets, which the
-# alert rules select (deploy/alerts/deckhand.yaml) as docs/setup.md's scrape config names it.
+# alert rules select (deploy/alerts/deckhand.yaml) as docs/guides/metrics.md's scrape config names it.
 {{- if eq $sm.kind "ServiceMonitor" }}
 apiVersion: monitoring.coreos.com/v1
 {{- else }}
