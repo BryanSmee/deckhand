@@ -707,6 +707,36 @@ export function createTasks(ctx) {
     return items.length;
   }
 
+  // Task `key`'s issue or pull request closed, or a pull request of its merged (http.mjs,
+  // forgetClosedStops()): its stop mark goes, so the store keeps none for good, and the comments
+  // held behind its stopped run with it, their 👀 off, rather than waiting for a trigger that may
+  // never come. Kept while its task is busy (its stopped run still ending, whose teardown holds
+  // what waits behind it): forgetClosedStops() drops both after. → whether it went.
+  function forgetStopped(key) {
+    if (!ctx.stopped?.has(key)) return false;
+    const task = tasks.get(key) ?? [...tasks].find(([other]) => sameTask(other, key))?.[1] ?? null;
+    if (task?.running || task?.pending.length) return false;
+    ctx.stopped.clear(key);
+    const held = task?.onHold?.splice(0) ?? [];
+    for (const item of held) ctx.track?.(ctx.settle(item, "cancelled"));
+    if (held.length) ctx.saveQueue?.();
+    const dropped = held.length ? `, ${held.length} held comment(s) dropped` : "";
+    log(`${key}: no longer stopped, closed${dropped}`);
+    return true;
+  }
+
+  // The stop marks of the tasks closed as titles.mjs last heard of them, dropped (forgetStopped()):
+  // those whose task was busy when they closed, or that closed while no copy was listening. As
+  // titles.mjs alone has it, which a reopen clears (pulls.mjs keeps an issue's merged pull request
+  // through a reopen). Not at start: an issue reopened while none was would lose its stop before
+  // its delivery says so. → their keys.
+  function forgetClosedStops() {
+    const titles = ctx.titles;
+    if (!titles?.keys) return [];
+    const closed = titles.keys().filter((key) => titles.closed(key));
+    return closed.filter((key) => forgetStopped(key)).map(taskId);
+  }
+
   // A run apart from work (modes.mjs `volumes`) is what the task's next run will be: it goes
   // first, after a shorter pause.
   function talking(task) {
@@ -929,6 +959,8 @@ export function createTasks(ctx) {
     deliverLater,
     startLater,
     holdStopped,
+    forgetStopped,
+    forgetClosedStops,
     schedule,
     queueOrder,
     pickedCount,
