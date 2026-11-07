@@ -132,7 +132,7 @@ test("docs/repo-config/policy-inputs.md's table names each mode's file and every
     new URL("../docs/repo-config/policy-inputs.md", import.meta.url),
     "utf8",
   );
-  const input = docs.slice(docs.indexOf("### The GitHub input"));
+  const input = docs.slice(docs.indexOf("## The GitHub input"));
   const table = input.slice(
     input.indexOf("| Mode "),
     input.indexOf("\n\n", input.indexOf("| Mode ")),

@@ -28,7 +28,7 @@ Three steps, all off by default:
    `up -d --build`) pulls or builds both engine images, `deckhand-engine` and
    `deckhand-engine-podman`, the way the `sandbox` service does the base image.
 3. **Grant it per repository**: `docker`, in an `allow_grant` rule of your policies that names
-   the repository (`grants/policy/grants.rego`, [the grants](../security/policies.md#the-grants): a rule
+   the repository (`grants/policy/grants.rego`, [the grants](../reference/server-folder.md#the-grants): a rule
    for every repository grants it to none), and the repository asks for it with `docker: true` in its
    `.deckhand.yaml` ([Per-repo config](../repo-config.md#container-engine)). Add the registries
    it pulls from to `hosts` in its grants file: Docker Hub is

@@ -160,8 +160,10 @@ docs/         the docs, and the site built from them (VitePress, build-time only
               images/ (the pictures dashboard/screenshots/ takes, out of every image's build),
               guides/ (one page per task: install, the GitHub App, the dashboard, the agents,
               logs and metrics, updating and its upgrade notes, the store…; setup.md, the page
-              they were split from, only says where each section went, #984), settings.md (the
-              server folder and every setting), per-repo config reference (repo-config.md: the core keys; repo-config/: modes,
+              they were split from, only says where each section went, #984), reference/
+              (settings.md and settings/: the server settings, a page per area; server-folder.md:
+              the server folder, the grants, the operator's policies; comment-commands.md), per-repo
+              config reference (repo-config.md: the core keys; repo-config/: modes,
               reviews, issues, policies, policy inputs), the security model (security.md: a one-page
               overview; security/: the threat model by area, #985), architecture, the
               dashboard's languages (dashboard-languages.md); .vitepress/ (config.mjs: the

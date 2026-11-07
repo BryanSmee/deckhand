@@ -2,7 +2,8 @@
 
 How to start a run from GitHub, stop it, and pick its mode, agent and model. Read it once the
 App is [installed](github-app.md) on a repository. The dashboard starts, queues and stops runs
-too: see [The dashboard](dashboard.md).
+too: see [The dashboard](dashboard.md). Every command a comment takes, in one list:
+[Comment commands](../reference/comment-commands.md).
 
 ## The trigger
 
@@ -19,7 +20,7 @@ without code; `/stop` wraps it up.
 
 `Deckhand /mode research` answers a question from the open web, without the repository's code
 or a GitHub token, once your policies grant the repository `research` (an `allow_grant` rule in
-`grants/policy/`: [the grants](../security/policies.md#the-grants),
+`grants/policy/`: [the grants](../reference/server-folder.md#the-grants),
 [Research runs](../security/policies.md#research-runs)).
 
 A repository's own modes, and what each built-in one is for: [Modes](../repo-config/modes.md).

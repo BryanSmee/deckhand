@@ -21,12 +21,12 @@ namespaces:
   services: deckhand
   sandboxes: deckhand-sandboxes
 
-# config.yaml and the grants folder, mounted at /etc/deckhand (docs/settings.md,
+# config.yaml and the grants folder, mounted at /etc/deckhand (docs/reference/settings.md,
 # docs/security/policies.md#the-grants-folder). `--set-file server.config=config.yaml` reads yours.
 # Read at start: the pods restart when they change, as the ConfigMap's name carries their hash.
 server:
   config: |
-    # Deckhand's settings, as server.example/config.yaml (every key: docs/settings.md), under
+    # Deckhand's settings, as server.example/config.yaml (every key: docs/reference/settings.md), under
     # the key config.yaml: your overlay or the chart's values replace them with yours
     # (docs/kubernetes.md, Install). Read at start: the pods restart when it changes, as the
     # ConfigMap's name has a hash of it.
@@ -41,7 +41,7 @@ server:
       # (docs/security/policies.md#the-grants-folder). Nothing set: nothing granted.
 
 # Any other setting of the orchestrator, the runner and the models service, in deckhand-env
-# (docs/settings.md): MAX_PARALLEL, KUBERNETES_SESSION_SIZE, KUBERNETES_REGISTRY_HOSTS…
+# (docs/reference/settings.md): MAX_PARALLEL, KUBERNETES_SESSION_SIZE, KUBERNETES_REGISTRY_HOSTS…
 # One the values below set (KUBERNETES_NAMESPACE, SANDBOX_IMAGE…) is refused, naming the value.
 env: {}
 

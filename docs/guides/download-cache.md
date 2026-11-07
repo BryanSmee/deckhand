@@ -25,7 +25,7 @@ cached_hosts: [deb.debian.org, dl-cdn.alpinelinux.org, registry.npmjs.org, files
 - **Size**: one cache for every repository, in the `egress` service's `egress-cache` volume
   (`deckhand_egress-cache` with compose's default project name), at most `EGRESS_CACHE_MAX`
   (10 GB by default): beyond it, the least recently used answers go. Set it in the `egress`
-  service's `environment` ([Advanced settings](../settings.md#advanced-settings)); `0` turns the cache off.
+  service's `environment` ([Services and networks](../reference/settings/services.md)); `0` turns the cache off.
 - **HTTPS**: the proxy decrypts the HTTPS of cached hosts, and only theirs, with a CA it
   makes on its first start and keeps in that volume (`ca/`). Each run whose grant has
   cached hosts trusts that CA (its key never leaves the volume). The agent's hosts and

@@ -72,7 +72,7 @@ export default defineConfig({
     nav: [
       { text: "Get started", link: "/get-started/quick-start" },
       { text: "Guides", link: "/guides/install" },
-      { text: "Reference", link: "/repo-config" },
+      { text: "Reference", link: "/reference/comment-commands" },
       { text: "Security", link: "/security", activeMatch: "^/security" },
     ],
     sidebar: [
@@ -139,13 +139,35 @@ export default defineConfig({
       {
         text: "Reference",
         items: [
-          { text: "Server settings", link: "/settings" },
-          { text: "Repository config", link: "/repo-config" },
-          { text: "Modes", link: "/repo-config/modes" },
-          { text: "Reviews", link: "/repo-config/reviews" },
-          { text: "Issues", link: "/repo-config/issues" },
-          { text: "Policies", link: "/repo-config/policies" },
-          { text: "Policy inputs", link: "/repo-config/policy-inputs" },
+          { text: "Comment commands", link: "/reference/comment-commands" },
+          {
+            text: "<code>.deckhand.yaml</code>",
+            link: "/repo-config",
+            collapsed: false,
+            items: [
+              { text: "Modes", link: "/repo-config/modes" },
+              { text: "Reviews", link: "/repo-config/reviews" },
+              { text: "Issues", link: "/repo-config/issues" },
+              { text: "Policies", link: "/repo-config/policies" },
+              { text: "Policy inputs", link: "/repo-config/policy-inputs" },
+            ],
+          },
+          {
+            text: "Server settings",
+            link: "/reference/settings",
+            collapsed: false,
+            items: [
+              { text: "Access and GitHub", link: "/reference/settings/access" },
+              { text: "Agents and models", link: "/reference/settings/agents" },
+              { text: "Runs and limits", link: "/reference/settings/limits" },
+              { text: "Sandboxes and the runner", link: "/reference/settings/sandboxes" },
+              { text: "The store", link: "/reference/settings/store" },
+              { text: "Blob storage", link: "/reference/settings/blobs" },
+              { text: "Logs and metrics", link: "/reference/settings/metrics" },
+              { text: "Services and networks", link: "/reference/settings/services" },
+            ],
+          },
+          { text: "The server folder and grants", link: "/reference/server-folder" },
         ],
       },
       {

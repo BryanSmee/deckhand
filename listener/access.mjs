@@ -72,7 +72,7 @@ export async function grantedAccess(
   if (missing.length) {
     log(`${repo}: ${CONFIG_FILE} asks for what its grant doesn't allow: ${missing.join("; ")}`);
     throw new RunError(
-      `${configErrors(task.base, missing, agent.displayName)}\n\nThe operator can grant these to the repository with \`allow_grant\` rules in the grants folder's policies (see Deckhand's docs/security/policies.md#the-grants), or the repository can remove them from \`${CONFIG_FILE}\`.`,
+      `${configErrors(task.base, missing, agent.displayName)}\n\nThe operator can grant these to the repository with \`allow_grant\` rules in the grants folder's policies (see Deckhand's docs/reference/server-folder.md#the-grants), or the repository can remove them from \`${CONFIG_FILE}\`.`,
     );
   }
   const { refused, notes } = check.mounts;
@@ -111,7 +111,7 @@ export async function researchRefusal(config, repo, { granted = null, check = nu
   check ??= await grantCheck(config, repo, { mounts: [] }, { granted });
   if (check.error) return grantsRefusal(check);
   if (!check.grant.allowResearch) {
-    return `research runs need the \`research\` grant: ${notGranted("research")} (see Deckhand's docs/security/policies.md#the-grants)`;
+    return `research runs need the \`research\` grant: ${notGranted("research")} (see Deckhand's docs/reference/server-folder.md#the-grants)`;
   }
   return null;
 }

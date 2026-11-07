@@ -154,7 +154,7 @@ services:
       # Prometheus metrics on a port of their own, not published (docs/guides/metrics.md).
       METRICS_PORT: ${METRICS_PORT:-}
       # Every setting but the secrets and the wiring below can be in config.yaml instead
-      # (docs/settings.md). A variable set here, non-empty, wins over the file's key:
+      # (docs/reference/settings.md). A variable set here, non-empty, wins over the file's key:
       # these pass .env's value, or nothing, so that the file's keys and the orchestrator's
       # defaults apply.
       # Required, here or in config.yaml: GitHub logins allowed to start runs
@@ -241,7 +241,7 @@ services:
       CLAUDE_CODE_VOLUME: ${CLAUDE_CODE_VOLUME:-}
       CODEX_VOLUME: ${CODEX_VOLUME:-}
       AGY_VOLUME: ${AGY_VOLUME:-}
-      # Advanced (docs/settings.md#advanced-settings).
+      # Advanced (docs/reference/settings/services.md).
       GRANTS_DIR: ${GRANTS_DIR:-}
       INSTALL_NETWORK: ${INSTALL_NETWORK:-}
       RUNNER: ${RUNNER:-}
@@ -295,7 +295,7 @@ services:
       # no volume at all (docs/guides/store.md).
       - data:/data
       # Your configuration, one folder you keep in git (server.example/ to start from), read
-      # only: config.yaml, your settings, read at start (docs/settings.md); grants/,
+      # only: config.yaml, your settings, read at start (docs/reference/settings.md); grants/,
       # what you grant each repo (hosts, Dockerfile, host mounts, limits), one
       # file per repo and default.yaml, read at each run (docs/security/policies.md#the-grants-folder). Both optional.
       # Readable by uid 1000, as the orchestrator runs (the usual 0644 files and 0755 folders).

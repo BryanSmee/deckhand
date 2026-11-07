@@ -1,7 +1,7 @@
 # Setting up Deckhand
 
 This page was split into the [guides](guides/install.md), one page per task, and
-[Server settings](settings.md). Where each of its sections went:
+[Server settings](reference/settings.md). Where each of its sections went:
 
 | Section                                                         | Now                                                                                                                                                                |
 | --------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
@@ -13,9 +13,9 @@ This page was split into the [guides](guides/install.md), one page per task, and
 | 4. The dashboard                                                | [The dashboard](guides/dashboard.md)                                                                                                                               |
 | › MCP clients                                                   | [MCP clients](guides/mcp-clients.md)                                                                                                                               |
 | › Your own machine                                              | [Your own machine](guides/machines.md)                                                                                                                             |
-| The server folder                                               | [Server settings › The server folder](settings.md#the-server-folder)                                                                                               |
+| The server folder                                               | [The server folder and grants](reference/server-folder.md)                                                                                                         |
 | The credentials folder                                          | [Agents and providers › The credentials folder](guides/agents.md#the-credentials-folder)                                                                           |
-| Settings                                                        | [Server settings](settings.md)                                                                                                                                     |
+| Settings                                                        | [Server settings](reference/settings.md)                                                                                                                           |
 | › Auto-pickup                                                   | [Auto-pickup](guides/auto-pickup.md)                                                                                                                               |
 | › Chats                                                         | [Chats](guides/chats.md)                                                                                                                                           |
 | › Fast mode                                                     | [Claude Code › Fast mode](guides/claude-code.md#fast-mode)                                                                                                         |
@@ -25,7 +25,7 @@ This page was split into the [guides](guides/install.md), one page per task, and
 | › Antigravity CLI                                               | [Antigravity CLI](guides/antigravity.md)                                                                                                                           |
 | › Plan usage                                                    | [Agents and providers › Plan usage](guides/agents.md#plan-usage)                                                                                                   |
 | › Fallbacks                                                     | [Fallbacks](guides/fallbacks.md)                                                                                                                                   |
-| › Advanced settings                                             | [Server settings › Advanced settings](settings.md#advanced-settings)                                                                                               |
+| › Advanced settings                                             | [Server settings › Services and networks](reference/settings/services.md)                                                                                          |
 | Logs                                                            | [Logs and health checks](guides/logs.md)                                                                                                                           |
 | Metrics                                                         | [Metrics](guides/metrics.md)                                                                                                                                       |
 | › With Compose                                                  | [Metrics › With Compose](guides/metrics.md#with-compose)                                                                                                           |

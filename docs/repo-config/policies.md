@@ -99,7 +99,7 @@ repository's). Eight decisions:
 Each has its allow rule (`allow_merge`…), and [capabilities](#capabilities) and
 [access](#access) two of their own each. Another `allow_*` or `deny_*` rule is reported by the
 config check, as probably misspelled. `allow_grant` and `deny_grant`, what the operator grants
-the repository ([the grants](../security/policies.md#the-grants)), are the operator's alone: here they are
+the repository ([the grants](../reference/server-folder.md#the-grants)), are the operator's alone: here they are
 ignored, and a config check error. So is `allow_access`: a repository's `deny_access` only takes
 access away.
 
@@ -121,7 +121,7 @@ What a run's sandbox gets (`pull`, `push`, `setup`, `docker`, `internet`, `read:
 `deny_capabilities` (`{"capability": …, "reason": …}`) on `repo` (`name`, `private`), `mode`,
 `custom_mode`, `issue`, `reason`, `fork`, `trigger` (as the run input's) and `command` (the
 comment's first line: `work`, `stop`…); used if its key (`setup`, `dockerfile`,
-`docker`) asks for it and the operator's [grant](../security/policies.md#the-grants) gives it, and what it needs is used (a deny drops what needs it). Deckhand's `mode-<mode>.rego` give each built-in mode
+`docker`) asks for it and the operator's [grant](../reference/server-folder.md#the-grants) gives it, and what it needs is used (a deny drops what needs it). Deckhand's `mode-<mode>.rego` give each built-in mode
 its own; the repository's `modes:` work's at most, and only what its `.deckhand/policy/` allows too (nothing: refused). The repository's config page, Capabilities tab, shows for each mode what a run gets, the file that decided each capability and what stops it.
 The `read:*` are what the run's token reads on GitHub (`read:issues` every issue, `read:pulls`
 every pull request, `read:discussions`, `read:actions` CI): without `read:issues`, a run reads its

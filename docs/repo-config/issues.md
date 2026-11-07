@@ -211,7 +211,7 @@ the sandbox lacks): its driver, an MCP client signed in as its owner, registers 
 labels, its capacity and the repositories it takes ([MCP clients](../guides/mcp-clients.md)). Both
 sides must opt in before this repository is offered to one:
 
-- the operator's policies grant it `machines` ([security.md](../security/policies.md#the-grants)), nothing
+- the operator's policies grant it `machines` ([the grants](../reference/server-folder.md#the-grants)), nothing
   by default;
 - this file has a `machines:` block, which may narrow the machines it takes to those with one
   of its labels (never wider than the grant):

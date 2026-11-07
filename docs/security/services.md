@@ -101,7 +101,7 @@ reach each other's sandboxes, volumes or networks: the second one doesn't run at
 image, mounts or capabilities beyond a sandbox spec
 (`listener/sandbox-spec.mjs`), which the runner turns into Docker's options: `--cap-drop ALL`, `no-new-privileges`, the operator's limits and a user. And it
 checks the spec again first, against the grants folder it reads itself and the operator's
-policies it asks the policy service itself ([the grants](policies.md#the-grants): `runner/spec-check.mjs`):
+policies it asks the policy service itself ([the grants](../reference/server-folder.md#the-grants): `runner/spec-check.mjs`):
 the sandbox's user, no capability, the base image or the run's repository's own, the task's own
 sandbox name (from its `deckhand.task`) and exactly its session volumes, the agents' volumes
 read-only and the repository's own caches, plain volume names and paths (nothing Docker would
@@ -320,7 +320,7 @@ and on `runner-models`, the models service's, for the Antigravity login's refres
 The policy service (#501), with Docker Compose, is on three others, internal (no way out):
 `policy`, shared with the orchestrator alone, `policy-github`, shared with the github service alone
 (the runs' writes and pushes), and `policy-runner`, shared with the runner alone, which asks
-it [the grants](policies.md#the-grants) (`GET /policies` and `POST /evaluate` only, never `/capabilities`,
+it [the grants](../reference/server-folder.md#the-grants) (`GET /policies` and `POST /evaluate` only, never `/capabilities`,
 `/access` or `/check`). Compose doesn't set its `SERVICE_NETWORKS`: its table still names what each
 caller may call. The orchestrator's service tokens come
 from the broker service, as every other's, and the broker publishes the public key the
