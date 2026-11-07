@@ -12,6 +12,18 @@ Pro/Ultra plan, for every
 repository or for those that pick it. One deployment serves one
 operator, across as many repositories as the App is installed on.
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/hero-dark.png">
+  <img alt="The loop: a Deckhand comment on an issue, the run followed live, then the draft pull request and the reply on the issue" src="docs/images/hero-light.png">
+</picture>
+
+The dashboard follows every task and run, across your repositories ([the dashboard](docs/setup.md#4-the-dashboard)):
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/dashboard-overview-desktop-dark.png">
+  <img alt="The dashboard's Overview: running runs, what waits on you, a card per repository" src="docs/images/dashboard-overview-desktop-light.png">
+</picture>
+
 ## What it does
 
 - **Comment triggers.** On an issue, the first line of a comment is the command and the rest
@@ -71,13 +83,33 @@ operator, across as many repositories as the App is installed on.
 
 ## How it works
 
+```mermaid
+sequenceDiagram
+  actor you as You
+  participant gh as GitHub
+  participant edge as edge
+  participant orch as orchestrator
+  participant runner as runner
+  participant sandbox as sandbox
+  participant proxy as egress proxy
+  participant github as github service
+  participant models as models service
+
+  you->>gh: comment "Deckhand" on an issue
+  gh->>edge: webhook (signature checked)
+  edge->>orch: the delivery
+  orch->>orch: allowlist, trigger line, policies, queue
+  orch->>runner: start a run
+  runner->>sandbox: one container, the run's token only
+  sandbox->>proxy: the agent's API, git, gh
+  proxy->>models: the agent's calls, your credential added there
+  proxy->>github: GitHub calls and pushes
+  github->>gh: with a token for that repository only
+  gh-->>you: 👀, a draft pull request, the reply on the issue
 ```
-GitHub ──webhook──▶ edge ──▶ orchestrator ──▶ runner ──docker──▶ sandbox (one per issue, Claude Code inside)
-                     │            │                                │
-                     └ dashboard  └──▶ github service ◀────────────┤  the run's token, swapped there
-                                       (GitHub gateway)            │  for a token for that repo only
-                                                                   └──▶ egress proxy ──▶ allowed hosts only
-```
+
+The services and what each holds: [services.md](docs/services.md), whose diagram shows
+the trust boundaries.
 
 - **Edge** (`edge/`) is the only service the internet reaches: it checks each webhook's
   signature and hands the delivery on, runs `/setup` and the sign-in, and serves the
