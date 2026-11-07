@@ -253,7 +253,7 @@ test("checkAppSettings: a warning naming the events the App isn't subscribed to,
     app: { name: "Acme Deckhand", slug: "acme-deckhand", owner: "acme", ownerType: "Organization" },
   });
   assert.equal(logs.length, 1);
-  assert.match(logs[0], /isn't subscribed to issues: turn it on .*docs\/setup\.md/);
+  assert.match(logs[0], /isn't subscribed to issues: turn it on .*docs\/guides\/github-app\.md/);
   assert.ok(
     logs[0].includes("(https://github.com/organizations/acme/settings/apps/acme-deckhand)"),
     logs[0],
