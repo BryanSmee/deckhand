@@ -6,14 +6,15 @@ inbox:
   ideas: 15
   bugs: 16
 
-# Prettier (npx) and the dashboard's packages, downloaded once.
+# Prettier (npx) and the dashboard's and docs site's packages, downloaded once.
 caches:
   - /home/node/.npm
 
-# The dashboard's build-time packages, for its tests and build, and graphql-js's bundle, which
-# the GitHub gateway's tests import (AGENTS.md).
+# The dashboard's and the docs site's build-time packages, for their tests and builds, and
+# graphql-js's bundle, which the GitHub gateway's tests import (AGENTS.md).
 setup: >-
   (cd dashboard && npm ci --no-audit --no-fund) &&
+  (cd docs && npm ci --no-audit --no-fund) &&
   cd listener/vendor && npm ci --no-audit --no-fund && npm run build
 
 # A container engine for building and starting edge/Dockerfile, orchestrator/Dockerfile and the

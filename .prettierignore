@@ -1,5 +1,8 @@
 dashboard/dist
 dashboard/package-lock.json
+docs/package-lock.json
+docs/.vitepress/dist
+docs/.vitepress/cache
 listener/vendor/package-lock.json
 listener/vendor/graphql.mjs
 listener/vendor/github.graphql

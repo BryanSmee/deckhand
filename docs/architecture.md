@@ -257,8 +257,8 @@ A run's reply counts once GitHub took it (`comments.mjs` `reply()` and `answer()
 discussion's included). A 5xx or a rate limit is tried again three times, over about two
 minutes; a reply refused with a 422 (too long, most likely) goes again cut to its first 20 000
 characters, with a link to the run on the dashboard for the rest. A reply still refused ends the
-run as `error`: its comments get 👎, and the dashboard's summary says "The reply couldn't be
-posted: <status>". An orchestrator restarting before then posts it again (`live.replied` is still
+run as `error`: its comments get 👎, and the dashboard's summary says `The reply couldn't be
+posted: <status>`. An orchestrator restarting before then posts it again (`live.replied` is still
 false).
 
 A run that stops to ask (its final message starts with `<!-- needs-input -->`, see

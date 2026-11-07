@@ -5,12 +5,15 @@ import assert from "node:assert/strict";
 import { readdirSync, readFileSync, existsSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
 import { test } from "node:test";
-import { fileURLToPath } from "node:url";
+import { createRequire } from "node:module";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { posix } from "./helpers.mjs";
+import { slugify } from "../docs/.vitepress/slug.mjs";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
-// What isn't the repository's own: packages, builds, git's files, Claude Code's worktrees.
-const SKIP = new Set(["node_modules", ".git", "dist", "coverage", ".claude"]);
+// What isn't the repository's own: packages, builds (the docs site's cache too), git's files,
+// Claude Code's worktrees.
+const SKIP = new Set(["node_modules", ".git", "dist", "cache", "coverage", ".claude"]);
 const TEXT = /\.(mjs|js|ts|tsx|md|rego|ya?ml|json|sh|css|html)$|Dockerfile$/;
 
 // The repository's files. Not `git ls-files`: the tests also run from a tarball without .git
@@ -106,3 +109,37 @@ test("slugs: GitHub's, repeated headings numbered", () => {
   const found = anchors("# A\n\n## Notes\n\n```sh\n# not a heading\n```\n\n## Notes\n");
   assert.deepEqual([...found], ["a", "notes", "notes-1"]);
 });
+
+// The docs site (docs/.vitepress) gives each heading the anchor GitHub does, so the references
+// above land on both.
+test("the site's slugs are GitHub's", () => {
+  for (const heading of ["CI before the review", "review.rego", "3. Use it", "Run tokens (#441)"]) {
+    assert.equal(slugify(heading), slug(heading));
+  }
+});
+
+// Each page rendered as the site renders it: every anchor GitHub gives it is an id there. With
+// the site's packages only (`npm ci` in docs/, the docs job in checks.yml).
+const vitepress = join(root, "docs", "node_modules", "vitepress");
+test(
+  "every page's anchors are ids on the site",
+  { skip: !existsSync(vitepress) && "no docs/node_modules (npm ci in docs/)" },
+  async () => {
+    const docs = join(root, "docs");
+    // From docs/, where the site's packages are.
+    const from = createRequire(join(docs, "package.json"));
+    const { createMarkdownRenderer } = await import(pathToFileURL(from.resolve("vitepress")));
+    const { default: site } = await import("../docs/.vitepress/config.mjs");
+    const md = await createMarkdownRenderer(docs, site.markdown, site.base);
+    const missing = [];
+    for (const path of files(docs).filter((path) => path.endsWith(".md"))) {
+      const text = readFileSync(path, "utf8");
+      const html = md.render(text, { relativePath: posix(relative(docs, path)) });
+      const ids = new Set([...html.matchAll(/ id="([^"]+)"/g)].map(([, id]) => id));
+      for (const anchor of anchors(text)) {
+        if (!ids.has(anchor)) missing.push(`${posix(relative(root, path))}#${anchor}`);
+      }
+    }
+    assert.deepEqual(missing, []);
+  },
+);

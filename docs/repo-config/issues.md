@@ -137,8 +137,8 @@ panel names the projects the grant lacks. A task on a pull request with no issue
 project.
 
 Runs only **add** items, to a granted project: a work run its issue, its pull request, its
-issue's sub-issues and the issues it files (`gh project item-add <number> --owner <org> --url
-<url>`, or `gh issue create --project`; not `gh issue edit` or `gh pr edit --add-project`, whose update with empty classic `projectIds` stays refused), a brainstorm the issues it files. They never set an
+issue's sub-issues and the issues it files (`gh project item-add <number> --owner <org>
+--url <url>`, or `gh issue create --project`; not `gh issue edit` or `gh pr edit --add-project`, whose update with empty classic `projectIds` stays refused), a brainstorm the issues it files. They never set an
 item's fields, remove or archive items, or change the project. This is the `project` action
 of [the GitHub input](policy-inputs.md#the-github-input); a repository's own modes don't add items unless its
 policies allow them (`allow_github`, [the default policies](policies.md#the-default-policies)).
