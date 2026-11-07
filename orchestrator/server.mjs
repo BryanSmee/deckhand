@@ -136,6 +136,10 @@ const MAPS_WAIT_MS = 10_000;
 // networks, should either have been recreated (restart.mjs relink()).
 const RELINK_MS = 60000;
 
+// How often the stop marks of closed issues and merged pull requests are looked for (tasks.mjs
+// forgetClosedStops()).
+const FORGET_STOPS_MS = 60 * 60_000;
+
 // How often the operator's credentials are looked at again, for their fingerprints.
 const FINGERPRINTS_MS = 30_000;
 
@@ -1326,6 +1330,10 @@ githubService.consume({
 // The models service's: the agents' calls it refused, each a line in its run's log.
 models.consume({ note: (event) => ctx.broker.runOf(event.run)?.note?.(event.message) });
 const relinking = setInterval(ctx.relink, RELINK_MS);
+// Stop marks left on tasks that closed while their stopped run was ending, or while no copy was
+// listening: not at start, as a reopen missed meanwhile would lose its stop (claims.mjs too).
+const forgettingStops = setInterval(ctx.forgetClosedStops, FORGET_STOPS_MS);
+forgettingStops.unref();
 ctx.conflicts.start();
 ctx.waits.start();
 ctx.startAdmissions();
@@ -1425,6 +1433,7 @@ sigterm = () => {
   history.stop();
   runEvents.stop();
   clearInterval(relinking);
+  clearInterval(forgettingStops);
   clearInterval(reconciling);
   clearInterval(printing);
   clearTimeout(appTimer);

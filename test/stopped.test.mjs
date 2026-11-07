@@ -125,3 +125,50 @@ test("a trigger during the stopped run's end: nothing held, its follow-up starts
   other.pending.push(item("x"));
   assert.equal(ctx.holdStopped(other), 0);
 });
+
+test("a close: the stop goes, the held comments too, their 👀 off; kept while its run ends", async (t) => {
+  const { ctx, logs, item } = tasksOf(t);
+  const settled = [];
+  ctx.settle = async (i, status) => settled.push([i.text, status]);
+  ctx.track = () => {};
+  let saves = 0;
+  ctx.saveQueue = () => saves++;
+  const task = newTask({ repo: "Org/Repo", id: "12", kind: "issue", number: 12, base: "main" });
+  ctx.tasks.set("Org/Repo#12", task);
+  task.onHold.push(item("Held."));
+  ctx.stopped.stop("org/repo#12", "bob");
+  // Its stopped run still ending: its teardown holds what waits, the sweep drops it later.
+  task.running = true;
+  assert.equal(ctx.forgetStopped("org/repo#12"), false);
+  assert.equal(ctx.stopped.has("org/repo#12"), true);
+  task.running = false;
+  // Under the delivery's spelling of the repo.
+  assert.equal(ctx.forgetStopped("org/repo#12"), true);
+  assert.equal(ctx.stopped.has("org/repo#12"), false);
+  assert.deepEqual([task.onHold, settled, saves], [[], [["Held.", "cancelled"]], 1]);
+  assert.ok(logs.includes("org/repo#12: no longer stopped, closed, 1 held comment(s) dropped"));
+  // Never stopped, or no longer: nothing to do.
+  assert.equal(ctx.forgetStopped("org/repo#12"), false);
+  assert.equal(ctx.forgetStopped("org/repo#13"), false);
+});
+
+test("the sweep: the stops of tasks closed or merged as last heard of, not the open ones", (t) => {
+  const { ctx } = tasksOf(t);
+  const closed = new Map([
+    ["org/repo#1", "done"],
+    ["org/repo#2", null],
+  ]);
+  ctx.titles = { keys: () => [...closed.keys()], closed: (key) => closed.get(key) ?? null };
+  const pulls = new Map([
+    ["org/repo#3", { state: "merged" }],
+    ["org/repo#4", { state: "ready" }],
+  ]);
+  ctx.pulls = { keys: () => [...pulls.keys()], get: (key) => pulls.get(key) ?? null };
+  for (const n of [1, 2, 3, 4, 5]) ctx.stopped.stop(`org/repo#${n}`, "bob");
+  assert.deepEqual(ctx.forgetClosedStops(), ["org/repo#1", "org/repo#3"]);
+  assert.deepEqual(
+    [2, 4, 5].map((n) => ctx.stopped.has(`org/repo#${n}`)),
+    [true, true, true],
+  );
+  assert.equal(ctx.stopped.has("org/repo#1"), false);
+});
