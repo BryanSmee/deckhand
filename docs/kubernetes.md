@@ -10,6 +10,28 @@ Each run's sandbox is a pod
 many run at once. [setup.md](setup.md) has the rest (the GitHub App's permissions, the settings,
 the agents): this page is what differs on a cluster.
 
+The same services either way; what changes is who starts the sandboxes and where the state
+lives:
+
+```mermaid
+flowchart TB
+  subgraph compose ["Compose: one host"]
+    direction LR
+    cservices["edge, orchestrator, runner, broker,<br/>github, models, policy, egress proxy<br/>one copy each<br/>stores on volumes"]
+    csock["Docker socket<br/>(the runner's alone)"]
+    csandbox["sandbox containers<br/>a network per run"]
+    cservices --> csock --> csandbox
+  end
+
+  subgraph kube ["Kubernetes: a cluster"]
+    direction LR
+    kservices["namespace deckhand<br/>the same services, two copies each<br/>stores on claims, or Redis"]
+    kapi["Kubernetes API<br/>(the runner's ServiceAccount)"]
+    ksandbox["namespace deckhand-sandboxes<br/>a pod per run, on any node<br/>NetworkPolicies"]
+    kservices --> kapi --> ksandbox
+  end
+```
+
 | Service      | Copies                           | Readiness | Grace (s) | Volumes                                            | Secrets                                                              |
 | ------------ | -------------------------------- | --------- | --------- | -------------------------------------------------- | -------------------------------------------------------------------- |
 | edge         | 2, both active                   | `/ready`  | 40        | `edge-data` (its store)                            | `deckhand-edge`                                                      |

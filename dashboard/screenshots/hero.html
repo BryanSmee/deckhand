@@ -1,0 +1,258 @@
+<!doctype html>
+<!-- The README's hero (run.mjs hero()): an issue's loop in three steps, on a made-up acme/app,
+     in the light or dark theme the page is shown in. Its texts are Deckhand's own forms: the
+     trigger comment and its reactions, the run's log on the dashboard, the reply's footer
+     (listener/footer.mjs) and the draft pull request. -->
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Deckhand: from an issue to a pull request</title>
+    <link rel="stylesheet" href="/node_modules/@fontsource-variable/inter/index.css" />
+    <link rel="stylesheet" href="/node_modules/@fontsource-variable/jetbrains-mono/index.css" />
+    <style>
+      :root {
+        --bg: #f6f7f9;
+        --card: #ffffff;
+        --line: #e3e6eb;
+        --text: #1c2026;
+        --muted: #667080;
+        --accent: #2f6fed;
+        --green: #1f883d;
+        --draft: #6e7781;
+        --code: #eef1f5;
+        color-scheme: light;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --bg: #0f1115;
+          --card: #171a20;
+          --line: #2a2f38;
+          --text: #e6e9ee;
+          --muted: #96a0ad;
+          --accent: #6d9eff;
+          --green: #3fb950;
+          --draft: #8b949e;
+          --code: #222730;
+          color-scheme: dark;
+        }
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--text);
+        font:
+          14px/1.45 "Inter Variable",
+          system-ui,
+          sans-serif;
+      }
+      main {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 20px;
+        padding: 28px;
+        width: 1200px;
+      }
+      section {
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+      }
+      h2 {
+        margin: 0;
+        font-size: 15px;
+        font-weight: 600;
+      }
+      h2 span {
+        display: inline-grid;
+        place-items: center;
+        width: 22px;
+        height: 22px;
+        margin-right: 8px;
+        border-radius: 50%;
+        background: var(--accent);
+        color: #fff;
+        font-size: 12px;
+      }
+      .card {
+        flex: 1;
+        background: var(--card);
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        padding: 14px 16px;
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+      }
+      .meta {
+        color: var(--muted);
+        font-size: 12px;
+      }
+      .title {
+        font-weight: 600;
+      }
+      .comment {
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        overflow: hidden;
+      }
+      .comment header {
+        background: var(--code);
+        padding: 6px 10px;
+        font-size: 12px;
+        color: var(--muted);
+      }
+      .comment header b {
+        color: var(--text);
+      }
+      .comment p {
+        margin: 0;
+        padding: 8px 10px;
+      }
+      .reactions {
+        display: flex;
+        gap: 6px;
+        padding: 0 10px 8px;
+      }
+      .reactions span {
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        padding: 0 8px;
+        font-size: 12px;
+      }
+      code,
+      .log {
+        font-family: "JetBrains Mono Variable", ui-monospace, monospace;
+        font-size: 12px;
+      }
+      code {
+        background: var(--code);
+        border-radius: 4px;
+        padding: 1px 4px;
+      }
+      .log {
+        list-style: none;
+        margin: 0;
+        padding: 0;
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+      }
+      .log li {
+        display: flex;
+        gap: 8px;
+        align-items: baseline;
+      }
+      .log .phase {
+        font-family: "Inter Variable", system-ui, sans-serif;
+        font-weight: 600;
+        font-size: 12px;
+        color: var(--muted);
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        margin-top: 4px;
+      }
+      .log .tool {
+        color: var(--accent);
+        min-width: 36px;
+      }
+      .ok {
+        color: var(--green);
+      }
+      .badges {
+        display: flex;
+        gap: 6px;
+        align-items: center;
+        flex-wrap: wrap;
+      }
+      .badge {
+        border-radius: 999px;
+        padding: 1px 9px;
+        font-size: 12px;
+        font-weight: 600;
+        color: #fff;
+        background: var(--draft);
+      }
+      .badge.live {
+        background: var(--accent);
+      }
+      .diff {
+        font-size: 12px;
+      }
+      .add {
+        color: var(--green);
+      }
+      .del {
+        color: #cf222e;
+      }
+      sub {
+        color: var(--muted);
+        font-size: 11px;
+        vertical-align: baseline;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <section>
+        <h2><span>1</span>Comment <code>Deckhand</code> on an issue</h2>
+        <div class="card">
+          <div class="meta">acme/app · Issue #22</div>
+          <div class="title">Dashboard on a frontend framework, built at image build time</div>
+          <div class="comment">
+            <header><b>octocat</b> commented</header>
+            <p>
+              Deckhand<br />Build it with Vite at image build time, and keep the listener serving
+              static files.
+            </p>
+            <div class="reactions"><span>👀 1</span><span>🚀 1</span></div>
+          </div>
+          <div class="meta">👀 once it is received, 🚀 once the run is done.</div>
+        </div>
+      </section>
+      <section>
+        <h2><span>2</span>Follow the run live</h2>
+        <div class="card">
+          <div class="badges">
+            <span class="badge live">Working</span>
+            <span class="meta">a sandbox of its own · 7 min</span>
+          </div>
+          <ul class="log">
+            <li class="phase">Setup</li>
+            <li><span class="ok">✓</span>added 214 packages in 9s</li>
+            <li class="phase">Work</li>
+            <li><span class="tool">Bash</span>cd dashboard &amp;&amp; npm ci</li>
+            <li><span class="tool">Edit</span>listener/static.mjs</li>
+            <li><span class="tool">Bash</span>node --test <span class="ok">412 pass</span></li>
+            <li class="phase">Push and pull request</li>
+            <li><span class="tool">Bash</span>git push origin issue-22-…</li>
+          </ul>
+        </div>
+      </section>
+      <section>
+        <h2><span>3</span>Review its pull request</h2>
+        <div class="card">
+          <div class="badges">
+            <span class="badge">Draft</span>
+            <span class="title">Dashboard on Preact and Vite, built in the image #25</span>
+          </div>
+          <div class="meta">
+            issue-22-dashboard-on-a-frontend-framework · 3 commits ·
+            <span class="diff"><span class="add">+86</span> <span class="del">−19</span></span>
+          </div>
+          <div class="comment">
+            <header><b>acme-deckhand</b> <span>bot</span> replied on #22</header>
+            <p>
+              Done in #25: the dashboard builds with Vite in the image's build stage, and the
+              listener serves <code>dashboard/dist/</code>. Tests pass (412).<br />
+              <sub>🤖 Claude Code opus · high effort · 7 min</sub>
+            </p>
+          </div>
+          <div class="meta">Or it stops and asks, when only you can decide.</div>
+        </div>
+      </section>
+    </main>
+  </body>
+</html>
