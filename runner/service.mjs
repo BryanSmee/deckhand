@@ -223,6 +223,9 @@ export function createRunnerService({
   // (repo, path, ref) → a file's blob id at `ref` (null: its default branch), or null: the
   // github service's.
   blobOf = async () => null,
+  // (repo, sha) → whether the commit is the repo's own (the github service's): a branch's image
+  // is built at none but those. None: no branch's image.
+  ownCommit = async () => false,
   // What GET /health says: when it started, its version (../lib/health.mjs).
   health = healthInfo(),
   // The runner's metrics' hooks (metrics.mjs runnerMetrics()), or none: starts that failed.
@@ -556,11 +559,12 @@ export function createRunnerService({
     "POST /images": async ({ req, res }) => {
       const asked = await readJsonBody(req, MAX_JSON);
       // What the grants allow, whatever the orchestrator asks; and what it builds from, the
-      // runner's to decide: the default branch unless a branch is granted, the Dockerfile's
-      // blob as GitHub says it, the hosts the grants give (builds.mjs).
+      // runner's to decide: the default branch unless a branch is granted (at one of the repo's
+      // own commits, as the github service says), the Dockerfile's blob as GitHub says it, the
+      // hosts the grants give (builds.mjs).
       const problem = await buildProblem(config, asked, grants, granted);
       if (problem) throw new Refused(403, `no build: ${problem}`);
-      const plan = await buildPlan(config, asked, { grants, blobOf });
+      const plan = await buildPlan(config, asked, { grants, blobOf, ownCommit });
       return streamed(res, async (output, line) => {
         const build = (planned) =>
           images.imageFor({
@@ -575,7 +579,7 @@ export function createRunnerService({
           // Its files hold another Dockerfile than the one its blob was looked up for: a push
           // in between, most often (the default branch moves). Planned again, once.
           log(`${asked.repo}: ${error.message}: looked up again`);
-          return build(await buildPlan(config, asked, { grants, blobOf }));
+          return build(await buildPlan(config, asked, { grants, blobOf, ownCommit }));
         }
       });
     },

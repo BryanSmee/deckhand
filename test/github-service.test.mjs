@@ -626,6 +626,54 @@ test("blobs: a file's blob id for the runner, at a ref or the default branch; pl
   assert.equal((await blob("path=Dockerfile", "edge")).status, 403);
 });
 
+test("commits: whether a commit is a repository's own, for the runner's branch images; a fork's isn't", async (t) => {
+  const OWN = "a".repeat(40); // on the default branch
+  const HEAD = "b".repeat(40); // a branch's head
+  const FORK = "c".repeat(40); // a fork's pull request's head, which GitHub serves here too
+  const asked = [];
+  const { a, call } = await setup(t, {
+    env: { ALLOWED_REPOS: "org/*" },
+    answer: (req) => {
+      asked.push(req.url);
+      const url = req.url.replace(/^\/api\/v3/, "");
+      if (url === "/repos/org/repo")
+        return [200, { id: 1, full_name: "org/repo", default_branch: "main" }];
+      let m;
+      if ((m = /\/compare\/([0-9a-f]+)\.\.\.main/.exec(url))) {
+        return [200, { status: m[1] === OWN ? "ahead" : "diverged" }];
+      }
+      if ((m = /\/commits\/([0-9a-f]+)\/branches-where-head$/.exec(url))) {
+        return [200, m[1] === HEAD ? [{ name: "feature" }] : []];
+      }
+      if (/\/commits\/[0-9a-f]+\/pulls\?/.test(url)) {
+        return [200, [{ number: 7, head: { repo: { full_name: "evil/repo" } } }]];
+      }
+      return [404, {}];
+    },
+  });
+  const commit = (path, sub = "runner") => call(a, sub, "GET", `/commits/${path}`);
+  const own = async (sha) => (await (await commit(`org/repo/${sha}`)).json()).own;
+  assert.equal(await own(OWN), true);
+  assert.equal(await own(HEAD), true);
+  assert.equal(await own(FORK), false);
+  assert.ok(asked.some((u) => u.endsWith(`/repos/org/repo/commits/${FORK}/pulls?per_page=100`)));
+  // A commit's full id only: never a ref, a pull request's above all.
+  const before = asked.length;
+  for (const ref of [
+    "main",
+    encodeURIComponent("refs/pull/7/head"),
+    OWN.slice(0, 12),
+    OWN.toUpperCase(),
+  ]) {
+    assert.equal((await commit(`org/repo/${ref}`)).status, 400, ref);
+  }
+  // Another owner's repo; edge, the orchestrator.
+  assert.equal((await commit(`other/repo/${OWN}`)).status, 403);
+  assert.equal((await commit(`org/repo/${OWN}`, "edge")).status, 403);
+  assert.equal((await commit(`org/repo/${OWN}`, "orchestrator")).status, 403);
+  assert.equal(asked.length, before);
+});
+
 test("mutates(): what edge may not send over GraphQL", () => {
   assert.equal(mutates("query { viewer { login } }"), false);
   assert.equal(mutates("{ viewer { login } }"), false);

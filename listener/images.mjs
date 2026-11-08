@@ -25,9 +25,10 @@ export const KEEP_TAGS = 3;
 // What a branch image's tag starts with.
 const BRANCH = "branch-";
 
-// Which ref a run's image is built from: the default branch, or a pull request's head when
-// the operator grants the repo branch images (`grant`, grants.mjs) and the pull request's
-// branch lives in the repo itself.
+// Which ref a run's image is built from: the default branch, or a pull request's head (its
+// commit's full id) when the operator grants the repo branch images (`grant`, grants.mjs) and the
+// pull request's branch lives in the repo itself. The runner checks that commit is the repo's own
+// again, with the github service (../runner/builds.mjs buildPlan()): not this word alone.
 export function imageRef(grant, settings, repo, base, pr) {
   const own = sameRepo(pr?.head?.repo?.full_name, repo);
   if (grant.allowBranchDockerImages && settings.dockerfile && pr?.head?.sha && own) {

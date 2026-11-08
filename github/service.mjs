@@ -17,7 +17,8 @@
 //   - the App itself: its public parts (GET /app), /setup's manifest conversion (POST
 //     /app/manifest);
 //   - GitHub's own status, githubstatus.com's as it last read it (GET /status, status.mjs);
-//   - the runner's repos' tarballs and blobs (build contexts, image tags).
+//   - the runner's repos' tarballs and blobs (build contexts, image tags), and whether a commit is
+//     a repo's own (a branch image's, ../runner/builds.mjs).
 //
 // Each route names its callers (ROUTES, ../lib/service-token.mjs serviceGuard()). The
 // orchestrator's calls that change something carry its fencing epoch, refused when stale (409,
@@ -110,10 +111,12 @@ export const ROUTES = {
   "PUT /fingerprints": WRITER,
   "GET /events": WRITER,
   "POST /events/ack": WRITER,
-  // The runner's: a repo's files, and a file's blob id, nothing else of GitHub's.
+  // The runner's: a repo's files, a file's blob id and whether a commit is the repo's own,
+  // nothing else of GitHub's.
   "GET /tarballs/:owner/:repo": ["runner"],
   "GET /tarballs/:owner/:repo/:ref": ["runner"],
   "GET /blobs/:owner/:repo": ["runner"],
+  "GET /commits/:owner/:repo/:sha": ["runner"],
 };
 
 // The longest body the orchestrator sends (a reply is 65 536 characters at most) and the most of
@@ -153,6 +156,8 @@ const validName = (name) => NAME.test(name) && name !== "." && name !== "..";
 const validRef = (ref) =>
   /^[A-Za-z0-9_./-]{1,250}$/.test(ref) &&
   ref.split("/").every((part) => part && part !== "." && part !== "..");
+// A commit's full id, as GitHub names it.
+const SHA = /^[0-9a-f]{40}$/;
 
 function decoded(segment) {
   try {
@@ -557,6 +562,17 @@ export function createGithubService({
     return sendJson(res, { sha: file.sha });
   }
 
+  // Whether `sha` is one of `repo`'s own commits (github-forks.mjs ownCommit()): on its default
+  // branch, a branch's head, or in a pull request from one of its branches. GitHub serves a fork
+  // pull request's commits through the repository too, so a commit found there says nothing of
+  // who wrote it; the runner builds a branch's image only at one of these.
+  async function commit(res, repo, sha) {
+    if (!SHA.test(sha)) throw new Refused(400, "not a commit's full id");
+    if (!repoAllowed(config, repo)) throw new Refused(403, `${repo} isn't allowed`);
+    if (!app.get()) throw new Refused(412, "no GitHub App yet");
+    return sendJson(res, { sha, own: await forkChecks.ownCommit(repo, sha) });
+  }
+
   // --- The orchestrator's events ------------------------------------------------------------
 
   async function events(res, url) {
@@ -695,6 +711,8 @@ export function createGithubService({
     }
     m = /^\/blobs\/([^/]+)\/([^/]+)$/.exec(path);
     if (m) return blob(res, repoOf(m[1], m[2]), url);
+    m = /^\/commits\/([^/]+)\/([^/]+)\/([^/]+)$/.exec(path);
+    if (m) return commit(res, repoOf(m[1], m[2]), decoded(m[3]));
     throw new Refused(404, "no such endpoint");
   }
 

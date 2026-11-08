@@ -1351,3 +1351,21 @@ test("headers some front ends route by never reach GitHub", async (t) => {
   const sent = gw.calls.at(-1).headers;
   for (const name of ROUTING_HEADERS) assert.equal(sent[name], undefined, name);
 });
+
+test("ownCommit(): a commit the runner may build a branch's image at is the repository's own", async () => {
+  const { get, asked } = fakeGithub();
+  const forks = createForkChecks({ get });
+  // On the default branch, a branch's head, below an own branch's head in its pull request.
+  for (const sha of [OWN, HEAD, BELOW]) assert.equal(await forks.ownCommit("Org/Repo", sha), true);
+  // A fork's pull request's head, served through the repository too; any other commit.
+  assert.equal(await forks.ownCommit("org/repo", FORK), false);
+  assert.equal(await forks.ownCommit("org/repo", MERGE), false);
+  // Asked of the repository itself, lowercased; no run's budget, however many times.
+  assert.ok(
+    asked.every((path) => !path.startsWith("/repos/") || /^\/repos\/org\/repo\b/.test(path)),
+  );
+  for (let i = 0; i <= RUN_LOOKUPS; i++) {
+    const sha = i.toString(16).padStart(40, "1");
+    assert.equal(await forks.ownCommit("org/repo", sha), false);
+  }
+});

@@ -763,5 +763,14 @@ export function createForkChecks({
     return null;
   }
 
-  return { restricted, checkCall, fetchScope, checkFetch, remember, checkGraphql };
+  // Whether commit `sha` (a full id) is `repo`'s own, by commitRefusal()'s rule: what the runner
+  // asks before it builds a branch's image (../runner/builds.mjs), as GitHub serves a fork pull
+  // request's commits through the base repository too (its tarball, its files). Not a run's:
+  // nothing was advertised to it, and no run's budget is spent.
+  async function ownCommit(repo, sha) {
+    const name = String(repo).toLowerCase();
+    return !(await commitRefusal({ repo: name }, name, String(sha).toLowerCase()));
+  }
+
+  return { restricted, checkCall, fetchScope, checkFetch, remember, checkGraphql, ownCommit };
 }
