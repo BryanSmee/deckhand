@@ -266,8 +266,9 @@ Deckhand's branches](security/github.md#github-actions-on-deckhands-branches).
 Every run starts from an image:
 
 - **The base image** (`SANDBOX_IMAGE`, `deckhand-sandbox`): the harness only: `git`, `gh`
-  (through the github service's GitHub gateway), `jq`, `ripgrep`, Node 26, Playwright with Chromium, the
-  entrypoint and the draft pull request hooks. No project toolchain, and **no Claude Code**:
+  (through the github service's GitHub gateway), `jq`, `ripgrep`, Node 26, Playwright with
+  Chromium, `img2webp` (an animated WebP from screenshots), the entrypoint and the draft pull
+  request hooks. No project toolchain, and **no Claude Code**:
   before the first run that needs it, Deckhand installs the pinned
   `CLAUDE_CODE_VERSION` in a short container of its own, into the shared
   `deckhand-claude-code` volume; later runs reuse it.
