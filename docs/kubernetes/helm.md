@@ -2,7 +2,8 @@
 
 The chart, `deploy/helm/deckhand/`, renders the base's objects: with its default values, the same
 as `kustomize build deploy/kubernetes` (CI checks it, alone and with each component:
-`test/helm-chart.test.mjs`), so every Kubernetes page holds for it. Its values do what an
+`test/helm-chart.test.mjs`), so every Kubernetes page holds for it. Only the images' tag differs:
+the base's is `latest`, the chart's the release it comes with (its `appVersion`). Its values do what an
 overlay's patches do. Read the [requirements](../kubernetes.md#requirements) first. No chart
 repository is published yet: install it from a checkout of this repository at a release.
 
@@ -13,7 +14,7 @@ Keep your values in a file of your own:
 ```yaml
 # values.yaml
 image:
-  tag: v1.2.3 # every service's image, and SANDBOX_IMAGE's
+  tag: 1.2.3 # every service's image, and SANDBOX_IMAGE's; default: the checkout's release
 apiServer:
   cidrs: [172.18.0.2/32] # the API server's addresses, kubernetes.md
 server:
@@ -61,7 +62,7 @@ and [finish the install](finish.md) with the Secrets, the GitHub App and the iso
 
 | Value                                       | Default                      | What it sets                                                                                                                                                                                                                                                                                             |
 | ------------------------------------------- | ---------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `image.repository`, `image.tag`             | `ghcr.io/bryansmee/deckhand` | every service's image, `<repository>-<service>:<tag>`; the tag is the chart's `appVersion` (`latest`) when empty                                                                                                                                                                                         |
+| `image.repository`, `image.tag`             | `ghcr.io/bryansmee/deckhand` | every service's image, `<repository>-<service>:<tag>`; the tag is the chart's `appVersion` (the release it comes with, `0.1.0`) when empty                                                                                                                                                               |
 | `image.sandbox`                             | `<repository>-sandbox:<tag>` | `SANDBOX_IMAGE` ([Isolation](isolation.md#what-the-manifests-set-up-and-why)), for a mirror of yours                                                                                                                                                                                                     |
 | `namespaces`                                | `deckhand`, `-sandboxes`     | the services' namespace and the sandboxes' ([Namespaces](sandboxes.md#namespaces)), two different ones, and whether the chart makes them                                                                                                                                                                 |
 | `server.config`, `server.grants`            | the examples                 | `config.yaml` and the grants folder's files, by their path in it; `--set-file server.config=config.yaml` reads yours                                                                                                                                                                                     |

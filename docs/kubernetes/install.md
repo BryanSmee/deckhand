@@ -20,14 +20,14 @@ resources:
 
 # The release, for every image: the sandboxes' too, below.
 images:
-  - { name: ghcr.io/bryansmee/deckhand-edge, newTag: v1.2.3 }
-  - { name: ghcr.io/bryansmee/deckhand-orchestrator, newTag: v1.2.3 }
-  - { name: ghcr.io/bryansmee/deckhand-runner, newTag: v1.2.3 }
-  - { name: ghcr.io/bryansmee/deckhand-broker, newTag: v1.2.3 }
-  - { name: ghcr.io/bryansmee/deckhand-github, newTag: v1.2.3 }
-  - { name: ghcr.io/bryansmee/deckhand-models, newTag: v1.2.3 }
-  - { name: ghcr.io/bryansmee/deckhand-policy, newTag: v1.2.3 }
-  - { name: ghcr.io/bryansmee/deckhand-egress, newTag: v1.2.3 }
+  - { name: ghcr.io/bryansmee/deckhand-edge, newTag: 1.2.3 }
+  - { name: ghcr.io/bryansmee/deckhand-orchestrator, newTag: 1.2.3 }
+  - { name: ghcr.io/bryansmee/deckhand-runner, newTag: 1.2.3 }
+  - { name: ghcr.io/bryansmee/deckhand-broker, newTag: 1.2.3 }
+  - { name: ghcr.io/bryansmee/deckhand-github, newTag: 1.2.3 }
+  - { name: ghcr.io/bryansmee/deckhand-models, newTag: 1.2.3 }
+  - { name: ghcr.io/bryansmee/deckhand-policy, newTag: 1.2.3 }
+  - { name: ghcr.io/bryansmee/deckhand-egress, newTag: 1.2.3 }
 
 configMapGenerator:
   # The settings the orchestrator, the runner and the models service share: SANDBOX_IMAGE at
@@ -36,7 +36,7 @@ configMapGenerator:
     namespace: deckhand
     behavior: merge
     literals:
-      - SANDBOX_IMAGE=ghcr.io/bryansmee/deckhand-sandbox:v1.2.3
+      - SANDBOX_IMAGE=ghcr.io/bryansmee/deckhand-sandbox:1.2.3
   # Your config.yaml and grants folder (server.example/ to start from), one key per file.
   - name: deckhand-server
     namespace: deckhand

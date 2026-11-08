@@ -5,6 +5,32 @@ run yet before you [update](updating.md). Most need nothing; each says what does
 first, then the older ones: the policies' (allow rules, per-mode policies, the grants) and the
 grants folder's.
 
+## Upgrading from v0.0.x (v0.1.0)
+
+v0.0.1 and v0.0.2 ran one `listener` image; v0.1.0 is the first release of the services (edge,
+the orchestrator, the runner, the broker, the github, models and policy services, the egress
+proxy). Nothing carries over from a v0.0.x install, and nothing moves its state: install
+v0.1.0 as a new one. The `deckhand-listener` images are no longer published. What to do:
+
+1. **Let its runs end**: `docker ps --filter label=deckhand.run` lists the sandboxes still
+   running; wait for them (or `/cancel` them).
+2. **Remove it**, from the folder of its `compose.yaml`: `docker compose down -v`. Its volumes
+   (the App's credentials, the queue, the runs' logs, the screenshots) go with it: the new
+   orchestrator's `data` volume has the old one's name, and would start on what v0.0.x left there.
+   Keep a copy of a run's log you want first.
+3. **Install v0.1.0** from a checkout of its tag, as [Install with Compose](install.md) says:
+   a new `.env` from `.env.example` (`ALLOWED_HOSTS`, the sandbox limits and the old
+   `listener`'s settings are gone: see [Hosts in the grants folder alone](#upgrading-hosts-in-the-grants-folder-alone)
+   and [The sandbox limits](#upgrading-allowed_hosts-and-the-sandbox-limits)), and a server
+   folder from `server.example/` (your `grants.yaml` becomes `server/grants/`: see
+   [A grants folder](#upgrading-a-grants-folder)); a repository's Dockerfile and branch images
+   now need a grant of your policies ([Upgrading the grants](#upgrading-the-grants-498)).
+4. **Create the App again** with `/setup`: the old one's key went with its volume. Delete the
+   old App in GitHub's settings (Developer settings, GitHub Apps) once the new one is installed.
+
+The other notes on this page are the steps between v0.0.2 and v0.1.0, for those who followed
+`edge`: a fresh install needs none of them.
+
 ## Upgrading: the orchestrator without a volume (#619)
 
 The orchestrator writes nothing beside its [store](store.md) now: the queue, its lease, its

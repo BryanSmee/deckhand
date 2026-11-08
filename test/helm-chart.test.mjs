@@ -1,5 +1,6 @@
 // deploy/helm/deckhand held to deploy/kubernetes (#570): with its default values the chart
-// renders the objects `kustomize build` does, alone and with each component, so the base's
+// renders the objects `kustomize build` does (but the images' tag: the base's is `latest`, the
+// chart's its appVersion, #981), alone and with each component, so the base's
 // rules (test/kubernetes-manifests.test.mjs) hold for it too; its values then change what they
 // say and nothing else. Needs helm and kustomize on the PATH, which CI's kubernetes job installs
 // (pinned) and where a skip fails the job; elsewhere these tests skip.
@@ -112,7 +113,7 @@ for (const components of COMBINATIONS) {
   const what = components.length ? `with ${components.join(" and ")}` : "alone";
   test(`helm: the chart renders what kustomize does, the base ${what}`, { skip }, (t) => {
     const expected = byKey(kustomize(t, components));
-    const actual = byKey(helm(t, values));
+    const actual = byKey(helm(t, { ...values, image: { tag: "latest" } }));
     assert.deepEqual([...actual.keys()].sort(), [...expected.keys()].sort());
     for (const [key, object] of expected) assert.deepEqual(actual.get(key), object, key);
   });
@@ -140,21 +141,29 @@ test(
   },
 );
 
+// A checkout at a release installs that release's images (#981): appVersion names it as the
+// release workflow tags them, 1.2.3 (no `v`, never `latest`).
+test("helm: the chart's appVersion is a release's images' tag", () => {
+  const { appVersion, version } = parseYaml(readFileSync(join(chart, "Chart.yaml"), "utf8"));
+  assert.match(appVersion, /^\d+\.\d+\.\d+$/);
+  assert.match(version, /^\d+\.\d+\.\d+$/);
+});
+
 test("helm: image.tag is every service's tag and the sandboxes'", { skip }, (t) => {
   const objects = helm(t, {
-    image: { tag: "v1.2.3" },
+    image: { tag: "1.2.3" },
     store: "redis",
     buildkit: { enabled: true },
   });
   const images = deployments(objects).flatMap((d) => d.spec.template.spec.containers);
   for (const { image } of images.filter((c) => c.image.startsWith("ghcr.io/bryansmee/"))) {
-    assert.match(image, /^ghcr\.io\/bryansmee\/deckhand-[a-z]+:v1\.2\.3$/);
+    assert.match(image, /^ghcr\.io\/bryansmee\/deckhand-[a-z]+:1\.2\.3$/);
   }
-  assert.equal(images.filter((c) => c.image.endsWith(":v1.2.3")).length, 8);
-  assert.equal(envOf(objects).SANDBOX_IMAGE, "ghcr.io/bryansmee/deckhand-sandbox:v1.2.3");
+  assert.equal(images.filter((c) => c.image.endsWith(":1.2.3")).length, 8);
+  assert.equal(envOf(objects).SANDBOX_IMAGE, "ghcr.io/bryansmee/deckhand-sandbox:1.2.3");
   // The engine's image too, at the same release.
-  const engine = helm(t, { image: { tag: "v1.2.3" }, engine: { enabled: true } });
-  assert.equal(envOf(engine).ENGINE_IMAGE, "ghcr.io/bryansmee/deckhand-engine:v1.2.3");
+  const engine = helm(t, { image: { tag: "1.2.3" }, engine: { enabled: true } });
+  assert.equal(envOf(engine).ENGINE_IMAGE, "ghcr.io/bryansmee/deckhand-engine:1.2.3");
   // One of its own, from a mirror.
   const mirrored = helm(t, { image: { sandbox: "registry.example.com/sandbox@sha256:abc" } });
   assert.equal(envOf(mirrored).SANDBOX_IMAGE, "registry.example.com/sandbox@sha256:abc");

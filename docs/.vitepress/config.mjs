@@ -234,6 +234,7 @@ export default defineConfig({
           { text: "Services", link: "/contributing/services" },
           { text: "Inside each service", link: "/contributing/each-service" },
           { text: "Upgrades without downtime", link: "/contributing/upgrades" },
+          { text: "Cutting a release", link: "/contributing/releases" },
           { text: "The dashboard's languages", link: "/contributing/dashboard-languages" },
           { text: "Dashboard redesign", link: "/design/dashboard-redesign" },
           { text: "Checking a cluster end to end", link: "/contributing/kubernetes-e2e" },
