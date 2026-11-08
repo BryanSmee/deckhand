@@ -15,7 +15,7 @@ node deploy/kubernetes/secrets.mjs keys | kubectl apply -f -
 # Your agents' credentials, the models service's alone (docs/guides/agents.md).
 kubectl -n deckhand create secret generic deckhand-models \
   --from-literal=CLAUDE_CODE_OAUTH_TOKEN=<from claude setup-token>
-# Optional: the plans' logins (codex-auth.json, agy-auth.json: guides/agents.md#the-credentials-folder).
+# Optional: the plans' logins (codex-auth.json, agy-auth.json: ../guides/agents.md#the-credentials-folder).
 kubectl -n deckhand create secret generic deckhand-credentials --from-file=codex-auth.json
 ```
 
