@@ -1,8 +1,7 @@
 name: Docs
 
 # The docs site (docs/, VitePress) on GitHub Pages: on pushes to main that change it, and by hand
-# (Actions → Docs → Run workflow), as #402 does once right after the repository goes public.
-# Skipped while the repository is private, and from any branch but main.
+# (Actions → Docs → Run workflow)
 on:
   push:
     branches: [main]
