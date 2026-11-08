@@ -16,6 +16,8 @@ to agents.
   [restarts](restarts.md), [agents](agents.md) and the [modules](modules.md).
 - [Services](services.md): which service calls which and holds what, their health, the rules
   they follow; [inside each service](each-service.md); [upgrades without downtime](upgrades.md).
+- [Cutting a release](releases.md): the tag, what it publishes, the chart's `appVersion` and the
+  notes.
 
 ## The dashboard
 
