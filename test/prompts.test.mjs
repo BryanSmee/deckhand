@@ -1143,3 +1143,12 @@ test("prompts: the repo's `language` closes every mode's prompt; without it, not
   }
   assert.doesNotMatch(line, /Rating/);
 });
+
+test("prompts: a UI change may show its tested flow as an animated WebP, with the image's img2webp", () => {
+  // Issue #1029: GitHub shows an animated WebP inline and moving, a video only as a link.
+  const rules = readFileSync(new URL("../prompts/sandbox.md", import.meta.url), "utf8");
+  assert.match(rules, /an animated WebP, which GitHub shows inline/);
+  assert.match(rules, /`img2webp -loop 0 [^`]*-o "\$SCREENSHOT_DIR\/<flow>\.webp"`/);
+  const dockerfile = readFileSync(new URL("../sandbox/Dockerfile", import.meta.url), "utf8");
+  assert.match(dockerfile, /apt-get install [^;]* webp[ \\]/);
+});
