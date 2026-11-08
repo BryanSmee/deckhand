@@ -105,6 +105,7 @@ export default defineConfig({
         text: "Guides: install",
         items: [
           { text: "Install with Compose", link: "/guides/install" },
+          { text: "A stable tunnel", link: "/guides/tunnels" },
           { text: "Create the GitHub App", link: "/guides/github-app" },
           { text: "Start runs", link: "/guides/runs" },
           { text: "Repositories and onboarding", link: "/guides/repositories" },
