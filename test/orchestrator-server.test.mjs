@@ -2699,6 +2699,8 @@ mounts:
       CLAUDE_CODE_OAUTH_TOKEN: "sk-ant-oat01-operator",
       ANTHROPIC_BASE_URL: github.url,
     }));
+    let stage = "start", finished = false; // DIAG
+    t.after(() => { if (!finished) console.log(`DIAG stage=${stage}\n` + ctx.listener.output().slice(-30000)); }); // DIAG
     const secret = readFileSync(join(ctx.dir, "run-token"), "utf8").trim();
     const runEnv = readFileSync(join(ctx.dir, "run-env"), "utf8");
     const agentToken = agentTokenIn(runEnv, "CLAUDE_CODE_OAUTH_TOKEN", secret);
@@ -2710,14 +2712,20 @@ mounts:
       });
       return `${res.status} ${await res.text()}`;
     };
+    stage = "1: " + 'await ctx.handOver();'; // DIAG
     await ctx.handOver();
+    stage = "2: " + 'await ctx.listener.until("picked up deckhand-org-repo-12-0e9572aae2 again");'; // DIAG
     await ctx.listener.until("picked up deckhand-org-repo-12-0e9572aae2 again");
     // The next copy has never been asked about the sandbox's address, and the runner is away
     // longer than the proxy waits for one answer: it waits, it isn't told "no run there".
+    stage = "3: " + 'await ctx.stopRunner();'; // DIAG
     await ctx.stopRunner();
     const during = call();
+    stage = "4: " + 'await new Promise((resolve) => setTimeout(resolve, 6000));'; // DIAG
     await new Promise((resolve) => setTimeout(resolve, 6000));
+    stage = "5: " + 'await ctx.startRunner();'; // DIAG
     await ctx.startRunner();
+    stage = "6: " + 'const answered = await during;'; // DIAG
     const answered = await during;
     assert.match(answered, /^200 /);
     assert.match(ctx.listener.output(), /Egress: models for \S+ waits for the runner/);
@@ -2725,13 +2733,19 @@ mounts:
     // The runner restarting again, as long: the copy's last answers stand meanwhile, each of
     // its answers within the proxy's wait for one. Past the second the proxy's addresses are
     // kept, so that each answer asks for them and for where the caller is.
+    stage = "7: " + 'await new Promise((resolve) => setTimeout(resolve, 1500));'; // DIAG
     await new Promise((resolve) => setTimeout(resolve, 1500));
+    stage = "8: " + 'await ctx.stopRunner();'; // DIAG
     await ctx.stopRunner();
     const restarting = call();
+    stage = "9: " + 'await new Promise((resolve) => setTimeout(resolve, 6000));'; // DIAG
     await new Promise((resolve) => setTimeout(resolve, 6000));
+    stage = "10: " + 'await ctx.startRunner();'; // DIAG
     await ctx.startRunner();
+    stage = "11: " + 'assert.match(await restarting, /^200 /);'; // DIAG
     assert.match(await restarting, /^200 /);
     assert.doesNotMatch(ctx.listener.output(), /Egress: refused models/);
+    finished = true; // DIAG
   });
 
   test("a run token renewed after a takeover: the broker's event has the next copy redact it by value (#617)", async (t) => {
