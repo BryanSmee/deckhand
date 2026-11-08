@@ -581,6 +581,28 @@ test("output after the answer postpones its stop", async (t) => {
   assert.match(answers[0], /^The final answer\./);
 });
 
+test("a grace timer that fires before its deadline by the wall clock waits for what's left", async (t) => {
+  const { runner, task, following } = setup(t, { graceMs: 80 });
+  // Two clocks, as Node has: the timers' (monotonic) and Date.now()'s (the wall's), which the
+  // deadline is saved on. A mocked Date would move with the timers.
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  let wall = 10_000;
+  t.mock.method(Date, "now", () => wall);
+  runner.out(result("Answered."));
+  assert.equal(task.live.graceUntil, 10_080);
+  // The timer fires with the wall clock 2 ms short of the deadline (whole milliseconds on
+  // clocks that tick apart, #563's hosted runners): no stop yet.
+  wall = 10_078;
+  t.mock.timers.tick(80);
+  // Whatever its timer started settles (setImmediate isn't mocked).
+  await new Promise(setImmediate);
+  assert.equal(runner.kills, 0);
+  wall = 10_080;
+  t.mock.timers.tick(2);
+  await following;
+  assert.equal(runner.kills, 1);
+});
+
 test("a run whose inbox is still open isn't stopped after a result", async (t) => {
   const { ctx, runner, task } = setup(t, { graceMs: 20 });
   ctx.deliver = () => true;
