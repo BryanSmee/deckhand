@@ -38,7 +38,7 @@ jobs:
   # its VERSION the tag's so register_machine and heartbeat report the release.
   machine-driver:
     if: github.ref_type == 'tag'
-    runs-on: [self-hosted, Linux]
+    runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
@@ -66,7 +66,7 @@ jobs:
        github.event.workflow_run.event == 'push' &&
        github.event.workflow_run.head_repository.full_name == github.repository &&
        github.event.workflow_run.head_sha == github.sha)
-    runs-on: [self-hosted, Linux]
+    runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
@@ -101,7 +101,8 @@ jobs:
         with:
           ref: ${{ env.COMMIT }}
       - run: echo "DOCKER_CONFIG=$RUNNER_TEMP/docker-config" >> "$GITHUB_ENV"
-      - if: github.ref_type == 'tag' || runner.arch != 'X64'
+      # arm64, on a tag, through QEMU: the runners are amd64.
+      - if: github.ref_type == 'tag'
         uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@v3
@@ -137,7 +138,10 @@ jobs:
           file: ${{ matrix.dockerfile }}
           platforms: ${{ github.ref_type == 'tag' && 'linux/amd64,linux/arm64' || 'linux/amd64' }}
           push: true
-          build-args: DECKHAND_VERSION=${{ steps.version.outputs.version }}
+          # DECKHAND_SOURCE: the dashboard links the version to its commit or release there.
+          build-args: |
+            DECKHAND_VERSION=${{ steps.version.outputs.version }}
+            DECKHAND_SOURCE=${{ github.server_url }}/${{ github.repository }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha,scope=${{ matrix.image }}

@@ -22,7 +22,7 @@ COPY prompts/brainstorm.md prompts/idea.md prompts/bug.md prompts/discussion.md 
 COPY docs/repo-config.md docs/
 COPY docs/repo-config/ docs/repo-config/
 ENV NODE_ENV=production
-# The release it is (a git tag, .github/workflows/release.yml); "dev" when built from source.
+# The release it is (a git tag, .github/workflows/release-workflow.yml); "dev" when built from source.
 ARG DECKHAND_VERSION=dev
 ENV DECKHAND_VERSION=$DECKHAND_VERSION
 # The repository it was built from (https://github.com/<owner>/<repo>): the dashboard links

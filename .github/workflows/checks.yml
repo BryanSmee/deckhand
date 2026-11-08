@@ -19,16 +19,16 @@ jobs:
   tests:
     # As the runner's own user, not root: the tests that need a directory root could write
     # anyway run here (they skip as root, below).
-    runs-on: [self-hosted, Linux] # TODO: change to ubuntu-latest on public release
+    runs-on: ubuntu-latest
     timeout-minutes: 20
     # A real Redis, so the store's Redis tests run (test/store-redis.test.mjs, its calls made as
     # docs/guides/store.md's ACL users, and the runner's handover on Redis): Redis 7, the oldest
-    # docs/guides/store.md supports. On a port the host picks: a self-hosted machine may run two jobs.
+    # docs/guides/store.md supports.
     services:
       redis:
         image: redis:7
         ports:
-          - 6379
+          - 6379:6379
         options: --health-cmd "redis-cli ping" --health-interval 2s --health-timeout 5s --health-retries 15
     steps:
       - uses: actions/checkout@v4
@@ -36,14 +36,17 @@ jobs:
         with:
           node-version: 26
       # The real opa, so its tests don't skip: the version and sha256 policy-service/Dockerfile
-      # pins, read from it, so the two can't differ.
+      # pins, read from it, so the two can't differ. Through the API with the job's token: GitHub
+      # throttles anonymous release downloads first when it is under load (504s and 503s).
       - name: Install opa
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           dockerfile=policy-service/Dockerfile
           version=$(sed -n 's/^ARG OPA_VERSION=//p' "$dockerfile")
           sum=$(sed -n 's/^ *amd64) sum=\([0-9a-f]*\) ;;.*/\1/p' "$dockerfile")
           test -n "$version" && test -n "$sum"
-          curl -fsSLo "$RUNNER_TEMP/opa" "https://github.com/open-policy-agent/opa/releases/download/v${version}/opa_linux_amd64_static"
+          gh release download "v${version}" -R open-policy-agent/opa -p opa_linux_amd64_static -O "$RUNNER_TEMP/opa"
           echo "$sum  $RUNNER_TEMP/opa" | sha256sum -c -
           mkdir -p "$RUNNER_TEMP/bin"
           install -m 755 "$RUNNER_TEMP/opa" "$RUNNER_TEMP/bin/opa"
@@ -54,9 +57,8 @@ jobs:
         run: npm ci --no-audit --no-fund && npm run build
       # Fails, too, when a real-opa or Redis test skipped: opa is on the PATH, Redis beside.
       - name: Tests
-        # Here, not in the job's env: the job context isn't there yet.
         env:
-          TEST_REDIS_URL: "redis://localhost:${{ job.services.redis.ports['6379'] }}"
+          TEST_REDIS_URL: redis://localhost:6379
         run: |
           node --test --test-force-exit --import ./test/blocking-stdout.mjs --test-timeout=120000 \
             --test-reporter=spec --test-reporter-destination=stdout \
@@ -74,7 +76,7 @@ jobs:
   # as a user who can't write somewhere fails here, unless it skips as root with its reason
   # (test/helpers.mjs isRoot).
   tests-root:
-    runs-on: [self-hosted, Linux] # TODO: change to ubuntu-latest on public release
+    runs-on: ubuntu-latest
     timeout-minutes: 20
     # --init: a PID 1 that reaps orphans. The runner's own (`tail -f /dev/null`) leaves them
     # zombies, which the fake docker's `tail --pid` waits on forever.
@@ -90,14 +92,21 @@ jobs:
       TEST_REDIS_URL: redis://redis:6379
     steps:
       - uses: actions/checkout@v4
+      # opa through the API with the job's token, as `tests` does; node:26 has no gh, so curl and
+      # jq. The asset's redirect goes to another host, where curl drops the token.
       - name: Install jq and opa
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           apt-get update -qq && apt-get install -y -qq jq
           dockerfile=policy-service/Dockerfile
           version=$(sed -n 's/^ARG OPA_VERSION=//p' "$dockerfile")
           sum=$(sed -n 's/^ *amd64) sum=\([0-9a-f]*\) ;;.*/\1/p' "$dockerfile")
           test -n "$version" && test -n "$sum"
-          curl -fsSLo /tmp/opa "https://github.com/open-policy-agent/opa/releases/download/v${version}/opa_linux_amd64_static"
+          asset=$(curl -fsSL -H "Authorization: Bearer $GH_TOKEN" \
+            "https://api.github.com/repos/open-policy-agent/opa/releases/tags/v${version}" |
+            jq -er '.assets[] | select(.name == "opa_linux_amd64_static") | .url')
+          curl -fsSLo /tmp/opa -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/octet-stream" "$asset"
           echo "$sum  /tmp/opa" | sha256sum -c -
           install -m 755 /tmp/opa /usr/local/bin/opa
       - run: opa version && jq --version && id && test "$(id -u)" = 0
@@ -117,14 +126,9 @@ jobs:
             echo "::error::Redis tests skipped"
             exit 1
           fi
-      # What root wrote in the runner's workspace goes back to its user: the next job's
-      # checkout, not in a container, couldn't clean it otherwise.
-      - name: Give the workspace back
-        if: always()
-        run: chown -R "$(stat -c %u:%g "$GITHUB_WORKSPACE/..")" "$GITHUB_WORKSPACE"
 
   dashboard:
-    runs-on: [self-hosted, Linux] # TODO: change to ubuntu-latest on public release
+    runs-on: ubuntu-latest
     defaults:
       run:
         working-directory: dashboard
@@ -140,7 +144,7 @@ jobs:
   # The docs site (docs/, VitePress): its build, and every page's anchors as GitHub's, rendered
   # as the site renders them (test/docs-links.test.mjs, which skips without docs/node_modules).
   docs:
-    runs-on: [self-hosted, Linux] # TODO: change to ubuntu-latest on public release
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -151,7 +155,7 @@ jobs:
       - run: node --test test/docs-links.test.mjs
 
   syntax:
-    runs-on: [self-hosted, Linux] # TODO: change to ubuntu-latest on public release
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -183,10 +187,10 @@ jobs:
   # as written; a broken generator or patch only shows here. The Helm chart (deploy/helm/deckhand,
   # #570) too, and held to the base: test/helm-chart.test.mjs, which needs helm and kustomize. The
   # end-to-end check's overlay as well (#676).
-  # The tools pinned by version and sha256, as opa is: a self-hosted runner has no kubectl to lean
-  # on.
+  # The tools pinned by version and sha256, as opa is, rather than whichever versions the runner's
+  # image happens to carry.
   kubernetes:
-    runs-on: [self-hosted, Linux] # TODO: change to ubuntu-latest on public release
+    runs-on: ubuntu-latest
     timeout-minutes: 10
     env:
       KUSTOMIZE_VERSION: 5.8.3
@@ -203,13 +207,16 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 26
+      # GitHub's releases through the API with the job's token, as opa is (helm's are its own host).
       - name: Install kustomize, kubeconform, helm and promtool
         working-directory: ${{ runner.temp }}
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          curl -fsSLo kustomize.tgz "https://github.com/kubernetes-sigs/kustomize/releases/download/kustomize%2Fv${KUSTOMIZE_VERSION}/kustomize_v${KUSTOMIZE_VERSION}_linux_amd64.tar.gz"
-          curl -fsSLo kubeconform.tgz "https://github.com/yannh/kubeconform/releases/download/v${KUBECONFORM_VERSION}/kubeconform-linux-amd64.tar.gz"
+          gh release download "kustomize/v${KUSTOMIZE_VERSION}" -R kubernetes-sigs/kustomize -p "kustomize_v${KUSTOMIZE_VERSION}_linux_amd64.tar.gz" -O kustomize.tgz
+          gh release download "v${KUBECONFORM_VERSION}" -R yannh/kubeconform -p kubeconform-linux-amd64.tar.gz -O kubeconform.tgz
           curl -fsSLo helm.tgz "https://get.helm.sh/helm-v${HELM_VERSION}-linux-amd64.tar.gz"
-          curl -fsSLo prometheus.tgz "https://github.com/prometheus/prometheus/releases/download/v${PROMETHEUS_VERSION}/prometheus-${PROMETHEUS_VERSION}.linux-amd64.tar.gz"
+          gh release download "v${PROMETHEUS_VERSION}" -R prometheus/prometheus -p "prometheus-${PROMETHEUS_VERSION}.linux-amd64.tar.gz" -O prometheus.tgz
           printf '%s  kustomize.tgz\n%s  kubeconform.tgz\n%s  helm.tgz\n%s  prometheus.tgz\n' "$KUSTOMIZE_SHA256" "$KUBECONFORM_SHA256" "$HELM_SHA256" "$PROMETHEUS_SHA256" | sha256sum -c -
           mkdir -p bin
           tar -xzf kustomize.tgz -C bin kustomize
@@ -283,7 +290,7 @@ jobs:
           promtool test rules deploy/alerts/deckhand.test.yaml
 
   format:
-    runs-on: [self-hosted, Linux] # TODO: change to ubuntu-latest on public release
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
