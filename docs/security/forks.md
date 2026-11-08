@@ -15,7 +15,10 @@ the repository's later runs trust and execute:
   repository's `~/.npm` volume, which every later work run, on any issue, installs from with
   push access. The run's log says "No caches: a pull request from a fork".
 - **Host mounts**: read-only, as for a run without `push` (the log's `Host mount` lines say so).
-- **Branch images**: never built from a fork's branch (the `branch_docker_images` grant).
+- **Branch images**: never built from a fork's branch (the `branch_docker_images` grant). The
+  runner checks it again, whatever the orchestrator asks: a branch's image is built at a commit
+  the github service says is the repository's own, by the rule for a commit that isn't the
+  repository's below ([The runner service](services.md#the-runner-service)).
 
 These protections follow what triggered the run, not the code it fetches. A work run started
 from an issue, or from one of the repository's own pull requests, isn't a fork's run, yet it

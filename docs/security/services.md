@@ -115,16 +115,23 @@ root, to hand it to the sandbox's user) only in the base image or the repository
 paths. A repo image builds only with the `dockerfile` grant (a branch's with
 `branch_docker_images`), from what the runner decides: the default branch's files unless a
 branch's is asked and granted, the Dockerfile's blob as the github service says it (`GET
-/blobs/…`), the hosts the grants give (`runner/builds.mjs`). A compromised orchestrator can
-still start a run, but not one it names as root on the host.
+/blobs/…`), the hosts the grants give (`runner/builds.mjs`). A branch's is built at a commit's
+full id, never a ref (`refs/pull/<n>/head` least of all), and only when the github service says
+that commit is the repository's own (`GET /commits/<owner>/<repo>/<sha>`: on its default branch,
+a branch's head, or in a pull request from one of its branches, the GitHub gateway's rule for a
+run's fetches, [Forks](forks.md)): GitHub serves a fork pull request's commits through the
+repository too, its tarball included, so the orchestrator's word that a commit is a branch's own
+isn't taken. The build's files are that commit's: a push can't change them after the check. A
+compromised orchestrator can still start a run, but not one it names as root on the host.
 
 The runner holds no GitHub credential either: a
 build's context starts from the repository's tarball, which it gets from the
-[github service](#the-github-service) (`GET /tarballs/<owner>/<repo>[/<ref>]` and a file's
-blob id, `GET /blobs/…`, the runner's only routes there, for an allowed repository, its names,
-path and ref checked before they make an API path), never from the orchestrator, which can't serve
-it files of its own (#502): a compromised orchestrator can't make an image build run its
-own files on the host. A run's first tokens come from the
+[github service](#the-github-service) (`GET /tarballs/<owner>/<repo>[/<ref>]`, a file's
+blob id, `GET /blobs/…`, and whether a commit is the repository's own, `GET /commits/…`, the
+runner's only routes there, for an allowed repository, its names, path and ref checked before
+they make an API path), never from the orchestrator, which can't serve it files of its own
+(#502), nor name a fork's commit for a branch's: a compromised orchestrator can't make an image
+build run its own files on the host. A run's first tokens come from the
 orchestrator (`POST /runs/<run>/tokens`, only while that run starts), which has the broker sign
 them with its own claims: the runner can't choose what a run's tokens allow. Every orchestrator call carries its
 fencing epoch: an older one than the newest the runner saw is refused (`409`).

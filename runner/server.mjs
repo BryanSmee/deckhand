@@ -114,7 +114,7 @@ try {
 }
 
 // The orchestrator's services port: a run's first tokens (which the orchestrator has the broker service sign, with the claims it decided). The
-// github service (#502): the repos' tarballs and blobs.
+// github service (#502): the repos' tarballs and blobs, whether a commit is a repo's own.
 const orchestratorUrl = env.ORCHESTRATOR_URL || "http://orchestrator:8083";
 const githubUrl = env.GITHUB_SERVICE_URL || "http://github:8080";
 const orchestrator = serviceClient({
@@ -146,6 +146,20 @@ async function blobOf(repo, path, ref) {
   if (res.status === 404) return null;
   if (!res.ok) throw new Error(`the github service: ${res.status} for ${path} of ${repo}`);
   return (await res.json()).sha;
+}
+
+// Whether a commit is one of the repo's own (on its default branch, a branch's head, in a pull
+// request from one of its branches), as the github service asks GitHub: a branch's image is
+// built at none but those. A github service older than this runner refuses the call: no build.
+async function ownCommit(repo, sha) {
+  const res = await github.request("GET", `/commits/${repo}/${encodeURIComponent(sha)}`);
+  if (!res.ok) {
+    throw new Error(
+      `the github service: ${res.status} for whether ${sha} is ${repo}'s own commit (one older than this runner doesn't answer it: update it)`,
+    );
+  }
+  const answer = await res.json();
+  return answer.sha === sha && answer.own === true;
 }
 
 const images = createImages({
@@ -203,6 +217,7 @@ service = createRunnerService({
   },
   refresh: loginRefresh({ config, images, jobs: backend.jobs }),
   blobOf,
+  ownCommit,
   keys: () => keys,
   health: { ...healthInfo(), warnings },
   bound,

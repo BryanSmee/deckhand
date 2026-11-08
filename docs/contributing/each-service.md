@@ -91,8 +91,10 @@ grants folder, which it reads itself, and what the operator's policies grant the
 it asks the policy service itself (`grants.mjs` `grantsBy()`, the operator's layer only: no
 repository's files), for an engine (`docker`) and an image build (`dockerfile`,
 `branch_docker_images`: `builds.mjs`); the runner holds no GitHub credential: a build context starts
-from the repo's tarball, which it gets from the github service (`GET /tarballs/…`), and an image's
-tag hashes the Dockerfile's blob the github service read (`GET /blobs/…`). The orchestrator talks to
+from the repo's tarball, which it gets from the github service (`GET /tarballs/…`), an image's
+tag hashes the Dockerfile's blob the github service read (`GET /blobs/…`), and a branch's image
+is built only at a commit the github service says is the repository's own (`GET /commits/…`:
+`github-forks.mjs` `ownCommit()`), never a fork's. The orchestrator talks to
 it through `runner/client.mjs`.
 
 Its API (`runner/service.mjs`) names the callers of each endpoint (`ROUTES`), each with its own
