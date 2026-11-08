@@ -34,11 +34,14 @@ case "$1" in
   wait)
     while alive "${@: -1}"; do nap; done ;;
   stop)
-    # A cancelled run's sandbox; one the test says is stuck ignores it.
+    # A cancelled run's sandbox; one the test says is stuck ignores it. Stuck or not is decided
+    # before the call is logged: a test that sees the stop then unsticks the sandbox, and a
+    # check after the log could find it unstuck already and stop it after all.
+    [ -e "$dir/stuck" ] && stuck=1
     echo "$*" >> "$dir/docker-calls"
     n=${@: -1}
     [ -d "$c/$n" ] || exit 1
-    [ -e "$dir/stuck" ] && exit 0
+    [ -n "${stuck-}" ] && exit 0
     read -r pid < "$c/$n/pid"
     kill -TERM -- -"$pid" 2> /dev/null
     while alive "$n"; do nap; done ;;
