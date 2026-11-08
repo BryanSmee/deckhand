@@ -1,8 +1,10 @@
 // Auto-pickup (#546): the open issues labelled AUTO_PICKUP_LABEL in the repos whose
 // `auto_pickup` opts in are started by the listener itself, oldest created first, in the
 // AUTO_PICKUP_SLOTS reserved within MAX_PARALLEL (repo-config.mjs startable()). A sweep looks
-// every SWEEP_MS, soon after a picked run ends or the label is added, and fills the reserved
-// slots that are free.
+// every SWEEP_MS, soon after a picked run ends, the label is added or one of Deckhand's pull
+// requests closes, and fills the reserved slots that are free. A repo whose
+// `auto_pickup_max_ready` is reached (that many of Deckhand's pull requests ready for review,
+// #973) has none of its issues picked meanwhile: they keep their label, nothing is said on them.
 //
 // An issue is picked only when nothing holds it: an open issue with nothing live on the
 // dashboard (board.mjs isLive(): running, queued, waiting, asking…), without the needs-input
@@ -169,17 +171,27 @@ export function vouchedLabeller(by, config, followUpPick, repo, number) {
 const addedBy = ({ by, pr }, at = "@") =>
   pr ? `by Deckhand for a follow-up of #${pr}, merged by ${at}${by}` : `by ${at}${by}`;
 
+// Whether `pr` is one of Deckhand's: opened by the App, from a branch of the repo.
+const deckhands = (pr, repo, bot) =>
+  !!bot && lower(pr.user?.login) === lower(bot) && headInRepo(pr, repo);
+
 // The issue numbers Deckhand's open pull requests are for: those the App opened, from a branch
 // of the repo, saying which issue they close, or on its `issue-<n>-…` branch.
 export function pulledIssues(pulls, repo, bot) {
   const numbers = new Set();
   for (const pr of pulls) {
-    if (!bot || lower(pr.user?.login) !== lower(bot) || !headInRepo(pr, repo)) continue;
+    if (!deckhands(pr, repo, bot)) continue;
     const n = linkedIssue(pr, repo, bot) ?? Number(/^issue-(\d+)-/.exec(pr.head?.ref ?? "")?.[1]);
     if (n) numbers.add(n);
   }
   return numbers;
 }
+
+// How many of Deckhand's open pull requests are ready for review (not drafts): what
+// `auto_pickup_max_ready` is held against (#973). Drafts are work in progress, which
+// `max_parallel` caps; a person's pull requests aren't Deckhand's backlog.
+export const readyPulls = (pulls, repo, bot) =>
+  pulls.filter((pr) => !pr.draft && deckhands(pr, repo, bot)).length;
 
 // `github(repo, method, path, body, expected)`: the App's calls. `repos()`: the repos to look
 // at, [{ repo, base }], those whose config, as last read, opts in (repos.mjs). `repoSettings`:
@@ -350,9 +362,12 @@ export function createAutoPickup({
     if (isLive(key)) return "something is live on it";
     if (!pulls.has(repo)) {
       const open = await paginate((p) => github(repo, "GET", p), `/repos/${repo}/pulls?state=open`);
-      pulls.set(repo, pulledIssues(open, repo, config.bot));
+      pulls.set(repo, {
+        issues: pulledIssues(open, repo, config.bot),
+        ready: readyPulls(open, repo, config.bot),
+      });
     }
-    if (pulls.get(repo).has(n)) return "Deckhand has an open pull request for it";
+    if (pulls.get(repo).issues.has(n)) return "Deckhand has an open pull request for it";
     if (await blocked(repo, issue)) return "an open issue blocks it";
     if (!settingsOf.has(repo)) settingsOf.set(repo, await repoSettings(repo, base));
     const { settings, errors } = settingsOf.get(repo);
@@ -363,6 +378,13 @@ export function createAutoPickup({
     const cap = settings.maxParallel ?? config.maxParallel;
     if (cap < config.maxParallel && load(repo) >= cap) {
       return "its repository's runs are at its max_parallel";
+    }
+    // Too many of Deckhand's pull requests wait for a person: they conflict with each other as
+    // they are merged (#973). The issue waits, its label on, nothing said on it.
+    const max = settings.autoPickupMaxReady;
+    const { ready } = pulls.get(repo);
+    if (max && ready >= max) {
+      return `its repository has ${ready} pull requests ready for review (auto_pickup_max_ready: ${max})`;
     }
     const stamp = `${issue.updated_at}|${settings.users.join(",")}`;
     const known = holds.get(key);
@@ -528,7 +550,8 @@ export function createAutoPickup({
     if (!res.ok) log(`Auto-pickup: editing comment ${id}: ${res.status}`);
   }
 
-  // A sweep soon: a picked run ended, or the label was added.
+  // A sweep soon: a picked run ended, the label was added, or one of Deckhand's pull requests
+  // closed (pullClosed()).
   function soon() {
     if (!slots || soonTimer) return;
     soonTimer = later(() => {
@@ -562,5 +585,19 @@ export function labelAdded(config, event, payload) {
     event === "issues" &&
     payload?.action === "labeled" &&
     lower(payload.label?.name) === lower(config.autoPickupLabel)
+  );
+}
+
+// Whether a `pull_request` delivery closed (merged or not) or turned to a draft one of Deckhand's
+// pull requests: a sweep soon (soon()), as a repo held by its `auto_pickup_max_ready` may have
+// room again (#973).
+export function pullClosed(config, event, payload) {
+  const pr = payload?.pull_request;
+  return (
+    !!config.autoPickupSlots &&
+    event === "pull_request" &&
+    ["closed", "converted_to_draft"].includes(payload?.action) &&
+    !!pr &&
+    deckhands(pr, payload.repository?.full_name ?? "", config.bot)
   );
 }

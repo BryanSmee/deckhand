@@ -25,7 +25,7 @@ import { onboardingTargets } from "./onboarding.mjs";
 import { LOOP_STEPS } from "./reviews.mjs";
 import { applyInput, inputEvent } from "./questions.mjs";
 import { forgottenFor, refreshFor } from "./repos.mjs";
-import { labelAdded } from "./auto-pickup.mjs";
+import { labelAdded, pullClosed } from "./auto-pickup.mjs";
 import { pickedTask, poolOf, SHARED } from "./tasks.mjs";
 import { staleFor } from "./work.mjs";
 import { publicRun, stream } from "./runlog.mjs";
@@ -688,6 +688,9 @@ export function createHttp(ctx) {
       if (labelAdded(config, event, payload)) ctx.autoPickup?.soon();
       return work;
     }
+    // One of Deckhand's pull requests closed: a repo held by its auto_pickup_max_ready may have
+    // room again, the next sweep now.
+    if (pullClosed(config, event, payload)) ctx.autoPickup?.soon();
     // A pull request that turned ready, in a repo whose `review.on` asks for a review.
     if (event === "pull_request") admitted(ctx.reviews.consider(event, payload, skip));
     // Deckhand's pull request that turned ready: the reviewers its repo's `review.request` names.
