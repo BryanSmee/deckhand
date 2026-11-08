@@ -296,3 +296,22 @@ test("settings: machines, said as offered to none without the grant", () => {
   });
   assert.equal(granted.grant.allowMachines, true);
 });
+
+test("settings: auto_pickup_max_ready has its row, noted as ignored without auto_pickup", () => {
+  assert.deepEqual(byKey(view("").settings, "auto_pickup_max_ready"), {
+    key: "auto_pickup_max_ready",
+    value: "no limit",
+    source: "operator",
+    note: null,
+  });
+  const set = byKey(
+    view("auto_pickup: true\nauto_pickup_max_ready: 3").settings,
+    "auto_pickup_max_ready",
+  );
+  assert.deepEqual(
+    [set.value, set.source, set.note],
+    ["3 pull requests ready for review", "repo", null],
+  );
+  const alone = byKey(view("auto_pickup_max_ready: 3").settings, "auto_pickup_max_ready");
+  assert.equal(alone.note, "needs `auto_pickup: true`, ignored");
+});

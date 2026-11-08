@@ -138,6 +138,9 @@ export function parseRepoConfig(text, config) {
   if (settings.review?.followUpsAutoPickup && !settings.autoPickup) {
     warn("review.follow_ups_auto_pickup: needs `auto_pickup: true`, ignored");
   }
+  if (settings.autoPickupMaxReady && !settings.autoPickup) {
+    warn("auto_pickup_max_ready: needs `auto_pickup: true`, ignored");
+  }
   return { settings, errors, warnings, fixes };
 }
 
@@ -846,6 +849,21 @@ export const KEYS = {
         value && !config.autoPickupSlots
           ? "the operator reserves no slots for it (AUTO_PICKUP_SLOTS)"
           : null,
+      ),
+  },
+  // A brake on auto-pickup (#973): while the repo has this many of Deckhand's open pull requests
+  // ready for review, none of its issues is picked (auto-pickup.mjs). It only narrows.
+  auto_pickup_max_ready: {
+    field: "autoPickupMaxReady",
+    default: null,
+    parse: (value, { key, settings, fail }) => {
+      if (Number.isInteger(value) && value > 0) settings.autoPickupMaxReady = value;
+      else fail(key, "expected a whole number above 0");
+    },
+    display: ({ value, row, settings }) =>
+      row(
+        value ? `${value} pull requests ready for review` : "no limit",
+        value && !settings.autoPickup ? "needs `auto_pickup: true`, ignored" : null,
       ),
   },
   review: {

@@ -277,6 +277,17 @@ start), then the label comes off. A run that fails or is stopped isn't picked ag
 someone adds the label back. A `deny_run` rule sees these runs with `trigger: "auto-pickup"`
 and the labeller as `sender` ([The run input](policy-inputs.md#the-run-input)).
 
+**`auto_pickup_max_ready: <n>`** (a whole number ≥ 1; unset, no limit) stops picking the
+repository's issues while it has `n` or more of Deckhand's open pull requests ready for
+review: those the App opened from one of its branches, drafts left out (`max_parallel` caps the
+work still going), a person's too. Pull requests that all branched from the same commit conflict
+with each other as they are merged, so the backlog waits for a person first. The issues keep
+their label and get no comment; the listener's log says `its repository has <k> pull requests
+ready for review (auto_pickup_max_ready: <n>)` once while it lasts, and the other repositories'
+issues take the free slots. Once a merge, a close or a pull request turned back to a draft
+brings the count below `n`, the next sweep, a few seconds later, picks again. Without
+`auto_pickup: true` the key is ignored, with a warning.
+
 ### Deckhand's own follow-ups
 
 A label the App's bot added starts nothing (a run's writes go out as the App, and a run may

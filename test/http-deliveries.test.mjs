@@ -7,7 +7,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createHttp } from "../listener/http.mjs";
 import { createWaits } from "../listener/waits.mjs";
-import { httpCtx } from "./helpers.mjs";
+import { httpCtx, testConfig } from "./helpers.mjs";
 
 const repository = { full_name: "org/repo", default_branch: "trunk" };
 
@@ -143,6 +143,38 @@ test("conflicts: a merge into the default branch checks its pull requests soon, 
   // Into another branch: the default branch didn't move.
   await s.http.deliver(merged("release"));
   assert.deepEqual([s.soon, s.moved], [["org/repo"], ["org/repo"]]);
+});
+
+test("auto-pickup: one of Deckhand's pull requests closed asks for a sweep soon; a person's doesn't (#973)", async () => {
+  const s = setup();
+  const sweeps = [];
+  const config = testConfig({
+    ALLOWED_REPOS: "org/repo",
+    MAX_PARALLEL: "3",
+    AUTO_PICKUP_SLOTS: "1",
+  });
+  config.bot = "deckhand[bot]";
+  const http = createHttp(
+    httpCtx({
+      config,
+      pulls: { record: () => false, ciChanged: async () => {}, baseMoved: () => {} },
+      conflicts: { soon: async () => {} },
+      waits: s.waits,
+      autoPickup: { soon: () => sweeps.push("soon") },
+    }),
+  );
+  const delivery = merged();
+  const pr = delivery.payload.pull_request;
+  await http.deliver({
+    ...delivery,
+    payload: { ...delivery.payload, pull_request: { ...pr, user: { login: "bob" } } },
+  });
+  assert.deepEqual(sweeps, []);
+  await http.deliver({
+    ...delivery,
+    payload: { ...delivery.payload, pull_request: { ...pr, user: { login: "deckhand[bot]" } } },
+  });
+  assert.deepEqual(sweeps, ["soon"]);
 });
 
 test("conflicts: another branch made the default in the settings checks its pull requests soon (#876)", async () => {

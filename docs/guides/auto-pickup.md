@@ -5,7 +5,8 @@ An issue nobody starts can wait for months. With `AUTO_PICKUP_SLOTS` above 0 (an
 `AUTO_PICKUP_LABEL` (`auto-pickup`) by itself, oldest created first across the repositories
 whose `.deckhand.yaml` says `auto_pickup: true` ([repo-config/issues.md](../repo-config/issues.md#auto-pickup)),
 in `work` mode, as many at once as there are slots. It looks every 5 minutes, a few seconds
-after the label is added (an `issues` delivery), and as soon as a run ends or a queued
+after the label is added (an `issues` delivery) or one of Deckhand's pull requests is closed or
+turned to a draft (a `pull_request` delivery), and as soon as a run ends or a queued
 auto-picked issue is cancelled.
 
 - **The slots.** Auto-picked runs never take more than `AUTO_PICKUP_SLOTS`. The other runs
@@ -30,7 +31,10 @@ auto-picked issue is cancelled.
   slot (1 held between runs)"), and no issue is picked for them meanwhile.
 - **What is skipped.** An issue with something live on the dashboard (running, queued,
   waiting, asking), the needs-input label (`NEEDS_INPUT_LABEL`), an open issue it is "blocked
-  by", or an open pull request of Deckhand's for it; the next one is picked instead.
+  by", or an open pull request of Deckhand's for it; the next one is picked instead. A
+  repository whose `auto_pickup_max_ready` is reached (that many of Deckhand's pull requests
+  ready for review, drafts not counted) has none of its issues picked, their labels kept, until
+  a merge or a close brings it below: the other repositories' take the slots meanwhile.
 - **Who it runs for.** The person who last added the label, from the issue's events: they must
   be in `ALLOWED_USERS` and the repository's `users`, or nothing starts (a label a bot added
   either). The label vouches for the issue as it was then: a title or description changed
