@@ -638,6 +638,10 @@ export function createRuns(ctx) {
     const current = () =>
       task.live === live && live.lingering === timer && !live.finishing && !live.cancelled;
     if (ctx.stopping || !current()) return;
+    // The timer counts on the monotonic clock, whole milliseconds apart from the wall clock's:
+    // it can fire a moment before `graceUntil` by Date.now(), the clock the deadline is saved
+    // and followed again on. Early, it waits for what's left.
+    if (Date.now() < live.graceUntil) return void linger(task, live.graceUntil);
     const state = await ctx.runner.state(task.name).catch(() => null);
     if (state !== "running" || ctx.stopping || !current()) return;
     const message = `Silent for ${minutes(graceMs)} min after its answer: stopped, its answer posted`;
