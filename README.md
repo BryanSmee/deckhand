@@ -1,3 +1,5 @@
+### SIMPLE EDIT TO CHECK FORK POLICIES
+
 # Deckhand
 
 Deckhand runs Claude Code on your GitHub issues and pull requests. Comment `Deckhand` on an
