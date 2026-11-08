@@ -244,6 +244,15 @@ export function createRunnerService({
   const events = createEvents({ store, runner, log });
   // Output streams and log reads in flight: ended first on SIGTERM, their callers come back.
   const streams = new Set();
+  // `res` kept among them until it closes, `ended()` then. One whose call came in before the stop
+  // but whose checks were still running as it began (the epoch, whose sandbox it is: calls of
+  // their own) ends at once: stop() had none to end, and the drain would wait on it to its end, a
+  // follow to the drain's 280 s.
+  function asStream(res, ended) {
+    streams.add(res);
+    res.on("close", () => (streams.delete(res), ended()));
+    if (stopping) res.destroy();
+  }
   const starting = new Map(); // run → its start in flight on this copy
 
   // A stale epoch refused (lib/fence.mjs).
@@ -446,10 +455,9 @@ export function createRunnerService({
         err: Number(url.searchParams.get("err") ?? 0) || 0,
       };
       const line = ndjson(res);
-      streams.add(res);
       // A caller gone, or this copy stopping: `docker logs` ends, the caller follows again.
       const stop = new AbortController();
-      res.on("close", () => (streams.delete(res), stop.abort()));
+      asStream(res, () => stop.abort());
       return runner
         .follow(name, {
           skip,
@@ -599,8 +607,7 @@ export function createRunnerService({
       }
       const wait = Math.min(Number(url.searchParams.get("wait")) || 0, MAX_WAIT_MS);
       const gone = new AbortController();
-      streams.add(res);
-      res.on("close", () => (streams.delete(res), gone.abort()));
+      asStream(res, () => gone.abort());
       req.on("close", () => gone.abort());
       const { size, data } = await logs.read(id, { offset, length, wait, signal: gone.signal });
       res

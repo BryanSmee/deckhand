@@ -82,19 +82,38 @@ function logsSpawn(lines) {
   };
 }
 
-// The Docker runner on one fake docker, shared by the copies (one host's Docker).
-function host({ lines = ['{"type":"result","result":"Done."}'], answers, metrics } = {}) {
+// `docker logs --follow` on a sandbox that goes on printing nothing: until it is killed.
+function endlessLogs() {
+  return () => {
+    const child = new EventEmitter();
+    child.stdout = new PassThrough();
+    child.stderr = new PassThrough();
+    child.kill = () => (child.stdout.end(), child.stderr.end(), child.emit("close", null));
+    return child;
+  };
+}
+
+// The Docker runner on one fake docker, shared by the copies (one host's Docker). `spawn`: its
+// `docker logs` (logsSpawn(lines) by default); `hold(args)`: a promise a docker call waits on.
+function host({
+  lines = ['{"type":"result","result":"Done."}'],
+  answers,
+  metrics,
+  spawn,
+  hold,
+} = {}) {
   const calls = [];
   const fake = fakeDocker({ answers });
   const docker = async (args, opts = {}) => {
     calls.push({ args, env: opts.env });
+    await hold?.(args);
     return fake.docker(args);
   };
   const inboxDir = tempDir(null, "deckhand-runs-");
   const runner = createDockerRunner({
     config,
     docker,
-    spawn: logsSpawn(lines),
+    spawn: spawn ?? logsSpawn(lines),
     inboxDir,
     metrics,
   });
@@ -1270,6 +1289,36 @@ test("stop: the lease goes once the calls are done", async (t) => {
   const b = await copy(t, { store, backend });
   assert.equal(await a.service.stop({ graceMs: 5000 }), true);
   await until(() => b.lease.active(), { what: "the other copy's lease" });
+});
+
+// A follow asked for just before the stop, whose sandbox is still being looked up (a docker
+// call) as the stop begins: ended too, not followed through the drain to its end. An
+// orchestrator that just took over follows its runs again as the runner updates (#936's test
+// on GitHub's runners, its runner held 280 s).
+test("stop: a stream whose checks still run as the copy stops ends too, the drain doesn't wait on it", async (t) => {
+  let lookingUp = null;
+  let release;
+  const backend = host({
+    spawn: endlessLogs(),
+    hold: (args) => {
+      if (!lookingUp || args[0] !== "ps") return;
+      lookingUp();
+      return new Promise((resolve) => (release = resolve));
+    },
+  });
+  const a = await copy(t, { store: fileStore(), backend });
+  await client(a.url).runner.start(SPEC);
+  const asked = new Promise((resolve) => (lookingUp = resolve));
+  const followed = call(a.url, "GET", `/sandboxes/${SPEC.name}/output`, { sub: "orchestrator" })
+    .then((res) => res.text())
+    .catch((error) => error);
+  await asked;
+  lookingUp = null;
+  const stopped = a.service.stop({ graceMs: 2000 });
+  release();
+  // Every call finished within the grace: none left to cut.
+  assert.equal(await stopped, true);
+  await followed;
 });
 
 // A push between the Dockerfile's lookup and the download of the files: planned again, once.
