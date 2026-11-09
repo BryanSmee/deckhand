@@ -46,6 +46,7 @@ import { createForwarder } from "./forward.mjs";
 import { createEdgeHttp, DRAIN_MS, takenDelivery } from "./http.mjs";
 import { createShots } from "./shots.mjs";
 import { createEdgeInternal } from "./internal.mjs";
+import { localToken } from "./local.mjs";
 import { declareMetrics } from "./metrics.mjs";
 import { createOAuth } from "./oauth.mjs";
 
@@ -106,7 +107,7 @@ function sessionKeyNow() {
 // Its secrets never go in the store: refused in a value, redacted from what people wrote.
 const secrets = () => {
   const now = sessionKeyNow();
-  return [...app.secrets(), now.toString("hex"), now.toString("base64")];
+  return [...app.secrets(), now.toString("hex"), now.toString("base64"), localToken(now)];
 };
 const store = openStore(env.STORE_URL || pathToFileURL(join(dataDir, "store")).href, {
   password: env.REDIS_PASSWORD,
@@ -204,6 +205,8 @@ const http = createEdgeHttp({
   stopping: () => stopping,
   waiting: () => !broker.ready(),
   metrics: counted,
+  // /status from inside its container (status.mjs), without a session (#1019).
+  localToken: () => localToken(sessionKeyNow()),
   log,
 });
 

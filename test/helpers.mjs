@@ -46,6 +46,7 @@ import { openLog } from "../listener/runlog.mjs";
 import { overlaps } from "../lib/subnets.mjs";
 import { signer } from "../lib/s3.mjs";
 import { parseYaml } from "../lib/yaml.mjs";
+import { localToken } from "../edge/local.mjs";
 
 // Whether the real `opa` is on the PATH (the listener's image has it): the tests that evaluate
 // Deckhand's policies as written skip without it, the fakes cover the listener's side. Asked
@@ -266,6 +267,14 @@ export function freshRedisPrefix(t, url) {
 }
 
 // A signing key of the test's own: { privateKey, publicKey, kid }.
+// /status as edge/status.mjs asks it from inside edge's container (#1019): edge's port, its
+// DATA_DIR.
+export async function localStatus(port, dataDir) {
+  const token = localToken(readFileSync(join(dataDir, "session.key")));
+  const headers = { authorization: `Bearer ${token}` };
+  return (await fetch(`http://127.0.0.1:${port}/status`, { headers })).json();
+}
+
 export function testKey() {
   const { privateKey, publicKey } = generateKeyPairSync("ed25519");
   return { privateKey, publicKey, kid: keyId(publicKey) };
