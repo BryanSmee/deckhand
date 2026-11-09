@@ -1,6 +1,6 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/preact";
 import { expect, test, vi } from "vitest";
-import { RunDataPanel, RunDataSteps } from "./RunData";
+import { RunDataPanel } from "./RunData";
 import { parseRoute, formatRoute } from "./route";
 import type { RunData, RunMetrics } from "./types";
 const metrics: RunMetrics = {
@@ -51,16 +51,12 @@ test("filters reach the API and broad and strict success stay side by side", asy
   await waitFor(() => expect(String(fetcher.mock.calls.at(-1)?.[0])).not.toContain("from="));
 });
 
-test("step details load only when opened, and report errors and empty periods", async () => {
+test("a PR's run data reports errors and empty periods", async () => {
   const fetcher = vi.fn(
     async () => new Response(JSON.stringify({ error: "Unavailable" }), { status: 503 }),
   );
   vi.stubGlobal("fetch", fetcher);
-  const { container } = render(<RunDataSteps repo="acme/app" task="acme/app#1" />);
-  expect(fetcher).not.toHaveBeenCalled();
-  const details = container.querySelector("details")!;
-  details.open = true;
-  fireEvent(details, new Event("toggle"));
+  render(<RunDataPanel repo="acme/app" task="acme/app#1" />);
   expect((await screen.findByRole("alert")).textContent).toBe("Unavailable");
   fetcher.mockImplementation(
     async () =>

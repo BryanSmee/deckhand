@@ -227,7 +227,7 @@ the default branch.
 
 In **Settings → Repositories → a repository → Run data**, compare retained runs by
 repository, agent, model, effort and triggering user, over the last 7, 30 or 90 days or all
-retained history. A pull request task's **Run data by step** shows the same cohort by work,
+retained history. A pull request task's **Run data** tab, after its runs' tabs, shows the same cohort by work,
 review, review fix, CI fix and other recorded modes; choose a step to see its metrics. Statistics use only recorded data, without agent or GitHub calls.
 
 Runs are selected by their start time. Linked issue and pull request runs count as one issue;

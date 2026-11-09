@@ -79,6 +79,12 @@
   }
 }
 
+/* A pull request's Run data tab: padded as its Review tab is. */
 .task {
-  padding: 16px 0;
+  padding: 24px 28px;
+}
+@media (max-width: 640px) {
+  .task {
+    padding: 16px;
+  }
 }

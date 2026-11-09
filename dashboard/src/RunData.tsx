@@ -193,13 +193,3 @@ function Metrics({ metrics: m }: { metrics: RunMetrics }) {
     </dl>
   );
 }
-
-export function RunDataSteps({ repo, task }: { repo: string; task: string }) {
-  const [open, setOpen] = useState(false);
-  return (
-    <details open={open} onToggle={(e) => setOpen(e.currentTarget.open)}>
-      <summary>{t("runData.steps")}</summary>
-      {open && <RunDataPanel repo={repo} task={task} />}
-    </details>
-  );
-}

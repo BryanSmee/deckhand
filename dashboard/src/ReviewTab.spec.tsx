@@ -99,11 +99,11 @@ const openReview = () => fireEvent.click(screen.getByRole("tab", { name: "Review
 test("no review of Deckhand's: no Review tab, nothing asked", () => {
   render(<Dashboard state={withTask({ review: undefined })} error={null} />);
   expect(screen.queryByRole("tab", { name: "Review" })).toBeNull();
-  expect(screen.getByRole("tablist").getAttribute("aria-label")).toBe("Runs");
+  expect(screen.getByRole("tablist").getAttribute("aria-label")).toBe("Runs and run data");
   expect(asked).toEqual([]);
 });
 
-test("after Policies, named in the tab list; [ and ] go through it", async () => {
+test("after Policies, before Run data, named in the tab list; [ and ] go through it", async () => {
   const decision: PolicyDecision = {
     decision: "merge",
     rule: "deny_merge",
@@ -114,11 +114,11 @@ test("after Policies, named in the tab list; [ and ] go through it", async () =>
   };
   render(<Dashboard state={withTask({ decisions: [decision] })} error={null} />);
   const list = screen.getByRole("tablist");
-  expect(list.getAttribute("aria-label")).toBe("Runs, policies and review");
-  expect(tabNames().slice(-2)).toEqual(["Policies", "Review"]);
-  // From the last run: ] to Policies, ] to Review, ] nowhere further, [ back to Policies.
+  expect(list.getAttribute("aria-label")).toBe("Runs, policies, review and run data");
+  expect(tabNames().slice(-3)).toEqual(["Policies", "Review", "Run data"]);
+  // From the last run: ] to Policies, ] to Review, ] to Run data, ] nowhere further, [ back.
   const selected = () => screen.getByRole("tab", { selected: true }).textContent;
-  const runs = screen.getAllByRole("tab").length - 2;
+  const runs = screen.getAllByRole("tab").length - 3;
   for (let i = 1; i < runs; i++) fireEvent.keyDown(document.body, { key: "]" });
   fireEvent.keyDown(document.body, { key: "]" });
   expect(selected()).toMatch(/^Policies/);
@@ -126,9 +126,28 @@ test("after Policies, named in the tab list; [ and ] go through it", async () =>
   expect(selected()).toBe("Review");
   await screen.findByRole("region", { name: "Must fix" });
   fireEvent.keyDown(document.body, { key: "]" });
-  expect(selected()).toBe("Review");
+  expect(selected()).toBe("Run data");
+  fireEvent.keyDown(document.body, { key: "]" });
+  expect(selected()).toBe("Run data");
   fireEvent.keyDown(document.body, { key: "[" });
-  expect(selected()).toMatch(/^Policies/);
+  expect(selected()).toBe("Review");
+});
+
+test("a pull request's Run data tab: its steps' numbers, asked for that task alone", async () => {
+  const runData: string[] = [];
+  mockApi({
+    "api/run-data": ({ url }) => {
+      runData.push(url);
+      return { error: "Unavailable" };
+    },
+  });
+  render(<Dashboard state={withTask({})} error={null} />);
+  expect(runData).toEqual([]);
+  fireEvent.click(screen.getByRole("tab", { name: "Run data" }));
+  const panel = screen.getByRole("tabpanel");
+  expect(within(panel).getByRole("region", { name: "Run data" })).toBeTruthy();
+  expect((await within(panel).findByRole("alert")).textContent).toBe("Unavailable");
+  expect(runData).toEqual(["api/run-data?repo=acme%2Fapp&task=acme%2Fapp%2322"]);
 });
 
 test("the last review's sections, its text literal, its places at the reviewed commit", async () => {
