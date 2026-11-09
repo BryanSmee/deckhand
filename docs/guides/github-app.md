@@ -1,6 +1,7 @@
 # Create the GitHub App
 
-Deckhand acts on GitHub as a private GitHub App of your own, which `/setup` creates for you.
+Deckhand acts on GitHub as a GitHub App of your own, which `/setup` creates for you (private,
+until you [install it on several organizations](#installing-it-on-several-organizations)).
 You need this page once, right after the [first start](install.md#start-deckhand), and again
 when an update asks the App for a permission it didn't have.
 
@@ -34,6 +35,44 @@ What the App asks for:
 | Workflows, Actions: read and write              | `pull_request_review_comment`, `workflow_run` |
 | Checks, Commit statuses, Metadata: read         | `discussion`, `discussion_comment`            |
 | Organization projects: read and write           | `push`, `repository`, `check_suite`, `status` |
+
+## Installing it on several organizations
+
+`/setup` creates the App private, and GitHub lets a private App be installed only on the
+account that owns it. When your repositories span several organizations (or an organization
+and your personal account), make the App public, then install it on each of them:
+
+1. Set `ALLOWED_REPOS` first, if it isn't set yet: one entry per repository or account
+   (`MyOrg/*,OtherOrg/api`; [Which repositories](repositories.md#which-repositories)), then
+   restart the services that read it (edge, the orchestrator and the github service). Left empty, it allows every repository the App is
+   installed on, whoever installed it.
+2. In the App's settings (the dashboard's **Settings › Server › GitHub App › App settings**),
+   _Advanced_, **Make public**.
+3. Open the App's public page (`https://github.com/apps/<slug>`, or **Install on another
+   account** in the dashboard's GitHub App card) and install it on each organization, picking its repositories. Only an
+   owner of an organization (or someone it lets manage Apps) can install it there.
+
+It stays safe because what the App reaches is not what Deckhand answers. Anyone can now
+install the App, but edge and the orchestrator fail closed: a repository out of
+`ALLOWED_REPOS` starts no run, gets no reply or onboarding issue, is left out of the
+dashboard's repository list, and its CI's deliveries aren't passed on. On the
+repositories you allow, `ALLOWED_USERS` (and a repository's own `users`) still decide who
+starts runs and signs in to the dashboard, and an installation's onboarding issue needs an
+allowed login to have installed the App ([Onboarding](repositories.md#onboarding)).
+
+What it costs:
+
+- Anyone can see the App's page, its name, owner and the permissions it asks for, and install
+  it on their own account.
+- A stranger's installation still costs a little: its webhooks reach Deckhand, which checks their
+  signature and then drops them, and the orchestrator lists its repositories
+  with the others (every 5 minutes while the dashboard is open), logging what permissions it
+  lacks. Its account shows in the dashboard's GitHub App card, beside yours.
+- Keep `ALLOWED_REPOS` set for as long as the App is public, and remove an `owner/*` entry
+  when that account is renamed or deleted: someone else could take its name and install the
+  App.
+- GitHub lets you make the App private again only once it is installed on its owner's account
+  alone: uninstall it from the others first.
 
 ## Permissions added later
 
