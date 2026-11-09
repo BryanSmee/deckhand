@@ -64,6 +64,10 @@ export const ANSWER_GRACE_MS = 2 * 60_000;
 // follow has skipped what was read before, for its sandbox's output from meanwhile before it is
 // stopped (follow()).
 const CATCH_UP_MS = 10_000;
+// How many times in a row the output of a sandbox that exited is followed again after a follow
+// that failed (the runner refusing, its stream cut, `docker logs` failing) before the run ends
+// with what was read: a Codex sandbox exits as soon as it answers, its result in the last lines.
+const EXITED_FOLLOWS = 3;
 // The most a run's end waits for its state at the github service, every try included.
 const GITHUB_STATE_MS = 10_000;
 // A run GitHub kept failing before its sandbox started (GitHubUnavailable, after the App's own
@@ -485,9 +489,12 @@ export function createRuns(ctx) {
       if (live.graceUntil !== whole) return;
       linger(task, until);
     };
+    // Failed reads of an exited sandbox's output, in a row (one that ran on doesn't count, and
+    // any whole read starts it again): its output is read again, up to EXITED_FOLLOWS times.
+    let failed = 0;
     try {
       for (;;) {
-        await ctx.runner.follow(task.name, {
+        const complete = await ctx.runner.follow(task.name, {
           skip: { ...live.lines },
           onCaughtUp: caughtUp,
           onOut: (line, at) => output(task, line, at),
@@ -501,9 +508,20 @@ export function createRuns(ctx) {
             if (live.answered) linger(task);
           },
         });
-        if (ctx.stopping || (await ctx.runner.state(task.name)) !== "running") break;
-        // The output stopped while the sandbox runs on (the daemon restarted, say): follow again.
-        await new Promise((resolve) => setTimeout(resolve, 1000));
+        if (ctx.stopping) break;
+        if (complete !== false) failed = 0;
+        const state = await ctx.runner.state(task.name);
+        // The output stopped while the sandbox runs on (the daemon restarted, say), or failed
+        // to come whole from one that exited (its result may be in what wasn't read): follow
+        // again, a few times for one that exited.
+        const again =
+          state === "running" ||
+          (state === "exited" && complete === false && ++failed <= EXITED_FOLLOWS);
+        if (!again) {
+          if (complete === false) log(`${live.key}: its output couldn't be read to its end`);
+          break;
+        }
+        await new Promise((resolve) => setTimeout(resolve, ctx.followAgainMs ?? 1000));
       }
     } catch (error) {
       return end(task, error);

@@ -53,6 +53,10 @@ Open the setup link through your public address, for example
 3. GitHub then sends you to the App's installation page: pick the repositories Deckhand may
    work on.
 
+The App is private, so it installs only on the account that owns it. For repositories in
+several organizations, see
+[Installing it on several organizations](../guides/github-app.md#installing-it-on-several-organizations).
+
 Each repository without a `.deckhand.yaml` gets an onboarding issue, where Claude proposes one.
 You can leave it for later: a repository works without it.
 

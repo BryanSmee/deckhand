@@ -1,6 +1,7 @@
 # Around the runs
 
-- **GitHub**: the operator's private App, created at `/setup`, its key in the github service alone
+- **GitHub**: the operator's own App, created at `/setup` (private, or public across several
+  organizations: `ALLOWED_REPOS` decides what it answers), its key in the github service alone
   ([the github service](each-service.md#the-github-service)), which makes the orchestrator's (and
   edge's) GitHub calls with installation tokens neither of them nor a sandbox gets. A sandbox holds
   a run token (`lib/tokens.mjs`): a JWT the broker service (`broker/`, #505) signs with Ed25519, the
