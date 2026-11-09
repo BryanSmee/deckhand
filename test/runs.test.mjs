@@ -87,7 +87,8 @@ function setup(
     answerGraceMs: graceMs,
     followAgainMs: 0,
     runner,
-    // A failed run's last API call, the models service's: none.
+    // A failed run's last API call, the models service's: none. Asked when a run ends with no
+    // result (the output that keeps failing, #1055).
     models: { apiOf: async () => ({}), prints: () => [] },
     running: 1,
     stopping: false,

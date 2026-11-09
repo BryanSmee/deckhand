@@ -922,7 +922,8 @@ export function createKubernetesRunner({
   }
 
   // Resolves once the pod's log ends (it exited, or the API closed the stream: state() tells),
-  // with false when reading it failed: what it gave may stop short of the end. `skip`: { out,
+  // with false when reading it failed: what it gave may stop short of the end. Only false
+  // means that: other ends resolve undefined, so callers check `=== false`. `skip`: { out,
   // err } lines already read by a previous follower (the runner's copy before). The log has the
   // agent's output and the rest in one stream, told apart by STDERR_TAG. A pod that stays Pending past
   // KUBERNETES_PENDING_MINUTES is removed, and its run fails with the reason.
