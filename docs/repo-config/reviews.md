@@ -249,6 +249,47 @@ review` gets the "unknown mode" reply. `review: true` (or a block without `on`, 
 `follow_ups_auto_pickup` are its only
 keys: any other, or a bad value, is an error.
 
+### Choosing who reviews
+
+A review is already independent of the work it reads: a fresh run, in its own clone and
+session, that never sees the implementer's reasoning, only the diff and the thread. `agent`,
+`model` and `effort` choose who reads it, and so what it catches:
+
+- **Another agent** has other blind spots: it misses different things than the one that wrote
+  the code, and doesn't share its habits. On a repository whose work runs on Claude Code,
+  `agent: codex` (the operator must have [configured it](../guides/codex.md)) has Codex
+  review Claude Code's pull requests. Name a tier (`best`, `balanced`, `fast`) or one of that
+  agent's own models with it: without `model`, the review takes `brainstorm_model`, and a
+  Claude Code model on a Codex run stops it ([Models and efforts](../guides/agents.md#models-and-efforts)).
+- **A stronger model, or more effort**, reads closer: `model: opus` reviews the work of a
+  repository whose `model` is `sonnet`, and `effort: high` or `xhigh` spends longer on each
+  change.
+
+```yaml
+review:
+  on: ready
+  agent: codex # the work runs on Claude Code
+  model: best
+  effort: high
+```
+
+```yaml
+model: sonnet # work runs
+review:
+  on: ready
+  model: opus # reviews Sonnet's work
+  effort: high
+```
+
+The cost runs the other way too. A weaker reviewer than the implementer (a `fast` model, a low
+effort) adds false findings: with `fix`, each one is a fix run that changes code to answer a
+claim that was wrong, and a review of that fix after it. A stronger one costs more per review
+but fewer rounds. The fix run itself stays the repository's work agent and model, whoever
+reviewed.
+
+The Codex trial ([How it does](../guides/codex.md#how-it-does)) tried Codex on work runs only:
+it kept no figures on Codex as a reviewer yet.
+
 ### Reviewers
 
 `request: [alice, bob]` asks people to review Deckhand's pull requests, so a pull request that
