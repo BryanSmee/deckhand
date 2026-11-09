@@ -7,7 +7,7 @@ image:
   # Every service's image is <repository>-<service>:<tag> (deckhand-edge, deckhand-runner…).
   repository: ghcr.io/bryansmee/deckhand
   # A release (1.2.3, as its images are tagged) or a digest's tag; empty: the chart's
-  # appVersion, the release this checkout is.
+  # appVersion, the release this chart comes with.
   tag: ""
   # SANDBOX_IMAGE, a reference the nodes can pull; empty: <repository>-sandbox:<tag>, which has
   # to match the services' release.
