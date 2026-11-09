@@ -8,11 +8,16 @@ gives it one, without opening a port.
 The tunnel must keep **the same address** for as long as the App lives. Three of them do, each
 on a free plan:
 
-| Tunnel                                                    | Address                      | Needs                                      |
-| --------------------------------------------------------- | ---------------------------- | ------------------------------------------ |
-| [Tailscale Funnel](#tailscale-funnel)                     | `<machine>.<tailnet>.ts.net` | a Tailscale account                        |
-| [A cloudflared named tunnel](#a-cloudflared-named-tunnel) | a hostname of your domain    | a Cloudflare account, and a domain on it   |
-| [An ngrok static domain](#an-ngrok-static-domain)         | `<name>.ngrok-free.dev`      | an ngrok account (one static domain, free) |
+| Tunnel                                                    | Address                      | Needs                                      | Tested          |
+| --------------------------------------------------------- | ---------------------------- | ------------------------------------------ | --------------- |
+| [Tailscale Funnel](#tailscale-funnel)                     | `<machine>.<tailnet>.ts.net` | a Tailscale account                        | yes, end to end |
+| [A cloudflared named tunnel](#a-cloudflared-named-tunnel) | a hostname of your domain    | a Cloudflare account, and a domain on it   | not yet         |
+| [An ngrok static domain](#an-ngrok-static-domain)         | `<name>.ngrok-free.dev`      | an ngrok account (one static domain, free) | not yet         |
+
+Tailscale Funnel was checked with Deckhand from `/setup` to a `Deckhand` comment answered
+through it. The other two follow their tools' own docs and work the same way (a stable HTTPS
+address forwarding to edge's port), but nobody has run them with Deckhand yet: if you do, tell
+us how it went in an issue.
 
 Whichever you pick:
 
@@ -52,6 +57,8 @@ through the tunnel alone.
 
 ## Tailscale Funnel
 
+_Tested with Deckhand, end to end._
+
 Funnel publishes a port of a machine of your tailnet on `https://<machine>.<tailnet>.ts.net`,
 with a certificate of its own. It needs, once, in the [admin console](https://login.tailscale.com/admin):
 MagicDNS and HTTPS certificates on (_DNS_), and the `funnel` attribute for the machine in the
@@ -71,6 +78,8 @@ tailscale funnel status   # "Funnel on", and the address
 A new DNS name can take a few minutes to resolve from GitHub's side the first time.
 
 ## A cloudflared named tunnel
+
+_Not tested with Deckhand yet: the steps follow Cloudflare's docs._
 
 A named tunnel keeps its hostname, one of a domain whose DNS is on Cloudflare
 (`deckhand.example.com` below). On the server, with `cloudflared` installed:
@@ -115,6 +124,8 @@ services:
 ```
 
 ## An ngrok static domain
+
+_Not tested with Deckhand yet: the steps follow ngrok's docs._
 
 Each ngrok account has one static domain, free (`<name>.ngrok-free.dev`, or
 `.ngrok-free.app` for older accounts), on its dashboard's _Domains_. On the server, with
