@@ -1,12 +1,13 @@
 // The Backlog tab's filters (WorkQueue.tsx): its text field (an issue's number and title), its
 // labels (a list to tick, opened from a button: an issue with any of those ticked shows, ""
-// for one with none) and "Hide sub-issues" (those whose parent is listed: starting the parent
-// lays them out). The labels are kept per repository, the toggle once for all (prefs.ts); the
+// for one with none), "Hide sub-issues" (those whose parent is listed: starting the parent
+// lays them out) and "Group by milestone" (milestoneSections(): the list in a section per
+// milestone). The labels are kept per repository, the toggles once for all (prefs.ts); the
 // text isn't kept. A label ticked that no listed issue has any more is left out of the filter,
 // and of the list.
 import { useId, useRef, useState } from "preact/hooks";
 import { t } from "./i18n";
-import type { BacklogIssue, BacklogLabel } from "./types";
+import type { BacklogIssue, BacklogLabel, BacklogMilestone } from "./types";
 import { Button } from "./ui/Button";
 import { Checkbox } from "./ui/Choice";
 import { Count } from "./ui/Count";
@@ -66,6 +67,46 @@ export function narrowBacklog(
   return labelled.filter((i) => !hiddenSubIssue(i, shown));
 }
 
+// "No milestone"'s section: GitHub's milestone numbers start at 1.
+export const NO_MILESTONE = 0;
+
+export interface MilestoneSection {
+  // The milestone's number, NO_MILESTONE for the issues without one.
+  key: number;
+  milestone: BacklogMilestone | null;
+  issues: BacklogIssue[];
+}
+
+// `issues` (what the filters leave) in a section per milestone: those with a due date first,
+// soonest first, then those without, by title, then "No milestone". Each keeps its issues in
+// their order (newest first); a milestone none of them is in has no section.
+export function milestoneSections(issues: readonly BacklogIssue[]): MilestoneSection[] {
+  const found = new Map<number, MilestoneSection>();
+  const none: BacklogIssue[] = [];
+  for (const issue of issues) {
+    const m = issue.milestone;
+    if (!m) {
+      none.push(issue);
+      continue;
+    }
+    const known = found.get(m.number);
+    if (known) known.issues.push(issue);
+    else found.set(m.number, { key: m.number, milestone: m, issues: [issue] });
+  }
+  const sections = [...found.values()].sort((a, b) => {
+    const [x, y] = [a.milestone!, b.milestone!];
+    if (x.dueOn !== null && y.dueOn !== null && x.dueOn !== y.dueOn) return x.dueOn - y.dueOn;
+    if ((x.dueOn === null) !== (y.dueOn === null)) return x.dueOn === null ? 1 : -1;
+    return x.title.localeCompare(y.title) || x.number - y.number;
+  });
+  return none.length
+    ? [...sections, { key: NO_MILESTONE, milestone: null, issues: none }]
+    : sections;
+}
+
+// Whether a listed issue has a milestone: "Group by milestone" is offered then, and applies.
+export const hasMilestones = (issues: readonly BacklogIssue[]) => issues.some((i) => i.milestone);
+
 // What the text field leaves: `#<n> <title>` holds its words, as typed.
 export function matchesText(issue: BacklogIssue, text: string) {
   const words = text.trim().toLowerCase();
@@ -94,6 +135,8 @@ interface Props {
   onTicked: (labels: string[]) => void;
   hideSubIssues: boolean;
   onHideSubIssues: (on: boolean) => void;
+  byMilestone: boolean;
+  onByMilestone: (on: boolean) => void;
   touch: boolean;
 }
 
@@ -106,6 +149,8 @@ export function BacklogFilter({
   onTicked,
   hideSubIssues,
   onHideSubIssues,
+  byMilestone,
+  onByMilestone,
   touch,
 }: Props) {
   const [open, setOpen] = useState(false);
@@ -114,7 +159,8 @@ export function BacklogFilter({
   const listId = useId();
   const counts = labelCounts(issues);
   const on = tickedOf(counts, ticked);
-  // Offered when an issue has a label, or is a sub-issue of another listed one.
+  // Offered when an issue has a label, or is a sub-issue of another listed one (the milestones'
+  // toggle: hasMilestones()).
   const labelled = counts.some((l) => l.name !== NO_LABEL);
   const listed = new Set(issues.map((i) => i.number));
   const subs = issues.some((i) => hiddenSubIssue(i, listed));
@@ -157,6 +203,16 @@ export function BacklogFilter({
             onClick={() => onHideSubIssues(!hideSubIssues)}
           >
             {t("queue.hideSubIssues")}
+          </FilterChip>
+        )}
+        {/* Only when an issue has a milestone: without one, it would change nothing. */}
+        {hasMilestones(issues) && (
+          <FilterChip
+            class={touch ? styles.touchChip : styles.chip}
+            pressed={byMilestone}
+            onClick={() => onByMilestone(!byMilestone)}
+          >
+            {t("queue.byMilestone")}
           </FilterChip>
         )}
       </div>

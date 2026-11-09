@@ -276,3 +276,106 @@ a.name:hover {
 .menuButton {
   width: 100%;
 }
+
+/* The Backlog by milestone: a section each, its header a button that opens or closes it,
+   then its cards. */
+.section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  list-style: none;
+}
+
+.sectionHead {
+  margin: 0;
+  font: inherit;
+}
+
+.sectionButton {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  min-height: 28px;
+  padding: 0 4px;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: var(--text-2);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+}
+
+.sectionButton:hover {
+  background: var(--surface-2);
+  color: var(--text);
+}
+
+.chevron,
+.chevronClosed {
+  flex: none;
+  color: var(--text-3);
+  transition: transform var(--fast);
+}
+
+.chevronClosed {
+  transform: rotate(-90deg);
+}
+
+.sectionTitle {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.due {
+  flex: none;
+  color: var(--text-3);
+  font-weight: 400;
+}
+
+.sectionCount {
+  flex: none;
+  margin-left: auto;
+  color: var(--text-3);
+  font-family: var(--mono);
+  font-size: 11.5px;
+  font-weight: 500;
+}
+
+.sectionCards {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* A phone: the header stays on top while its section scrolls, 44 px tall. */
+.rows .section,
+.rows .sectionCards {
+  gap: 0;
+}
+
+.rows .sectionHead {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+}
+
+.rows .sectionButton {
+  min-height: 44px;
+  padding: 0;
+  font-size: 13px;
+}
+
+.rows .sectionButton:hover {
+  background: none;
+}

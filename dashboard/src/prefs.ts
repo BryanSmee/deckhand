@@ -46,6 +46,8 @@ export const PREFS = {
   shortcuts: flag("shortcuts", true),
   // The board's Backlog: sub-issues whose parent is listed left out (WorkQueue.tsx).
   hideSubIssues: flag("backlog.hideSubIssues", false),
+  // The board's Backlog in a section per milestone (WorkQueue.tsx).
+  byMilestone: flag("backlog.byMilestone", false),
 };
 
 export type Prefs = { [K in keyof typeof PREFS]: (typeof PREFS)[K]["default"] };
@@ -144,6 +146,32 @@ export function setBacklogLabels(repo: string, labels: readonly string[]) {
 export function useBacklogLabels(repo: string): [string[], (labels: readonly string[]) => void] {
   useChoices();
   return [getBacklogLabels(repo), (labels) => setBacklogLabels(repo, labels)];
+}
+
+// The board's Backlog's sections collapsed, per repository (WorkQueue.tsx): their milestones'
+// numbers, 0 for "No milestone", in `deckhand.backlog.collapsed.<owner/repo>` as JSON. None
+// collapsed isn't kept.
+const collapsedKey = (repo: string) => `deckhand.backlog.collapsed.${repo.toLowerCase()}`;
+
+export function getBacklogCollapsed(repo: string): number[] {
+  try {
+    const kept: unknown = JSON.parse(readKept(collapsedKey(repo)) ?? "[]");
+    return Array.isArray(kept) ? kept.filter((n): n is number => Number.isInteger(n)) : [];
+  } catch {
+    return [];
+  }
+}
+
+export function setBacklogCollapsed(repo: string, sections: readonly number[]) {
+  writeKept(collapsedKey(repo), sections.length ? JSON.stringify([...new Set(sections)]) : null);
+  tell();
+}
+
+export function useBacklogCollapsed(
+  repo: string,
+): [number[], (sections: readonly number[]) => void] {
+  useChoices();
+  return [getBacklogCollapsed(repo), (sections) => setBacklogCollapsed(repo, sections)];
 }
 
 const DARK = "(prefers-color-scheme: dark)";
