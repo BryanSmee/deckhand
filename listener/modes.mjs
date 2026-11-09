@@ -21,6 +21,9 @@
 //   is a run of its own (entryRun()); an analysis reads its digest, nothing before.
 // - inbox: inbox issues and discussion categories are their own trigger (workItem()).
 // - kind: what the dashboard shows its runs as (kindOf()).
+// - talk: a conversation on its issue (`brainstorm`, `grooming`), which comments go on in until
+//   "/stop" runs its wrap-up (`wrapUp`, that wrap-up's mode: brainstorms.mjs keeps its state).
+//   Its own mode is a wrap-up's, so the policies tell the two apart (`input.mode`).
 // - prompt: its instructions, in ../prompts/ (prompts.mjs).
 // Their names are reserved: a repo's `modes:` can't take them (repo-config.mjs). The
 // dashboard has a copy of the list (format.ts), checked by a test.
@@ -31,6 +34,7 @@ export const MODES = {
     volumes: "apart",
     defaults: "brainstorm",
     kind: "brainstorm",
+    talk: true,
     prompt: "brainstorm.md",
   },
   onboarding: {
@@ -52,7 +56,25 @@ export const MODES = {
     volumes: "apart",
     defaults: "brainstorm",
     kind: "brainstorm",
+    wrapUp: "brainstorm",
     prompt: "brainstorm.md",
+  },
+  // A review of the backlog (#585): a conversation like a brainstorm's, which may comment on the
+  // issues it reviews; its wrap-up edits, labels and closes them as agreed (mode-grooming.rego).
+  grooming: {
+    picked: true,
+    volumes: "apart",
+    defaults: "brainstorm",
+    kind: "grooming",
+    talk: true,
+    prompt: "grooming.md",
+  },
+  "grooming-stop": {
+    volumes: "apart",
+    defaults: "brainstorm",
+    kind: "grooming",
+    wrapUp: "grooming",
+    prompt: "grooming.md",
   },
   idea: {
     volumes: "apart",
@@ -104,6 +126,11 @@ export const FRESH = having("fresh");
 // The modes whose runs have volumes of their own (`volumes`), and of those, research's.
 export const APART = new Set(Object.keys(MODES).filter((mode) => MODES[mode].volumes));
 export const RESEARCH = having("volumes", "research");
+// The conversations, and their wrap-ups: the runs that read and answer on their issue only.
+export const TALKS = new Set(
+  Object.keys(MODES).filter((mode) => MODES[mode].talk || MODES[mode].wrapUp),
+);
+export const WRAP_UPS = new Set(Object.keys(MODES).filter((mode) => MODES[mode].wrapUp));
 
 // Any other mode is one of the repo's own.
 export const BUILT_IN = new Set(RESERVED_MODES);
@@ -173,6 +200,17 @@ export function isFresh(task, mode) {
 // running entry. A repo's `fresh` modes run on its issues, where a burst belongs together.
 export function entryRun(mode) {
   return FRESH.has(mode);
+}
+
+// The conversation a run is part of: its own mode, or the one a wrap-up ends ("stop" →
+// "brainstorm"). What the sandbox (TASK_MODE) and the dashboard (`taskMode`) know it as.
+export function talkOf(mode) {
+  return builtIn(mode)?.wrapUp ?? mode;
+}
+
+// The wrap-up "/stop" runs for the conversation `mode` (a brainstorm's when unknown).
+export function wrapUpOf(mode) {
+  return Object.keys(MODES).find((m) => MODES[m].wrapUp === mode) ?? "stop";
 }
 
 // What the dashboard shows a run or queued task as.

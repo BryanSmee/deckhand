@@ -133,6 +133,7 @@ export const en = {
   "kind.idea": "Idea",
   "kind.bug": "Bug report",
   "kind.research": "Research",
+  "kind.grooming": "Grooming",
   "kind.issue": "Issue",
 
   "runKind.work": "Work",

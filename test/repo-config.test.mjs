@@ -304,6 +304,7 @@ test("modes: parsed, with the defaults of work or brainstorms", () => {
     "brainstorm",
     "onboarding",
     "research",
+    "grooming",
     "policy",
     "audit",
     "triage",
@@ -653,6 +654,7 @@ test("review: off without the block, manual with true, its keys checked", () => 
     "brainstorm",
     "onboarding",
     "research",
+    "grooming",
     "policy",
     "review",
   ]);

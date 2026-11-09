@@ -18,7 +18,7 @@ import {
   workItem,
 } from "./events.mjs";
 import { GitHubUnavailable, getJson } from "./github.mjs";
-import { customMode, entryRun, isApart } from "./modes.mjs";
+import { customMode, entryRun, isApart, WRAP_UPS } from "./modes.mjs";
 import { liveMessage } from "./prompts.mjs";
 import { isOpen } from "./pulls.mjs";
 import { ANSWER, hasOpenQuestions, stillAsks } from "./questions.mjs";
@@ -755,7 +755,7 @@ export function createTasks(ctx) {
   // and everything after it (order is kept) wait for the next run. So does every inbox entry.
   function deliverable(task) {
     const live = task.live;
-    if (!live?.open || live.mode === "stop" || entryRun(live.mode)) return 0;
+    if (!live?.open || WRAP_UPS.has(live.mode) || entryRun(live.mode)) return 0;
     // An agent that takes no messages mid-run gets them in its next run.
     if (!agentFor(live.record.agent).takesMessages) return 0;
     const n = task.pending.findIndex((i) => i.mode !== live.mode);

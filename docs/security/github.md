@@ -450,10 +450,13 @@ to GitHub: the proxy never tunnels those hosts for it, and its plain HTTP to the
     assigning anyone and a rerun past a first. A brainstorm (`mode-brainstorm.rego`) edits and
     reacts on its own issue, files issues and labels, orders and files its follow-ups (a
     "blocked by" link, a project, a milestone), and never comments: the orchestrator posts its
-    reply. Inbox entries (`mode-idea.rego`, `mode-bug.rego`) file issues carrying their label,
+    reply. A grooming (`mode-grooming.rego`, #585) writes as a brainstorm does, and comments on
+    the repository's other issues; its wrap-up (`grooming-stop`) also edits, labels and closes
+    them, as not planned or as a duplicate only (`change.state_reason`): the one default mode
+    that writes to issues it didn't create or isn't linked to. Inbox entries (`mode-idea.rego`, `mode-bug.rego`) file issues carrying their label,
     edit those and link the ones they split; discussions (`mode-discussion.rego`) file issues. Onboarding,
     analyses, reviews and research write nothing. No default rule
-    allows closing, merging, locking or a label's settings.
+    allows closing (but a grooming's wrap-up), merging, locking or a label's settings.
 
   A **rerun** (`POST …/actions/runs/<id>/rerun-failed-jobs`, `…/actions/jobs/<id>/rerun`,
   issue #451; never a whole run's `…/rerun`, cancelling, dispatching, approving a fork's run

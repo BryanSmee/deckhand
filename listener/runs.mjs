@@ -11,7 +11,7 @@ import { ReplyError } from "./comments.mjs";
 import { commentsText, dashboardLink, taskKey } from "./events.mjs";
 import { GitHubUnavailable, incidentNote } from "./github.mjs";
 import { nextStep, replyFooter, setupText } from "./footer.mjs";
-import { brainstormDefaults, customMode, entryRun, isApart, isFresh } from "./modes.mjs";
+import { brainstormDefaults, customMode, entryRun, isApart, isFresh, TALKS } from "./modes.mjs";
 import { answersOnly } from "./capabilities.mjs";
 import { branchConfigReport } from "./onboarding.mjs";
 import { createPreparation } from "./preparation.mjs";
@@ -211,7 +211,7 @@ export function createRuns(ctx) {
       // offset (next_message) so that none is lost or read twice across a handover.
       outbox: [],
       mode,
-      talk: mode === "brainstorm" || mode === "stop",
+      talk: TALKS.has(mode),
       light,
       record,
       // Its log, the runner's (../runner/client.mjs openRemote()): written at once, sent in order.

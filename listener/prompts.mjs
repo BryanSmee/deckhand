@@ -5,7 +5,7 @@ import { entryName } from "./agents/index.mjs";
 import { entryLabel, providerLabel } from "./agents/select.mjs";
 import { mandatoryHosts } from "./egress.mjs";
 import { languageLine } from "./language.mjs";
-import { FRESH, INBOX, MODES } from "./modes.mjs";
+import { FRESH, INBOX, MODES, TALKS, talkOf } from "./modes.mjs";
 import { triggerWord } from "./onboarding.mjs";
 import { blockingSeverities } from "./reviews.mjs";
 
@@ -222,6 +222,14 @@ function brainstormPrompt(task) {
 ${modeInstructions.brainstorm}`;
 }
 
+// A grooming (#585): a review of the repository's backlog, on its own issue.
+function groomingPrompt(task) {
+  return `Groom the backlog of ${task.repo} with the maintainer, on GitHub issue #${task.number}. Read it
+with \`gh issue view ${task.number} --comments\`.
+
+${modeInstructions.grooming}`;
+}
+
 // Onboarding: its instructions, what this Deckhand allows the repo (a config can only narrow
 // it, the operator's grants and policies widen it: `grant`, grants.mjs grantOf()), and the
 // config's reference.
@@ -274,13 +282,17 @@ Don't post comments on GitHub yourself: your final message is posted for you as 
 end with a short summary (the pull request link, the files, the inbox issues created).`;
 }
 
-// What the agent reads for a brainstorm run, besides the comments themselves.
+// What the agent reads for a brainstorm or grooming run, besides the comments themselves.
 function brainstormMessage(mode, text, restored) {
+  const adding = text ? `, adding:\n\n${text}\n\n` : ". ";
   if (mode === "stop") {
-    return `The maintainer ends the brainstorm here${text ? `, adding:\n\n${text}\n\n` : ". "}Wrap up as in step 4 of your instructions: create the follow-ups that were kept, post the summary and update the issue's description with what was decided.`;
+    return `The maintainer ends the brainstorm here${adding}Wrap up as in step 4 of your instructions: create the follow-ups that were kept, post the summary and update the issue's description with what was decided.`;
+  }
+  if (mode === "grooming-stop") {
+    return `The maintainer ends the grooming here${adding}Wrap up as in step 4 of your instructions: apply the changes that were agreed to the issues they name, nothing else, then update this issue's description with the log of every issue you touched.`;
   }
   return restored
-    ? `${text}\n\n(The brainstorm resumes after a pause: check the issue for comments you haven't seen.)`
+    ? `${text}\n\n(The ${talkOf(mode)} resumes after a pause: check the issue for comments you haven't seen.)`
     : text;
 }
 
@@ -498,6 +510,7 @@ function promptOf(
     return noCodePrompt(task, ownRules, INBOX.has(mode) ? text : "");
   }
   if (mode === "brainstorm" || mode === "stop") return brainstormPrompt(task);
+  if (mode === "grooming" || mode === "grooming-stop") return groomingPrompt(task);
   if (INBOX.has(mode)) return inboxPrompt(task, mode, text);
   if (mode === "analyze") return analyzePrompt(task, text);
   if (mode === "research") return researchPrompt(task);
@@ -535,8 +548,7 @@ const CHAT_CONTAINER =
 export function firstMessage({ mode, text, restored, started }) {
   // A chat's answer stays in the conversation: nothing is posted.
   if (mode === "chat") return started ? `${text || "Continue."}\n\n(${CHAT_CONTAINER})` : text;
-  const talk = mode === "brainstorm" || mode === "stop";
-  const body = talk ? brainstormMessage(mode, text, restored) : text;
+  const body = TALKS.has(mode) ? brainstormMessage(mode, text, restored) : text;
   // An empty follow-up (only "/model …", say) would open an interactive session instead.
   if (started) {
     return `${body || "Continue."}\n\n(${NEW_CONTAINER} Don't post comments on GitHub yourself: your final message is posted as a reply.)`;
@@ -603,6 +615,9 @@ export function liveMessage(mode, text) {
     "Your final message is still posted as the single reply for this run: make it cover this comment too. (Don't post comments on GitHub yourself.)";
   if (mode === "brainstorm") {
     return `New comment on the issue: ${text}\n\n(Still a brainstorm: no code, branch, commit or pull request, and new issues only for kept follow-ups. ${reply})`;
+  }
+  if (mode === "grooming") {
+    return `New comment on the issue: ${text}\n\n(Still grooming: no code, branch, commit or pull request, other issues commented on only as your instructions say, edited only at the wrap-up. ${reply})`;
   }
   if (FRESH.has(mode) && mode !== "analyze") {
     return `Another entry arrived on the inbox while you were working:\n\n${text}\n\nHandle it like the others, as its own entry. ${reply}`;

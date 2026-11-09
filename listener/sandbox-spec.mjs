@@ -6,7 +6,7 @@
 import { proxyEnv } from "./egress.mjs";
 import { languageLine } from "./language.mjs";
 import { restricted } from "./github-forks.mjs";
-import { isApart, isFresh, RESEARCH } from "./modes.mjs";
+import { isApart, isFresh, RESEARCH, talkOf } from "./modes.mjs";
 import { ENGINE_HOST } from "./runner/engine.mjs";
 import { SCREENSHOT_DIR } from "./runner/inbox.mjs";
 import { SANDBOX_URLS } from "../lib/services.mjs";
@@ -192,7 +192,7 @@ export function sandboxEnv(
   engine,
 ) {
   const { live } = task;
-  const mode = live.mode === "stop" ? "brainstorm" : live.mode;
+  const mode = talkOf(live.mode);
   // Its capabilities: without `push`, no branch; without `pull`, no clone, nothing of the
   // repo's to run or read (a research run).
   const caps = capabilitiesOf(live);

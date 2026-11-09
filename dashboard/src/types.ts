@@ -21,7 +21,9 @@ export type TaskState =
 
 export type RunStatus = "running" | "ok" | "needs-input" | "error" | "interrupted" | "cancelled";
 
-export type Kind = "issue" | "pr" | "discussion" | "brainstorm" | "idea" | "bug" | "research";
+// A conversation on its issue: a brainstorm, or a grooming of the backlog (#585).
+export type Kind = "issue" | "pr" | "discussion" | Talk | "idea" | "bug" | "research";
+type Talk = "brainstorm" | "grooming";
 
 export type Auth = "plan" | "key" | "gateway";
 
@@ -34,10 +36,9 @@ export interface Run {
   replyTo: number | null;
   // start, continue, restore or wrap-up
   mode: string | null;
-  // work, brainstorm, idea, bug, discussion or one of the repo's own modes
+  // work, brainstorm, grooming, idea, bug, discussion or one of the repo's own modes
   taskMode: string | null;
-  // What its start decided it gets (pull, push, internet…); null before, or for a run from before
-  // capabilities.
+  // What its start decided it gets (pull, push, internet…); null before, or before capabilities.
   capabilities?: string[] | null;
   // Why the listener started it itself ("conflict": a pull request to rebase, "review": one
   // that turned ready, "review-fix": one whose review requested changes, "ci-fix": one whose CI
@@ -160,8 +161,7 @@ export interface PullRequest {
   ciFailed?: boolean;
 }
 
-// failed when one run failed, else running while one hasn't finished, else passed; none
-// without any.
+// failed when a run failed, else running while one hasn't finished, else passed; none without any.
 export type CiState = "running" | "failed" | "passed" | "none";
 
 export interface Ci {

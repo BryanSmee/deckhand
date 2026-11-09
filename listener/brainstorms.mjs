@@ -6,7 +6,8 @@ import { respellMap } from "./spelling.mjs";
 // Claude's reply keeps a brainstorm active at least this long, so an answer can follow it.
 export const REPLY_GRACE_MS = 2 * 60000;
 
-// key → { repo, number, status, deadline }. "active" → "idle" once the deadline passes with no
+// key → { repo, number, status, deadline, mode }: `mode` the conversation's, "grooming" or
+// "brainstorm" (also when missing: kept before grooming existed). "active" → "idle" once the deadline passes with no
 // comment: the deadline is data, its timer armed again from it by the copy that loads the map.
 // One container per reply means nothing is held open meanwhile: idle is what the dashboard
 // shows, and the next comment restores the session from its volume and says so to Claude.
@@ -50,12 +51,13 @@ export function createBrainstorms({
     timers.delete(key);
   }
 
-  // A comment that starts or continues the brainstorm. True when it was idle: the session
-  // is restored.
-  function activate(key, { repo, number }) {
+  // A comment that starts or continues the brainstorm, in `mode`. True when it was idle: the
+  // session is restored.
+  function activate(key, { repo, number }, mode = "brainstorm") {
     const b = brainstorms.get(key);
     const restored = b?.status === "idle";
-    save(key, { ...(b ?? { repo, number }), status: "active", deadline: now() + idleMs });
+    const deadline = now() + idleMs;
+    save(key, { ...(b ?? { repo, number }), status: "active", deadline, mode });
     armIdle(key);
     return restored;
   }

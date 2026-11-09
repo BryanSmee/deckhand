@@ -78,6 +78,12 @@ with `no-new-privileges` and limits ([Hardening](security/mounts-and-engine.md#h
 token stolen from it is refused from any other network. What the policies give each run is
 decided at its start ([Capabilities](security/policies.md#capabilities)).
 
+Deckhand's default policies keep each mode's writes to its own issue, its pull requests and the
+issues it files, but a grooming's ([Grooming](repo-config/modes.md#grooming)): it comments on
+the repository's other issues, and its wrap-up edits, labels and closes them, as not planned or
+as a duplicate only. Who may start one, and wrap it up, is `runs:start:grooming` and
+`runs:start:grooming-stop` ([Access](security/webhooks-and-sign-in.md#access)).
+
 ## Your part as the operator
 
 Deckhand fails closed, but some things only you decide:
