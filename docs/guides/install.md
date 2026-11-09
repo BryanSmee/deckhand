@@ -6,7 +6,7 @@ Compose; on a cluster, see [On Kubernetes](#on-kubernetes).
 
 Deckhand runs on your own server with your own private GitHub App and your own Claude
 credential (or OpenAI key, for [Codex](codex.md)). You need Docker Engine 26 or later with the
-compose plugin, and an HTTPS address that GitHub can reach (your reverse proxy, or a tunnel)
+compose plugin (and Node 20 or later for the `deckhand` command), and an HTTPS address that GitHub can reach (your reverse proxy, or a tunnel)
 forwarding to edge's port: without a public address, see [A stable tunnel](tunnels.md).
 
 ## Start Deckhand
@@ -20,10 +20,14 @@ cp -r server.example server
 # server/config.yaml: allowed_users, the GitHub logins allowed to start runs (required: no
 #   start without it), and the other settings; server/grants/: what you grant each
 #   repository. See settings.md, The server folder.
-docker compose pull
-docker compose up -d
+node cli/deckhand.mjs up
 docker compose logs edge
 ```
+
+`deckhand up` pins the latest release in `.env` (`DECKHAND_VERSION`) and moves the checkout to
+its tag, so `compose.yaml` is that release's, then pulls every image and runs
+`docker compose up -d`. Without Node: set `DECKHAND_VERSION` yourself, check out its tag
+(`git checkout v1.2.3`), then `docker compose pull` and `docker compose up -d`.
 
 Compose runs nine images, published for each release (`DECKHAND_VERSION`, default
 `latest`): edge's (the only one the internet reaches: GitHub's webhooks, `/setup`, sign-in and
@@ -44,7 +48,7 @@ networks, see [Security model](../security.md)), and the base sandbox image runs
 [your tunnel](tunnels.md), at it.
 
 To build the images from this checkout instead: `docker compose up -d --build`. Updating is
-`docker compose pull` and `docker compose up -d` again ([Updating](updating.md)).
+`node cli/deckhand.mjs update` ([Updating](updating.md)).
 
 ## A plan or an API key
 

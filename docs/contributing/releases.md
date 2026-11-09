@@ -3,8 +3,8 @@
 A release is a `v*` tag on a commit of `main`, pushed by hand. The release workflow
 (`.github/workflows/release-workflow.yml`) does the rest when the tag arrives: every image of its
 matrix for `linux/amd64` and `linux/arm64`, tagged `1.2.3`, `1.2` and `latest` (the images drop
-the tag's `v`), and the release itself, with the machine driver (`deckhand-machine.mjs`, its
-`VERSION` the tag's) attached. Compose's default `DECKHAND_VERSION` is `latest`: the tag is what
+the tag's `v`), and the release itself, with the machine driver (`deckhand-machine.mjs`) and the `deckhand` command
+(`deckhand.mjs`, from `cli/`) attached, each with its `VERSION` the tag's. Compose's default `DECKHAND_VERSION` is `latest`: the tag is what
 a new install pulls.
 
 1. **Ask Deckhand to prepare it**: open a `Release v0.x.0` issue in the release's milestone
@@ -44,7 +44,7 @@ a new install pulls.
        jq -r --arg i "$image" '[$i, .digest, ([.manifests[].platform | select(.os == "linux") | .architecture] | join(","))] | @tsv'
      docker buildx imagetools inspect "ghcr.io/bryansmee/deckhand-$image:latest" --format '{{json .Manifest}}' | jq -r .digest
    done
-   gh release view v1.2.3 --json assets --jq '.assets[].name'   # deckhand-machine.mjs
+   gh release view v1.2.3 --json assets --jq '.assets[].name'   # deckhand-machine.mjs, deckhand.mjs
    ```
 
 5. **The notes**: the workflow made the release with GitHub's generated notes; replace them with
