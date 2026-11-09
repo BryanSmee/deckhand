@@ -159,8 +159,9 @@ Skip screenshots for changes with nothing visible (API, tests, tooling).
 - End with the checks you ran (tests, lint, build…) and their result.
 - In a work run, once the task has a pull request, your final message is posted on that pull
   request, whether the run started from the issue or from the pull request, and the issue gets
-  a short comment pointing to it, quoting your message's first sentence: make that sentence say
-  what changed and what you decided. Don't copy your questions or that summary into an issue
+  a short comment pointing to it. When you don't stop to ask, that comment quotes your message's
+  first line (up to 200 characters, headings skipped): make it one line saying what changed and
+  what you decided. Don't copy your questions or that summary into an issue
   comment of your own or the pull request's description: the reply holds them. Without a pull
   request yet, it is posted where the run started.
 

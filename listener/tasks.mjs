@@ -20,6 +20,7 @@ import {
 import { GitHubUnavailable, getJson } from "./github.mjs";
 import { customMode, entryRun, isApart } from "./modes.mjs";
 import { liveMessage } from "./prompts.mjs";
+import { isOpen } from "./pulls.mjs";
 import { ANSWER, hasOpenQuestions, stillAsks } from "./questions.mjs";
 import {
   CONFIG_FILE,
@@ -556,7 +557,7 @@ export function createTasks(ctx) {
     const titles = ctx.titles?.closed && { get: ctx.titles.closed, keys: ctx.titles.keys };
     if (spelledGet(titles, key)) return false;
     const pr = spelledGet(ctx.pulls, key);
-    const open = pr?.state === "draft" || pr?.state === "ready";
+    const open = isOpen(pr);
     if (pr && !open) return false;
     if (last.status === "needs-input") return !ctx.dismissals?.has?.(last.key, last.id);
     if (!open) return false;

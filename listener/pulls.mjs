@@ -30,7 +30,8 @@ import {
 import { respellMap, sameTask } from "./spelling.mjs";
 import { mapLimited } from "../lib/pool.mjs";
 
-const open = (pr) => pr?.state === "draft" || pr?.state === "ready";
+// Whether a pull request is open: a draft or ready for review.
+export const isOpen = (pr) => pr?.state === "draft" || pr?.state === "ready";
 // How many open pull requests' CI resync() reads at once (three GitHub calls each).
 const CI_AT_ONCE = 4;
 // How many open pull requests readMerge() reads at once (one GitHub call each).
@@ -83,7 +84,7 @@ export function createPulls({
   function record(key, pr) {
     const repo = parseKey(key)?.repo;
     const current = pulls.get(key);
-    if (current && current.number !== pr.number && open(current) && !open(pr)) return false;
+    if (current && current.number !== pr.number && isOpen(current) && !isOpen(pr)) return false;
     let before = null;
     for (const [other, p] of pulls) {
       if (p.number !== pr.number || !sameRepo(parseKey(other)?.repo, repo)) continue;
@@ -138,7 +139,7 @@ export function createPulls({
     });
     // Moved to a new head: its CI read now, as the delivery that said it changed may have been
     // handled before this one, and found no pull request at that commit.
-    if (head && before?.ci?.sha !== head && open(pr)) {
+    if (head && before?.ci?.sha !== head && isOpen(pr)) {
       readCiOf(key).catch((error) => log(`${key}: CI: ${error.message ?? error}`));
     }
     return true;
@@ -188,7 +189,7 @@ export function createPulls({
             readyAt: null,
             ...(pr.head?.sha && { head: pr.head.sha }),
           });
-          if (pr.head?.sha && open(pulls.get(t.key))) opened.push(t.key);
+          if (pr.head?.sha && isOpen(pulls.get(t.key))) opened.push(t.key);
         }
       }
       for (const key of unsized(unique)) {
@@ -217,7 +218,7 @@ export function createPulls({
   }
 
   // [key, pr] of the tasks whose pull request is open, for the conflict watcher.
-  const openPulls = () => [...pulls].filter(([, pr]) => open(pr));
+  const openPulls = () => [...pulls].filter(([, pr]) => isOpen(pr));
 
   // The open pull requests' states asked again from GitHub (one listing per repo, then those it
   // doesn't have or whose size isn't known one by one), and the tasks without one looked up
@@ -361,7 +362,7 @@ export function createPulls({
       do {
         entry.again = false;
         const pr = pulls.get(key);
-        if (!pr?.head || !open(pr)) break;
+        if (!pr?.head || !isOpen(pr)) break;
         const repo = parseKey(key)?.repo;
         let ci;
         try {
@@ -450,7 +451,7 @@ export function createPulls({
   // Resolves to whether GitHub hadn't computed it yet at the head recorded.
   async function readOneMerge(key) {
     const pr = pulls.get(key);
-    if (!open(pr)) return false;
+    if (!isOpen(pr)) return false;
     let found;
     try {
       found = await getPull(parseKey(key).repo, pr.number);
@@ -501,7 +502,7 @@ const markKey = (repo, number) => `${repo.toLowerCase()}#${number}`;
 // for one pull request, kept's state (resync() asks GitHub about the open ones at start), with
 // when it turned ready and whether the listener merged it from either.
 function mergePulls(kept, moved) {
-  if (kept.number !== moved.number) return open(moved) && !open(kept) ? moved : kept;
+  if (kept.number !== moved.number) return isOpen(moved) && !isOpen(kept) ? moved : kept;
   const autoMerged = kept.autoMerged || moved.autoMerged;
   const external = kept.external ?? moved.external;
   return {

@@ -16,6 +16,7 @@ import { branchConfigReport } from "./onboarding.mjs";
 import { createPreparation } from "./preparation.mjs";
 import { openingMessages, promptFor } from "./prompts.mjs";
 import { CONFIG_FILE } from "./repo-config.mjs";
+import { isOpen } from "./pulls.mjs";
 import { askAfterRun } from "./reviewers.mjs";
 import { postReview, reviewStart } from "./reviews.mjs";
 import {
@@ -875,7 +876,7 @@ export function createRuns(ctx) {
     // one place for the questions and what changed. Saved before it is posted, so that the
     // next copy, after a handover, posts it there too (an idempotency key is per path).
     const pull = workPull(task);
-    if (openPull(pull) && live.replyTo !== pull.number) {
+    if (isOpen(pull) && live.replyTo !== pull.number) {
       live.replyTo = pull.number;
       live.record.replyTo = pull.number;
       await ctx.saveLive(task);
@@ -890,8 +891,6 @@ export function createRuns(ctx) {
     }
   }
 
-  const openPull = (pr) => pr?.state === "draft" || pr?.state === "ready";
-
   // The task's pull request, for a work run on an issue (one that may push: not a review,
   // a brainstorm, an inbox entry's or a discussion's), or null.
   function workPull(task) {
@@ -900,8 +899,9 @@ export function createRuns(ctx) {
     return ctx.pulls?.get(live.key) ?? null;
   }
 
-  // The issue's comment for a reply posted on its pull request `number`: where it is, and its
-  // first line, which the prompt asks to say what changed and what was decided. Its own
+  // The issue's comment for a reply posted on its pull request `number`: where it is, and, for
+  // one that doesn't ask, its first line, which the prompt asks to say what changed and what was
+  // decided. Its own
   // idempotency key: a handover doesn't post it twice. Not posted is only logged: the reply is.
   async function pointTo(task, number, posted, text, status) {
     const { live } = task;
@@ -913,7 +913,8 @@ export function createRuns(ctx) {
       status === "needs-input"
         ? `Waiting for your input on #${number}: its questions are in ${reply}.`
         : `Replied on #${number}: ${reply}.`;
-    const gist = summaryOf({ text: hidden(live, text) });
+    // Its questions are what a reply that asks starts with: the pointer says where they are.
+    const gist = status === "needs-input" ? null : summaryOf({ text: hidden(live, text) });
     await ctx
       .answer(
         { ...task, replyTo: task.number, comment: null },

@@ -1503,7 +1503,8 @@ test("a run's end asks the waits about its own issue again: its run may have clo
 
 // #1053: once a work task has its pull request, its run's replies go there, whatever started the
 // run, and the issue gets a pointer. `pull`: the task's pull request as pulls.mjs has it.
-async function replied(t, text, { mode = "work", light = false, replyTo = 12, pull } = {}) {
+// `end(run)`: how the run ends, its result `text` and its sandbox's exit by default.
+async function replied(t, text, { mode = "work", light = false, replyTo = 12, pull, end } = {}) {
   const posts = [];
   const answer = async (target, body, opts = {}) => {
     posts.push({ on: target.replyTo, body, key: opts.key ?? null, saved: saved.slice() });
@@ -1521,8 +1522,11 @@ async function replied(t, text, { mode = "work", light = false, replyTo = 12, pu
   Object.assign(run.task.live, { light, replyTo, asked: replyTo });
   run.task.live.record.replyTo = replyTo;
   const live = run.task.live;
-  run.runner.out(result(text));
-  await run.runner.kill();
+  if (end) await end(run);
+  else {
+    run.runner.out(result(text));
+    await run.runner.kill();
+  }
   await run.following;
   return { ...run, live, posts, labels };
 }
@@ -1544,7 +1548,7 @@ test("a work run asking, its task's pull request open: the reply on the pull req
   assert.equal(posts[0].saved.at(-1), 54);
   assert.equal(
     posts[1].body,
-    "Waiting for your input on #54: its questions are in [the reply](https://github.com/org/repo/issues/54#issuecomment-1).\n\n> The schema drops a column.",
+    "Waiting for your input on #54: its questions are in [the reply](https://github.com/org/repo/issues/54#issuecomment-1).",
   );
   // The board and ticked() read the asking run's `replyTo`.
   assert.equal(live.replyTo, 54);
@@ -1610,6 +1614,46 @@ test("a work run without a pull request yet, or one that only answers: its reply
     talk.posts.map((p) => p.on),
     [12],
   );
+});
+
+test("a work run stopped, its task's pull request open: the reply there, the pointer on the issue", async (t) => {
+  const { posts } = await replied(t, null, {
+    pull: { number: 54, state: "draft" },
+    end: async ({ ctx, runs }) => {
+      ctx.deliver = () => true;
+      ctx.runner.out(result("Half way."));
+      runs.cancel("org/repo#12", "bryansmee");
+    },
+  });
+  assert.deepEqual(
+    posts.map((p) => [p.on, p.key]),
+    [
+      [54, "run:reply"],
+      [12, "run:issue-note"],
+    ],
+  );
+  assert.equal(
+    posts[1].body,
+    "Replied on #54: [the reply](https://github.com/org/repo/issues/54#issuecomment-1).\n\n> Stopped by @bryansmee.",
+  );
+});
+
+test("a review run that fails, its task's pull request open: its error where it was asked, no pointer", async (t) => {
+  const { posts, live } = await replied(t, null, {
+    mode: "review",
+    replyTo: 54,
+    pull: { number: 54, state: "ready" },
+    end: async ({ ctx, runner }) => {
+      ctx.models = { apiOf: async () => ({}), prints: () => [] };
+      runner.out(failed("The diff couldn't be read."));
+    },
+  });
+  assert.equal(live.record.status, "error");
+  assert.deepEqual(
+    posts.map((p) => [p.on, p.key]),
+    [[54, "run:reply"]],
+  );
+  assert.match(posts[0].body, /^Claude stopped with an error\./);
 });
 
 test("a work run's pointer that GitHub refuses: logged, the reply counts", async (t) => {
