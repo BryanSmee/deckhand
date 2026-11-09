@@ -5,6 +5,7 @@ import { render, screen, within } from "@testing-library/preact";
 import { expect, test } from "vitest";
 import { Dashboard } from "./App";
 import { Outcome } from "./Outcome";
+import { setPref } from "./prefs";
 import { makeState, makeTask, mockApi } from "./testUtils";
 import type { Run, Task } from "./types";
 
@@ -64,6 +65,14 @@ test("on a phone, the tag is plain text in the facts line", () => {
 test("a run on the API key, or through a gateway, says so", () => {
   show(makeTask({ number: 5, state: "done", runs: [run({ provider: "anthropic", auth: "key" })] }));
   expect(outcome().getByText("API key").getAttribute("title")).toBe("Ran on ANTHROPIC_API_KEY");
+});
+
+// The tooltip is the label's language too (#916): only the variable stays as it is.
+test("in French, the tag and its tooltip are French", () => {
+  setPref("language", "fr");
+  show(makeTask({ number: 5, state: "done", runs: [run({ provider: "anthropic", auth: "key" })] }));
+  const tag = within(screen.getByRole("region", { name: "Résultat" })).getByText("Clé d’API");
+  expect(tag.getAttribute("title")).toBe("Exécutée avec ANTHROPIC_API_KEY");
 });
 
 test("a run off Anthropic, or from before the field: no tag", () => {
