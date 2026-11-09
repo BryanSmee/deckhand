@@ -47,7 +47,7 @@ import { apiRoute, hidden, mustDo } from "./web.mjs";
 import { readJsonBody, Refused, refuse, send } from "../lib/http.mjs";
 
 // The store's key of the chats: all of them, as one value (the store lists no keys).
-export const CHATS_KEY = "chats";
+const CHATS_KEY = "chats";
 
 // A chat's id: 16 hex digits (the runner checks a chat's key by them: ../runner/spec-check.mjs
 // chatSandbox()).
@@ -69,7 +69,7 @@ const START = startAction("chat");
 const LOGS = "logs:read";
 
 // The chat's task id and key, as tasks.mjs and runs.mjs have them.
-export const chatTaskId = (id) => `chat-${id}`;
+const chatTaskId = (id) => `chat-${id}`;
 export const chatKey = (chat) => taskKey(chat.repo, chatTaskId(chat.id));
 
 // `ctx` (../orchestrator/server.mjs): the orchestrator's state and services, read at call time;

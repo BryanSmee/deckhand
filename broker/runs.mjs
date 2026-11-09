@@ -31,7 +31,7 @@ import {
 } from "../lib/tokens.mjs";
 import { createSeal } from "./seal.mjs";
 
-export { AGENT_TOKEN_TTL_MS, RENEW_GRACE_MS, TOKEN_TTL_MS };
+export { RENEW_GRACE_MS };
 
 // What a run's token sent from elsewhere than its sandbox gets.
 export const NOT_ITS_SANDBOX = "this run's token only works from its own sandbox";
@@ -99,7 +99,7 @@ export function runFields(body) {
 
 // The hashes of a run's tokens the orchestrator sends (PUT /runs/:id), checked: { hash, exp, at:
 // 0 }, the newest last.
-export function issuedFields(list) {
+function issuedFields(list) {
   return (Array.isArray(list) ? list : [])
     .filter((t) => /^[0-9a-f]{64}$/.test(t?.hash ?? "") && Number.isFinite(t?.exp))
     .map(({ hash: h, exp }) => ({ hash: h, exp, at: 0 }))

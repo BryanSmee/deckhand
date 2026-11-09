@@ -51,7 +51,7 @@ export const MAX_FIELDS = 10;
 // How long a document may take to validate in the worker.
 export const VALIDATE_MS = 10_000;
 // The most node IDs a call's mutations may name: GitHub looks up 100 at once.
-export const MAX_NODES = 100;
+const MAX_NODES = 100;
 
 const SCHEMA = new URL("./vendor/github.graphql", import.meta.url);
 let schema = null;
@@ -421,7 +421,7 @@ const ACTORS = new Set(["User", "Bot"]);
 
 // A GraphQL call's body → { query, doc, variables, operationName } or { refused }: its JSON
 // read, its document under the caps and parsed (in linear time: validation is apart).
-export function readCall(body) {
+function readCall(body) {
   let call;
   try {
     call = JSON.parse(body.toString("utf8"));
@@ -475,7 +475,7 @@ export function validationError(query, schema = githubSchema()) {
 
 // A read and validated call → { doc, op, variables, operationName, coerced } or { refused }:
 // its operation picked as GitHub picks it, and its variables coerced to their types.
-export function operationOf(schema, { doc, variables, operationName }) {
+function operationOf(schema, { doc, variables, operationName }) {
   const op = getOperationAST(doc, operationName ?? undefined);
   if (!op) {
     return {
@@ -497,7 +497,7 @@ export function operationOf(schema, { doc, variables, operationName }) {
   return { doc, op, variables, operationName, coerced: values.variableValues };
 }
 
-// A GraphQL call's body → operationOf()'s, validated on this thread: the tests' shortcut.
+// A GraphQL call's body → operationOf()'s, validated on this thread: kept for the tests alone.
 export function parseCall(body, schema = githubSchema()) {
   const call = readCall(body);
   if (call.refused) return call;
@@ -602,14 +602,14 @@ export function createValidator({
 
 // The fields an operation selects at its root (selected()). Validation has ruled out cycles and
 // fragments on other types.
-export function rootFields(doc, op) {
+function rootFields(doc, op) {
   return selected(doc, op.selectionSet);
 }
 
 // A mutation's root fields → [{ name, key, spec, input }], or { refused }: each one MUTATIONS
 // names, its input (`input:` as graphql-js resolves it, inline or from the variables) with only
 // the fields it knows. `__typename` asks nothing.
-export function mutationFields({ doc, op, coerced }, schema = githubSchema()) {
+function mutationFields({ doc, op, coerced }, schema = githubSchema()) {
   const defs = schema.getMutationType().getFields();
   const out = [];
   // Fields with the same response key are one, which GitHub runs once (validation has made
@@ -1030,7 +1030,7 @@ export function issueReads(schema, doc, op, variables, run) {
 // and `url` unaliased (or aliased to themselves), and no `html_url`, which GraphQL's Issue
 // doesn't have, so it could only be another field's alias. Otherwise a run could answer
 // `url: title` with a title of its choosing, and claim an issue it didn't create.
-export function answersCreated(doc, fields) {
+function answersCreated(doc, fields) {
   const issues = ownPath(doc, fields, ["issue"]);
   if (!issues || !ownPath(doc, issues, ["url"])) return false;
   const inner = selected(

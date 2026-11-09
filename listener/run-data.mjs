@@ -5,7 +5,7 @@ import { parseKey } from "./events.mjs";
 
 export const DIMENSIONS = ["repo", "agent", "model", "effort", "user"];
 const value = (r, key) => (key === "user" ? (r.user ?? "unknown") : (r[key] ?? "unknown"));
-export const stepOf = (r) => r.reason || r.taskMode || "work";
+const stepOf = (r) => r.reason || r.taskMode || "work";
 
 export function runData({ runs, pull = () => null, reviewed = () => null, filters = {} }) {
   const all = runs.filter((r) => !r.owner && ["issue", "pr"].includes(parseKey(r.key)?.kind));

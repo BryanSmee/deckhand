@@ -14,7 +14,7 @@ const RETRY_MS = 5_000;
 // How often the plans' usage is read again while a dashboard asks for it (api/state, every few
 // seconds): the readings change with the runs' calls, and a poll of the plans is the models
 // service's to pace (../models/usage.mjs POLL_MS).
-export const USAGE_MS = 15_000;
+const USAGE_MS = 15_000;
 
 // `before` (a list, or none) with `fresh` last, those of `fresh` taken out of it first (by
 // `keyOf`), then the oldest dropped past `max`: `fresh` stays whole.

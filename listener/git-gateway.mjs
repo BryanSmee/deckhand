@@ -183,7 +183,7 @@ export function rejection(refs, caps, reasons) {
 
 // Where the pack starts in a push spooled to `file`, its ref updates ending at `end`: past the
 // push options when the client sends some. Null when there is no pack (only deletions).
-export async function packStart(file, end, caps) {
+async function packStart(file, end, caps) {
   const handle = await open(file);
   try {
     const { size } = await handle.stat();
@@ -236,7 +236,7 @@ const unconnectedReason = (repo, ref, missing) =>
 // Why the workflow files of a push can't go through, by ref (git-mirror.mjs check()'s
 // findings, { ref, path, problems }): empty when they all pass. `secrets`: the repo is granted
 // `workflow_secrets`, which the message names then.
-export function workflowRefusals(found, secrets = false) {
+function workflowRefusals(found, secrets = false) {
   const byRef = new Map();
   for (const { ref, path, problems } of found) {
     byRef.set(ref, [...(byRef.get(ref) ?? []), `${path}: ${problems.join(", ")}`]);

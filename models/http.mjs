@@ -56,7 +56,7 @@ const realSleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms).unref
 // `credentials`: the names of those the operator set; `secrets()`: their values, and the plan
 // logins' tokens as last used; `keys`: the broker's public keys, for the service tokens;
 // `bound`: lib/service-token.mjs networkCallers()'s, or null (Kubernetes).
-export function createModelsHandler({
+function createModelsHandler({
   endpoints,
   runs,
   usage = null,

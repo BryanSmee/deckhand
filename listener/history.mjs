@@ -111,7 +111,7 @@ export const noteUnnamedShots = (store, folder, at) =>
 
 // Those past `cutoff`, removed at the broker (`removeShots(folder)`), then from the record; one
 // the broker didn't remove stays, for the next day's try. → how many were removed.
-export async function pruneUnnamedShots({ store, cutoff, removeShots, log = () => {} }) {
+async function pruneUnnamedShots({ store, cutoff, removeShots, log = () => {} }) {
   const old = Object.entries((await store.get(UNNAMED_SHOTS)) ?? {})
     .filter(([, at]) => at < cutoff)
     .map(([folder]) => folder);

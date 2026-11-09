@@ -15,12 +15,7 @@ import { policyClient } from "../listener/policy-client.mjs";
 import { allowOnly, createEngine, opaErrors } from "../policy-service/engine.mjs";
 import { POLICIES, policyMetrics, resultOf } from "../policy-service/metrics.mjs";
 import { opaBinary, opaServer } from "../policy-service/opa.mjs";
-import {
-  createPolicyService,
-  grantsDirOf,
-  ROUTES,
-  settingsOf,
-} from "../policy-service/service.mjs";
+import { createPolicyService, ROUTES, settingsOf } from "../policy-service/service.mjs";
 import {
   assertHealth,
   samplesOf,
@@ -549,7 +544,8 @@ test("the engine: a check opa didn't finish isn't remembered as the files' compi
   );
 });
 
-test("grantsDirOf: the environment's, else config.yaml's grants_dir, else the default", () => {
+test("settingsOf's grants folder: the environment's, else config.yaml's grants_dir, else the default", () => {
+  const grantsDirOf = (env, read) => settingsOf(env, read).GRANTS_DIR;
   const files = (map) => (path) => {
     if (path in map) return map[path];
     throw Object.assign(new Error(`ENOENT: ${path}`), { code: "ENOENT" });

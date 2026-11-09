@@ -69,7 +69,7 @@ export const allowed = (actor, config, users, may = null) =>
   (!may || may.has(lower(actor.login)));
 
 // The mode an auto-picked issue runs in: what its starter, and whoever edited it since, need.
-export const PICKED_ACTION = startAction("work");
+const PICKED_ACTION = startAction("work");
 
 // Why the issue's text isn't the one the label vouched for, or null: its title renamed (its
 // events) or its description edited (`history`: its edits, as lastEdits() reads them) at or
@@ -82,7 +82,7 @@ export const PICKED_ACTION = startAction("work");
 // GitHub lists an edited description's original as an edit by its author at its creation, the
 // label's second too. That one edit by the App is no edit since; any later one of its is.
 // `may`: allowed()'s.
-export function editedSince(events, history, since, config, users, created = null, may = null) {
+function editedSince(events, history, since, config, users, created = null, may = null) {
   const after = (at) => Date.parse(at ?? "") >= since;
   const second = (at) => Math.floor(Date.parse(at ?? "") / 1000);
   const original =

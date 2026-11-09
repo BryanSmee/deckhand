@@ -47,7 +47,7 @@ const HOP_BY_HOP = new Set([
   "x-deckhand-cache",
 ]);
 
-export function keptHeaders(headers) {
+function keptHeaders(headers) {
   return Object.fromEntries(Object.entries(headers).filter(([k]) => !HOP_BY_HOP.has(k)));
 }
 

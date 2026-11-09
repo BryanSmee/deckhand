@@ -16,9 +16,9 @@ import { isToken, RUN_AUDIENCE, TokenError, verifyToken } from "../lib/tokens.mj
 import { NOT_ITS_SANDBOX } from "../listener/broker.mjs";
 
 // A run lasts 7 days at most (its agent token's lifetime): its record, a day more.
-export const RUN_TTL_MS = 8 * 24 * 60 * 60_000;
+const RUN_TTL_MS = 8 * 24 * 60 * 60_000;
 // The listener's reactions are kept that long (the run that could take one off is over by then).
-export const CLAIM_TTL_MS = 30 * 24 * 60 * 60_000;
+const CLAIM_TTL_MS = 30 * 24 * 60 * 60_000;
 // The events the orchestrator reads (pushes, notes for a run's log, pull requests changed).
 export const STREAM = "github";
 const STREAM_MAX = 10_000;

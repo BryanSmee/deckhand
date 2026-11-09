@@ -23,7 +23,7 @@ import { logContext, withRequest } from "../lib/log.mjs";
 // inline script), never in a frame (a page on a sibling domain, which SameSite=Lax lets
 // through, could get a signed-in user to click Start or Cancel), and never sniffed as another
 // type. Edge's own pages narrow the policy further (html.mjs page()).
-export const SECURITY_HEADERS = {
+const SECURITY_HEADERS = {
   "content-security-policy": "default-src 'self'; frame-ancestors 'none'",
   "x-content-type-options": "nosniff",
 };
@@ -69,8 +69,8 @@ export function local(req) {
 // A delivery's GUID, as the store keeps it: { taking: at } while it goes on the stream, then
 // { kept: at }, for a day. A redelivery of one taken (by hand, or GitHub's own) comes within that;
 // the redeliveries' poller only asks for those GitHub never saw taken.
-export const deliveryKey = (id) => `deliveries/${id}`;
-export const DELIVERY_TTL_MS = 24 * 3600_000;
+const deliveryKey = (id) => `deliveries/${id}`;
+const DELIVERY_TTL_MS = 24 * 3600_000;
 // How long a commit's mark (internal.mjs ciWaitingKey()) lasts, should its entry be lost.
 const CI_WAITING_TTL_MS = 10 * 60_000;
 // A delivery still being taken after this was lost on its way to the stream (a copy that died,
