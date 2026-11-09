@@ -21,6 +21,44 @@ import { review } from "./en-review";
 import { ui } from "./en-ui";
 
 export const en = {
+  "runData.intro":
+    "Compare existing issues without extra agent runs. Issues differ, and retained history may be incomplete.",
+  "runData.method": "How to read these numbers",
+  "runData.title": "Run data",
+  "runData.steps": "Run data by step",
+  "runData.step": "Step",
+  "runData.repo": "Repository",
+  "runData.agent": "Agent",
+  "runData.model": "Model",
+  "runData.effort": "Effort",
+  "runData.user": "Triggering user",
+  "runData.all": "All",
+  "runData.unknown": "Unknown / automatic",
+  "runData.period": "Period",
+  "runData.days7": "Last 7 days",
+  "runData.days30": "Last 30 days",
+  "runData.days90": "Last 90 days",
+  "runData.retained": "All retained history",
+  "runData.refresh": "Refresh",
+  "runData.loading": "Reading run data…",
+  "runData.empty": "No recorded runs match these filters.",
+  "runData.runs": "Runs",
+  "runData.tokens": "Recorded tokens",
+  "runData.coverage": "Runs with token data",
+  "runData.needsInput": "Needs input / runs",
+  "runData.runsPerIssue": "Runs / issue",
+  "runData.tokensPerIssue": "Recorded tokens / issue",
+  "runData.findings": "Findings / reviewed PR",
+  "runData.fixes": "Fix / CI-fix runs",
+  "runData.merged": "Merged / PRs",
+  "runData.unchanged": "Merged unchanged / PRs",
+  "runData.afterFixes": "Merged after fix runs",
+  "runData.changed": "Merged with later changes",
+  "runData.unknownMerge": "Merged, last push unknown",
+  "runData.closed": "Closed without merging",
+  "runData.caveat":
+    "Across different issues, not a controlled comparison. Runs are selected by start time; outcomes are the latest recorded. Linked issue and PR runs count as one issue. Groups can share issues and PR findings, so their outcomes are not additive. Findings count retained review findings in the period, including repeat findings. Tokens include cached input, are partial when coverage is incomplete, and are not a bill or a plan allowance. Older records and agents that do not report usage remain unknown. Unchanged means the PR head matches the last recorded agent push; fix runs may precede that push.",
+
   // The language's own name, in its own language: Preferences › Language lists it so.
   "language.name": "English",
 

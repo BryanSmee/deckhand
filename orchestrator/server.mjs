@@ -1300,7 +1300,8 @@ const shotsMoved = brokerService.persist("the screenshots kept here", () =>
 // the lines its gateways add to a run's log, the pull requests runs changed (the dashboard has
 // them at once, whether their delivery comes or not).
 githubService.consume({
-  pushed: async ({ run, branch, at }) => ctx.broker.runOf(run)?.pushed?.({ branch, at }),
+  pushed: async ({ run, branch, at, head }) =>
+    ctx.broker.runOf(run)?.pushed?.({ branch, at, head }),
   note: async ({ run, message }) => ctx.broker.runOf(run)?.note?.(message),
   // An installation token the gateway used for a run, by its fingerprint: what its log and reply
   // are redacted of (runs.mjs hidden()), the token itself never leaving the service.

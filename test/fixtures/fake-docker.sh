@@ -292,7 +292,7 @@ case "$1" in
         text="Codex did: ${TASK_MESSAGE:-the issue}"
         echo '"'"'{"type":"thread.started","thread_id":"t1"}'"'"'
         jq -nc --arg text "$text" '"'"'{type: "item.completed", item: {id: "item_0", type: "agent_message", text: $text}}'"'"'
-        echo '"'"'{"type":"turn.completed","usage":{}}'"'"'
+        echo '"'"'{"type":"turn.completed","usage":{"input_tokens":60,"cached_input_tokens":20,"output_tokens":30}}'"'"'
         jq -nc --arg text "$text" '"'"'{type: "deckhand.result", ok: true, text: $text, duration_ms: 60000}'"'"'
         exit 0
       fi

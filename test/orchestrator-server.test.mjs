@@ -1623,6 +1623,9 @@ describe("listener", options, () => {
       /org\/repo#12: running \S+ \(work, continue, codex gpt-6-astra\/medium\)/,
     );
     await settled(github, [99, 100]);
+    const recorded = await until(() => summary(dir), "Codex's saved run");
+    assert.equal(recorded.user, "alice");
+    assert.deepEqual(recorded.usage, { tokens: 90 });
   });
 
   test("the Antigravity CLI: its plan's login stays out, its hosts relayed with the proxy's CA", async (t) => {
@@ -6169,6 +6172,9 @@ allow_capabilities contains "read:pulls"
       "delivered",
       "branch",
       "lastPushAt",
+      "lastPushHead",
+      "user",
+      "usage",
       "exitCode",
       "capabilities",
     ],

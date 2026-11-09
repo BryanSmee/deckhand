@@ -776,7 +776,10 @@ export function createGitGateway({
     if (!answer) return;
     try {
       const branch = pushedBranch(parsed.updates, parsed.caps, answer);
-      if (branch) run.pushed?.({ branch, at: now() });
+      if (branch) {
+        const head = parsed.updates.findLast((u) => u.ref === `refs/heads/${branch}`)?.new;
+        run.pushed?.({ branch, at: now(), head });
+      }
     } catch (error) {
       log(`Git gateway: ${repo}: recording a push: ${error.message ?? error}`);
     }

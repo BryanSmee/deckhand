@@ -142,7 +142,8 @@ export function createRuns({
         // tokens themselves.
         tokens: tokenSet(id),
         note: (message) => void event({ type: "note", run: id, message }),
-        pushed: ({ branch, at }) => void event({ type: "pushed", run: id, branch, at }),
+        pushed: ({ branch, at, head }) =>
+          void event({ type: "pushed", run: id, branch, at, ...(head && { head }) }),
         update: (fn) => update(run, fn),
       };
       objects.set(id, run);

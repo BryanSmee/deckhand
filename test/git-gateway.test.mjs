@@ -485,7 +485,13 @@ test("a push GitHub takes is the run's last: its branch and when; one it refuses
     now: () => clock,
   });
   assert.ok((await git(work, "push", remote(), "HEAD:refs/heads/issue-1-x")).ok);
-  assert.deepEqual(pushes, [{ branch: "issue-1-x", at: 1000 }]);
+  assert.deepEqual(pushes, [
+    {
+      branch: "issue-1-x",
+      at: 1000,
+      head: execFileSync("git", ["rev-parse", "HEAD"], { cwd: work, encoding: "utf8" }).trim(),
+    },
+  ]);
   // GitHub refuses it (a workflow its token can't write, say).
   const hook = join(bare, "hooks", "pre-receive");
   writeFileSync(hook, "#!/bin/sh\nexit 1\n", { mode: 0o755 });
@@ -500,7 +506,11 @@ test("a push GitHub takes is the run's last: its branch and when; one it refuses
   assert.equal(pushes.length, 1);
   clock = 3000;
   assert.ok((await git(work, "push", remote(), "HEAD:refs/heads/issue-1-y")).ok);
-  assert.deepEqual(pushes.at(-1), { branch: "issue-1-y", at: 3000 });
+  assert.deepEqual(pushes.at(-1), {
+    branch: "issue-1-y",
+    at: 3000,
+    head: execFileSync("git", ["rev-parse", "HEAD"], { cwd: work, encoding: "utf8" }).trim(),
+  });
 });
 
 test("the `workflows` grant: the push's token writes workflows, read again on each push", async (t) => {

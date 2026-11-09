@@ -697,8 +697,8 @@ export function createRestart(ctx) {
   // `live.reruns`.
   function watchPushes(task) {
     const { live } = task;
-    ctx.broker.watchPushes(live.id, ({ branch, at }) => {
-      Object.assign(live.record, { branch, lastPushAt: at });
+    ctx.broker.watchPushes(live.id, ({ branch, at, head }) => {
+      Object.assign(live.record, { branch, lastPushAt: at, lastPushHead: head ?? null });
       if (task.live === live) saveLive(task);
     });
     ctx.broker.watchChanges(live.id, () => {

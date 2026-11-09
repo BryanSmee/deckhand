@@ -1,0 +1,152 @@
+// Read-only comparisons of retained runs. No GitHub or agent calls: outcomes are the last
+// recorded ones, and missing evidence stays unknown rather than implying success or no cost.
+
+import { parseKey } from "./events.mjs";
+
+export const DIMENSIONS = ["repo", "agent", "model", "effort", "user"];
+const value = (r, key) => (key === "user" ? (r.user ?? "unknown") : (r[key] ?? "unknown"));
+export const stepOf = (r) => r.reason || r.taskMode || "work";
+
+export function runData({ runs, pull = () => null, reviewed = () => null, filters = {} }) {
+  const all = runs.filter((r) => !r.owner && ["issue", "pr"].includes(parseKey(r.key)?.kind));
+  const identity = (r) => {
+    const pr = pull(r.key);
+    return pr ? `${r.repo.toLowerCase()}#pr-${pr.number}` : r.key.toLowerCase();
+  };
+  const selectedKey = filters.task && all.find((r) => r.key === filters.task);
+  const selected = all.filter(
+    (r) =>
+      (!filters.task || (selectedKey && identity(r) === identity(selectedKey))) &&
+      (filters.from == null || r.startedAt >= filters.from) &&
+      (filters.to == null || r.startedAt < filters.to) &&
+      DIMENSIONS.every(
+        (d) => !filters[d] || value(r, d).toLowerCase() === filters[d].toLowerCase(),
+      ),
+  );
+  // Full retained history supplies the last push and fixes, even if a run filter omits them.
+  const histories = new Map();
+  for (const r of all) {
+    const key = identity(r);
+    if (!histories.has(key)) histories.set(key, []);
+    histories.get(key).push(r);
+  }
+  function metrics(list) {
+    const issues = new Map(list.map((r) => [identity(r), r]));
+    const out = {
+      runs: list.length,
+      issues: issues.size,
+      needsInput: 0,
+      tokens: 0,
+      usageRuns: 0,
+      fixes: 0,
+      ciFixes: 0,
+      findings: 0,
+      reviewedPulls: 0,
+      pullRequests: 0,
+      merged: 0,
+      unchanged: 0,
+      changed: 0,
+      unknownMerge: 0,
+      mergedAfterFixes: 0,
+      closed: 0,
+    };
+    for (const r of list) {
+      if (r.status === "needs-input") out.needsInput++;
+      if (Number.isFinite(r.usage?.tokens)) {
+        out.tokens += r.usage.tokens;
+        out.usageRuns++;
+      }
+      if (r.reason === "review-fix") out.fixes++;
+      if (r.reason === "ci-fix") out.ciFixes++;
+    }
+    for (const [key, r] of issues) {
+      const pr = pull(r.key);
+      if (!pr) continue;
+      out.pullRequests++;
+      const rounds = reviewed(r.repo, pr.number)?.rounds ?? [];
+      const inPeriod = rounds.filter(
+        (h) =>
+          (filters.from == null || h.at >= filters.from) &&
+          (filters.to == null || h.at < filters.to),
+      );
+      if (inPeriod.length) out.reviewedPulls++;
+      for (const h of inPeriod)
+        out.findings += Object.values(h.counts ?? {}).reduce((a, b) => a + b, 0);
+      if (pr.state === "closed") out.closed++;
+      if (pr.state !== "merged") continue;
+      out.merged++;
+      const history = histories.get(key);
+      if (history.some((x) => ["review-fix", "ci-fix"].includes(x.reason))) out.mergedAfterFixes++;
+      const pushed = history
+        .filter((x) => x.lastPushAt)
+        .sort((a, b) => b.lastPushAt - a.lastPushAt)[0];
+      if (!pushed?.lastPushHead || !pr.head) out.unknownMerge++;
+      else if (pushed.lastPushHead === pr.head) out.unchanged++;
+      else out.changed++;
+    }
+    return out;
+  }
+  function group(keyOf) {
+    const groups = new Map();
+    for (const r of selected) {
+      const key = keyOf(r);
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push(r);
+    }
+    return [...groups].sort(([a], [b]) => a.localeCompare(b));
+  }
+  return {
+    options: Object.fromEntries(
+      DIMENSIONS.map((d) => [d, [...new Set(all.map((r) => value(r, d)))].sort()]),
+    ),
+    total: metrics(selected),
+    groups: group((r) => JSON.stringify(DIMENSIONS.map((d) => value(r, d)))).map(([key, list]) => ({
+      dimensions: Object.fromEntries(DIMENSIONS.map((d, i) => [d, JSON.parse(key)[i]])),
+      ...metrics(list),
+    })),
+    steps: group(stepOf).map(([step, list]) => ({ step, ...metrics(list) })),
+  };
+}
+
+// Turn totals already printed by the agent. Cached input is included once; these are token
+// counts, not dollars or estimates of a subscription's shared allowance.
+export function recordUsage(record, line) {
+  let e;
+  try {
+    e = JSON.parse(line);
+  } catch {
+    return;
+  }
+  if (!e || typeof e !== "object") return;
+  let tokens;
+  if (record.agent === "codex" && e.type === "turn.completed") {
+    const u = e.usage;
+    if (valid(u?.input_tokens) && valid(u?.output_tokens))
+      tokens = u.input_tokens + u.output_tokens;
+  } else if ((!record.agent || record.agent === "claude") && e.type === "result") {
+    const u = e.usage;
+    if (
+      valid(u?.input_tokens) &&
+      valid(u?.output_tokens) &&
+      [u.cache_read_input_tokens, u.cache_creation_input_tokens].every((n) => n == null || valid(n))
+    ) {
+      tokens =
+        u.input_tokens +
+        u.output_tokens +
+        (u.cache_read_input_tokens ?? 0) +
+        (u.cache_creation_input_tokens ?? 0);
+    }
+  }
+  if (record.agent === "antigravity" && e.event === "result") {
+    const u = e.result?.usage;
+    if (
+      valid(u?.input_tokens) &&
+      valid(u?.output_tokens) &&
+      (u.cache_read_tokens == null || valid(u.cache_read_tokens))
+    ) {
+      tokens = u.input_tokens + u.output_tokens + (u.cache_read_tokens ?? 0);
+    }
+  }
+  if (valid(tokens)) record.usage = { tokens: (record.usage?.tokens ?? 0) + tokens };
+}
+const valid = (n) => Number.isSafeInteger(n) && n >= 0;

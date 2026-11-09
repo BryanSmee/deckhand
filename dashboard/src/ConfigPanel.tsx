@@ -9,6 +9,7 @@
 import type { ComponentChildren } from "preact";
 import { useEffect, useState } from "preact/hooks";
 import { useRepoConfig } from "./api";
+import { RunDataPanel } from "./RunData";
 import { Capabilities, capabilityTrouble } from "./Capabilities";
 import { ago, type Tone } from "./format";
 import { t, tx } from "./i18n";
@@ -126,6 +127,7 @@ const TABS: { id: ConfigTab | undefined; label: Plain }[] = [
   { id: undefined, label: "config.tabConfig" },
   { id: "policies", label: "config.tabPolicies" },
   { id: "capabilities", label: "config.tabCapabilities" },
+  { id: "run-data", label: "runData.title" },
 ];
 
 export function ConfigPanel({ repo, tab, row, onRow, onBack, now }: Props) {
@@ -233,14 +235,18 @@ export function ConfigPanel({ repo, tab, row, onRow, onBack, now }: Props) {
         </p>
       )}
       {!config && loading && <p class={styles.loading}>{t("config.readingGithub")}</p>}
-      {config &&
+      {tab === "run-data" ? (
+        <RunDataPanel repo={repo} />
+      ) : (
+        config &&
         (tab === "policies" ? (
           <PolicyConfig config={config} />
         ) : tab === "capabilities" ? (
           <Capabilities config={config} />
         ) : (
           <Body config={config} opened={opened} toggle={toggle} setOpened={setOpened} />
-        ))}
+        ))
+      )}
     </div>
   );
 }

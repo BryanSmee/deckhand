@@ -99,6 +99,10 @@ export interface Run {
   // when it hasn't pushed, absent for runs from before they were recorded.
   branch?: string | null;
   lastPushAt?: number | null;
+  lastPushHead?: string | null;
+  // Last triggering author; null for automatic runs, absent in older history.
+  user?: string | null;
+  usage?: { tokens: number };
   // How its sandbox exited, once the runner said (listener/run-events.mjs). Sent, not shown.
   exitCode?: number | null;
 }
@@ -1363,4 +1367,32 @@ export interface Chats {
   agents: { name: string; label: string }[];
   models: string[];
   efforts: string[];
+}
+
+// GET /api/run-data (listener/http.mjs, listener/run-data.mjs). Runs started in [from, to),
+// current recorded PR outcomes; linked issue and PR runs count as one work item.
+export type RunDimension = "repo" | "agent" | "model" | "effort" | "user";
+export interface RunMetrics {
+  runs: number;
+  issues: number;
+  needsInput: number;
+  tokens: number;
+  usageRuns: number;
+  fixes: number;
+  ciFixes: number;
+  findings: number;
+  reviewedPulls: number;
+  pullRequests: number;
+  merged: number;
+  unchanged: number;
+  changed: number;
+  unknownMerge: number;
+  mergedAfterFixes: number;
+  closed: number;
+}
+export interface RunData {
+  options: Record<RunDimension, string[]>;
+  total: RunMetrics;
+  groups: (RunMetrics & { dimensions: Record<RunDimension, string> })[];
+  steps: (RunMetrics & { step: string })[];
 }

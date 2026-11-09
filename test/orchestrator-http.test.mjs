@@ -656,3 +656,49 @@ test("a machine run's tool requests (#600): in api/state on its task, answered b
     ["bob", "org/repo#3", "0123456789abcdef", "once"],
   ]);
 });
+
+test("run data: tasks access precedes aggregation and options, chats hidden, periods validated", async (t) => {
+  const runs = [
+    { id: "a", key: "org/app#1", repo: "org/app", kind: "issue", startedAt: 10, agent: "codex" },
+    {
+      id: "b",
+      key: "org/hidden#2",
+      repo: "org/hidden",
+      kind: "issue",
+      startedAt: 20,
+      model: "secret",
+    },
+    {
+      id: "c",
+      key: "org/app#chat-1",
+      repo: "org/app",
+      kind: "issue",
+      owner: "alice",
+      startedAt: 30,
+      model: "private",
+    },
+  ];
+  const ctx = {
+    config: {},
+    log: () => {},
+    skip: () => {},
+    tasks: new Map(),
+    app: {},
+    runs,
+    permissions: permissionsOf({ alice: { "org/app": VIEWER } }),
+    pulls: { get: () => null },
+  };
+  const http = createHttp(ctx);
+  const { url } = await serve(t, (req, res) =>
+    http.handle(req, res, { user: req.headers["x-user"] ?? null }),
+  );
+  const get = (path) => fetch(url + path, { headers: { "x-user": "alice" } });
+  const data = await (await get("/api/run-data")).json();
+  assert.equal(data.total.runs, 1);
+  assert.deepEqual(data.options.repo, ["org/app"]);
+  assert.deepEqual(data.options.model, ["unknown"]);
+  assert.equal((await (await get("/api/run-data?repo=org/hidden")).json()).total.runs, 0);
+  assert.equal((await get("/api/run-data?from=bad")).status, 400);
+  assert.equal((await get("/api/run-data?from=20&to=10")).status, 400);
+  assert.equal((await fetch(url + "/api/run-data")).status, 401);
+});

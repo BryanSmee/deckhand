@@ -47,6 +47,7 @@ import { AuthTag, Outcome } from "./Outcome";
 import { heldMerge, PolicyTab } from "./Policies";
 import { getPref } from "./prefs";
 import { Questions } from "./Questions";
+import { RunDataSteps } from "./RunData";
 import { ReviewRounds } from "./ReviewLoop";
 import { ReviewTab } from "./ReviewTab";
 import { RunMenu } from "./RunMenu";
@@ -562,6 +563,7 @@ export function Detail({
             )}
           </div>
           <ReviewRounds task={t} actions={reviewActions || undefined} />
+          {t.pr && <RunDataSteps key={t.key} repo={t.repo} task={t.key} />}
           <ToolRequests task={t} user={user} now={now} refresh={refresh} />
           <HeldComments task={t} user={user} now={now} refresh={refresh} />
           {reply && (thread || reply.id !== r?.id) && (

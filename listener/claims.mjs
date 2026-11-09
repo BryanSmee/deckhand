@@ -634,7 +634,10 @@ export function createClaims(
       task = going(owner, id, run);
       const { record } = task.live;
       record.branch = pushed.branch;
-      if (pull.moved) record.lastPushAt = now();
+      if (pull.moved) {
+        record.lastPushAt = now();
+        record.lastPushHead = pushed.sha;
+      }
     }
     // Without one named: its pull request is the machine's all the same, whatever it pushed.
     markPull(task, task.claim);
