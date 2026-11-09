@@ -122,7 +122,10 @@ the broker's public keys (`SERVICE_KEYS_DIR`, read-only, as the policy service d
   the inbox again as it changes (`listener/runner/inbox.mjs` `mirror`).
 - **Its output** comes as NDJSON (`GET /sandboxes/<name>/output`), from the lines the orchestrator
   read already: the stream ends when the sandbox does, or when the runner stops, and the
-  orchestrator follows again from where it was, as when `docker logs` ended.
+  orchestrator follows again from where it was, as when `docker logs` ended. A stream that failed
+  (refused, cut, or `docker logs` failing, which the runner says by cutting it rather than ending
+  it) is followed again even for a sandbox that exited, a few times: its result is often in its
+  last lines.
 - **Its log** is in segments in the runner's store, the closed ones moved to blob storage when
   `BLOB_URL` is set ([A run's log](run-logs.md#a-runs-log)), written by appends that name the offset
   they go at: one sent again is taken once, one at another offset refused with the log's size, which

@@ -2076,8 +2076,90 @@ test("follow: a log stream that outlives its pod is let go, the rest of the log 
   await runner.start(spec());
   fake.pod = fakes.objects.pods.get("dh-org-repo-12-abc");
   const err = [];
-  await runner.follow("dh-org-repo-12-abc", { onOut: () => {}, onErr: (l) => err.push(l) });
+  const whole = await runner.follow("dh-org-repo-12-abc", {
+    onOut: () => {},
+    onErr: (l) => err.push(l),
+  });
   assert.deepEqual(err, ["one", "two"]);
+  assert.notEqual(whole, false);
+  assert.ok(logged.some((l) => /its stream outlived the pod, reading the rest/.test(l)));
+});
+
+// A read that fails says so (false), the lines that came kept: the orchestrator reads the log
+// again even once the pod exited (runs.mjs follow()), its result often in its last lines (#1055).
+test("follow: a log read that fails partway resolves false, with the lines that came; a whole one doesn't", async (t) => {
+  const encode = (text) => new TextEncoder().encode(text);
+  let failing = true;
+  const logs = {
+    // Its first line, then (once it was read) the connection reset, or the end.
+    "dh-org-repo-12-abc": () => {
+      let pulls = 0;
+      return new Response(
+        new ReadableStream({
+          pull(c) {
+            if (pulls++ === 0) c.enqueue(encode("\x1eone\n"));
+            else if (failing) c.error(new Error("connection reset"));
+            else c.close();
+          },
+        }),
+      );
+    },
+  };
+  const { runner, logged } = setup(t, { logs });
+  await runner.start(spec());
+  const err = [];
+  const follow = () =>
+    runner.follow("dh-org-repo-12-abc", { onOut: () => {}, onErr: (l) => err.push(l) });
+  assert.equal(await follow(), false);
+  assert.deepEqual(err, ["one"]);
+  assert.ok(logged.some((l) => /The log of dh-org-repo-12-abc: .*connection reset/.test(l)));
+  failing = false;
+  assert.notEqual(await follow(), false);
+  assert.deepEqual(err, ["one", "one"]);
+});
+
+test("follow: a stream that outlives its pod, then a failed read of the rest: false", async (t) => {
+  const encode = (text) => new TextEncoder().encode(text);
+  const fake = {};
+  const logs = {
+    "dh-org-repo-12-abc": ({ follow, signal }) => {
+      // The read of the rest cut short: the API server replaced meanwhile.
+      if (!follow) {
+        return new Response(
+          new ReadableStream({ start: (c) => c.error(new Error("connection reset")) }),
+        );
+      }
+      return new Response(
+        new ReadableStream({
+          start(c) {
+            c.enqueue(encode("\x1eone\n"));
+            fake.pod.status.phase = "Succeeded";
+            signal.addEventListener("abort", () => c.error(signal.reason));
+          },
+        }),
+      );
+    },
+  };
+  const fakes = fakeApi({ logs });
+  const logged = [];
+  const runner = createKubernetesRunner({
+    config,
+    api: fakes.api,
+    inboxDir: tempDir(t),
+    log: (line) => logged.push(line),
+    sleep: async () => {},
+    watchMs: 5,
+    probe: ENFORCED,
+  });
+  await runner.start(spec());
+  fake.pod = fakes.objects.pods.get("dh-org-repo-12-abc");
+  const err = [];
+  const whole = await runner.follow("dh-org-repo-12-abc", {
+    onOut: () => {},
+    onErr: (l) => err.push(l),
+  });
+  assert.equal(whole, false);
+  assert.deepEqual(err, ["one"]);
   assert.ok(logged.some((l) => /its stream outlived the pod, reading the rest/.test(l)));
 });
 

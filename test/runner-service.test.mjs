@@ -66,8 +66,8 @@ const SPEC = {
   labels: { "deckhand.task": "o/a#1" },
 };
 
-// `docker logs --follow`: what the fake sandbox printed, then its end.
-function logsSpawn(lines) {
+// `docker logs --follow`: what the fake sandbox printed, then its end, `code` its exit code.
+function logsSpawn(lines, code = 0) {
   return () => {
     const child = new EventEmitter();
     child.stdout = new PassThrough();
@@ -76,7 +76,7 @@ function logsSpawn(lines) {
     setImmediate(() => {
       child.stdout.end(lines.map((l) => `${l}\n`).join(""));
       child.stderr.end("cloning\n");
-      setImmediate(() => child.emit("close", 0));
+      setImmediate(() => child.emit("close", code));
     });
     return child;
   };
@@ -94,9 +94,10 @@ function endlessLogs() {
 }
 
 // The Docker runner on one fake docker, shared by the copies (one host's Docker). `spawn`: its
-// `docker logs` (logsSpawn(lines) by default); `hold(args)`: a promise a docker call waits on.
+// `docker logs` (logsSpawn(lines, code) by default); `hold(args)`: a promise a docker call waits on.
 function host({
   lines = ['{"type":"result","result":"Done."}'],
+  code,
   answers,
   metrics,
   spawn,
@@ -113,7 +114,7 @@ function host({
   const runner = createDockerRunner({
     config,
     docker,
-    spawn: spawn ?? logsSpawn(lines),
+    spawn: spawn ?? logsSpawn(lines, code),
     inboxDir,
     metrics,
   });
@@ -712,18 +713,25 @@ test("output, messages and the inbox through the client: what was read is skippe
   const out = [];
   const err = [];
   let caughtUp = 0;
-  await runner.follow("dh-o-a-1", {
+  const whole = await runner.follow("dh-o-a-1", {
     skip: { out: 1, err: 0 },
     onOut: (line) => out.push(line),
     onErr: (line) => err.push(line),
     onCaughtUp: () => caughtUp++,
   });
   assert.deepEqual([out, err], [["two", "three"], ["cloning"]]);
+  // Read to its end.
+  assert.equal(whole, true);
   // Past what it skipped: said once, through the runner.
   assert.equal(caughtUp, 1);
-  // A runner that isn't there: follow() says so and ends, never throws (its caller asks again).
+  // A runner that isn't there: follow() says so and ends, never throws (its caller asks again),
+  // and says it read nothing to the end.
   const gone = client("http://127.0.0.1:9", { runWaitMs: 50 }).runner;
-  await gone.follow("dh-o-a-1", { onOut: () => assert.fail(), onErr: () => assert.fail() });
+  const none = await gone.follow("dh-o-a-1", {
+    onOut: () => assert.fail(),
+    onErr: () => assert.fail(),
+  });
+  assert.equal(none, false);
   // Messages in order, the close after them, in the inbox the broker gets a copy of.
   await runner.send("dh-o-a-1-1", "First", { name: "claude", message: (t) => t });
   runner.send("dh-o-a-1-1", "Second");
@@ -746,6 +754,21 @@ test("output, messages and the inbox through the client: what was read is skippe
   assert.deepEqual(await again(), { sent: false });
   // No inbox: none.
   assert.equal(backend.inbox("dh-o-x-1-1"), null);
+});
+
+// `docker logs` failing partway: the runner cuts the stream rather than ending it, and the
+// client says it isn't the output's end, so its caller reads it again (runs.mjs follow()).
+test("output whose docker logs failed: what came is read, and the client says it isn't whole", async (t) => {
+  const a = await copy(t, { store: fileStore(), backend: host({ lines: ["one"], code: 1 }) });
+  const { runner } = client(a.url);
+  await runner.start(SPEC);
+  const out = [];
+  const whole = await runner.follow("dh-o-a-1", {
+    onOut: (line) => out.push(line),
+    onErr: () => {},
+  });
+  assert.deepEqual(out, ["one"]);
+  assert.equal(whole, false);
 });
 
 test("a run's log: appends in order through the client, one sent twice taken once, a wrong offset refused", async (t) => {
