@@ -43,6 +43,19 @@ What differs from Claude Code:
 - **Its own sandbox is off** (`--dangerously-bypass-approvals-and-sandbox`): the container is
   the sandbox, as with Claude Code.
 
+## How it does
+
+Tried in November 2026 on two of Deckhand's own feature issues (`gpt-6-astra`, medium effort),
+picked with `/agent codex` while Claude Code stayed the default
+([#1025](https://github.com/BryanSmee/deckhand/issues/1025)): a release mode
+([#1060](https://github.com/BryanSmee/deckhand/issues/1060), its pull request ready for review
+with every check passing in 13 minutes) and run data per agent and model
+([#1036](https://github.com/BryanSmee/deckhand/issues/1036), close to a thousand lines in
+27 minutes). It built new features at about Claude Code's speed, following Deckhand's
+conventions, and its one `needs-input` stop asked about a real gap in the issue's own
+requirements. Both runs later stopped on OpenAI's quota ("Quota exceeded"), not on Deckhand. Two issues are
+a first look, not a benchmark: no cost or review figures were kept.
+
 ## With a ChatGPT plan
 
 Instead of an API key, Codex can run on a ChatGPT plan's login. Its refresh token is
