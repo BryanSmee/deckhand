@@ -33,6 +33,7 @@ modes:
 
 review:
   on: ready
+  ci: wait
   model: opus
   fix: 5
   follow_ups_auto_pickup: true
