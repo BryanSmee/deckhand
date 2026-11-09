@@ -823,7 +823,7 @@ export function createRuns(ctx) {
       const text = answer
         ? `${answer}\n\nStopped by @${by} after its answer.\n\n${footer}`
         : `Stopped by @${by}.\n\n${footer}`;
-      await post(task, text);
+      await post(task, text, "cancelled");
       live.replied = true;
       ctx.saveLive(task);
     }
@@ -849,7 +849,7 @@ export function createRuns(ctx) {
       const text = answer
         ? `${answer}\n\n${name} was stopped as failed after its answer: ${why}.\n\n${footer}`
         : `${name} was stopped as failed: ${why}.\n\n${footer}`;
-      await post(task, text);
+      await post(task, text, "error");
       live.replied = true;
       ctx.saveLive(task);
     }
@@ -866,15 +866,65 @@ export function createRuns(ctx) {
 
   // The run's reply. Throws a ReplyError when GitHub doesn't take it, retries included
   // (comments.mjs): finish() then ends the run as failed, `live.replied` still false.
-  function post(task, text) {
+  // `status`: how it ended, for the issue's pointer (pointTo()).
+  async function post(task, text, status) {
     const { live } = task;
     // A chat's answers are in its log, which its owner reads: nothing goes to GitHub.
-    if (isChat(task)) return Promise.resolve();
+    if (isChat(task)) return;
+    // A work run's reply goes on its task's open pull request, whatever started it (#1053):
+    // one place for the questions and what changed. Saved before it is posted, so that the
+    // next copy, after a handover, posts it there too (an idempotency key is per path).
+    const pull = workPull(task);
+    if (openPull(pull) && live.replyTo !== pull.number) {
+      live.replyTo = pull.number;
+      live.record.replyTo = pull.number;
+      await ctx.saveLive(task);
+    }
     // Once per run (`live.replied`): asked again after a handover, it isn't posted twice.
-    return ctx.answer(target(task, live.replyTo), hidden(live, text), {
+    const posted = await ctx.answer(target(task, live.replyTo), hidden(live, text), {
       full: runLink(task),
       key: `${live.id}:reply`,
     });
+    if (pull && live.replyTo === pull.number && pull.number !== task.number) {
+      await pointTo(task, pull.number, posted, text, status);
+    }
+  }
+
+  const openPull = (pr) => pr?.state === "draft" || pr?.state === "ready";
+
+  // The task's pull request, for a work run on an issue (one that may push: not a review,
+  // a brainstorm, an inbox entry's or a discussion's), or null.
+  function workPull(task) {
+    const { live } = task;
+    if (task.kind !== "issue" || live.mode === "review" || answersOnly(live)) return null;
+    return ctx.pulls?.get(live.key) ?? null;
+  }
+
+  // The issue's comment for a reply posted on its pull request `number`: where it is, and its
+  // first line, which the prompt asks to say what changed and what was decided. Its own
+  // idempotency key: a handover doesn't post it twice. Not posted is only logged: the reply is.
+  async function pointTo(task, number, posted, text, status) {
+    const { live } = task;
+    const url = await Promise.resolve(posted?.json?.())
+      .then((c) => c?.html_url ?? null)
+      .catch(() => null);
+    const reply = url ? `[the reply](${url})` : "the reply";
+    const lead =
+      status === "needs-input"
+        ? `Waiting for your input on #${number}: its questions are in ${reply}.`
+        : `Replied on #${number}: ${reply}.`;
+    const gist = summaryOf({ text: hidden(live, text) });
+    await ctx
+      .answer(
+        { ...task, replyTo: task.number, comment: null },
+        gist ? `${lead}\n\n> ${gist}` : lead,
+        {
+          key: `${live.id}:issue-note`,
+        },
+      )
+      .catch((error) =>
+        log(`${live.key}: its pointer on #${task.number}: ${error.message ?? error}`),
+      );
   }
 
   // The run on the dashboard, where its whole answer is, should GitHub take only its start.
@@ -1063,7 +1113,7 @@ export function createRuns(ctx) {
       );
       log(`${live.key}: review posted on #${live.replyTo} (${posted.event ?? "as a comment"})`);
       live.reviewed = { number: live.replyTo, posted, auto };
-    } else await post(task, text);
+    } else await post(task, text, status);
     live.replied = true;
     ctx.saveLive(task);
     // Runs that only answer (no `push`) ask questions all along: no label for those.

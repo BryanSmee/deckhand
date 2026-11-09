@@ -8,6 +8,19 @@ run as `error`: its comments get 👎, and the dashboard's summary says `The rep
 posted: <status>`. An orchestrator restarting before then posts it again (`live.replied` is still
 false).
 
+A work run's reply goes on its task's open pull request (draft or ready, as `pulls.mjs` knows
+it) once there is one, whether its comment came from the issue or from that pull request
+(`runs.mjs` `post()`, #1053): the questions, the decisions and what changed stay in one thread.
+Its `replyTo` (the run's and its record's) becomes the pull request's number, saved before the
+reply is posted, so that the next orchestrator, after a handover, posts it there too rather than
+on the issue (an idempotency key is per path). The issue then gets a short comment of its own
+(`pointTo()`, its key `<run id>:issue-note`): `Waiting for your input on #<pr>` or `Replied on #<pr>`, linking the reply, and its first sentence quoted, which `prompts/sandbox.md` asks to say
+what changed and what was decided. A task without a pull request yet gets its reply where its
+comment was, and no pointer. Reviews, brainstorms, inbox entries, discussions, chats and any run
+without `push` (`answersOnly()`) reply where they did. The `needs-input` label stays on the
+issue; ticking the boxes of the reply on the pull request answers it (`work.mjs` `ticked()`
+matches the task's `replyTo`, the asking run's), as does a comment on the issue.
+
 A run that stops to ask (its final message starts with `<!-- needs-input -->`, see
 `prompts/sandbox.md`, or has it on a line of its own before its first numbered line: a run that
 put a translated heading first, `asksInput()`) shows as `needs-input` on the dashboard and labels

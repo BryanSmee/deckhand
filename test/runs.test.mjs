@@ -1500,3 +1500,134 @@ test("a run's end asks the waits about its own issue again: its run may have clo
   await following;
   assert.deepEqual(asked, ["org/repo#12"]);
 });
+
+// #1053: once a work task has its pull request, its run's replies go there, whatever started the
+// run, and the issue gets a pointer. `pull`: the task's pull request as pulls.mjs has it.
+async function replied(t, text, { mode = "work", light = false, replyTo = 12, pull } = {}) {
+  const posts = [];
+  const answer = async (target, body, opts = {}) => {
+    posts.push({ on: target.replyTo, body, key: opts.key ?? null, saved: saved.slice() });
+    const url = `https://github.com/org/repo/issues/${target.replyTo}#issuecomment-${posts.length}`;
+    return { json: async () => ({ html_url: url }) };
+  };
+  const saved = [];
+  const labels = [];
+  const run = setup(t, { mode, answer });
+  Object.assign(run.ctx, {
+    pulls: { get: (key) => (key === "org/repo#12" ? (pull ?? null) : null) },
+    saveLive: async (task) => saved.push(task.live.replyTo),
+    label: async (repo, number, on) => labels.push([number, on]),
+  });
+  Object.assign(run.task.live, { light, replyTo, asked: replyTo });
+  run.task.live.record.replyTo = replyTo;
+  const live = run.task.live;
+  run.runner.out(result(text));
+  await run.runner.kill();
+  await run.following;
+  return { ...run, live, posts, labels };
+}
+
+const ASKS =
+  "<!-- needs-input -->\n## Needs your input\n\nThe schema drops a column.\n\n1. **Keep it**: keep the column?\n   - [ ] Yes\n   - [ ] No";
+
+test("a work run asking, its task's pull request open: the reply on the pull request, a pointer on the issue, the label on the issue", async (t) => {
+  const pull = { number: 54, state: "draft" };
+  const { live, posts, labels } = await replied(t, ASKS, { pull });
+  assert.deepEqual(
+    posts.map((p) => [p.on, p.key]),
+    [
+      [54, "run:reply"],
+      [12, "run:issue-note"],
+    ],
+  );
+  // Where it goes is saved before it is posted: the next copy posts it there too.
+  assert.equal(posts[0].saved.at(-1), 54);
+  assert.equal(
+    posts[1].body,
+    "Waiting for your input on #54: its questions are in [the reply](https://github.com/org/repo/issues/54#issuecomment-1).\n\n> The schema drops a column.",
+  );
+  // The board and ticked() read the asking run's `replyTo`.
+  assert.equal(live.replyTo, 54);
+  assert.equal(live.record.replyTo, 54);
+  assert.equal(live.record.status, "needs-input");
+  assert.deepEqual(labels, [[12, true]]);
+});
+
+test("a work run started from its pull request that finishes: the reply there, what it did on the issue", async (t) => {
+  const pull = { number: 54, state: "ready" };
+  const { posts, labels } = await replied(t, "Renamed the column, kept the old name readable.", {
+    pull,
+    replyTo: 54,
+  });
+  assert.deepEqual(
+    posts.map((p) => [p.on, p.key]),
+    [
+      [54, "run:reply"],
+      [12, "run:issue-note"],
+    ],
+  );
+  assert.equal(
+    posts[1].body,
+    "Replied on #54: [the reply](https://github.com/org/repo/issues/54#issuecomment-1).\n\n> Renamed the column, kept the old name readable.",
+  );
+  assert.deepEqual(labels, []);
+});
+
+test("a work run's reply after a handover: where the last copy decided, its pull request merged since", async (t) => {
+  const { posts } = await replied(t, "Done.", {
+    pull: { number: 54, state: "merged" },
+    replyTo: 54,
+  });
+  assert.deepEqual(
+    posts.map((p) => [p.on, p.key]),
+    [
+      [54, "run:reply"],
+      [12, "run:issue-note"],
+    ],
+  );
+});
+
+test("a work run without a pull request yet, or one that only answers: its reply where it started, no pointer", async (t) => {
+  const none = await replied(t, ASKS);
+  assert.deepEqual(
+    none.posts.map((p) => [p.on, p.key]),
+    [[12, "run:reply"]],
+  );
+  assert.deepEqual(none.labels, [[12, true]]);
+  // A closed pull request isn't where the next replies go.
+  const closed = await replied(t, "Done.", { pull: { number: 54, state: "closed" } });
+  assert.deepEqual(
+    closed.posts.map((p) => p.on),
+    [12],
+  );
+  // A brainstorm (no `push`) replies where it was asked.
+  const talk = await replied(t, "Here are three ways.", {
+    mode: "brainstorm",
+    light: true,
+    pull: { number: 54, state: "draft" },
+  });
+  assert.deepEqual(
+    talk.posts.map((p) => p.on),
+    [12],
+  );
+});
+
+test("a work run's pointer that GitHub refuses: logged, the reply counts", async (t) => {
+  const posts = [];
+  const run = setup(t, {
+    mode: "work",
+    answer: async (target, body, opts) => {
+      if (opts?.key === "run:issue-note") throw new Error("GitHub POST: 502");
+      posts.push(target.replyTo);
+    },
+  });
+  run.ctx.pulls = { get: () => ({ number: 54, state: "draft" }) };
+  const live = run.task.live;
+  Object.assign(live, { light: false, replyTo: 12 });
+  run.runner.out(result("Done."));
+  await run.runner.kill();
+  await run.following;
+  assert.deepEqual(posts, [54]);
+  assert.equal(live.record.status, "ok");
+  assert.ok(run.logs.some((l) => /its pointer on #12: GitHub POST: 502/.test(l)));
+});
