@@ -19,19 +19,24 @@ const result = (text) => JSON.stringify({ type: "result", result: text, duration
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 // A sandbox that runs until killed, its output written by the test (`out(line)`). `fails`: an
-// error following it throws instead.
-function fakeRunner(fails = null) {
+// error following it throws instead. `follows`: what each follow does in turn instead,
+// ({ onOut, onErr, runner }) → what it resolves with, until there are none left.
+function fakeRunner(fails = null, follows = []) {
   const runner = {
     running: true,
     kills: 0,
     closes: 0,
     onOut: null,
     exited: null,
+    // What each follow skipped.
+    skips: [],
     state: async () => (runner.running ? "running" : "exited"),
     // Past what was read before at once, unless `holding`: then when the test says (caughtUp()).
     holding: false,
-    follow: (name, { onOut, onErr, onCaughtUp }) => {
+    follow: (name, { skip, onOut, onErr, onCaughtUp }) => {
+      runner.skips.push(skip);
       if (fails) return Promise.reject(fails);
+      if (follows.length) return Promise.resolve(follows.shift()({ onOut, onErr, runner }));
       runner.onOut = onOut;
       runner.onErr = onErr;
       runner.caughtUp = onCaughtUp;
@@ -62,11 +67,12 @@ function setup(
     config = {},
     answer,
     fails,
+    follows,
     githubStatus,
   } = {},
 ) {
   const dir = tempDir(t);
-  const runner = fakeRunner(fails);
+  const runner = fakeRunner(fails, follows);
   const answers = [];
   const logs = [];
   const done = [];
@@ -79,7 +85,11 @@ function setup(
     logDir: dir,
     shotsDir: dir,
     answerGraceMs: graceMs,
+    followAgainMs: 0,
     runner,
+    // A failed run's last API call, the models service's: none. Asked when a run ends with no
+    // result (the output that keeps failing, #1055).
+    models: { apiOf: async () => ({}), prints: () => [] },
     running: 1,
     stopping: false,
     runs: [],
@@ -622,6 +632,38 @@ test("a sandbox that exits on its own after its answer: no stop", async (t) => {
   await sleep(60);
   assert.equal(runner.kills, 0);
   assert.equal(answers.length, 1);
+});
+
+// A follow that failed (the runner refusing, its stream cut, `docker logs` failing) just as the
+// sandbox exited: a Codex sandbox exits as soon as it answers, its result in its last line.
+test("a sandbox that exited while its output failed to come whole: read again from where it was, its answer posted", async (t) => {
+  const { runner, answers, following } = setup(t, {
+    follows: [
+      ({ onOut, runner }) => {
+        onOut("npm ci", null);
+        runner.running = false;
+        return false;
+      },
+      ({ onOut }) => (onOut(result("Done, read again."), null), true),
+    ],
+  });
+  await following;
+  assert.deepEqual(runner.skips.slice(1), [{ out: 1, err: 0 }]);
+  assert.equal(answers.length, 1);
+  assert.match(answers[0], /^Done, read again\./);
+  assert.equal(runner.kills, 0);
+});
+
+test("an exited sandbox whose output keeps failing: read again a few times, then its run ends with what it has", async (t) => {
+  const failing = ({ runner }) => ((runner.running = false), false);
+  const { runner, answers, logs, following } = setup(t, {
+    follows: Array.from({ length: 10 }, () => failing),
+  });
+  await following;
+  // The first follow and three more.
+  assert.equal(runner.skips.length, 4);
+  assert.match(answers[0], /stopped with an error\.\n\n> No result: see the listener logs\./);
+  assert.ok(logs.some((l) => l.includes("org/repo#12: its output couldn't be read to its end")));
 });
 
 test("a Stop after the answer posts it with the Stopped by line", async (t) => {

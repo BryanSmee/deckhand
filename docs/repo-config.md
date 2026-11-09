@@ -138,6 +138,8 @@ wait_for_answers: true
 # Start the open issues labelled auto-pickup by themselves, in the operator's reserved slots
 # (see Auto-pickup in repo-config/issues.md).
 auto_pickup: true
+# None picked while 3 of Deckhand's pull requests here wait for review (unset: no limit).
+auto_pickup_max_ready: 3
 
 # Move this repo's issues on an organization's project (v2) as their work goes (see Projects in
 # repo-config/issues.md). Only projects the operator grants it (allow_projects).
@@ -187,6 +189,7 @@ projects:
 | `conflicts.check_minutes`               | none: off                               | minutes between conflict checks, and one soon after a merge; at least `CONFLICT_CHECK_MINUTES` (see [Conflicts](repo-config/issues.md#conflicts))                                    |
 | `wait_for_answers`                      | `true`                                  | an issue's work runs wait until its open questions are answered (see [Open questions](repo-config/issues.md#open-questions))                                                         |
 | `auto_pickup`                           | `false`                                 | `true`: Deckhand starts this repo's open issues labelled `AUTO_PICKUP_LABEL` by itself, in the operator's `AUTO_PICKUP_SLOTS` (see [Auto-pickup](repo-config/issues.md#auto-pickup)) |
+| `auto_pickup_max_ready`                 | none: no limit                          | none picked while this repo has that many of Deckhand's pull requests ready for review (see [Auto-pickup](repo-config/issues.md#auto-pickup))                                        |
 | `projects`                              | none                                    | organization projects (v2) Deckhand moves the issues on: `project`, `field`, `start`, `ready`, `merged` (see [Projects](repo-config/issues.md#projects))                             |
 | `machines`                              | none: off                               | `true`, or `labels: [...]`: its tasks may run on its users' own machines, with the operator's `machines` grant (see [Machines](repo-config/issues.md#machines))                      |
 
@@ -266,8 +269,9 @@ Deckhand's branches](security/github.md#github-actions-on-deckhands-branches).
 Every run starts from an image:
 
 - **The base image** (`SANDBOX_IMAGE`, `deckhand-sandbox`): the harness only: `git`, `gh`
-  (through the github service's GitHub gateway), `jq`, `ripgrep`, Node 26, Playwright with Chromium, the
-  entrypoint and the draft pull request hooks. No project toolchain, and **no Claude Code**:
+  (through the github service's GitHub gateway), `jq`, `ripgrep`, Node 26, Playwright with
+  Chromium, `img2webp` (an animated WebP from screenshots), the entrypoint and the draft pull
+  request hooks. No project toolchain, and **no Claude Code**:
   before the first run that needs it, Deckhand installs the pinned
   `CLAUDE_CODE_VERSION` in a short container of its own, into the shared
   `deckhand-claude-code` volume; later runs reuse it.

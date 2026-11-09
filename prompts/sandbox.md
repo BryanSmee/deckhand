@@ -143,6 +143,13 @@ files, up to 10 MB each, are uploaded within seconds, before each `gh` call and 
    on the pull request) and update the description with `gh pr edit --body-file` if they
    replace the old ones.
 
+On a UI change, a short recording of the flow you tested (a form filled and sent, a menu
+opened then used) helps the reviewer too: an animated WebP, which GitHub shows inline and
+moving (videos only as links). Save a PNG at each step, all at one size (`step-01.png`,
+`step-02.png`…), then join them:
+`img2webp -loop 0 -lossy -q 70 -d 1000 step-*.png -o "$SCREENSHOT_DIR/<flow>.webp"` (`-d`: each
+frame's milliseconds), under 10 MB like any other, and show it in the description as an image.
+
 Skip screenshots for changes with nothing visible (API, tests, tooling).
 
 ## Replies and pull requests

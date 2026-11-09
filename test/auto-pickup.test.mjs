@@ -8,6 +8,8 @@ import {
   labellerRefusal,
   vouchedLabeller,
   pulledIssues,
+  pullClosed,
+  readyPulls,
 } from "../listener/auto-pickup.mjs";
 import { ConfigError, loadConfig } from "../listener/config.mjs";
 import { parseRepoConfig, startable } from "../listener/repo-config.mjs";
@@ -762,6 +764,151 @@ test("a repo at its max_parallel: its issues aren't picked, another repo's are",
   });
   assert.deepEqual(await pickup.sweep(), ["org/b#2"]);
   assert.match(p.logs[0], /org\/a#1: skipped, its repository's runs are at its max_parallel/);
+});
+
+// One of org/a's open pull requests for issue `n`: Deckhand's from its branch unless `extra` says.
+const pull = (n, extra = {}) => ({
+  number: 100 + n,
+  user: { login: BOT },
+  draft: false,
+  body: `Closes #${n}`,
+  head: { ref: `issue-${n}-x`, repo: { full_name: "org/a" } },
+  ...extra,
+});
+const MAX_READY = "auto_pickup: true\nauto_pickup_max_ready: 3";
+
+test("auto_pickup_max_ready: at the limit, no issue of the repo is picked, its label kept, nothing said", async () => {
+  const pulls = [pull(10), pull(11), pull(12)];
+  const { pickup, p } = setup({
+    env: { AUTO_PICKUP_SLOTS: "2" },
+    repos: { "org/a": { issues: [issue(1, 1), issue(2, 2)], pulls, settings: MAX_READY } },
+  });
+  assert.deepEqual(await pickup.sweep(), []);
+  assert.deepEqual(p.comments, []);
+  assert.deepEqual(p.removed, []);
+  assert.deepEqual(p.accepted, []);
+  const why =
+    "skipped, its repository has 3 pull requests ready for review (auto_pickup_max_ready: 3)";
+  assert.deepEqual(p.logs, [`Auto-pickup: org/a#1: ${why}`, `Auto-pickup: org/a#2: ${why}`]);
+  // No events or edits read for it: the brake comes before them.
+  assert.equal(p.calls.filter((c) => c.includes("/events")).length, 0);
+  // Logged once while it lasts.
+  await pickup.sweep();
+  assert.equal(p.logs.length, 2);
+});
+
+test("auto_pickup_max_ready: below it, or with a draft or a person's pull request among them, picked as today", async () => {
+  const cases = {
+    two: [pull(10), pull(11)],
+    draft: [pull(10), pull(11), pull(12, { draft: true })],
+    person: [pull(10), pull(11), pull(12, { user: { login: "bob" } })],
+    fork: [pull(10), pull(11), pull(12, { head: { ref: "x", repo: { full_name: "bob/a" } } })],
+  };
+  for (const [name, pulls] of Object.entries(cases)) {
+    const { pickup } = setup({
+      repos: { "org/a": { issues: [issue(1, 1)], pulls, settings: MAX_READY } },
+    });
+    assert.deepEqual(await pickup.sweep(), ["org/a#1"], name);
+  }
+});
+
+test("auto_pickup_max_ready: a repo at its limit leaves the slot to another opted-in repo", async () => {
+  const { pickup } = setup({
+    repos: {
+      "org/a": {
+        issues: [issue(1, 1)],
+        pulls: [pull(10), pull(11), pull(12)],
+        settings: MAX_READY,
+      },
+      "org/b": { issues: [issue(2, 2)] },
+    },
+  });
+  assert.deepEqual(await pickup.sweep(), ["org/b#2"]);
+});
+
+test("auto_pickup_max_ready: no more GitHub calls than without it", async () => {
+  const calls = async (settings, pulls) => {
+    const { pickup, p } = setup({ repos: { "org/a": { issues: [issue(1, 1)], pulls, settings } } });
+    const started = await pickup.sweep();
+    return { started, calls: p.calls };
+  };
+  const pulls = [pull(10), pull(11)];
+  const unset = await calls("auto_pickup: true", pulls);
+  assert.deepEqual(await calls(MAX_READY, pulls), unset);
+  // At the limit: fewer, the brake comes before the issue's events and edits.
+  const held = await calls(MAX_READY, [...pulls, pull(12)]);
+  assert.deepEqual(held.started, []);
+  assert.ok(held.calls.length < unset.calls.length);
+  assert.equal(held.calls.filter((c) => c.includes("/pulls")).length, 1);
+});
+
+test("auto_pickup_max_ready: a merge brings the count below it, the next sweep picks", async () => {
+  const pulls = [pull(10), pull(11), pull(12)];
+  const repos = { "org/a": { issues: [issue(1, 1)], pulls, settings: MAX_READY } };
+  const timers = [];
+  const later = (fn, ms) => (timers.push({ fn, ms }), { unref() {} });
+  const { pickup, config } = setup({ repos, later });
+  assert.deepEqual(await pickup.sweep(), []);
+  const merged = pulls.pop();
+  const payload = {
+    action: "closed",
+    pull_request: { ...merged, merged: true },
+    repository: { full_name: "org/a" },
+  };
+  assert.equal(pullClosed(config, "pull_request", payload), true);
+  pickup.soon();
+  assert.equal(timers[0].ms, SOON_MS);
+  assert.deepEqual(await pickup.sweep(), ["org/a#1"]);
+});
+
+test("pullClosed(): Deckhand's pull request closed or turned to a draft, with slots", () => {
+  const config = testConfig({ MAX_PARALLEL: "3", AUTO_PICKUP_SLOTS: "1" });
+  config.bot = BOT;
+  const payload = { action: "closed", pull_request: pull(1), repository: { full_name: "org/a" } };
+  assert.equal(pullClosed(config, "pull_request", payload), true);
+  assert.equal(
+    pullClosed(config, "pull_request", { ...payload, action: "converted_to_draft" }),
+    true,
+  );
+  assert.equal(pullClosed(config, "pull_request", { ...payload, action: "opened" }), false);
+  assert.equal(pullClosed(config, "issues", payload), false);
+  const person = { ...payload, pull_request: pull(1, { user: { login: "bob" } }) };
+  assert.equal(pullClosed(config, "pull_request", person), false);
+  const fork = pull(1, { head: { ref: "issue-1-x", repo: { full_name: "bob/a" } } });
+  assert.equal(pullClosed(config, "pull_request", { ...payload, pull_request: fork }), false);
+  const none = testConfig();
+  none.bot = BOT;
+  assert.equal(pullClosed(none, "pull_request", payload), false);
+});
+
+test("readyPulls(): Deckhand's open pull requests from the repo's branches, not drafts", () => {
+  const pulls = [
+    pull(1),
+    pull(2, { draft: true }),
+    pull(3, { user: { login: "bob" } }),
+    pull(4, { head: { ref: "issue-4-x", repo: { full_name: "bob/a" } } }),
+    pull(5),
+  ];
+  assert.equal(readyPulls(pulls, "org/a", BOT), 2);
+  assert.equal(readyPulls(pulls, "org/a", null), 0);
+});
+
+test("auto_pickup_max_ready: a whole number above 0, unset by default, a warning without auto_pickup", () => {
+  const config = testConfig({ MAX_PARALLEL: "3", AUTO_PICKUP_SLOTS: "1" });
+  assert.equal(parseRepoConfig("", config).settings.autoPickupMaxReady, null);
+  const set = parseRepoConfig(MAX_READY, config);
+  assert.equal(set.settings.autoPickupMaxReady, 3);
+  assert.deepEqual(set.warnings, []);
+  for (const bad of ["0", "-1", "2.5", "lots", "true"]) {
+    assert.deepEqual(
+      parseRepoConfig(`auto_pickup: true\nauto_pickup_max_ready: ${bad}`, config).errors,
+      ["auto_pickup_max_ready: expected a whole number above 0"],
+      bad,
+    );
+  }
+  assert.deepEqual(parseRepoConfig("auto_pickup_max_ready: 2", config).warnings, [
+    "auto_pickup_max_ready: needs `auto_pickup: true`, ignored",
+  ]);
 });
 
 test("a repo whose issue list fails keeps what is known of its issues: a stuck label isn't picked again", async () => {
