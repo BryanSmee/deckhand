@@ -167,7 +167,7 @@ export function RunDataPanel({ repo, task }: { repo: string; task?: string }) {
 function Metrics({ metrics: m }: { metrics: RunMetrics }) {
   const rows = [
     [t("runData.runsPerIssue"), `${ratio(m.runs, m.issues)} (${m.runs}/${m.issues})`],
-    [t("runData.tokensPerIssue"), m.usageRuns ? ratio(m.tokens, m.issues) : "—"],
+    [t("runData.tokensPerIssue"), ratio(m.tokens, m.usageIssues)],
     [t("runData.coverage"), `${m.usageRuns}/${m.runs}`],
     [t("runData.needsInput"), rate(m.needsInput, m.runs)],
     [

@@ -43,6 +43,8 @@ export function runData({ runs, pull = () => null, reviewed = () => null, filter
       needsInput: 0,
       tokens: 0,
       usageRuns: 0,
+      // Issues with token data: tokens per issue is over these, absent usage being unknown.
+      usageIssues: 0,
       fixes: 0,
       ciFixes: 0,
       findings: 0,
@@ -55,15 +57,18 @@ export function runData({ runs, pull = () => null, reviewed = () => null, filter
       mergedAfterFixes: 0,
       closed: 0,
     };
+    const usageIssues = new Set();
     for (const r of list) {
       if (r.status === "needs-input") out.needsInput++;
       if (Number.isFinite(r.usage?.tokens)) {
         out.tokens += r.usage.tokens;
         out.usageRuns++;
+        usageIssues.add(identity(r));
       }
       if (r.reason === "review-fix") out.fixes++;
       if (r.reason === "ci-fix") out.ciFixes++;
     }
+    out.usageIssues = usageIssues.size;
     for (const [key, r] of issues) {
       const pr = pullsByIssue.get(key);
       if (!pr) continue;
@@ -126,6 +131,8 @@ export function runData({ runs, pull = () => null, reviewed = () => null, filter
 // thread's running total, carried over when a run resumes it: a run counts what it added to the
 // total its thread had when it started, `sessionTotal(thread)` (the last one an earlier run saved).
 export function recordUsage(record, line, sessionTotal = () => 0) {
+  // Most lines (tool output, messages) carry neither: no second parse for them.
+  if (!line.includes('"usage"') && !line.includes('"thread.started"')) return;
   let e;
   try {
     e = JSON.parse(line);

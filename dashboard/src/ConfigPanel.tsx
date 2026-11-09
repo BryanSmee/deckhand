@@ -229,12 +229,14 @@ export function ConfigPanel({ repo, tab, row, onRow, onBack, now }: Props) {
           ))}
         </nav>
       </header>
-      {error && (
+      {error && tab !== "run-data" && (
         <p class={styles.failed} role="alert">
           {t("config.unreadable", { error })}
         </p>
       )}
-      {!config && loading && <p class={styles.loading}>{t("config.readingGithub")}</p>}
+      {!config && loading && tab !== "run-data" && (
+        <p class={styles.loading}>{t("config.readingGithub")}</p>
+      )}
       {tab === "run-data" ? (
         <RunDataPanel repo={repo} />
       ) : (

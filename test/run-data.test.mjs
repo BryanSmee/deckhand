@@ -40,6 +40,7 @@ test("linked issue and PR runs share one outcome, with strict and broad success 
     needsInput: 1,
     tokens: 100,
     usageRuns: 1,
+    usageIssues: 1,
     fixes: 1,
     ciFixes: 1,
     findings: 3,
@@ -214,4 +215,20 @@ test("a value spelled in two cases is one filter option", () => {
   const runs = [run("a", { user: "Alice" }), run("b", { key: "org/app#2", user: "alice" })];
   assert.deepEqual(runData({ runs }).options.user, ["Alice"]);
   assert.equal(runData({ runs, filters: { user: "Alice" } }).total.runs, 2);
+});
+
+test("tokens per issue leave out the issues without token data rather than count them as 0", () => {
+  const data = runData({
+    runs: [
+      run("a", { usage: { tokens: 300 } }),
+      run("b", { usage: { tokens: 100 } }),
+      run("c"),
+      run("d", { key: "org/app#2" }),
+      run("e", { key: "org/app#3" }),
+    ],
+  });
+  assert.equal(data.total.issues, 3);
+  assert.equal(data.total.usageIssues, 1);
+  assert.equal(data.total.tokens, 400);
+  assert.equal(data.total.usageRuns, 2);
 });

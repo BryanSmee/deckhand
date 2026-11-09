@@ -1380,6 +1380,8 @@ export interface RunMetrics {
   needsInput: number;
   tokens: number;
   usageRuns: number;
+  // Issues with at least one run with token data: tokens per issue is over these.
+  usageIssues: number;
   fixes: number;
   ciFixes: number;
   findings: number;

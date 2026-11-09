@@ -239,8 +239,9 @@ controlled experiments.
 
 - **Recorded tokens / issue** includes input, cached input and output reported in Claude,
   Codex or Antigravity turn totals. Codex reports its session's running total, which a run that
-  resumes the session carries on: each run counts only what it added to it. **Runs with token
-  data** gives coverage: absent usage is unknown, not zero.
+  resumes the session carries on: each run counts only what it added to it. It is over the
+  issues with token data: absent usage is unknown, not zero, and **Runs with token data** gives
+  the coverage.
   Totals can be partial; they are neither billed dollars nor a subscription's shared allowance.
   Older summaries and agents without supported usage events remain unknown.
 - **Needs input / runs** counts runs whose final recorded status is `needs-input`.

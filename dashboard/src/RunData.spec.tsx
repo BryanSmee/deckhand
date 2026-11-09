@@ -9,6 +9,7 @@ const metrics: RunMetrics = {
   needsInput: 1,
   tokens: 400,
   usageRuns: 2,
+  usageIssues: 2,
   fixes: 1,
   ciFixes: 0,
   findings: 2,
@@ -83,7 +84,15 @@ test("a PR's step selector names its steps and shows that step's metrics", async
           JSON.stringify({
             ...data,
             steps: [
-              { step: "review-fix", ...metrics, tokens: 20, runs: 1, issues: 1, usageRuns: 1 },
+              {
+                step: "review-fix",
+                ...metrics,
+                tokens: 20,
+                runs: 1,
+                issues: 1,
+                usageRuns: 1,
+                usageIssues: 1,
+              },
             ],
           }),
           { status: 200 },
