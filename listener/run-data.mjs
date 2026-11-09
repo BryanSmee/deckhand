@@ -25,10 +25,15 @@ export function runData({ runs, pull = () => null, reviewed = () => null, filter
   );
   // Full retained history supplies the last push and fixes, even if a run filter omits them.
   const histories = new Map();
+  const pullsByIssue = new Map();
   for (const r of all) {
     const key = identity(r);
     if (!histories.has(key)) histories.set(key, []);
     histories.get(key).push(r);
+    const pr = pull(r.key);
+    const previous = pullsByIssue.get(key);
+    if (pr && (!previous || (pr.updatedAt ?? 0) >= (previous.updatedAt ?? 0)))
+      pullsByIssue.set(key, pr);
   }
   function metrics(list) {
     const issues = new Map(list.map((r) => [identity(r), r]));
@@ -60,7 +65,7 @@ export function runData({ runs, pull = () => null, reviewed = () => null, filter
       if (r.reason === "ci-fix") out.ciFixes++;
     }
     for (const [key, r] of issues) {
-      const pr = pull(r.key);
+      const pr = pullsByIssue.get(key);
       if (!pr) continue;
       out.pullRequests++;
       const rounds = reviewed(r.repo, pr.number)?.rounds ?? [];

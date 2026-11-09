@@ -165,3 +165,18 @@ test("issue-backed modes count; discussions and private chats do not", () => {
   assert.equal(data.total.runs, 1);
   assert.equal(data.steps[0].step, "research");
 });
+
+test("a PR-only cohort finds its outcome on the linked issue's record", () => {
+  const runs = [
+    run("issue", { lastPushAt: 15, lastPushHead: "head" }),
+    run("review", { key: "org/app#pr-2", kind: "pr", reason: "review", model: "reviewer" }),
+  ];
+  const data = runData({
+    runs,
+    filters: { model: "reviewer" },
+    pull: (key) => (key.endsWith("#1") ? { number: 2, state: "merged", head: "head" } : null),
+  });
+  assert.equal(data.total.issues, 1);
+  assert.equal(data.total.merged, 1);
+  assert.equal(data.total.unchanged, 1);
+});
