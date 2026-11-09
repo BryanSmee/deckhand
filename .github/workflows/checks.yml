@@ -55,7 +55,12 @@ jobs:
       - name: Bundle graphql-js
         working-directory: listener/vendor
         run: npm ci --no-audit --no-fund && npm run build
-      # Fails, too, when a real-opa or Redis test skipped: opa is on the PATH, Redis beside.
+      # The size ratchet holds test/file-sizes.json to main's (#1065, test/file-sizes.test.mjs):
+      # the checkout has the commit under test alone.
+      - name: Fetch main
+        run: git fetch --no-tags --depth=1 origin +refs/heads/main:refs/remotes/origin/main
+      # Fails, too, when a real-opa or Redis test skipped: opa is on the PATH, Redis beside; or
+      # the ratchet's comparison with main, fetched above.
       - name: Tests
         env:
           TEST_REDIS_URL: redis://localhost:6379
@@ -69,6 +74,10 @@ jobs:
           fi
           if grep "# SKIP no Redis" "$RUNNER_TEMP/tests.tap"; then
             echo "::error::Redis tests skipped"
+            exit 1
+          fi
+          if grep "# SKIP no origin/main" "$RUNNER_TEMP/tests.tap"; then
+            echo "::error::the size ratchet's comparison with main skipped"
             exit 1
           fi
 

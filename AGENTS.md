@@ -205,6 +205,12 @@ docs/         the docs, and the site built from them (VitePress, build-time only
   sandbox image copies `docs/` for its pages. The pages are plain Markdown that reads the same on
   GitHub: relative links, GitHub's heading anchors, no Vue components outside `index.md`.
 - **ESM** (`.mjs`), small functions, comments that explain _why_, briefly.
+- **Files over 800 lines can't grow** (1,500 for tests; #1065): an agent adds to the file it is
+  already in and nothing else pushes back. `test/file-sizes.test.mjs` holds each to its number
+  in `test/file-sizes.json`, which only goes down: split the file (a module of its own for the
+  part you touch), never raise its number to make room. A file that shrank lowers its number in
+  the same pull request. A number raised against main's fails unless its entry says why
+  (`{ "lines": 900, "why": "#<issue>" }`), which the review weighs.
 - **Nothing project-specific.** No PocketBerry, Linear, pnpm or Postgres in the services, base
   image or generic prompts: a project brings those through its per-repo config, Dockerfile
   and extra instructions. Names, hosts and volume names come from settings.
