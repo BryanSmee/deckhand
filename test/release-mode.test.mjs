@@ -43,6 +43,8 @@ test(
       const result = await deny("run", { target: { kind } });
       assert.equal(result.length === 0, kind === "issue", kind);
     }
+    // A reply on the prepare pull request continues the issue's run.
+    assert.deepEqual(await deny("run", { target: { kind: "pr" }, continues: true }), []);
 
     const { results, error } = await policies.capabilityRules(release.repo, "main", {
       release: { ...release, repo: { name: release.repo, private: false } },
@@ -53,8 +55,8 @@ test(
     for (const cap of caps) assert.ok(results.release.operator.allow.has(cap), cap);
 
     const allowed = {
-      own_issue: ["edit", "link"],
-      own_pr: ["edit", "draft", "milestone"],
+      own_issue: ["edit", "link", "react", "unreact"],
+      own_pr: ["edit", "draft", "milestone", "react", "unreact"],
       new_pr: ["create", "milestone"],
       new_issue: ["create", "milestone"],
       created_issue: ["edit", "link", "milestone"],
@@ -76,7 +78,8 @@ test(
     }
     for (const [kind, actions] of [
       ["own_pr", ["ready", "merge", "close", "assign", "comment", "update_branch"]],
-      ["own_issue", ["close", "label", "milestone"]],
+      ["own_issue", ["close", "label", "milestone", "comment"]],
+      ["sub_issue", ["react", "edit"]],
       ["other_issue", ["edit", "link"]],
       ["pr", ["edit", "draft"]],
       ["release", ["create"]],

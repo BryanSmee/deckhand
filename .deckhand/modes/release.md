@@ -19,9 +19,9 @@ edit the issue and pull request bodies; Deckhand posts your final reply.
   outside the milestone. Paginate results and reconcile them with git history; don't use
   only the first page, milestone membership, or merge dates as the release boundary. Ask if
   the baseline cannot be established.
-- Reuse this issue's existing branch and draft prepare pull request (`gh pr view`); if none
-  exists, create `issue-<number>-prepare-vX.Y.Z` from main and open a draft with
-  `Closes #<number>`. On continuation, read your earlier checklist and gap issues first.
+- Work on the branch and draft pull request the sandbox opened for this issue before you
+  started (`gh pr view`); it is the prepare pull request. On continuation, read your earlier
+  checklist and gap issues first.
 
 ## Checklist in the release issue
 

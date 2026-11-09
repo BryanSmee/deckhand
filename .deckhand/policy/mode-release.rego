@@ -6,16 +6,24 @@ allow_run if {
   input.target.kind == "issue"
 }
 
+# A reply that continues the issue's run, posted on its prepare pull request (where its replies
+# go since #1054) as well as on the issue.
+allow_run if {
+  input.mode == "release"
+  input.continues
+}
+
 allow_capabilities contains c if {
   input.mode == "release"
   some c in {"pull", "push", "setup", "read:issues", "read:pulls", "read:actions"}
 }
 
 # The gateway also checks ownership and refuses tags, releases and merges before policy.
-# No ready, closing, assignment, comments, or writes to unrelated issues.
+# No ready, closing, assignment, comments, or writes to unrelated issues; reactions only on its
+# own issue and pull request (the sandbox's rules suggest them for comments needing no answer).
 release_writes := {
-  "own_issue": {"edit", "link"},
-  "own_pr": {"edit", "draft", "milestone"},
+  "own_issue": {"edit", "link", "react", "unreact"},
+  "own_pr": {"edit", "draft", "milestone", "react", "unreact"},
   "new_pr": {"create", "milestone"},
   "new_issue": {"create", "milestone"},
   "created_issue": {"edit", "link", "milestone"},
