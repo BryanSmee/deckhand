@@ -7,12 +7,27 @@ the tag's `v`), and the release itself, with the machine driver (`deckhand-machi
 `VERSION` the tag's) attached. Compose's default `DECKHAND_VERSION` is `latest`: the tag is what
 a new install pulls.
 
-1. **A pull request that prepares it**: `deploy/helm/deckhand/Chart.yaml`'s `appVersion` set to
+1. **Ask Deckhand to prepare it**: open a `Release v0.x.0` issue in the release's milestone
+   and comment `Deckhand /mode release`. This repository's
+   [release mode](../../.deckhand/modes/release.md) uses Claude Opus, as its reviews do.
+   It writes an evidence-backed checklist in the issue body, checks the milestone's
+   acceptance criteria, docs, screenshots and demo scenario when flows changed, builds the
+   docs, and checks CI on `main`. It files gaps as sub-issues, links dependencies where order
+   matters, and puts maintainer decisions under `Open questions` (so the issue waits for input).
+   It gathers release-specific upgrade steps and breaking `Runs in flight` cases from all
+   merged pull requests since the previous release. Configuration and policy are read from
+   `main`: the mode must be merged there before its first live trial. A maintainer can use
+   `Deckhand /mode policy` on the prepare pull request to inspect the deployed policies;
+   its samples are illustrative, not an exhaustive permission test.
+2. **Review the draft prepare pull request**: `deploy/helm/deckhand/Chart.yaml`'s `appVersion` set to
    the release as its images are tagged (`1.2.3`), and its `version` bumped too; the release's
    notes in `.github/release-notes/v1.2.3.md` (what changed for operators, linking the
    [upgrade notes](../guides/upgrade-notes.md) they need). A checkout of the tag then installs
-   that release's images with the chart's defaults.
-2. **The tag, on that pull request's merge commit**, once Checks passed on it:
+   that release's images with the chart's defaults. These are the draft's only two changed
+   files; gaps are fixed separately. Both versions use the release's `X.Y.Z`. The mode
+   leaves the pull request draft, even when checks pass. Resolve its checklist and questions,
+   review the operator actions, then mark it ready and merge it yourself.
+3. **The tag, on that pull request's merge commit**, once Checks passed on it:
 
    ```sh
    git fetch origin
@@ -20,7 +35,7 @@ a new install pulls.
    git push origin v1.2.3
    ```
 
-3. **What it published**, once the Release run is done: every image at both architectures, and
+4. **What it published**, once the Release run is done: every image at both architectures, and
    `latest` on the same digest as the release.
 
    ```sh
@@ -32,5 +47,7 @@ a new install pulls.
    gh release view v1.2.3 --json assets --jq '.assets[].name'   # deckhand-machine.mjs
    ```
 
-4. **The notes**: the workflow made the release with GitHub's generated notes; replace them with
+5. **The notes**: the workflow made the release with GitHub's generated notes; replace them with
    the pull request's: `gh release edit v1.2.3 --notes-file .github/release-notes/v1.2.3.md`.
+6. **The demo**: upload the updated demo yourself when the release changed its on-screen flow,
+   and record the link in the release checklist. Publishing stays with the maintainer.
