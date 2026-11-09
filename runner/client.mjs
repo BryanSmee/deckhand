@@ -141,7 +141,9 @@ export function createRunnerClient({
 
   // Its output, line by line, until it exits or the stream ends (the runner updating): the
   // caller follows again with what it read as `skip` (../listener/runs.mjs follow()), as when
-  // `docker logs` ends. Never throws: a runner away is said, and comes back.
+  // `docker logs` ends. → true when the stream ended, false when it failed (refused, cut): its
+  // output may go on past what was read, even for a sandbox that exited. Never throws: a
+  // runner away is said, and comes back.
   async function follow(name, { skip = { out: 0, err: 0 }, onOut, onErr, onCaughtUp = () => {} }) {
     try {
       const res = await orchestrator.request(
@@ -157,8 +159,10 @@ export function createRunnerClient({
           log(`The output of ${name}: ${error.stack ?? error}`);
         }
       });
+      return true;
     } catch (error) {
       log(`The output of ${name}: ${error.message ?? error}`);
+      return false;
     }
   }
 

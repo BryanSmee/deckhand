@@ -241,7 +241,9 @@ export function createDockerRunner({
   }
 
   // Resolves once the sandbox's output ends (it exited, or `docker logs` stopped: state()
-  // tells). `skip`: { out, err } lines of each stream already read by a previous listener.
+  // tells), with false when `docker logs` failed: what it gave may stop short of the end, even
+  // for a sandbox that exited. `skip`: { out, err } lines of each stream already read by a
+  // previous listener.
   // Only whole lines count: one cut short is read again, whole, by the next follow(). A line
   // over MAX_LINE is cut there and counts as one line, the same for the next follow(). Each
   // handler gets the line and when Docker says it was written (ms; null without a stamp):
@@ -290,7 +292,7 @@ export function createDockerRunner({
       lines(child.stderr, skip.err, onErr);
       past();
       child.on("error", (error) => log(`docker logs ${name}: ${error.message}`));
-      child.on("close", resolve);
+      child.on("close", (code) => resolve(code === 0 || !!signal?.aborted));
     });
   }
 

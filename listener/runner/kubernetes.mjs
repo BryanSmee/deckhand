@@ -921,9 +921,10 @@ export function createKubernetesRunner({
     return now() - since >= UNKNOWN_MS;
   }
 
-  // Resolves once the pod's log ends (it exited, or the API closed the stream: state() tells).
-  // `skip`: { out, err } lines already read by a previous follower (the runner's copy before). The log has the agent's
-  // output and the rest in one stream, told apart by STDERR_TAG. A pod that stays Pending past
+  // Resolves once the pod's log ends (it exited, or the API closed the stream: state() tells),
+  // with false when reading it failed: what it gave may stop short of the end. `skip`: { out,
+  // err } lines already read by a previous follower (the runner's copy before). The log has the
+  // agent's output and the rest in one stream, told apart by STDERR_TAG. A pod that stays Pending past
   // KUBERNETES_PENDING_MINUTES is removed, and its run fails with the reason.
   //
   // A stream the API server dropped without closing it (an instance replaced during an
@@ -971,9 +972,9 @@ export function createKubernetesRunner({
     } catch (error) {
       if (signal?.aborted) return;
       if (!stop.signal.aborted) {
-        // The caller follows again while the pod runs (runs.mjs follow()).
+        // The caller follows again (runs.mjs follow()), even once the pod exited.
         log(`The log of ${name}: ${error.message}`);
-        return;
+        return false;
       }
       log(`The log of ${name}: its stream outlived the pod, reading the rest`);
       past = { out: Math.max(skip.out, seen.out), err: Math.max(skip.err, seen.err) };

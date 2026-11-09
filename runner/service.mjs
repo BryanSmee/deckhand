@@ -461,16 +461,18 @@ export function createRunnerService({
       // A caller gone, or this copy stopping: `docker logs` ends, the caller follows again.
       const stop = new AbortController();
       asStream(res, () => stop.abort());
-      return runner
-        .follow(name, {
-          skip,
-          signal: stop.signal,
-          onOut: (text, at) => line({ s: "out", line: text, at }),
-          onErr: (text, at) => line({ s: "err", line: text, at }),
-          // Both streams past what the caller skipped (../listener/runs.mjs follow()).
-          onCaughtUp: () => line({ caughtUp: true }),
-        })
-        .then(() => res.end());
+      const whole = await runner.follow(name, {
+        skip,
+        signal: stop.signal,
+        onOut: (text, at) => line({ s: "out", line: text, at }),
+        onErr: (text, at) => line({ s: "err", line: text, at }),
+        // Both streams past what the caller skipped (../listener/runs.mjs follow()).
+        onCaughtUp: () => line({ caughtUp: true }),
+      });
+      // Its output failed to come whole (`docker logs` failed): the stream is cut rather than
+      // ended, so the caller reads it again rather than taking it for the sandbox's end.
+      if (whole === false) res.destroy();
+      else res.end();
     },
     "POST /sandboxes/:name/kill": async ({ params }) => {
       await runner.kill((await oursOrRefuse(named(params.name, "name"))).name);
