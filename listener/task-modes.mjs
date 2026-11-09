@@ -31,9 +31,9 @@ export function createTaskModes(ctx) {
   const may = (item, action, what) => itemMay(ctx.permissions, log, item, action, what);
 
   // What a comment asks for: "work", "brainstorm", "grooming", "stop" (wrap either up: its
-  // wrap-up's mode, wrapUpOf()) or one of the repo's own modes (its config's `modes:`); null when it doesn't reach Claude. A "/mode"
-  // line picks the mode, with or without a trigger line; without either, a comment goes on in
-  // the issue's current mode. Keeps the issue's brainstorm and mode state up to date, once the
+  // wrap-up's mode, wrapUpOf()) or one of the repo's own modes (its config's `modes:`); null
+  // when it doesn't reach Claude. A "/mode" line picks the mode, with or without a trigger line;
+  // without either, a comment goes on in the issue's current mode. Keeps the issue's brainstorm and mode state up to date, once the
   // policies allow the run (null when they don't).
   async function modeOf(item, key, name) {
     // The inbox issue or the discussion category is the trigger (workItem()), the dashboard's

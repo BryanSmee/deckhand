@@ -183,26 +183,23 @@ test(
   },
 );
 
-test(
-  "the real opa: a grooming gets a brainstorm's capabilities and pushes nowhere",
-  withOpa,
-  async (t) => {
-    const policies = defaultPolicies(t);
-    for (const mode of ["grooming", "grooming-stop"]) {
-      const push = await policies.deny("deny_push", "org/repo", "main", () => ({
-        repo: "org/repo",
-        mode,
-        custom_mode: false,
-        reason: null,
-        issue: 1,
-        action: "push",
-        branch: "issue-1-x",
-        ref: "refs/heads/issue-1-x",
-        created: true,
-        deleted: false,
-        default_branch: "main",
-      }));
-      assert.ok(push.length, mode);
-    }
-  },
-);
+// Its capabilities are checked with every built-in mode's (capabilities.test.mjs).
+test("the real opa: a grooming pushes nowhere", withOpa, async (t) => {
+  const policies = defaultPolicies(t);
+  for (const mode of ["grooming", "grooming-stop"]) {
+    const push = await policies.deny("deny_push", "org/repo", "main", () => ({
+      repo: "org/repo",
+      mode,
+      custom_mode: false,
+      reason: null,
+      issue: 1,
+      action: "push",
+      branch: "issue-1-x",
+      ref: "refs/heads/issue-1-x",
+      created: true,
+      deleted: false,
+      default_branch: "main",
+    }));
+    assert.ok(push.length, mode);
+  }
+});

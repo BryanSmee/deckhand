@@ -11,7 +11,8 @@ import { ReplyError } from "./comments.mjs";
 import { commentsText, dashboardLink, taskKey } from "./events.mjs";
 import { GitHubUnavailable, incidentNote } from "./github.mjs";
 import { nextStep, replyFooter, setupText } from "./footer.mjs";
-import { brainstormDefaults, customMode, entryRun, isApart, isFresh, TALKS } from "./modes.mjs";
+import { brainstormDefaults, customMode, entryRun, isApart, isFresh } from "./modes.mjs";
+import { TALKS, WRAP_UPS } from "./modes.mjs";
 import { answersOnly } from "./capabilities.mjs";
 import { branchConfigReport } from "./onboarding.mjs";
 import { createPreparation } from "./preparation.mjs";
@@ -44,8 +45,7 @@ import { newLogContext, newRequestId, withLogContext } from "../lib/log.mjs";
 // What a run logs, and the calls it makes to the other services, name it (lib/log.mjs), from
 // its start or its pick-up after a restart (restart.mjs) to its end: under a request ID of its
 // own, not that of whatever happened to start it (a delivery that freed a place, another run's
-// end).
-// Its run's ID once it has one (task.live).
+// end). Its run's ID once it has one (task.live).
 export const runLogContext = (task) => ({
   request: newRequestId(),
   repo: task.repo,
@@ -349,8 +349,8 @@ export function createRuns(ctx) {
       !chosen.takeOver &&
       (await ctx.runner.hasSession(sessionName(task.name, mode), agentOf(task)));
     const restored = items.some((i) => i.restored);
-    record.mode =
-      mode === "stop" ? "wrap-up" : restored ? "restore" : started ? "continue" : "start";
+    const wrapUp = WRAP_UPS.has(mode);
+    record.mode = wrapUp ? "wrap-up" : restored ? "restore" : started ? "continue" : "start";
     const messages = openingMessages(mode, text, chosen, { restored, started, previous });
     // Once its capabilities are decided (preparation.mjs), the volume the run mounts
     // (sandbox-spec.mjs sessionOf()) may not be its mode's: looked at again there, and when that
@@ -1317,7 +1317,7 @@ export function createRuns(ctx) {
     const status =
       !light || ["error", "cancelled"].includes(record.status)
         ? record.status
-        : mode === "stop"
+        : WRAP_UPS.has(mode)
           ? "stopped"
           : "ok";
     for (const item of live.handled) {
@@ -1539,7 +1539,7 @@ const chatOf = (task) => task.id.slice("chat-".length);
 // one), else what begin() would have said from `now`: a wrap-up and a restored run stay so.
 export function reopenedMode({ mode, restored, started, now }) {
   if (now === started) return null;
-  if (mode === "stop") return "wrap-up";
+  if (WRAP_UPS.has(mode)) return "wrap-up";
   if (restored) return "restore";
   return now ? "continue" : "start";
 }

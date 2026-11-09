@@ -450,8 +450,10 @@ to GitHub: the proxy never tunnels those hosts for it, and its plain HTTP to the
     assigning anyone and a rerun past a first. A brainstorm (`mode-brainstorm.rego`) edits and
     reacts on its own issue, files issues and labels, orders and files its follow-ups (a
     "blocked by" link, a project, a milestone), and never comments: the orchestrator posts its
-    reply. A grooming (`mode-grooming.rego`, #585) writes as a brainstorm does, and comments on
-    the repository's other issues; its wrap-up (`grooming-stop`) also edits, labels and closes
+    reply. A grooming (`mode-grooming.rego`, #585) edits and reacts on its own issue,
+    files issues and labels, never comments there (but no "blocked by" link, project or
+    milestone on the issues it filed, unlike a brainstorm), and comments on the repository's
+    other issues; its wrap-up (`grooming-stop`) also edits, labels and closes
     them, as not planned or as a duplicate only (`change.state_reason`): the one default mode
     that writes to issues it didn't create or isn't linked to. Inbox entries (`mode-idea.rego`, `mode-bug.rego`) file issues carrying their label,
     edit those and link the ones they split; discussions (`mode-discussion.rego`) file issues. Onboarding,

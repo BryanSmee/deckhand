@@ -7,8 +7,9 @@ import { respellMap } from "./spelling.mjs";
 export const REPLY_GRACE_MS = 2 * 60000;
 
 // key → { repo, number, status, deadline, mode }: `mode` the conversation's, "grooming" or
-// "brainstorm" (also when missing: kept before grooming existed). "active" → "idle" once the deadline passes with no
-// comment: the deadline is data, its timer armed again from it by the copy that loads the map.
+// "brainstorm" (also when missing: kept before grooming existed). "active" → "idle" once the
+// deadline passes with no comment: the deadline is data, its timer armed again from it by the
+// copy that loads the map.
 // One container per reply means nothing is held open meanwhile: idle is what the dashboard
 // shows, and the next comment restores the session from its volume and says so to Claude.
 // `busy(key)`: a reply is still on its way, and posting it arms the timer again. `brainstorms`:

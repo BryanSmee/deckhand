@@ -82,7 +82,10 @@ Deckhand's default policies keep each mode's writes to its own issue, its pull r
 issues it files, but a grooming's ([Grooming](repo-config/modes.md#grooming)): it comments on
 the repository's other issues, and its wrap-up edits, labels and closes them, as not planned or
 as a duplicate only. Who may start one, and wrap it up, is `runs:start:grooming` and
-`runs:start:grooming-stop` ([Access](security/webhooks-and-sign-in.md#access)).
+`runs:start:grooming-stop` ([Access](security/webhooks-and-sign-in.md#access)). A grooming
+reads every open issue, and its policy lets it write to any of them: in a public repository, an
+issue written by an outsider may try to steer the wrap-up into editing or closing others, within
+those rights. Read what its wrap-up is about to apply, its last reply, before you `/stop` it.
 
 ## Your part as the operator
 
