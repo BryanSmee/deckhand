@@ -25,6 +25,12 @@ docker:
 conflicts:
   check_minutes: 5
 
+modes:
+  release:
+    instructions: .deckhand/modes/release.md
+    agent: claude
+    model: opus
+
 review:
   on: ready
   model: opus
