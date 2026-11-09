@@ -5,6 +5,17 @@ run yet before you [update](updating.md). Most need nothing; each says what does
 first, then the older ones: the policies' (allow rules, per-mode policies, the grants) and the
 grants folder's.
 
+## Upgrading: the sandbox image's contract label (#980)
+
+The base sandbox image now carries a `deckhand.sandbox-api` label, the number of the contract
+between the services and its scripts, and a run is refused before it starts when its base
+image's number is lower than the services' (or missing), saying what to run, rather than
+failing later without a word. What changes for you: pull the sandbox image with the services,
+as `docker compose pull` does (`docker compose build sandbox` from source); on Kubernetes,
+`SANDBOX_IMAGE` has to be this release's, as [Updating](../kubernetes/updating.md) already
+says. A sandbox image of yours (a mirror) has to be this release's or newer. Repository images
+built `FROM` the base inherit the label: they need nothing.
+
 ## Upgrading: /status from inside edge's container (#1019)
 
 A call of `/status` from edge's own loopback without a forwarding header no longer goes without
