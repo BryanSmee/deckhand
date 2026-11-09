@@ -8,7 +8,8 @@ the details of each step and the rest: other agents, two copies of each service,
 
 - A server with Docker Engine 26 or later and the compose plugin.
 - An HTTPS address GitHub can reach (your reverse proxy, or a tunnel), forwarding to edge's
-  port, 8080.
+  port, 8080. A home server or a laptop has none: [a stable tunnel](../guides/tunnels.md)
+  gives it one (Tailscale Funnel, a cloudflared named tunnel or an ngrok static domain).
 - A GitHub account or organization to own the App, and a repository to try it on.
 - A Claude credential: a token from `claude setup-token` (your Claude plan) or an
   `ANTHROPIC_API_KEY`. A plan is usually licensed to one person: for a team, use an API key

@@ -7,7 +7,7 @@ Compose; on a cluster, see [On Kubernetes](#on-kubernetes).
 Deckhand runs on your own server with your own private GitHub App and your own Claude
 credential (or OpenAI key, for [Codex](codex.md)). You need Docker Engine 26 or later with the
 compose plugin, and an HTTPS address that GitHub can reach (your reverse proxy, or a tunnel)
-forwarding to edge's port.
+forwarding to edge's port: without a public address, see [A stable tunnel](tunnels.md).
 
 ## Start Deckhand
 
@@ -40,7 +40,8 @@ networks, see [Security model](../security.md)), and the base sandbox image runs
 `sandbox` service only pulls it and exits); with the `engine` profile, the
 [container engine](container-engine.md)'s two images too. A repository can bring its own image
 `FROM` that base: see [Per-repo config](../repo-config.md). Edge publishes port 8080
-(`PORT` to change it), on a network of its own (`edge-out`); point your reverse proxy at it.
+(`PORT` to change it), on a network of its own (`edge-out`); point your reverse proxy, or
+[your tunnel](tunnels.md), at it.
 
 To build the images from this checkout instead: `docker compose up -d --build`. Updating is
 `docker compose pull` and `docker compose up -d` again ([Updating](updating.md)).
