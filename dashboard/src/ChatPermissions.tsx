@@ -33,6 +33,7 @@ const NAMES: Record<string, Plain> = {
   "read:pulls": "chats.capReadPulls",
   "read:discussions": "chats.capReadDiscussions",
   "read:actions": "chats.capReadActions",
+  "read:context": "chats.capReadContext",
 };
 
 // What the panel edits: every list concrete (what is on), from what the next run gets.
