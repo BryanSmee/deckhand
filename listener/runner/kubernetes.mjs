@@ -982,7 +982,9 @@ export function createKubernetesRunner({
       try {
         await readLog(name, {}, AbortSignal.timeout(WATCH_MS), each);
       } catch (error) {
+        // Its last lines (its result, often) unread: the caller reads it again.
         log(`The log of ${name}: ${error.message}`);
+        return false;
       }
       return;
     } finally {

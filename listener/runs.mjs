@@ -488,7 +488,8 @@ export function createRuns(ctx) {
       if (live.graceUntil !== whole) return;
       linger(task, until);
     };
-    // Follows of an exited sandbox that failed, in a row: its output is read again, whole.
+    // Failed reads of an exited sandbox's output, in a row (one that ran on doesn't count, and
+    // any whole read starts it again): its output is read again, up to EXITED_FOLLOWS times.
     let failed = 0;
     try {
       for (;;) {
