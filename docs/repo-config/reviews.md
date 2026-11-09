@@ -251,6 +251,8 @@ keys: any other, or a bad value, is an error.
 
 ### Choosing who reviews
 
+<!-- onboarding: skip: Choosing a review's agent, model and effort (another agent, a stronger model, and what a weaker reviewer costs) is in docs/repo-config/reviews.md in Deckhand's source. -->
+
 A review is already independent of the work it reads: a fresh run, in its own clone and
 session, that never sees the implementer's reasoning, only the diff and the thread. `agent`,
 `model` and `effort` choose who reads it, and so what it catches:
@@ -289,6 +291,8 @@ reviewed.
 
 The Codex trial ([How it does](../guides/codex.md#how-it-does)) tried Codex on work runs only:
 it kept no figures on Codex as a reviewer yet.
+
+<!-- onboarding: end -->
 
 ### Reviewers
 
