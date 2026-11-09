@@ -67,6 +67,7 @@ import {
   forwarder,
   freshRedisPrefix,
   grantsPolicy,
+  listening,
   servePolicies,
   isRoot,
   needsBash,
@@ -1010,7 +1011,9 @@ describe("listener", options, () => {
   }
 
   // `opa`: the policy service's (fakeOpa()'s, allowing everything by default).
-  async function listen(t, files, extra = {}, { opa } = {}) {
+  // `appRefused`: how many of the orchestrator's first asks for the App edge answers 500, as an
+  // edge not up yet: the orchestrator then starts without it, and learns it a few seconds later.
+  async function listen(t, files, extra = {}, { opa, appRefused = 0 } = {}) {
     // Removed once the file is done: its listener and sandboxes are stopped by then.
     const dir = tempDir(null);
     fakeDocker(dir);
@@ -1101,6 +1104,38 @@ describe("listener", options, () => {
       portOf(runner, /Deckhand runner \(\w+\) on :(\d+)/g),
     );
     const edgeInternalPort = await forwarder(t, () => portOf(edge, /Internal port on :(\d+)\n/g));
+    // The orchestrator reaches it through `appRefused`'s refusals, when there are some.
+    let edgeUrlPort = edgeInternalPort;
+    if (appRefused) {
+      let left = appRefused;
+      const front = createServer((req, res) => {
+        if (req.method === "GET" && req.url === "/app" && left > 0) {
+          left -= 1;
+          return res
+            .writeHead(500, { "content-type": "application/json" })
+            .end('{"message":"not yet"}');
+        }
+        const upstream = httpRequest(
+          {
+            host: "127.0.0.1",
+            port: edgeInternalPort,
+            method: req.method,
+            path: req.url,
+            headers: req.headers,
+          },
+          (answer) => {
+            res.writeHead(answer.statusCode, answer.headers);
+            answer.pipe(res);
+          },
+        );
+        upstream.on("error", () => res.destroy());
+        res.on("close", () => upstream.destroy());
+        req.pipe(upstream);
+      });
+      edgeUrlPort = await listening(front);
+      front.unref();
+      t.after(() => (front.closeAllConnections(), front.close()));
+    }
     const servicesPort = await forwarder(t, () => portOf(listener, /Services on :(\d+)\n/g));
     writesLanded.set(dir, () =>
       waitUntil(
@@ -1125,7 +1160,7 @@ describe("listener", options, () => {
       SERVICES_PORT: "0",
       // A copy killed leaves its lease for this long: the next one waits it out.
       LEASE_SECONDS: "2",
-      EDGE_URL: `http://127.0.0.1:${edgeInternalPort}`,
+      EDGE_URL: `http://127.0.0.1:${edgeUrlPort}`,
       // Where the fake sandbox reaches the services' names (fixtures/fake-docker.sh).
       DECKHAND_TEST_PROXY: `http://127.0.0.1:${standIn.port}`,
       RUNNER_URL: `http://127.0.0.1:${runnerPort}`,
@@ -4807,6 +4842,30 @@ allow_capabilities contains "read:pulls"
     assert.deepEqual(app.installations, [
       { account: "org", url: installation.html_url, missing: ["actions: write"] },
     ]);
+  });
+
+  // An edge slower to answer than the orchestrator to start: what it does at start once the App
+  // is known waits for it, rather than waiting for the next listing (a dashboard's).
+  test("the App learned after the start: the start's listing then, and its warnings", async (t) => {
+    const installation = {
+      id: 7,
+      account: { login: "org" },
+      html_url: "https://github.com/organizations/org/settings/installations/7",
+      permissions: { ...APP_PERMISSIONS, actions: undefined },
+    };
+    const { listener } = await listen(
+      t,
+      {
+        app: JSON.stringify({ slug: "deckhand", events: APP_EVENTS, permissions: APP_PERMISSIONS }),
+        installations: JSON.stringify([installation]),
+      },
+      (dir, github) => ({ GITHUB_URL: github.url }),
+      { appRefused: 1 },
+    );
+    await listener.until("Edge: the App (");
+    await listener.until(
+      `installation on org lacks actions: write: an owner of the account accepts the new permissions on ${installation.html_url}`,
+    );
   });
 
   test("auto-pickup: an opted-in repo's labelled issue starts by itself, for whoever added the label", async (t) => {

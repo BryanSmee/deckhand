@@ -556,6 +556,10 @@ function useApp(parts) {
   config.bot = ctx.app.identity().name;
 }
 
+// Whether the start reached what it does once the App is known (catchUp(), below), and did it.
+let started = false;
+let caughtUp = false;
+
 // What edge says of the App now: used once it has one, and again when another one is set up
 // there. Resolves to whether it has one.
 async function refreshApp() {
@@ -567,6 +571,7 @@ async function refreshApp() {
   ctx.appInfo = null;
   if (!first) log(`GitHub App ${parts.slug}: set up at edge`);
   checkApp();
+  catchUp();
   return true;
 }
 
@@ -1187,24 +1192,6 @@ for (const state of keyed) state.respell(spelled);
 // A run since a dismissal shows its task again: its entry is stale.
 dismissals.prune(ctx.runs);
 picks.prune(ctx.runs);
-// Issues and pull requests that closed or merged after their run asked, while no listener heard
-// it: their questions set aside, as the `closed` delivery would have (http.mjs). GitHub says
-// when each closed; a run that asked after that still waits.
-if (ctx.app) {
-  setAsideClosed({
-    runs: ctx.runs,
-    dismissals,
-    tasks: closedTasks(ctx.runs, titles.closed, (key) => pulls.get(key)),
-    // Gone (404) or deleted (410): null, as never closed.
-    closedAt: async (repo, number) => {
-      const issue = await lookup(repo, `/repos/${repo}/issues/${number}`);
-      return issue?.closed_at ? Date.parse(issue.closed_at) : null;
-    },
-    log,
-  })
-    .then((keys) => keys.length && log(`Closed since their run asked: ${keys.join(", ")}`))
-    .catch((error) => log(`Closed since their run asked: ${error.stack ?? error}`));
-}
 
 // Before any request is served: runs still going since the previous listener (their inboxes
 // and logs asked of the runner), then what it left queued (comments for those runs are
@@ -1391,9 +1378,30 @@ const runEvents = createRunEvents({
   log,
 });
 runEvents.start();
-// What changed while no copy acted, once the App is known.
-if (!ctx.stopping && ctx.app) {
-  checkApp();
+// What changed while no copy acted, once the App is known: now, or when edge first says
+// (refreshApp()) if edge, slower to start than this copy, missed the wait for it (appAsked, with
+// the servers). Once: refreshApp() reads the App's settings itself, each time it changes.
+started = true;
+catchUp();
+function catchUp() {
+  if (!started || caughtUp || ctx.stopping || !ctx.app) return;
+  caughtUp = true;
+  // Issues and pull requests that closed or merged after their run asked, while no listener
+  // heard it: their questions set aside, as the `closed` delivery would have (http.mjs). GitHub
+  // says when each closed; a run that asked after that still waits.
+  setAsideClosed({
+    runs: ctx.runs,
+    dismissals,
+    tasks: closedTasks(ctx.runs, titles.closed, (key) => pulls.get(key)),
+    // Gone (404) or deleted (410): null, as never closed.
+    closedAt: async (repo, number) => {
+      const issue = await lookup(repo, `/repos/${repo}/issues/${number}`);
+      return issue?.closed_at ? Date.parse(issue.closed_at) : null;
+    },
+    log,
+  })
+    .then((keys) => keys.length && log(`Closed since their run asked: ${keys.join(", ")}`))
+    .catch((error) => log(`Closed since their run asked: ${error.stack ?? error}`));
   // Pull requests that changed while no copy acted, or whose delivery was lost; the deliveries
   // GitHub couldn't hand over, asked again by edge.
   ctx.sync(null);
