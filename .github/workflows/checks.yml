@@ -31,7 +31,11 @@ jobs:
           - 6379:6379
         options: --health-cmd "redis-cli ping" --health-interval 2s --health-timeout 5s --health-retries 15
     steps:
+      # Two commits deep: the size ratchet (#1065, test/file-sizes.test.mjs) compares the files
+      # with the merge commit's first parent, main as the pull request merges into it.
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
       - uses: actions/setup-node@v4
         with:
           node-version: 26
@@ -55,15 +59,12 @@ jobs:
       - name: Bundle graphql-js
         working-directory: listener/vendor
         run: npm ci --no-audit --no-fund && npm run build
-      # The size ratchet holds test/file-sizes.json to main's (#1065, test/file-sizes.test.mjs):
-      # the checkout has the commit under test alone.
-      - name: Fetch main
-        run: git fetch --no-tags --depth=1 origin +refs/heads/main:refs/remotes/origin/main
       # Fails, too, when a real-opa or Redis test skipped: opa is on the PATH, Redis beside; or
-      # the ratchet's comparison with main, fetched above.
+      # the size ratchet's, its base checked out above.
       - name: Tests
         env:
           TEST_REDIS_URL: redis://localhost:6379
+          FILE_SIZES_BASE: HEAD^1
         run: |
           node --test --test-force-exit --import ./test/blocking-stdout.mjs --test-timeout=120000 \
             --test-reporter=spec --test-reporter-destination=stdout \
@@ -76,8 +77,8 @@ jobs:
             echo "::error::Redis tests skipped"
             exit 1
           fi
-          if grep "# SKIP no origin/main" "$RUNNER_TEMP/tests.tap"; then
-            echo "::error::the size ratchet's comparison with main skipped"
+          if grep "# SKIP no base to compare with" "$RUNNER_TEMP/tests.tap"; then
+            echo "::error::the size ratchet skipped"
             exit 1
           fi
 
