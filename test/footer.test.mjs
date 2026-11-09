@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { replyFooter, setupText } from "../listener/footer.mjs";
+import { nextStep, replyFooter, setupText } from "../listener/footer.mjs";
 
 const record = { agent: "claude", provider: "anthropic", model: "opus", effort: "high" };
 const result = { ok: true, text: "Done", durationMs: 240000 };
@@ -84,4 +84,19 @@ test("an external run's setup, as its machine reports it (#599): what it said, i
     {},
   );
   assert.equal(footer, "<sub>🤖 Claude · on Desk (v2.0.1, sandbox off, as it reports)</sub>");
+});
+
+test("footer: the next step of a brainstorm and a grooming, and after their wrap-up", () => {
+  const talk = { talk: true, fresh: false, trigger: "Deckhand" };
+  assert.equal(
+    nextStep("brainstorm", talk),
+    " · 💬 brainstorm: reply to continue, `/stop` to wrap up",
+  );
+  assert.equal(nextStep("grooming", talk), " · 💬 grooming: reply to continue, `/stop` to wrap up");
+  const done = { ...talk, talk: true };
+  assert.equal(nextStep("stop", done), " · 💬 brainstorm ended: a trigger line starts it again");
+  assert.equal(
+    nextStep("grooming-stop", done),
+    " · 💬 grooming ended: a trigger line starts it again",
+  );
 });

@@ -126,13 +126,13 @@ function patched(body) {
   if (!actions.length || keys.some((k) => !rest.includes(k))) actions.push("edit");
   // Labels set replace the issue's: what they remove is known once it is looked up.
   const change = { labels_added: labelNames(body.labels) };
-  return {
-    actions,
-    assignees: set.assignees,
-    milestone: set.milestone,
-    change: "labels" in body ? { ...change, labels_set: true } : change,
-  };
+  if ("labels" in body) change.labels_set = true;
+  if (body.state === "closed") change.state_reason = closeReason(body.state_reason);
+  return { actions, assignees: set.assignees, milestone: set.milestone, change };
 }
+
+// A close's reason as GitHub reads it, `completed` without one: `change.state_reason`.
+export const closeReason = (reason) => String(reason ?? "completed").toLowerCase();
 
 // The assignees and milestone a body sets, which a create and an edit both take → { actions,
 // assignees: { logins, as } (`as`: they are `added`, or `set` in place of the issue's), milestone:

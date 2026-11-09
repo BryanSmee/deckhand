@@ -398,15 +398,17 @@ const runOf =
   });
 
 test(
-  "the real opa: policy/run.rego allows each built-in mode on issues, brainstorm, stop and onboarding nowhere else",
+  "the real opa: policy/run.rego allows each built-in mode on issues, the conversations and onboarding nowhere else",
   { skip: !hasOpa() && "no opa on the PATH" },
   async (t) => {
     const policies = engine(t);
-    const issueOnly = new Set(["brainstorm", "stop", "onboarding"]);
+    const issueOnly = new Set(["brainstorm", "stop", "grooming", "grooming-stop", "onboarding"]);
     const builtIn = [
       "work",
       "brainstorm",
       "stop",
+      "grooming",
+      "grooming-stop",
       "onboarding",
       "research",
       "review",

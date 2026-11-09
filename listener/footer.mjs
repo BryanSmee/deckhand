@@ -2,14 +2,14 @@
 // options that came too late for the run. Pure.
 import { agentFor } from "./agents/index.mjs";
 import { entryLabel, providerLabel } from "./agents/select.mjs";
-import { BUILT_IN } from "./modes.mjs";
+import { BUILT_IN, talkOf, WRAP_UPS } from "./modes.mjs";
 import { triggerWord } from "./onboarding.mjs";
 import { minutes } from "./runlog.mjs";
 
 // On a phone, the reply is where the next step is read.
 export function nextStep(mode, { talk, fresh, trigger }) {
-  if (mode === "stop") return " · 💬 brainstorm ended: a trigger line starts it again";
-  if (talk) return " · 💬 brainstorm: reply to continue, `/stop` to wrap up";
+  if (WRAP_UPS.has(mode)) return ` · 💬 ${talkOf(mode)} ended: a trigger line starts it again`;
+  if (talk) return ` · 💬 ${mode}: reply to continue, \`/stop\` to wrap up`;
   if (mode === "discussion") return " · 💬 reply in this discussion to continue";
   if (mode === "onboarding") {
     return ` · 💬 onboarding: reply to change the proposal, \`${triggerWord(trigger)}\` opens the pull request`;

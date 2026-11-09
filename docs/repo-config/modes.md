@@ -8,6 +8,7 @@ repository's own (`modes`), and research runs. Reviews, a mode of their own, hav
 
 A run is in a mode: **work** (implement, the default), **brainstorm** (discuss, no code;
 it files the follow-up issues the maintainer keeps, like inbox entries and discussions),
+**grooming** (a review of the backlog, see [Grooming](#grooming)),
 **onboarding** (propose this file, see [Onboarding](../repo-config.md#onboarding)), **research** (the open
 web, without the code, see [Research](#research)), **review** (a pull request's, when the
 `review` block turns it on, see [Reviews](reviews.md#reviews)), **policy** (a dry run of the
@@ -29,7 +30,8 @@ Focus on the error handling.
   read-only audit starts from the issue and its comments, where the audit posted what it found.
 - **A comment with neither** goes on in the issue's current mode. The trigger line alone,
   or `/mode work`, goes back to work; `/mode brainstorm` to a brainstorm, which `/stop` wraps
-  up. Brainstorms stay on issues ([`run.rego`](policy-inputs.md#the-run-input)).
+  up (and `/mode grooming` to a grooming, the same). Brainstorms and groomings stay on issues
+  ([`run.rego`](policy-inputs.md#the-run-input)).
 - **An unknown name** gets a reply listing the modes, and nothing runs. So does a comment
   for a mode that was removed from the config since.
 - Work is the default: there is no `default_mode`.
@@ -81,6 +83,36 @@ error, listed in the reply:
   `.deckhand/policy/` ([Policies](policies.md#policies)).
 
 The dashboard names the repo's modes next to the issue, and in each run.
+
+### Grooming
+
+`/mode grooming` on an issue opened for it reviews the backlog with the maintainer: the open
+issues but the [inboxes](issues.md#inboxes), each checked against the code, the merged pull
+requests and the other issues, in batches of **done**, **obsolete**, **duplicate** and
+**outdated** ones, with the evidence and the change proposed. `/stop` applies what was agreed.
+
+<!-- onboarding: skip: How a grooming runs and what it may write are in docs/repo-config/modes.md in Deckhand's source. -->
+
+It is a conversation like a brainstorm: the same agent, model and effort (`brainstorm_agent`,
+`brainstorm_model`, `brainstorm_effort`), a clone of the default branch and a session of its
+own, no `setup` and no branch; each comment on the issue goes on in it, it goes idle and is
+restored the same way, and `/stop` wraps it up. Its runs may write to issues they didn't create,
+the first of Deckhand's modes that does ([`mode-grooming.rego`](../../policy/mode-grooming.rego),
+[the table](policy-inputs.md#the-github-input)):
+
+- **While it goes on** (`grooming`), it may comment on the issues it reviews (when the
+  maintainer agrees, or to ask an issue's author something), and edit its own issue; it never
+  comments there, as its final message is the reply.
+- **The wrap-up** (`/stop`, the `grooming-stop` mode) applies what was agreed: it edits the
+  issues' titles and descriptions, labels them, and closes them as not planned or as a
+  duplicate (never as completed: it didn't do the work), files the issues that replace
+  merged ones, and writes the pass's log into the grooming issue's description.
+
+Neither opens a pull request, pushes or touches a pull request. The wrap-up is a mode of its own
+so that a brainstorm's `/stop` keeps its own, narrower rights: an operator's or a repository's
+policy tells them apart by `input.mode`.
+
+<!-- onboarding: end -->
 
 ### Research
 

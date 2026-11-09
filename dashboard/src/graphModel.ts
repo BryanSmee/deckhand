@@ -133,12 +133,15 @@ const BRAINSTORMING: Task["state"][] = [
   "brainstorm",
   "idle-brainstorm",
 ];
+// A grooming is one too (the listener's modes.mjs `talk`).
+const TALKS = ["brainstorm", "grooming"];
+const talks = (kindOrMode: string | null | undefined) => TALKS.includes(kindOrMode ?? "");
 const brainstorming = (t: Task) =>
-  (t.kind === "brainstorm" || t.mode === "brainstorm") && BRAINSTORMING.includes(t.state);
+  (talks(t.kind) || talks(t.mode)) && BRAINSTORMING.includes(t.state);
 
 // A brainstorm that is over, wrapped up: its issue is back in the backlog, not on the graph.
 const brainstormed = (t: Task) =>
-  t.mode === "brainstorm" && ["done", "error", "interrupted", "cancelled"].includes(t.state);
+  talks(t.mode) && ["done", "error", "interrupted", "cancelled"].includes(t.state);
 
 // A card of the Brainstorm tab. `task`: null for one just started from the backlog.
 export interface BrainstormCard {
@@ -326,7 +329,7 @@ export function graphOf(
 // comment, on the graph when an arrow touches it): starting it answers them first, or ends the
 // brainstorm with a work run.
 export const waitsForAnswers = (t: Task) =>
-  inChip("input", t) && (t.kind === "issue" || t.kind === "brainstorm");
+  inChip("input", t) && (t.kind === "issue" || talks(t.kind));
 
 // "1st", "2nd", "3rd", "4th", "11th", "21st": by the locale's ordinal forms.
 // Every form Intl.PluralRules has a key, so a language whose ordinals use `zero` or `many` can
@@ -358,7 +361,7 @@ export const unqueueable = (t: Task) =>
   t.state === "queued" &&
   !!t.position &&
   t.number !== null &&
-  (t.kind === "issue" || t.kind === "research" || (t.kind === "brainstorm" && !t.runs.length));
+  (t.kind === "issue" || t.kind === "research" || (talks(t.kind) && !t.runs.length));
 
 // Whether it can wait for another issue instead (Queue after…, a drop on a node's middle): not
 // when its queued comments only reply to its last run (the listener's `canWait`).
@@ -468,7 +471,7 @@ export const movable = (
 
 // An open issue's task whose last run was stopped, failed or cut short by a restart.
 const stopped = (t: Task) =>
-  ["cancelled", "error", "interrupted"].includes(t.state) && !t.closed && t.mode !== "brainstorm";
+  ["cancelled", "error", "interrupted"].includes(t.state) && !t.closed && !talks(t.mode);
 
 // The work queue's lists besides the backlog: the issues waiting for others, less those a
 // Start or Remove on its way takes out of their wait; those waiting for answers, less those an

@@ -446,6 +446,39 @@ test("prompts: a brainstorm proposes follow-up issues and files the kept ones", 
   assert.match(liveMessage("brainstorm", "Hi"), /new issues only for kept follow-ups/);
 });
 
+test("prompts: a grooming reviews the open issues in batches, and applies what was agreed at /stop (#585)", () => {
+  for (const mode of ["grooming", "grooming-stop"]) {
+    const text = promptFor(issue, { mode, text: "", settings, config, grant });
+    assert.match(
+      text,
+      /^Groom the backlog of org\/repo with the maintainer, on GitHub issue #12\./,
+    );
+    assert.match(text, /Never write or edit code, create a branch, commit, push or open a pull/);
+    // Open issues only, without the inbox issues.
+    assert.match(text, /gh issue list --state open/);
+    assert.match(text, /without this issue and the inbox issues/);
+    // Comments on other issues as agreed; edits, labels and closes wait for the wrap-up.
+    assert.match(text, /Don't edit, label or close any issue before the wrap-up/);
+    assert.match(text, /--reason "not planned"/);
+    assert.match(text, /--reason duplicate/);
+    assert.match(text, /closing one as completed is refused/);
+  }
+  assert.match(
+    firstMessage({ mode: "grooming-stop", text: "", started: true }),
+    /^The maintainer ends the grooming here\. Wrap up as in step 4 .*apply the changes that were agreed/,
+  );
+  assert.match(
+    firstMessage({ mode: "grooming-stop", text: "Skip #4.", started: false }),
+    /^The maintainer ends the grooming here, adding:\n\nSkip #4\.\n\nWrap up/,
+  );
+  assert.match(
+    firstMessage({ mode: "grooming", text: "Hm", restored: true, started: false }),
+    /^Hm\n\n\(The grooming resumes after a pause/,
+  );
+  assert.equal(firstMessage({ mode: "grooming", text: "Go", started: false }), "Go");
+  assert.match(liveMessage("grooming", "Hi"), /^New comment on the issue: Hi\n\n\(Still grooming/);
+});
+
 test("live messages: what Claude reads for a comment delivered mid-run", () => {
   assert.match(
     liveMessage("brainstorm", "Hi"),
@@ -1108,6 +1141,8 @@ test("prompts: the repo's `language` closes every mode's prompt; without it, not
     "work without pull": [issue, { mode: "work", capabilities: [] }],
     brainstorm: [issue, { mode: "brainstorm" }],
     stop: [issue, { mode: "stop" }],
+    grooming: [issue, { mode: "grooming" }],
+    "grooming-stop": [issue, { mode: "grooming-stop" }],
     idea: [issue, { mode: "idea" }],
     bug: [issue, { mode: "bug" }],
     discussion: [issue, { mode: "discussion" }],

@@ -77,7 +77,7 @@ test("/mode with a name the repo doesn't have: a reply listing its modes, no run
     [
       "org/repo",
       12,
-      "Unknown mode `foo`. The modes here: `work`, `brainstorm`, `onboarding`, `research` (not granted here), `policy`. Pick one with a `/mode <name>` line.",
+      "Unknown mode `foo`. The modes here: `work`, `brainstorm`, `onboarding`, `research` (not granted here), `grooming`, `policy`. Pick one with a `/mode <name>` line.",
     ],
   ]);
   // The repo's own modes are listed too.
@@ -86,7 +86,7 @@ test("/mode with a name the repo doesn't have: a reply listing its modes, no run
   assert.equal(own.mode, null);
   assert.match(
     own.replies[0][2],
-    /^Unknown mode `reveiw`\. The modes here: `work`, `brainstorm`, `onboarding`, `research` \(not granted here\), `policy`, `audit`\./,
+    /^Unknown mode `reveiw`\. The modes here: `work`, `brainstorm`, `onboarding`, `research` \(not granted here\), `grooming`, `policy`, `audit`\./,
   );
   assert.equal((await modeOf({ trigger: "work", modeLine: "audit" }, modes)).mode, "audit");
 });
@@ -303,6 +303,32 @@ test("/mode brainstorm discusses; a comment goes on in it; /stop wraps it up; th
   // The trigger alone implements: work, the brainstorm over.
   assert.equal((await modeOf({ trigger: "work" }, "", opts)).mode, "work");
   assert.equal(brainstorms.get(key), undefined);
+});
+
+test("/mode grooming: a conversation like a brainstorm, which /stop wraps up in grooming-stop (#585)", async (t) => {
+  const brainstorms = brainstormsOf(t);
+  const opts = { brainstorms, issueModes: createIssueModes() };
+  const key = "org/repo#12";
+  const first = await modeOf({ trigger: "work", modeLine: "grooming" }, "", opts);
+  assert.deepEqual([first.mode, first.replies], ["grooming", []]);
+  assert.deepEqual(
+    [brainstorms.get(key).status, brainstorms.get(key).mode],
+    ["active", "grooming"],
+  );
+  // A comment goes on in it, after a pause too.
+  assert.equal((await modeOf({}, "", opts)).mode, "grooming");
+  t.mock.timers.tick(60000);
+  assert.equal(brainstorms.get(key).status, "idle");
+  assert.equal((await modeOf({}, "", opts)).mode, "grooming");
+  assert.equal(brainstorms.get(key).status, "active");
+  // "/stop": the grooming's own wrap-up, not a brainstorm's.
+  assert.equal((await modeOf({ trigger: "stop" }, "", opts)).mode, "grooming-stop");
+  assert.equal(brainstorms.get(key).status, "stopped");
+  assert.equal((await modeOf({}, "", opts)).mode, null);
+  // "/mode brainstorm" then makes it a brainstorm, whose "/stop" is a brainstorm's again.
+  assert.equal((await modeOf({ modeLine: "brainstorm" }, "", opts)).mode, "brainstorm");
+  assert.equal((await modeOf({}, "", opts)).mode, "brainstorm");
+  assert.equal((await modeOf({ trigger: "stop" }, "", opts)).mode, "stop");
 });
 
 test("/mode work alone moves a brainstorm to work; without one or a session, nothing", async (t) => {

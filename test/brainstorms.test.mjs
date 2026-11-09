@@ -19,6 +19,7 @@ test("brainstorms: active, idle once the deadline passes, restored, stopped, end
     number: 12,
     status: "active",
     deadline: 60000,
+    mode: "brainstorm",
   });
 
   // A reply on its way keeps it active.
@@ -37,12 +38,38 @@ test("brainstorms: active, idle once the deadline passes, restored, stopped, end
   brainstorms.stop(key);
   const again = createBrainstorms({ brainstorms: await maps.again("brainstorms"), ...options });
   assert.deepEqual(again.list(), [
-    { key, repo: "org/repo", number: 12, status: "stopped", deadline: 240000 },
+    { key, repo: "org/repo", number: 12, status: "stopped", deadline: 240000, mode: "brainstorm" },
   ]);
   brainstorms.end(key);
   assert.equal(brainstorms.get(key), undefined);
   assert.deepEqual(await stored(), {});
   brainstorms.end(key); // nothing to end
+});
+
+test("brainstorms: a grooming is kept as one, with its mode; one kept without a mode stays so", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout", "Date"] });
+  const maps = mapStore();
+  const old = await maps.map("brainstorms");
+  // Kept before groomings (#585): no `mode`, a brainstorm's.
+  old.set("org/repo#3", { repo: "org/repo", number: 3, status: "idle", deadline: 0 });
+  const options = { idleMs: 1000, busy: () => false, log: () => {}, now: Date.now };
+  const brainstorms = createBrainstorms({ brainstorms: old, ...options });
+  assert.equal(brainstorms.get("org/repo#3").mode, undefined);
+  assert.equal(brainstorms.activate("org/repo#3", { repo: "org/repo", number: 3 }), true);
+  assert.equal(brainstorms.get("org/repo#3").mode, "brainstorm");
+  brainstorms.activate("org/repo#4", { repo: "org/repo", number: 4 }, "grooming");
+  t.mock.timers.tick(1000);
+  assert.deepEqual(brainstorms.get("org/repo#4"), {
+    repo: "org/repo",
+    number: 4,
+    status: "idle",
+    deadline: 1000,
+    mode: "grooming",
+  });
+  brainstorms.stop("org/repo#4");
+  const again = createBrainstorms({ brainstorms: await maps.again("brainstorms"), ...options });
+  assert.equal(again.get("org/repo#4").mode, "grooming");
+  assert.equal(again.get("org/repo#4").status, "stopped");
 });
 
 test("brainstorms: the next copy arms the idle timer of active ones, which fires once", async () => {

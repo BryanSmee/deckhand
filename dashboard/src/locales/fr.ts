@@ -128,6 +128,7 @@ export const fr = {
   "kind.idea": "Idée",
   "kind.bug": "Rapport de bug",
   "kind.research": "Recherche",
+  "kind.grooming": "Tri",
   "kind.issue": "Issue",
 
   "runKind.work": "Travail",

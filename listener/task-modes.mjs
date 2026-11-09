@@ -5,7 +5,7 @@ import { researchRefusal } from "./access.mjs";
 import { grantsBy } from "./grants.mjs";
 import { AGENTS } from "./agents/index.mjs";
 import { taskKey } from "./events.mjs";
-import { customMode, INBOX } from "./modes.mjs";
+import { customMode, INBOX, wrapUpOf } from "./modes.mjs";
 import { sessionNames } from "./sandbox-spec.mjs";
 import { CONFIG_FILE, modeNames } from "./repo-config.mjs";
 import { itemMay, startAction } from "./permissions.mjs";
@@ -30,10 +30,10 @@ export function createTaskModes(ctx) {
   // Whether `item`'s author may do `action` there (permissions.mjs).
   const may = (item, action, what) => itemMay(ctx.permissions, log, item, action, what);
 
-  // What a comment asks for: "work", "brainstorm", "stop" (wrap a brainstorm up) or one of the
-  // repo's own modes (its config's `modes:`); null when it doesn't reach Claude. A "/mode"
-  // line picks the mode, with or without a trigger line; without either, a comment goes on in
-  // the issue's current mode. Keeps the issue's brainstorm and mode state up to date, once the
+  // What a comment asks for: "work", "brainstorm", "grooming", "stop" (wrap either up: its
+  // wrap-up's mode, wrapUpOf()) or one of the repo's own modes (its config's `modes:`); null
+  // when it doesn't reach Claude. A "/mode" line picks the mode, with or without a trigger line;
+  // without either, a comment goes on in the issue's current mode. Keeps the issue's brainstorm and mode state up to date, once the
   // policies allow the run (null when they don't).
   async function modeOf(item, key, name) {
     // The inbox issue or the discussion category is the trigger (workItem()), the dashboard's
@@ -60,10 +60,10 @@ export function createTaskModes(ctx) {
     if (wanted === "research") return startResearch(item, key);
     if (wanted === "review") return startReview(item, key);
     if (wanted === "policy") return policyDryRun(item);
-    // A comment on the issue itself continues its brainstorm; one on its pull request is work.
-    if (wanted === "brainstorm" || (!wanted && ctx.brainstorms.get(key) && onIssue(item))) {
-      return brainstorm(item, key, wanted);
-    }
+    // A comment on the issue itself continues its brainstorm (or grooming); one on its pull
+    // request is work.
+    if (["brainstorm", "grooming"].includes(wanted)) return brainstorm(item, key, wanted);
+    if (!wanted && ctx.brainstorms.get(key) && onIssue(item)) return brainstorm(item, key, null);
     // Without a trigger line, a comment only continues work the agent already started (a
     // brainstorm's session is not work's: sandbox-spec.mjs sessionName()).
     if (!wanted && !(await hasSession(key, name, false))) {
@@ -227,22 +227,28 @@ export function createTaskModes(ctx) {
     return null;
   }
 
+  // A brainstorm, or a grooming (`wanted`, else the conversation the issue is in: one kept
+  // before grooming existed is a brainstorm).
   async function brainstorm(item, key, wanted) {
-    if (!wanted && ctx.brainstorms.get(key).status === "stopped") {
+    const b = ctx.brainstorms.get(key);
+    if (!wanted && b.status === "stopped") {
       return skip(`#${item.number}: brainstorm stopped and no trigger line`);
     }
-    if (!(await allowed(item, "brainstorm", key))) return null;
+    const mode = wanted ?? b.mode ?? "brainstorm";
+    if (!(await allowed(item, mode, key))) return null;
     ctx.issueModes.set(key, null);
-    item.restored = ctx.brainstorms.activate(key, item);
-    return "brainstorm";
+    item.restored = ctx.brainstorms.activate(key, item, mode);
+    return mode;
   }
 
+  // "/stop": the wrap-up of the issue's conversation, a brainstorm's or a grooming's.
   async function stopBrainstorm(item, key) {
     const b = ctx.brainstorms.get(key);
     if (!b || b.status === "stopped") return skip(`#${item.number} has no brainstorm to stop`);
-    if (!(await allowed(item, "stop", key))) return null;
+    const mode = wrapUpOf(b.mode ?? "brainstorm");
+    if (!(await allowed(item, mode, key))) return null;
     ctx.brainstorms.stop(key);
-    return "stop";
+    return mode;
   }
 
   // The reply to a "/mode" Claude can't run: the modes there are. No run starts.

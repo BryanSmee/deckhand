@@ -490,6 +490,14 @@ test("brainstorms go to the column, from a reply on its way to the wrap-up; over
   expect(linked.nodes[0].task?.key).toBe("org/app#1");
 });
 
+test("a grooming is a brainstorm's kind of conversation: in the column, then back in the backlog (#585)", () => {
+  const g = (n: number, state: Task["state"]) =>
+    task(n, { kind: "grooming", mode: "grooming", state });
+  const tasks = [g(1, "brainstorm"), g(2, "idle-brainstorm"), g(3, "stopping"), g(4, "done")];
+  expect(brainstormsOf(tasks).map((c) => c.number)).toEqual([1, 2, 3]);
+  expect(graphOf(tasks, [], []).nodes.map((n) => n.number)).toEqual([]);
+});
+
 test("brainstorms pending: a start in brainstorm mode or a stop stays in the column, work leaves it", () => {
   const sent = (p: WorkAction): Pending => ({ repo: "org/app", title: "From the backlog", ...p });
   const tasks = [

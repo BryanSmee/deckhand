@@ -168,7 +168,7 @@ first (again after a push to its default branch).
 
 **Where they are asked**: each dashboard route needs its action (the backlog, its counts in
 the repositories list and a discussion's thread `tasks:read`; starting, queueing or laying out work, the inbox, Analyze, a
-discussion, onboarding and a chat's creation and messages `runs:start:<mode>` for the mode they start (`chat` for a chat), wrapping a brainstorm up `runs:start:stop`; cancelling, rerunning,
+discussion, onboarding and a chat's creation and messages `runs:start:<mode>` for the mode they start (`chat` for a chat), wrapping a brainstorm up `runs:start:stop` (a grooming's `runs:start:grooming-stop` too); cancelling, rerunning,
 answering, Review and Fix, dismissing, lanes and the run order `runs:manage`, and what starts a
 run among them (a rerun, Review, Fix, answers a session goes on with) its mode's start too, before
 anything is posted; a repository's config and its refresh `repo:config:read`; Settings › Server,
@@ -319,7 +319,8 @@ operator's layer, under the operator's files:
   [the push input](policy-inputs.md#the-push-input)), with the deny rules that are exceptions with a reason (a
   brainstorm doesn't comment, a run never deletes a comment or resolves a person's thread). Work
   runs (work, fix, CI fix and conflict runs) and the repository's own `modes:` share
-  `mode-work.rego`; brainstorms and `/stop` `mode-brainstorm.rego`; then
+  `mode-work.rego`; brainstorms and `/stop` `mode-brainstorm.rego`; groomings and their
+  `/stop` `mode-grooming.rego` ([Grooming](modes.md#grooming)); then
   `mode-idea.rego`, `mode-bug.rego`, `mode-discussion.rego`, `mode-onboarding.rego`,
   `mode-analyze.rego`, `mode-review.rego`, `mode-research.rego` (research gets no GitHub token,
   so it never reaches the gateway), `mode-chat.rego` (the dashboard's chats: the code, its setup

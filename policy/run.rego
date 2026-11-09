@@ -11,9 +11,9 @@ package deckhand
 # Every mode runs on an issue; on a pull request or a discussion, all but these.
 allow_run if input.target.kind == "issue"
 
-# Brainstorms, their wrap-up (`/stop`) and onboarding are conversations on an issue: a pull
-# request's comments are about its code.
-allow_run if not input.mode in {"brainstorm", "stop", "onboarding"}
+# Brainstorms, groomings, their wrap-ups (`/stop`) and onboarding are conversations on an issue:
+# a pull request's comments are about its code.
+allow_run if not input.mode in {"brainstorm", "stop", "grooming", "grooming-stop", "onboarding"}
 
 # A comment that goes on in the issue's current mode, without a trigger or `/mode` line: the
 # conversation started where it was allowed (the onboarding pull request's comments go on in

@@ -9,7 +9,7 @@ import { StringDecoder } from "node:string_decoder";
 import { idOf } from "./agents/common.mjs";
 import { agentFor, entryName } from "./agents/index.mjs";
 import { entryLabel } from "./agents/select.mjs";
-import { kindOf } from "./modes.mjs";
+import { kindOf, talkOf } from "./modes.mjs";
 import { asksInput, replyQuestions, withoutMarker } from "./questions.mjs";
 import { listDir, readJson, setAside } from "../lib/files.mjs";
 import { storable, values } from "../lib/store.mjs";
@@ -251,7 +251,7 @@ export function newRecord(
     key,
     kind: kindOf(mode, task.kind),
     // work, brainstorm, idea, bug, discussion or one of the repo's own modes.
-    taskMode: mode === "stop" ? "brainstorm" : mode,
+    taskMode: talkOf(mode),
     repo: task.repo,
     title,
     replyTo,
