@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { test } from "node:test";
 import {
   createHistory,
@@ -8,7 +10,9 @@ import {
   UNNAMED_SHOTS,
 } from "../listener/history.mjs";
 import { openStore } from "../lib/store.mjs";
-import { saveSummary, summaryKey } from "../listener/runlog.mjs";
+import { leftInData } from "../listener/config.mjs";
+import { loadRuns, moveSummaries, saveSummary, summaryKey } from "../listener/runlog.mjs";
+import { tempDir } from "./helpers.mjs";
 
 const DAY = 24 * 60 * 60 * 1000;
 const NOW = 1000 * DAY;
@@ -256,4 +260,48 @@ test("retention: the folders an older release kept that no run names go at the b
   ctx.config.logRetentionDays = 0;
   await history.prune();
   assert.deepEqual(removed, [old]);
+});
+
+test("retention: an old run's log the runner never took isn't summarized again at the next start (#779)", async (t) => {
+  const { store, removeLog, removeShots } = fixture();
+  // What a release before #619 left in logs/: a run past the days, its summary and its log, which
+  // the runner never took (moveLogs() read such a log again at every start, #697).
+  const dataDir = tempDir(t);
+  const logDir = join(dataDir, "logs");
+  mkdirSync(logDir);
+  const id = "deckhand-org-repo-1-old";
+  const record = {
+    id,
+    key: "org/repo#1",
+    startedAt: NOW - 100 * DAY,
+    finishedAt: NOW - 100 * DAY,
+    status: "ok",
+  };
+  writeFileSync(join(logDir, `${id}.json`), JSON.stringify(record));
+  const line = JSON.stringify({ type: "listener", event: "note", at: record.startedAt }) + "\n";
+  writeFileSync(join(logDir, `${id}.log`), line);
+  // The orchestrator's start (server.mjs): the summaries moved, the list loaded, then pruned.
+  const start = async () => {
+    const moved = await moveSummaries(logDir, store, { log: () => {} });
+    const runs = await loadRuns(store, { log: () => {} });
+    const byId = new Map(runs.map((r) => [r.id, r]));
+    const gone = await pruneRuns({
+      runs,
+      byId,
+      store,
+      days: 90,
+      now: NOW,
+      needed: () => false,
+      removeLog,
+      removeShots,
+    });
+    return { moved, listed: runs.length, gone: gone.length };
+  };
+  assert.deepEqual(await start(), { moved: 1, listed: 0, gone: 1 });
+  assert.equal(await store.get(summaryKey(id)), null);
+  // The next start finds nothing to summarize: the log stays as it was, named for the operator.
+  assert.deepEqual(await start(), { moved: 0, listed: 0, gone: 0 });
+  assert.equal(await store.get(summaryKey(id)), null);
+  assert.equal(readFileSync(join(logDir, `${id}.log`), "utf8"), line);
+  assert.deepEqual(leftInData(dataDir, "store", new Set(["logs"])), [`logs/${id}.log`]);
 });
