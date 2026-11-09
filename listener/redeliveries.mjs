@@ -47,6 +47,15 @@ export function failedDeliveries(list) {
   return failed.sort((a, b) => Date.parse(a.delivered_at) - Date.parse(b.delivered_at));
 }
 
+// A delivery list (or one delivery) from its JSON text, each `id` kept as GitHub wrote it, a
+// string: delivery IDs are past 2^53 (about 3.85e18 in 2026), which JSON.parse rounds to
+// another delivery's, and GitHub answers 404 for that one (#1078). Other numbers stay numbers.
+export function parseDeliveries(text) {
+  return JSON.parse(text, (key, value, context) =>
+    key === "id" && typeof value === "number" ? context.source : value,
+  );
+}
+
 // The `cursor` of a Link header's next page, or null on the last one.
 export function nextCursor(link) {
   const next = /<([^>]+)>;\s*rel="next"/.exec(link ?? "");
@@ -80,7 +89,7 @@ export function createRedeliveries({
       const query = `per_page=${PER_PAGE}${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`;
       const res = await github.asApp("GET", `/app/hook/deliveries?${query}`);
       if (!res.ok) throw new Error(`GitHub GET /app/hook/deliveries: ${res.status}`);
-      const page = await res.json();
+      const page = parseDeliveries(await res.text());
       if (!Array.isArray(page)) throw new Error("GitHub GET /app/hook/deliveries: no list");
       all.push(...page);
       if (page.some((d) => Date.parse(d.delivered_at) < since)) break;
@@ -116,6 +125,7 @@ export function createRedeliveries({
         }
         // Not asked: the next scan tries again. The others are saved whatever happens.
         if (!res?.ok) {
+          if (res) log(`Redeliveries: ${d.guid} (delivery ${d.id}): GitHub answered ${res.status}`);
           await store.delete(askedKey(d.guid));
           continue;
         }

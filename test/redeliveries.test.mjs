@@ -2,7 +2,12 @@
 // failed ones redelivered, the rest left alone.
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { createRedeliveries, failedDeliveries, nextCursor } from "../listener/redeliveries.mjs";
+import {
+  createRedeliveries,
+  failedDeliveries,
+  nextCursor,
+  parseDeliveries,
+} from "../listener/redeliveries.mjs";
 import { openStore } from "../lib/store.mjs";
 import { recordingFetch } from "./helpers.mjs";
 
@@ -89,6 +94,16 @@ test("failed deliveries: never the events nothing reads, a status per state and 
   assert.equal(await redeliveries.scan(), 2);
   assert.deepEqual(github.redelivered(), ["1", "2"]);
   assert.ok(!logs.some((line) => /status|check_suite/.test(line)), logs.join("\n"));
+});
+
+test("delivery IDs past 2^53 are kept as GitHub wrote them, other numbers stay numbers", () => {
+  const text = '[{"id":3853120732796035072,"guid":"g","status_code":503,"installation_id":42}]';
+  // What JSON.parse would make of it: another delivery's ID.
+  assert.notEqual(String(JSON.parse(text)[0].id), "3853120732796035072");
+  assert.deepEqual(parseDeliveries(text), [
+    { id: "3853120732796035072", guid: "g", status_code: 503, installation_id: 42 },
+  ]);
+  assert.deepEqual(parseDeliveries('{"id":12,"guid":"g"}'), { id: "12", guid: "g" });
 });
 
 test("the Link header's next cursor, none on the last page", () => {
@@ -229,4 +244,41 @@ test("each redelivery GitHub agreed to is counted, not those it refused", async 
   refuse = false;
   assert.equal(await redeliveries.scan(), 1);
   assert.equal(counted, 2);
+});
+
+test("a delivery whose ID is past 2^53 is redelivered by its exact ID", async () => {
+  // GitHub's text as it sends it: the IDs as JSON numbers no double holds.
+  const body = JSON.stringify([delivery("ID_A", "second", 1, 0), delivery("ID_B", "first", 2, 503)])
+    .replace('"ID_A"', "3853120732796035072")
+    .replace('"ID_B"', "3853120732796034999");
+  const { fetch, calls } = recordingFetch(({ method }) =>
+    method === "POST"
+      ? new Response(null, { status: 202 })
+      : new Response(body, { headers: { "content-type": "application/json" } }),
+  );
+  const asApp = (method, path) => fetch(`https://api.example${path}`, { method });
+  const redeliveries = createRedeliveries({ app: () => ({ asApp }), now: () => NOW });
+  assert.equal(await redeliveries.scan(), 2);
+  assert.deepEqual(
+    calls.filter((c) => c.method === "POST").map((c) => c.path),
+    [
+      "/app/hook/deliveries/3853120732796034999/attempts",
+      "/app/hook/deliveries/3853120732796035072/attempts",
+    ],
+  );
+});
+
+test("a redelivery GitHub refuses is logged with its status", async () => {
+  const github = fakeApp(
+    { "": [delivery(7, "lost", 1, 0)] },
+    { attempt: () => Response.json({ message: "Not Found" }, { status: 404 }) },
+  );
+  const logs = [];
+  const redeliveries = createRedeliveries({
+    app: github.app,
+    now: () => NOW,
+    log: (line) => logs.push(line),
+  });
+  assert.equal(await redeliveries.scan(), 0);
+  assert.deepEqual(logs, ["Redeliveries: lost (delivery 7): GitHub answered 404"]);
 });
