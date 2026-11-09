@@ -185,6 +185,14 @@ test("format: the listener's lines", () => {
     "Starting (opus, high effort, fast)",
   );
   assert.equal(start({ mode: "continue", kind: "issue" }), "Continuing the session");
+  // A wrap-up names the conversation it ends; a log from before #1081 has no taskMode.
+  const wrapUp = { mode: "wrap-up", kind: "brainstorm" };
+  assert.equal(start({ ...wrapUp, taskMode: "brainstorm" }), "Wrapping up the brainstorm");
+  assert.equal(
+    start({ ...wrapUp, kind: "grooming", taskMode: "grooming" }),
+    "Wrapping up the grooming",
+  );
+  assert.equal(start(wrapUp), "Wrapping up the brainstorm");
   assert.equal(start({ mode: "start", kind: "pr", taskMode: "audit" }), "Starting the audit mode");
   assert.equal(
     start({ mode: "continue", kind: "issue", reason: "conflict" }),

@@ -353,10 +353,12 @@ const STARTING = {
   chat: "Starting a chat",
 };
 
+// A wrap-up says the conversation it ends (`taskMode`, talkOf()): a log without it is a
+// brainstorm's, the only one there was before #1081.
 const GOING_ON = {
-  "wrap-up": "Wrapping up the brainstorm",
-  restore: "Restoring the session after a pause",
-  continue: "Continuing the session",
+  "wrap-up": (e) => `Wrapping up the ${e.taskMode ?? "brainstorm"}`,
+  restore: () => "Restoring the session after a pause",
+  continue: () => "Continuing the session",
 };
 
 // Runs the listener started itself (conflicts.mjs, reviews.mjs).
@@ -402,7 +404,7 @@ function listenerEntries(e, agent, seen) {
   }
   const own = e.taskMode && e.taskMode !== "work" ? `Starting the ${e.taskMode} mode` : null;
   const what =
-    (REASONS[e.reason] ?? GOING_ON[e.mode] ?? STARTING[e.kind] ?? own ?? "Starting") +
+    (REASONS[e.reason] ?? GOING_ON[e.mode]?.(e) ?? STARTING[e.kind] ?? own ?? "Starting") +
     (e.model ? ` (${e.model}, ${e.effort} effort${e.speed === "fast" ? ", fast" : ""})` : "");
   // A fallback's run (runs.mjs): what it took over from, and why.
   const fell = e.fallback && !e.fallback.sticky;
