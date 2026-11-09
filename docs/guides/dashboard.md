@@ -222,3 +222,40 @@ it has errors), its Capabilities tab (for each mode, what a run gets, the file t
 capability and what stops it), and the raw file. Anyone signed in with `repo:config:read` on
 that repository sees it, grants included. Its **Refresh** reads it again (at most every 5 seconds); changing it is a commit on
 the default branch.
+
+## Run data
+
+In **Settings → Repositories → a repository → Run data**, compare retained runs by
+repository, agent, model, effort and triggering user, over the last 7, 30 or 90 days or all
+retained history. A pull request task's **Run data** tab, after its runs' tabs, shows the same cohort by work,
+review, review fix, CI fix and other recorded modes; choose a step to see its metrics. Statistics use only recorded data, without agent or GitHub calls.
+
+Runs are selected by their start time. Linked issue and pull request runs count as one issue;
+a standalone pull request also counts as one. Each settings group counts the issues its runs
+touched, so an issue that used several settings appears in several groups. Outcomes and review
+findings belong to those issues' pull requests, not exclusively to one model or user. Group
+outcomes therefore must not be added together, and comparisons across different issues are not
+controlled experiments.
+
+- **Recorded tokens / issue** includes input, cached input and output reported in Claude,
+  Codex or Antigravity turn totals. Codex reports its session's running total, which a run that
+  resumes the session carries on: each run counts only what it added to it. It is over the
+  issues with token data: absent usage is unknown, not zero, and **Runs with token data** gives
+  the coverage.
+  Totals can be partial; they are neither billed dollars nor a subscription's shared allowance.
+  Older summaries and agents without supported usage events remain unknown.
+- **Needs input / runs** counts runs whose final recorded status is `needs-input`.
+- **Findings / reviewed PR** counts must-fix findings in retained review rounds within the
+  period, including findings repeated in later rounds. PRs without recorded rounds are excluded
+  from that average. Fix and CI-fix counts are recorded runs, not configured limits.
+- **Merged / PRs** and **Merged unchanged / PRs** appear side by side, using the latest
+  recorded PR state. The stricter measure compares its head to the last recorded agent push
+  across its retained history. A missing push commit is shown separately as unknown. Fix runs
+  can precede that last push, so **Merged after fix runs** can overlap unchanged merges.
+- **Triggering user** is the last author in the batch that started a run. Automatic runs and
+  history from before this field was recorded are shown as unknown / automatic.
+
+The view respects repository task access and includes runs on issues and pull requests in any
+mode. Discussions and private chats are excluded. Run retention also limits
+these statistics; deleted history is not reconstructed, and a PR's latest recorded outcome can
+change after the selected period.

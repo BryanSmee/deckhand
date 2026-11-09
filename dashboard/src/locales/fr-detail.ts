@@ -70,11 +70,13 @@ export const detail = {
   "detail.policies": "Politiques",
   "detail.latestTab": "Dernière : suit les prochaines exécutions",
   "detail.reviewTab": "Revue",
+  "detail.runDataTab": "Données",
   // The tabs' list ("Thread, runs and review"): each in it, joined by and().
   "detail.tabsThread": "fil",
   "detail.tabsRuns": "exécutions",
   "detail.tabsPolicies": "politiques",
   "detail.tabsReview": "revue",
+  "detail.tabsRunData": "données",
   "detail.back": "Retour",
   "detail.more": "Plus : ouvrir sur GitHub, copier, télécharger",
   "detail.mode": "mode {mode}",

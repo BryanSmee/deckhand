@@ -255,6 +255,8 @@ export function newRecord(
     repo: task.repo,
     title,
     replyTo,
+    // The last triggering author; automatic runs have no user.
+    user: items.findLast((item) => item.author)?.author ?? null,
     // What runs it: the operator's until the repo's settings are read (begin()), on which
     // provider, and why when it is a fallback's or `/agent`'s (entryFor()).
     agent,

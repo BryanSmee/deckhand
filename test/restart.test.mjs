@@ -110,15 +110,21 @@ test("a restored run's pushes go on its record, saved with it", async (t) => {
   );
   await createRestart(ctx).restoreRuns();
   // What the git gateway calls once GitHub took a push.
-  broker.runOf(secret).pushed({ branch: "issue-1-x", at: 1234 });
+  broker.runOf(secret).pushed({ branch: "issue-1-x", at: 1234, head: "commit1" });
   const task = [...ctx.tasks.values()][0];
   assert.equal(task.live.record.branch, "issue-1-x");
   assert.equal(task.live.record.lastPushAt, 1234);
+  assert.equal(task.live.record.lastPushHead, "commit1");
   await task.live.saving;
   const saved = await savedRun(ctx.store, "r1");
   assert.deepEqual([saved.record.branch, saved.record.lastPushAt], ["issue-1-x", 1234]);
+  assert.equal(saved.record.lastPushHead, "commit1");
   assert.deepEqual([task.live.reviewFrom, saved.reviewFrom], ["start1", "start1"]);
   assert.deepEqual([task.live.engine, saved.engine], [true, true]);
+  // A rolling update may still deliver a push from a github service without the commit field.
+  broker.runOf(secret).pushed({ branch: "issue-1-x", at: 2345 });
+  await task.live.saving;
+  assert.equal((await savedRun(ctx.store, "r1")).record.lastPushHead, null);
 });
 
 test("a restored run keeps the issues it created, the comments it posted and the workflow runs it reran, and saves those it adds next", async (t) => {

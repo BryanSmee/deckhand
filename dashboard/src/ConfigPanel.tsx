@@ -9,6 +9,7 @@
 import type { ComponentChildren } from "preact";
 import { useEffect, useState } from "preact/hooks";
 import { useRepoConfig } from "./api";
+import { RunDataPanel } from "./RunData";
 import { Capabilities, capabilityTrouble } from "./Capabilities";
 import { ago, type Tone } from "./format";
 import { t, tx } from "./i18n";
@@ -126,6 +127,7 @@ const TABS: { id: ConfigTab | undefined; label: Plain }[] = [
   { id: undefined, label: "config.tabConfig" },
   { id: "policies", label: "config.tabPolicies" },
   { id: "capabilities", label: "config.tabCapabilities" },
+  { id: "run-data", label: "runData.title" },
 ];
 
 export function ConfigPanel({ repo, tab, row, onRow, onBack, now }: Props) {
@@ -227,20 +229,26 @@ export function ConfigPanel({ repo, tab, row, onRow, onBack, now }: Props) {
           ))}
         </nav>
       </header>
-      {error && (
+      {error && tab !== "run-data" && (
         <p class={styles.failed} role="alert">
           {t("config.unreadable", { error })}
         </p>
       )}
-      {!config && loading && <p class={styles.loading}>{t("config.readingGithub")}</p>}
-      {config &&
+      {!config && loading && tab !== "run-data" && (
+        <p class={styles.loading}>{t("config.readingGithub")}</p>
+      )}
+      {tab === "run-data" ? (
+        <RunDataPanel repo={repo} />
+      ) : (
+        config &&
         (tab === "policies" ? (
           <PolicyConfig config={config} />
         ) : tab === "capabilities" ? (
           <Capabilities config={config} />
         ) : (
           <Body config={config} opened={opened} toggle={toggle} setOpened={setOpened} />
-        ))}
+        ))
+      )}
     </div>
   );
 }

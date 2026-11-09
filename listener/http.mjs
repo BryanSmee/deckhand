@@ -3,6 +3,7 @@
 // with the MCP client's login and scopes (mcp.mjs); and the verified deliveries edge puts on its
 // stream (deliver()). The public server (webhooks, /setup, sign-in, the dashboard's files) is
 // edge's (../edge/http.mjs); the egress policy, which the egress proxy asks, is egress-http.mjs.
+import { runData, DIMENSIONS } from "./run-data.mjs";
 import { board, isLive, runPlaces, STATES } from "./board.mjs";
 import {
   ciDelivery,
@@ -458,6 +459,34 @@ export function createHttp(ctx) {
     if (!user) return res.writeHead(401).end();
     res.setHeader("cache-control", "no-store");
     if (url.pathname === "/api/state") return sendJson(res, await state(user));
+    // RunData (dashboard/src/types.ts): all retained shared runs, before board truncation.
+    if (url.pathname === "/api/run-data") {
+      const filters = Object.fromEntries(
+        [...DIMENSIONS, "task"].map((k) => [k, url.searchParams.get(k)]),
+      );
+      for (const k of ["from", "to"]) {
+        const raw = url.searchParams.get(k);
+        if (raw !== null) {
+          const n = Number(raw);
+          if (!raw || !Number.isSafeInteger(n) || n < 0)
+            return sendJson(res, { error: "Invalid period" }, 400);
+          filters[k] = n;
+        }
+      }
+      if (filters.from != null && filters.to != null && filters.from >= filters.to)
+        return sendJson(res, { error: "Invalid period" }, 400);
+      const shared = ctx.runs.filter((r) => !r.owner);
+      const shows = await seeing(user, [...new Set(shared.map((r) => r.repo))], TASKS, true);
+      return sendJson(
+        res,
+        runData({
+          runs: shared.filter((r) => shows(r.repo)),
+          filters,
+          pull: (key) => ctx.pulls.get(key),
+          reviewed: (repo, number) => ctx.reviews?.entry(repo, number),
+        }),
+      );
+    }
     // Settings › Server and the services' health: server-wide. A decision that failed says so
     // (a 503), as apiRoute() does; the plans in api/state are just left out then.
     if (

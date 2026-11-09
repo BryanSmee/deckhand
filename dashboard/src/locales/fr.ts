@@ -17,6 +17,44 @@ import { review } from "./fr-review";
 import { ui } from "./fr-ui";
 
 export const fr = {
+  "runData.title": "Données des exécutions",
+  "runData.steps": "Données par étape",
+  "runData.step": "Étape",
+  "runData.repo": "Dépôt",
+  "runData.agent": "Agent",
+  "runData.model": "Modèle",
+  "runData.effort": "Effort",
+  "runData.user": "Auteur du déclenchement",
+  "runData.all": "Tous",
+  "runData.unknown": "Inconnu / automatique",
+  "runData.period": "Période",
+  "runData.days7": "7 derniers jours",
+  "runData.days30": "30 derniers jours",
+  "runData.days90": "90 derniers jours",
+  "runData.retained": "Tout l’historique conservé",
+  "runData.refresh": "Actualiser",
+  "runData.loading": "Lecture des données…",
+  "runData.empty": "Aucune exécution ne correspond aux filtres.",
+  "runData.runs": "Exécutions",
+  "runData.tokens": "Jetons enregistrés",
+  "runData.coverage": "Exécutions avec des jetons connus",
+  "runData.needsInput": "Demande de précisions / exécutions",
+  "runData.runsPerIssue": "Exécutions / issue",
+  "runData.tokensPerIssue": "Jetons enregistrés / issue",
+  "runData.findings": "Constats / PR relue",
+  "runData.fixes": "Corrections / corrections CI",
+  "runData.merged": "Fusionnées / PR",
+  "runData.unchanged": "Fusionnées sans modification / PR",
+  "runData.afterFixes": "Fusionnées après corrections",
+  "runData.changed": "Fusionnées avec modifications ultérieures",
+  "runData.unknownMerge": "Fusionnées, dernier push inconnu",
+  "runData.closed": "Fermées sans fusion",
+  "runData.intro":
+    "Compare les issues existantes, sans nouvelle exécution d’agent. Les issues diffèrent et l’historique conservé peut être incomplet.",
+  "runData.method": "Comment lire ces nombres",
+  "runData.caveat":
+    "Les exécutions sont sélectionnées par leur date de début et les résultats sont les derniers enregistrés. Une issue et sa PR liée comptent pour une seule issue. Plusieurs groupes peuvent partager les mêmes issues et constats de PR : leurs résultats ne s’additionnent pas. Les constats incluent ceux des relectures conservées dans la période, même répétés. Les jetons incluent les entrées en cache ; leur total est partiel lorsque la couverture est incomplète. Ce n’est ni une facture ni le quota d’un forfait. Les anciens enregistrements et les agents sans données d’usage restent inconnus. « Sans modification » signifie que la tête de la PR correspond au dernier push enregistré de l’agent ; des corrections peuvent précéder ce push.",
+
   // The language's own name, in its own language: Preferences › Language lists it so.
   "language.name": "Français",
 

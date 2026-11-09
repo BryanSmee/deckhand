@@ -7,11 +7,12 @@
 // its thread first, to read and reply to, with the last reply and Rerun, then its runs. A
 // Policies tab when its pull request's policies decided something (with a badge when one kept
 // it from merging by itself), and a Review tab once Deckhand reviewed it: the last review's
-// findings, follow-ups and comments (ReviewTab.tsx). A phone's log search takes the header's
+// findings, follow-ups and comments (ReviewTab.tsx). A pull request's Run data tab: its runs'
+// numbers by step (RunData.tsx). A phone's log search takes the header's
 // place. Its shortcuts: O opens it on GitHub, A goes to its questions, R reruns, Shift S stops
 // (asking first), Shift R reviews its pull request again and Shift F asks for one more fix
 // round once its review loop is over, [ and ] go through its thread, every run (those without a
-// tab too), its policies and its review.
+// tab too), its policies, its review and its run data.
 import type { ComponentChildren } from "preact";
 import { useEffect, useRef, useState } from "preact/hooks";
 import { useCan } from "./access";
@@ -47,6 +48,7 @@ import { AuthTag, Outcome } from "./Outcome";
 import { heldMerge, PolicyTab } from "./Policies";
 import { getPref } from "./prefs";
 import { Questions } from "./Questions";
+import { RunDataPanel } from "./RunData";
 import { ReviewRounds } from "./ReviewLoop";
 import { ReviewTab } from "./ReviewTab";
 import { RunMenu } from "./RunMenu";
@@ -80,10 +82,11 @@ interface Props {
 
 // The states a run is going on in, which Stop ends.
 const STOPPABLE: Task["state"][] = ["scheduled", "building-image", "working", "stopping"];
-// A discussion's tab before its runs', and the Policies and Review tabs after them.
+// A discussion's tab before its runs', and the Policies, Review and Run data tabs after them.
 const THREAD = "thread";
 const POLICIES = "policies";
 const REVIEW = "review";
+const RUN_DATA = "run-data";
 const PANEL = "task-view";
 // Up to this many runs, each has a tab; past it, the latest and the one shown only.
 const ALL_TABS = 3;
@@ -111,7 +114,7 @@ export function Detail({
   );
   // A discussion's page shows its thread, or a run's log.
   const [showLog, setShowLog] = useState(false);
-  // The task whose Policies or Review tab is open, and which.
+  // The task whose Policies, Review or Run data tab is open, and which.
   const [paneOf, setPaneOf] = useState<{ key: string; id: string } | null>(null);
   // The task whose Stop asks, and the one whose stop is on its way.
   const [confirming, setConfirming] = useState<string | null>(null);
@@ -164,9 +167,10 @@ export function Detail({
   const pane = paneOf?.key === t.key ? paneOf.id : null;
   const policies = decided && pane === POLICIES;
   const reviewShown = reviewed && pane === REVIEW;
-  const thread = discussion && !showLog && !policies && !reviewShown;
+  const runDataShown = !!t.pr && pane === RUN_DATA;
+  const thread = discussion && !showLog && !policies && !reviewShown && !runDataShown;
   const held = heldMerge(t);
-  const logShown = !thread && !policies && !reviewShown && !!r && reads;
+  const logShown = !thread && !policies && !reviewShown && !runDataShown && !!r && reads;
   const hidden = !!touch && searching && logShown;
   // A phone's More menu, for a run's log.
   const menu = !!touch && logShown;
@@ -301,6 +305,7 @@ export function Detail({
       ? [{ id: POLICIES, label: tr("detail.policies"), count: t.decisions!.length }]
       : []),
     ...(reviewed ? [{ id: REVIEW, label: tr("detail.reviewTab") }] : []),
+    ...(t.pr ? [{ id: RUN_DATA, label: tr("detail.runDataTab") }] : []),
   ];
   // "Thread, runs, policies and review", what the tabs are: its first letter as the locale
   // writes it in capital.
@@ -310,17 +315,26 @@ export function Detail({
       tr("detail.tabsRuns"),
       decided && tr("detail.tabsPolicies"),
       reviewed && tr("detail.tabsReview"),
+      t.pr && tr("detail.tabsRunData"),
     ].filter((x): x is string => !!x),
   );
   const tabsLabel = listed.charAt(0).toLocaleUpperCase(locale()) + listed.slice(1);
   const pick = (id: string) => {
-    const aside = id === POLICIES || id === REVIEW;
+    const aside = id === POLICIES || id === REVIEW || id === RUN_DATA;
     setPaneOf(aside ? { key: t.key, id } : null);
     if (aside) return;
     setShowLog(id !== THREAD);
     if (id !== THREAD) onRun(id === t.runs[0]?.id ? null : id);
   };
-  const selected = policies ? POLICIES : reviewShown ? REVIEW : thread ? THREAD : (r?.id ?? "");
+  const selected = policies
+    ? POLICIES
+    : reviewShown
+      ? REVIEW
+      : runDataShown
+        ? RUN_DATA
+        : thread
+          ? THREAD
+          : (r?.id ?? "");
   keys.github = () => (url ? void window.open(url, "_blank", "noreferrer") : false);
   keys.answer = () => {
     const field = root.current?.querySelector<HTMLElement>(
@@ -345,6 +359,7 @@ export function Detail({
     ...t.runs.map((x) => x.id),
     ...(decided ? [POLICIES] : []),
     ...(reviewed ? [REVIEW] : []),
+    ...(t.pr ? [RUN_DATA] : []),
   ];
   keys.nextRun = (i) => {
     const next = order[order.indexOf(selected) + (i === 0 ? 1 : -1)];
@@ -654,6 +669,10 @@ export function Detail({
       ) : reviewShown ? (
         <div id={PANEL} role="tabpanel" class={styles.panel}>
           <ReviewTab key={t.key} task={t} now={now} />
+        </div>
+      ) : runDataShown ? (
+        <div id={PANEL} role="tabpanel" class={styles.panel}>
+          <RunDataPanel key={t.key} repo={t.repo} task={t.key} />
         </div>
       ) : thread ? (
         <div id={PANEL} role="tabpanel" class={styles.panel}>

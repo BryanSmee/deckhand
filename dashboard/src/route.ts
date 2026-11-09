@@ -22,7 +22,7 @@ export type Page = "tasks" | "board" | "settings" | "chats";
 // Settings' tabs besides Repositories (its first, and the one with no `section`).
 export type Section = "preferences" | "clients" | "server" | "access";
 // A repository's settings' tabs besides Config (its first, and the one with no `configTab`).
-export type ConfigTab = "policies" | "capabilities";
+export type ConfigTab = "policies" | "capabilities" | "run-data";
 
 export interface Route {
   repo: string | null; // null: All
@@ -52,7 +52,7 @@ export function parseRoute(hash: string): Route {
   const [path, query = ""] = h.slice(1).split("?", 2);
   // Settings: Repositories (#/settings alone too), Preferences, MCP clients, Server or Access.
   const repos =
-    /^(?:settings\/repositories|repositories)(?:\/([\w.-]+\/[\w.-]+)(?:\/(policies|capabilities))?)?$/.exec(
+    /^(?:settings\/repositories|repositories)(?:\/([\w.-]+\/[\w.-]+)(?:\/(policies|capabilities|run-data))?)?$/.exec(
       path,
     );
   if (repos) {
