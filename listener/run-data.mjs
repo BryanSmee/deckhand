@@ -102,7 +102,15 @@ export function runData({ runs, pull = () => null, reviewed = () => null, filter
   }
   return {
     options: Object.fromEntries(
-      DIMENSIONS.map((d) => [d, [...new Set(all.map((r) => value(r, d)))].sort()]),
+      // One option per value whatever its case, as filtering ignores it: the first spelling.
+      DIMENSIONS.map((d) => {
+        const seen = new Map();
+        for (const r of all) {
+          const v = value(r, d);
+          if (!seen.has(v.toLowerCase())) seen.set(v.toLowerCase(), v);
+        }
+        return [d, [...seen.values()].sort()];
+      }),
     ),
     total: metrics(selected),
     groups: group((r) => JSON.stringify(DIMENSIONS.map((d) => value(r, d)))).map(([key, list]) => ({
@@ -114,8 +122,10 @@ export function runData({ runs, pull = () => null, reviewed = () => null, filter
 }
 
 // Turn totals already printed by the agent. Cached input is included once; these are token
-// counts, not dollars or estimates of a subscription's shared allowance.
-export function recordUsage(record, line) {
+// counts, not dollars or estimates of a subscription's shared allowance. Codex reports its
+// thread's running total, carried over when a run resumes it: a run counts what it added to the
+// total its thread had when it started, `sessionTotal(thread)` (the last one an earlier run saved).
+export function recordUsage(record, line, sessionTotal = () => 0) {
   let e;
   try {
     e = JSON.parse(line);
@@ -124,11 +134,25 @@ export function recordUsage(record, line) {
   }
   if (!e || typeof e !== "object") return;
   let tokens;
-  if (record.agent === "codex" && e.type === "turn.completed") {
+  if (record.agent === "codex") {
+    // Read again after a restart, its start keeps the base it had.
+    if (
+      e.type === "thread.started" &&
+      typeof e.thread_id === "string" &&
+      record.usage?.thread !== e.thread_id
+    ) {
+      const base = sessionTotal(e.thread_id);
+      record.usage = { thread: e.thread_id, base: valid(base) ? base : 0 };
+    }
     const u = e.usage;
-    if (valid(u?.input_tokens) && valid(u?.output_tokens))
-      tokens = u.input_tokens + u.output_tokens;
-  } else if ((!record.agent || record.agent === "claude") && e.type === "result") {
+    if (e.type === "turn.completed" && valid(u?.input_tokens) && valid(u?.output_tokens)) {
+      const total = u.input_tokens + u.output_tokens;
+      const base = record.usage?.base ?? 0;
+      record.usage = { ...record.usage, total, tokens: Math.max(0, total - base) };
+    }
+    return;
+  }
+  if ((!record.agent || record.agent === "claude") && e.type === "result") {
     const u = e.usage;
     if (
       valid(u?.input_tokens) &&
@@ -155,3 +179,14 @@ export function recordUsage(record, line) {
   if (valid(tokens)) record.usage = { tokens: (record.usage?.tokens ?? 0) + tokens };
 }
 const valid = (n) => Number.isSafeInteger(n) && n >= 0;
+
+// recordUsage()'s `sessionTotal` for a run: the total the task's latest other run on that thread
+// saved. `runs`: newest first, as ctx.runs is.
+export const sessionTotals = (runs, record) => (thread) =>
+  runs.find(
+    (r) =>
+      r.id !== record.id &&
+      r.key === record.key &&
+      r.usage?.thread === thread &&
+      valid(r.usage.total),
+  )?.usage.total ?? 0;

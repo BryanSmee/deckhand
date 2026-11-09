@@ -449,6 +449,16 @@ function summary(dir) {
   }
 }
 
+// Every saved run's summary.
+function summaries(dir) {
+  const folder = join(dir, "store", "keys", "summaries%2F");
+  try {
+    return readdirSync(folder).map((f) => JSON.parse(readFileSync(join(folder, f), "utf8")).value);
+  } catch {
+    return [];
+  }
+}
+
 // What a run's summary has from its log's first line (runlog.mjs newRecord()).
 const RUN_FIELDS = [
   ...["provider", "credential", "auth", "fallback", "picked", "light", "kind", "title", "repo"],
@@ -1623,9 +1633,19 @@ describe("listener", options, () => {
       /org\/repo#12: running \S+ \(work, continue, codex gpt-6-astra\/medium\)/,
     );
     await settled(github, [99, 100]);
-    const recorded = await until(() => summary(dir), "Codex's saved run");
-    assert.equal(recorded.user, "alice");
-    assert.deepEqual(recorded.usage, { tokens: 90 });
+    // The fake's resumed session reports the same running total: the follow-up added nothing.
+    const recorded = await until(() => {
+      const all = summaries(dir);
+      return all.length === 2 && all.sort((a, b) => a.startedAt - b.startedAt);
+    }, "Codex's saved runs");
+    assert.equal(recorded[0].user, "alice");
+    assert.deepEqual(
+      recorded.map((r) => r.usage),
+      [
+        { thread: "t1", base: 0, total: 90, tokens: 90 },
+        { thread: "t1", base: 90, total: 90, tokens: 0 },
+      ],
+    );
   });
 
   test("the Antigravity CLI: its plan's login stays out, its hosts relayed with the proxy's CA", async (t) => {

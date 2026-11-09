@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { runData, recordUsage } from "../listener/run-data.mjs";
+import { runData, recordUsage, sessionTotals } from "../listener/run-data.mjs";
 const run = (id, extra = {}) => ({
   id,
   key: "org/app#1",
@@ -107,7 +107,7 @@ test("each dimension and the half-open period filters runs, not the board's limi
   assert.equal(runData({ runs, filters: { to: 0 } }).total.runs, 0);
 });
 
-test("turn usage includes cached input once and accumulates; missing or invalid usage is unknown", () => {
+test("turn usage includes cached input once; missing or invalid usage is unknown", () => {
   const codex = { agent: "codex" };
   recordUsage(
     codex,
@@ -116,11 +116,12 @@ test("turn usage includes cached input once and accumulates; missing or invalid 
       usage: { input_tokens: 60, cached_input_tokens: 20, output_tokens: 30 },
     }),
   );
+  // Codex's totals are the thread's so far: the last one replaces the first.
   recordUsage(
     codex,
-    JSON.stringify({ type: "turn.completed", usage: { input_tokens: 10, output_tokens: 2 } }),
+    JSON.stringify({ type: "turn.completed", usage: { input_tokens: 100, output_tokens: 40 } }),
   );
-  assert.equal(codex.usage.tokens, 102);
+  assert.equal(codex.usage.tokens, 140);
   const claude = { agent: "claude" };
   recordUsage(
     claude,
@@ -179,4 +180,38 @@ test("a PR-only cohort finds its outcome on the linked issue's record", () => {
   assert.equal(data.total.issues, 1);
   assert.equal(data.total.merged, 1);
   assert.equal(data.total.unchanged, 1);
+});
+
+test("a Codex run that resumes its thread counts only what it added to the thread's total", () => {
+  const turn = (input, output) =>
+    JSON.stringify({
+      type: "turn.completed",
+      usage: { input_tokens: input, output_tokens: output },
+    });
+  const started = (thread) => JSON.stringify({ type: "thread.started", thread_id: thread });
+  const runs = [];
+  const play = (id, lines) => {
+    const record = { id, key: "org/app#1", agent: "codex" };
+    runs.unshift(record);
+    for (const line of lines) recordUsage(record, line, sessionTotals(runs, record));
+    return record;
+  };
+  const first = play("a", [started("t1"), turn(800, 200)]);
+  const second = play("b", [started("t1"), turn(1100, 300), turn(1300, 400)]);
+  const fresh = play("c", [started("t2"), turn(50, 10)]);
+  assert.equal(first.usage.tokens, 1000);
+  assert.equal(second.usage.tokens, 700);
+  assert.equal(fresh.usage.tokens, 60);
+  // A total below the one resumed (compacted, say) counts nothing rather than a negative.
+  assert.equal(play("d", [started("t1"), turn(100, 0)]).usage.tokens, 0);
+  // A restored run reading its output again counts it once.
+  for (const line of [started("t1"), turn(1100, 300), turn(1300, 400)])
+    recordUsage(second, line, sessionTotals(runs, second));
+  assert.equal(second.usage.tokens, 700);
+});
+
+test("a value spelled in two cases is one filter option", () => {
+  const runs = [run("a", { user: "Alice" }), run("b", { key: "org/app#2", user: "alice" })];
+  assert.deepEqual(runData({ runs }).options.user, ["Alice"]);
+  assert.equal(runData({ runs, filters: { user: "Alice" } }).total.runs, 2);
 });

@@ -74,7 +74,7 @@ test("run data's repository tab has a stable address", () => {
   expect(formatRoute(parseRoute(hash))).toBe(hash);
 });
 
-test("a PR's step selector shows that step's metrics", async () => {
+test("a PR's step selector names its steps and shows that step's metrics", async () => {
   vi.stubGlobal(
     "fetch",
     vi.fn(
@@ -92,6 +92,9 @@ test("a PR's step selector shows that step's metrics", async () => {
   );
   render(<RunDataPanel repo="acme/app" task="acme/app#1" />);
   await screen.findByText("Merged unchanged / PRs");
+  // Named as the run history names it, in the interface's language.
+  expect(screen.getByRole("option", { name: "Review fix" })).toBeTruthy();
+  expect(screen.getByRole("rowheader", { name: "Review fix" })).toBeTruthy();
   fireEvent.change(screen.getByLabelText("Step"), { target: { value: "review-fix" } });
   expect(screen.getByText("1 (1/1)")).toBeTruthy();
 });

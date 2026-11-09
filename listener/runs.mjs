@@ -3,7 +3,7 @@
 // listener picks them up (restart.mjs). Each run's reply, reactions and label once it is over.
 // An external run (#597) has no sandbox: a user's machine claimed its task (claims.mjs) and
 // reports its life through /mcp, its log's lines, its end; the rest is a sandbox run's.
-import { recordUsage } from "./run-data.mjs";
+import { recordUsage, sessionTotals } from "./run-data.mjs";
 import { engineNote, recheckMounts, RunError, validateRun } from "./access.mjs";
 import { agentFor } from "./agents/index.mjs";
 import { authOf, entryLabel, nextFallback, resolved, resolveEntry } from "./agents/select.mjs";
@@ -560,7 +560,7 @@ export function createRuns(ctx) {
     if (phase && enterPhase(live, phase)) ctx.saveLive(task);
     if (at !== null) stamp(live, line, events, at);
     const kept = keep(task, line);
-    recordUsage(live.record, line);
+    recordUsage(live.record, line, sessionTotals(ctx.runs, live.record));
     live.lines.out++;
     ctx.saveLiveSoon?.(task);
     if (!kept) return;
@@ -1446,7 +1446,7 @@ export function createRuns(ctx) {
     // sends each line as its agent prints it, batching only those printed while a call is out.
     stamp(live, line, events, Date.now());
     const kept = keep(task, line);
-    recordUsage(live.record, line);
+    recordUsage(live.record, line, sessionTotals(ctx.runs, live.record));
     live.lines.out++;
     if (!kept) return;
     const event = events.findLast((e) => e.type === "result");

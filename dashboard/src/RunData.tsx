@@ -1,5 +1,6 @@
 import { useEffect, useState } from "preact/hooks";
 import { getJson } from "./api";
+import { runKindName } from "./format";
 import { locale, t } from "./i18n";
 import type { RunData, RunDimension, RunMetrics } from "./types";
 import { Field } from "./ui/Field";
@@ -9,6 +10,13 @@ import styles from "./RunData.module.css";
 const dimensions: RunDimension[] = ["repo", "agent", "model", "effort", "user"];
 const number = (n: number) => n.toLocaleString(locale(), { maximumFractionDigits: 1 });
 const ratio = (n: number, d: number) => (d ? number(n / d) : "—");
+// A step as the run history names it: why the listener started it, or its mode.
+const stepName = (step: string) =>
+  ({
+    conflict: t("runName.conflict"),
+    "review-fix": t("runName.reviewFix"),
+    "ci-fix": t("runName.ciFix"),
+  })[step] ?? runKindName(step);
 const rate = (n: number, d: number) => `${n}/${d}${d ? ` (${number((n / d) * 100)}%)` : ""}`;
 
 export function RunDataPanel({ repo, task }: { repo: string; task?: string }) {
@@ -90,7 +98,7 @@ export function RunDataPanel({ repo, task }: { repo: string; task?: string }) {
             <option value="">{t("runData.all")}</option>
             {(data?.steps ?? []).map((s) => (
               <option key={s.step} value={s.step}>
-                {s.step}
+                {stepName(s.step)}
               </option>
             ))}
           </Field>
@@ -121,7 +129,7 @@ export function RunDataPanel({ repo, task }: { repo: string; task?: string }) {
                   <tbody>
                     {data.steps.map((s) => (
                       <tr key={s.step}>
-                        <th scope="row">{s.step}</th>
+                        <th scope="row">{stepName(s.step)}</th>
                         <td>{s.runs}</td>
                         <td>{s.usageRuns ? number(s.tokens) : "—"}</td>
                         <td>
