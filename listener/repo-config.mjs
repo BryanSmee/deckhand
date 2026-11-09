@@ -46,7 +46,7 @@ const PROJECT_KEYS = ["project", "field", ...PROJECT_STEPS];
 
 const MODE_KEYS = ["instructions", "session", "agent", "model", "effort", "speed"];
 
-const REVIEW_KEYS = [
+export const REVIEW_KEYS = [
   "on",
   "instructions",
   "agent",
