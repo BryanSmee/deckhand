@@ -28,6 +28,7 @@
 // A task whose last run is error, interrupted or cancelled is `rerunnable` when it may run
 // again, and `dismissed` ({ by, at }) while that run is the one someone dismissed from the
 // dashboard (dismissals.mjs): it keeps its state, but no longer asks for attention.
+import { askingRun } from "./dismissals.mjs";
 import { parseKey, taskKey } from "./events.mjs";
 import { APART, talkOf } from "./modes.mjs";
 import { LOOP_STEPS, LOOPING, loopState } from "./reviews.mjs";
@@ -109,12 +110,13 @@ function dismissedOf(t, d) {
   return t.state === last.status ? { by: d.by, at: d.at } : null;
 }
 
-// `aside`: the run's questions were set aside, so only the issue's body asks.
-function questionsFor(t, last, input, aside) {
+// `asker`: the run that stopped to ask and still waits (askingRun()); `aside`: its questions
+// were set aside, so only the issue's body asks.
+function questionsFor(t, asker, input, aside) {
   if (t.state !== "needs-input") return null;
-  // The run's are the latest: one starting takes the label off.
-  if (!aside && last?.status === "needs-input" && last.questions) {
-    return { source: "run", runId: last.id, ...last.questions };
+  // The run's are the latest: one starting takes the label off, not a review of its pull request.
+  if (!aside && asker?.questions) {
+    return { source: "run", runId: asker.id, ...asker.questions };
   }
   return input?.questions ? { source: "issue", ...input.questions } : null;
 }
@@ -127,7 +129,8 @@ function questionsFor(t, last, input, aside) {
 // in the store's `reviews`, for its `review`. `machines`: the tasks routed to a user's machines
 // (claims.mjs board()), each with its `machine`.
 // A task waiting for input carries `questions`: { source, runId?, items, raw }, from the reply
-// of its last run when it stopped to ask, else from its issue's body (questions.mjs).
+// of its run that stopped to ask (askingRun(): its last, or the last before reviews of its pull
+// request), else from its issue's body (questions.mjs).
 export function board({
   runs,
   queued,
@@ -255,7 +258,8 @@ function settle(t, q, b, w, input, aside = null) {
   else if (b?.status === "idle") t.state = "idle-brainstorm";
   else t.state = last ? runState(last) : "done";
   // A run's questions nobody will answer: set aside since it asked.
-  const setAside = !!last && aside?.runId === last.id;
+  const asker = askingRun(t.runs);
+  const setAside = !!asker && aside?.runId === asker.id;
   if (t.state === "needs-input" && setAside) t.state = "done";
   // The label outlasts how the last run ended (a run starting takes it off), not a live one,
   // and is what a wait whose issues are done still waits for (waits.mjs). With the run's
@@ -270,8 +274,13 @@ function settle(t, q, b, w, input, aside = null) {
     t.kind ??= "issue";
     t.since = Math.max(t.since, input.since ?? 0);
   }
-  const asked = questionsFor(t, last, input, setAside && !putBack);
+  const asked = questionsFor(t, asker, input, setAside && !putBack);
   if (asked) t.questions = asked;
+  // Answered, it goes on in the session that asked, where it replied: not a review's since.
+  if (asked?.source === "run") {
+    t.mode = asker.taskMode ?? t.mode;
+    t.replyTo = asker.replyTo ?? t.replyTo;
+  }
   if (b && b.status !== "stopped") {
     // A grooming is one too (modes.mjs `talk`), shown as itself.
     t.kind = b.mode === "grooming" ? "grooming" : "brainstorm";
