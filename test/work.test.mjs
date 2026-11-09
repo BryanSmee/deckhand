@@ -847,6 +847,29 @@ test("GET issues: each issue's labels, from the list", async () => {
   );
 });
 
+test("GET issues: each issue's milestone, from the list, none on the others", async () => {
+  const w = setup({
+    issues: {
+      1: {
+        ...open("Dated"),
+        milestone: { number: 3, title: "v2", due_on: "2026-12-01T08:00:00Z", state: "open", id: 9 },
+      },
+      2: { ...open("Undated"), milestone: { number: 4, title: "Later", due_on: null } },
+      3: { ...open("Plain"), milestone: null },
+    },
+  });
+  const res = await call(w.api, "GET", "/api/repos/org/app/issues");
+  assert.deepEqual(
+    res.body.issues.map((i) => [i.number, i.milestone]),
+    [
+      [1, { number: 3, title: "v2", dueOn: Date.parse("2026-12-01T08:00:00Z") }],
+      [2, { number: 4, title: "Later", dueOn: null }],
+      [3, undefined],
+    ],
+  );
+  assert.equal("milestone" in res.body.issues[2], false);
+});
+
 test("GET issues: a sub-issue's parent when it is listed, read once per backlog read", async () => {
   const sub = (title, extra = {}) => ({ ...open(title), ...extra });
   const w = setup({

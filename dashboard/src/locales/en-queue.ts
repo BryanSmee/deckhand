@@ -36,6 +36,9 @@ export const queue = {
   "queue.noLabel": "No label",
   "queue.clearLabels": "Clear",
   "queue.hideSubIssues": "Hide sub-issues",
+  "queue.byMilestone": "Group by milestone",
+  "queue.noMilestone": "No milestone",
+  "queue.milestoneDue": "due {date}",
 
   // A tab's hint: what its cards' drags do.
   "queue.hintBacklog":

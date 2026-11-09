@@ -1,9 +1,16 @@
-// The Backlog tab's filters: its labels, "Hide sub-issues" and the text field together, kept
-// in this browser (labels per repository, the toggle for every one).
-import { fireEvent, render, screen, within } from "@testing-library/preact";
+// The Backlog tab's filters: its labels, "Hide sub-issues", "Group by milestone" and the text
+// field together, kept in this browser (labels and collapsed sections per repository, the
+// toggles for every one).
+import { act, fireEvent, render, screen, within } from "@testing-library/preact";
 import { beforeEach, expect, test, vi } from "vitest";
 import { Dashboard } from "./App";
-import { labelCounts, narrowBacklog, NO_LABEL } from "./BacklogFilter";
+import {
+  labelCounts,
+  milestoneSections,
+  narrowBacklog,
+  NO_LABEL,
+  NO_MILESTONE,
+} from "./BacklogFilter";
 import { BACKLOG as EMPTY, makeState, mockApi } from "./testUtils";
 import type { Backlog, BacklogIssue } from "./types";
 
@@ -194,4 +201,140 @@ test("a phone: the text field, the labels and the toggle in the sheet", async ()
   tick(area, /^bug/);
   tick(area, /^idea/);
   expect(numbers(area)).toEqual([40, 43]);
+});
+
+const V1 = { number: 1, title: "v1", dueOn: Date.UTC(2026, 11, 1) };
+const V2 = { number: 2, title: "v2", dueOn: Date.UTC(2027, 0, 15) };
+const LATER = { number: 3, title: "Later", dueOn: null };
+const ALPHA = { number: 4, title: "Alpha", dueOn: null };
+const PLANNED: Backlog = {
+  ...EMPTY,
+  issues: [
+    issue(50, "Epic", { milestone: V2, labels: [IDEA], subIssues: 1 }),
+    issue(51, "Ship it", { milestone: V1, labels: [BUG] }),
+    // A sub-issue of #50 in another milestone: hidden with the toggle all the same.
+    issue(52, "Part of the epic", { milestone: V1, parent: 50 }),
+    issue(53, "Someday", { milestone: LATER }),
+    issue(54, "Loose end", { labels: [BUG] }),
+    issue(55, "First", { milestone: ALPHA }),
+    issue(56, "Fix the docs", { milestone: V1, labels: [IDEA] }),
+  ],
+};
+const sectionsOf = (area: HTMLElement) =>
+  within(area)
+    .getAllByRole("button", { expanded: true })
+    .concat(within(area).queryAllByRole("button", { expanded: false }))
+    .filter((b) => b.closest("h3"))
+    .map((b) => b.textContent);
+const header = (area: HTMLElement, name: RegExp) =>
+  within(area)
+    .getAllByRole("button", { name })
+    .find((b) => b.closest("h3"))!;
+
+test("milestoneSections: dated by due date, then undated by title, then No milestone", () => {
+  const sections = milestoneSections(PLANNED.issues);
+  expect(sections.map((s) => [s.key, s.issues.map((i) => i.number)])).toEqual([
+    [1, [51, 52, 56]],
+    [2, [50]],
+    [4, [55]],
+    [3, [53]],
+    [NO_MILESTONE, [54]],
+  ]);
+  expect(sections.at(-1)!.milestone).toBeNull();
+  // On what the filters leave: a milestone none of them is in has no section.
+  const bugs = milestoneSections(narrowBacklog(PLANNED.issues, ["bug"], false));
+  expect(bugs.map((s) => s.key)).toEqual([1, NO_MILESTONE]);
+  expect(milestoneSections(narrowBacklog(PLANNED.issues, [], true))[0].issues).toEqual([
+    PLANNED.issues[1],
+    PLANNED.issues[6],
+  ]);
+  expect(milestoneSections([])).toEqual([]);
+});
+
+test("Group by milestone: offered with a milestone, a section each with its due date and count; kept", async () => {
+  backlog = PLANNED;
+  const { area } = await open();
+  const toggle = within(area).getByRole("button", { name: "Group by milestone" });
+  expect(toggle.getAttribute("aria-pressed")).toBe("false");
+  // Off: the list as it was, no header.
+  expect(numbers(area)).toEqual([50, 51, 52, 53, 54, 55, 56]);
+  expect(within(area).queryByRole("heading")).toBeNull();
+  fireEvent.click(toggle);
+  expect(localStorage.getItem("deckhand.backlog.byMilestone")).toBe("1");
+  expect(numbers(area)).toEqual([51, 52, 56, 50, 55, 53, 54]);
+  expect(sectionsOf(area)).toEqual([
+    "v1due Dec 1, 20263",
+    "v2due Jan 15, 20271",
+    "Alpha1",
+    "Later1",
+    "No milestone1",
+  ]);
+  // The tab's count stays the total.
+  expect(backlogTab().textContent).toMatch(/7$/);
+  // The filters apply inside: an empty section goes.
+  fireEvent.click(within(area).getByRole("button", { name: "Hide sub-issues" }));
+  expect(numbers(area)).toEqual([51, 56, 50, 55, 53, 54]);
+  fireEvent.input(within(area).getByRole("textbox", { name: "Filter the backlog" }), {
+    target: { value: "s" },
+  });
+  expect(sectionsOf(area)).toEqual(["v1due Dec 1, 20262", "Alpha1", "Later1", "No milestone1"]);
+  fireEvent.input(within(area).getByRole("textbox", { name: "Filter the backlog" }), {
+    target: { value: "nothing like it" },
+  });
+  expect(numbers(area)).toEqual([]);
+  expect(within(area).getByText("No open issue matches.")).toBeTruthy();
+});
+
+test("Group by milestone: not offered without a milestone, the list flat even when on", async () => {
+  localStorage.setItem("deckhand.backlog.byMilestone", "1");
+  const { area } = await open();
+  expect(within(area).queryByRole("button", { name: "Group by milestone" })).toBeNull();
+  expect(within(area).queryByRole("heading")).toBeNull();
+  expect(numbers(area)).toEqual([40, 41, 42, 43, 44, 45]);
+});
+
+test("a section collapses from its header, kept per repo; milestones gone drop out", async () => {
+  backlog = PLANNED;
+  localStorage.setItem("deckhand.backlog.byMilestone", "1");
+  localStorage.setItem("deckhand.backlog.collapsed.acme/app", JSON.stringify([99]));
+  const { area } = await open();
+  const v1 = header(area, /^v1/);
+  expect(v1.getAttribute("aria-expanded")).toBe("true");
+  expect(document.getElementById(v1.getAttribute("aria-controls")!)).toBeTruthy();
+  fireEvent.click(v1);
+  expect(header(area, /^v1/).getAttribute("aria-expanded")).toBe("false");
+  expect(numbers(area)).toEqual([50, 55, 53, 54]);
+  fireEvent.click(header(area, /^No milestone/));
+  expect(numbers(area)).toEqual([50, 55, 53]);
+  // #99 isn't listed any more: left out.
+  expect(JSON.parse(localStorage.getItem("deckhand.backlog.collapsed.acme/app")!)).toEqual([
+    1,
+    NO_MILESTONE,
+  ]);
+  expect(localStorage.getItem("deckhand.backlog.collapsed.acme/other")).toBeNull();
+  // The arrows skip a collapsed section's cards.
+  const seen = new Set<string>();
+  for (let i = 0; i < 20; i++) {
+    act(() => void fireEvent.keyDown(document, { key: "ArrowDown" }));
+    const n = (document.activeElement as HTMLElement | null)?.dataset.number;
+    if (n) seen.add(n);
+  }
+  for (const n of ["51", "52", "56", "54"]) expect(seen.has(n)).toBe(false);
+  expect(seen.has("50")).toBe(true);
+  fireEvent.click(header(area, /^v1/));
+  fireEvent.click(header(area, /^No milestone/));
+  expect(numbers(area)).toEqual([51, 52, 56, 50, 55, 53, 54]);
+  expect(localStorage.getItem("deckhand.backlog.collapsed.acme/app")).toBeNull();
+});
+
+test("a phone: the toggle and the sections in the sheet, its rows' buttons as they were", async () => {
+  phone = true;
+  backlog = PLANNED;
+  const { area } = await open();
+  fireEvent.click(within(area).getByRole("button", { name: "Group by milestone" }));
+  expect(numbers(area)).toEqual([51, 52, 56, 50, 55, 53, 54]);
+  const card = within(area).getByText("Ship it").closest("li")!;
+  expect(within(card).getByRole("button", { name: "Start #51" })).toBeTruthy();
+  fireEvent.click(header(area, /^v2/));
+  expect(numbers(area)).toEqual([51, 52, 56, 55, 53, 54]);
 });

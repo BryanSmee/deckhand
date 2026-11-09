@@ -220,7 +220,7 @@ export function createWorkApi({
   const { seed: seedInputs } = createInputSeeder({ config, github, label, inputs, boardKeys, log });
 
   // The repo's open issues, newest first (pull requests are issues to this API: left out),
-  // with their labels, their open sub-issues (subIssues()) and their listed parent
+  // with their labels, their milestone, their open sub-issues (subIssues()) and their listed parent
   // (parentsOf()), and the modes the dashboard offers: onboarding
   // is the listener's own, research only with its grant (access.mjs researchRefusal()).
   async function readBacklog(repo) {
@@ -242,6 +242,7 @@ export function createWorkApi({
         labels: (i.labels ?? []).map(labelOf).filter((l) => l.name),
         ...subIssues(i),
         ...(parents.has(i.number) && { parent: parents.get(i.number) }),
+        ...milestoneOf(i),
       })),
       modes: errors.length ? [] : await offeredModes(repo, settings),
       errors: errors.length > 0,
@@ -255,6 +256,16 @@ export function createWorkApi({
   function subIssues(issue) {
     const { total = 0, completed = 0 } = issue.sub_issues_summary ?? {};
     return total > completed ? { subIssues: total - completed } : {};
+  }
+
+  // `milestone`: the issue's, from the list too (the Backlog's sections), `dueOn` in epoch ms
+  // or null; left out when it has none.
+  function milestoneOf(issue) {
+    const m = issue.milestone;
+    if (!m || typeof m.number !== "number") return {};
+    const due = m.due_on ? Date.parse(m.due_on) : NaN;
+    const dueOn = Number.isNaN(due) ? null : due;
+    return { milestone: { number: m.number, title: m.title ?? "", dueOn } };
   }
 
   // A label as the list has it: an object, or its name alone (GitHub's older shape).

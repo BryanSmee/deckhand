@@ -14,7 +14,16 @@ import type { ComponentChildren } from "preact";
 import { useEffect, useState } from "preact/hooks";
 import { useCan } from "./access";
 import type { WorkAreaState } from "./api";
-import { BacklogFilter, matchesText, narrowBacklog, Swatch } from "./BacklogFilter";
+import {
+  BacklogFilter,
+  hasMilestones,
+  matchesText,
+  type MilestoneSection,
+  milestoneSections,
+  narrowBacklog,
+  NO_MILESTONE,
+  Swatch,
+} from "./BacklogFilter";
 import { Chooser, type Target } from "./Chooser";
 import {
   BRAINSTORM_TYPE,
@@ -39,8 +48,8 @@ import { typesOf, useDropZone } from "./hooks";
 // `tr`: t() where a task is called `t`.
 import { locale, t as tr } from "./i18n";
 import type { Plain } from "./locales";
-import { useBacklogLabels, usePref } from "./prefs";
-import type { BacklogLabel, OrderMove, Task, WorkAction } from "./types";
+import { useBacklogCollapsed, useBacklogLabels, usePref } from "./prefs";
+import type { BacklogIssue, BacklogLabel, OrderMove, Task, WorkAction } from "./types";
 import { AutoMark } from "./ui/AutoMark";
 import { Button, IconButton } from "./ui/Button";
 import * as Icon from "./ui/icons";
@@ -170,11 +179,14 @@ export function WorkQueue({
   const [dragging, setDragging] = useState<string | null>(null);
   // A Queued card dragged over another: where it would go, above or below it.
   const [dropAt, setDropAt] = useState<{ key: string; above: boolean } | null>(null);
-  // The Backlog's filters (BacklogFilter.tsx): its text, then its labels (this repo's) and
-  // "Hide sub-issues" (every repo's), kept in this browser.
+  // The Backlog's filters (BacklogFilter.tsx): its text, then its labels (this repo's),
+  // "Hide sub-issues" and "Group by milestone" (every repo's), kept in this browser, and the
+  // milestones' sections collapsed (this repo's).
   const [filter, setFilter] = useState("");
   const [ticked, setTicked] = useBacklogLabels(repo);
   const [hideSubIssues, setHideSubIssues] = usePref("hideSubIssues");
+  const [byMilestone, setByMilestone] = usePref("byMilestone");
+  const [collapsed, setCollapsed] = useBacklogCollapsed(repo);
   // A phone's sheet: open, or its tabs alone.
   const [open, setOpen] = useState(true);
   useEffect(() => {
@@ -203,6 +215,17 @@ export function WorkQueue({
   // What the labels and the toggle leave (the tab's count), then the text.
   const narrowed = narrowBacklog(issues, ticked, hideSubIssues);
   const shown = narrowed.filter((i) => matchesText(i, filter));
+  // In a section per milestone, when an issue has one: every filter applies inside them.
+  const sections = byMilestone && hasMilestones(issues) ? milestoneSections(shown) : null;
+  // A section's header opens or closes it; those of milestones no longer listed drop out.
+  const toggleSection = (key: number) => {
+    const listed = new Set([
+      NO_MILESTONE,
+      ...issues.flatMap((i) => (i.milestone ? [i.milestone.number] : [])),
+    ]);
+    const kept = collapsed.filter((k) => listed.has(k) && k !== key);
+    setCollapsed(collapsed.includes(key) ? kept : [...kept, key]);
+  };
 
   // A brainstorm's card let go on Backlog: it stops. A Queued card: it leaves the queue.
   const stopZone = useDropZone(
@@ -350,58 +373,60 @@ export function WorkQueue({
     };
   });
 
+  const backlogRow = (i: BacklogIssue): Row => {
+    // A parent with open sub-issues is laid out with them ("plan").
+    const parent = !!i.subIssues;
+    return {
+      key: `${i.number}`,
+      number: i.number,
+      title: i.title,
+      href: i.url,
+      meta: i.subIssues ? tr("queue.subIssues", { count: i.subIssues }) : "",
+      labels: i.labels,
+      drag:
+        starts(picked.mode) || (brainstorms && starts("brainstorm"))
+          ? dragOf(ISSUE_TYPE, i.number, i.url, {
+              status: tr("queue.dragBacklog"),
+              title: i.title ?? "",
+            })
+          : undefined,
+      actions: [
+        ...only(
+          starts(picked.mode),
+          {
+            label: tr("queue.start"),
+            shortcut: "start",
+            aria: tr("queue.startAria", { number: i.number }),
+            icon: <Icon.Play size={11} />,
+            run: () => act({ action: parent ? "plan" : "start", number: i.number, ...picked }),
+            disabled: off,
+          },
+          {
+            label: tr("queue.after"),
+            aria: tr("queue.afterAria", { number: i.number }),
+            after: (after: number) =>
+              act({ action: parent ? "plan" : "queue", number: i.number, after, ...picked }),
+            disabled: off,
+          },
+        ),
+        ...(brainstorms && starts("brainstorm")
+          ? [
+              {
+                label: tr("queue.brainstormAction"),
+                shortcut: "brainstorm" as const,
+                aria: tr("queue.brainstormAria", { number: i.number }),
+                run: () => act({ action: "start", number: i.number, mode: "brainstorm" }),
+                disabled: off,
+              },
+            ]
+          : []),
+      ],
+    };
+  };
+
   const rows: Record<QueueTab, Row[]> = {
     queued: queuedRows,
-    backlog: shown.map((i) => {
-      // A parent with open sub-issues is laid out with them ("plan").
-      const parent = !!i.subIssues;
-      return {
-        key: `${i.number}`,
-        number: i.number,
-        title: i.title,
-        href: i.url,
-        meta: i.subIssues ? tr("queue.subIssues", { count: i.subIssues }) : "",
-        labels: i.labels,
-        drag:
-          starts(picked.mode) || (brainstorms && starts("brainstorm"))
-            ? dragOf(ISSUE_TYPE, i.number, i.url, {
-                status: tr("queue.dragBacklog"),
-                title: i.title ?? "",
-              })
-            : undefined,
-        actions: [
-          ...only(
-            starts(picked.mode),
-            {
-              label: tr("queue.start"),
-              shortcut: "start",
-              aria: tr("queue.startAria", { number: i.number }),
-              icon: <Icon.Play size={11} />,
-              run: () => act({ action: parent ? "plan" : "start", number: i.number, ...picked }),
-              disabled: off,
-            },
-            {
-              label: tr("queue.after"),
-              aria: tr("queue.afterAria", { number: i.number }),
-              after: (after: number) =>
-                act({ action: parent ? "plan" : "queue", number: i.number, after, ...picked }),
-              disabled: off,
-            },
-          ),
-          ...(brainstorms && starts("brainstorm")
-            ? [
-                {
-                  label: tr("queue.brainstormAction"),
-                  shortcut: "brainstorm" as const,
-                  aria: tr("queue.brainstormAria", { number: i.number }),
-                  run: () => act({ action: "start", number: i.number, mode: "brainstorm" }),
-                  disabled: off,
-                },
-              ]
-            : []),
-        ],
-      };
-    }),
+    backlog: shown.map(backlogRow),
     brainstorm: cards.map((c) => {
       const can = !blocked && !busy && movable(c);
       const status = c.sending ?? (c.task ? tr(STATE_NAMES[c.task.state]) : "");
@@ -701,6 +726,50 @@ export function WorkQueue({
     );
   };
 
+  // A milestone's section: its header (a button that opens or closes it: its title, its due
+  // date, its count), then its cards. Sticky on a phone, while its cards scroll under it.
+  const section = (s: MilestoneSection) => {
+    const closed = collapsed.includes(s.key);
+    const id = `${panelId}-m${s.key}`;
+    const due =
+      s.milestone?.dueOn != null
+        ? new Date(s.milestone.dueOn).toLocaleDateString(locale(), {
+            year: "numeric",
+            month: "short",
+            day: "numeric",
+            // GitHub's due date is a day, not a time: the same one wherever it's read.
+            timeZone: "UTC",
+          })
+        : null;
+    return (
+      <li key={s.key} class={styles.section}>
+        <h3 class={styles.sectionHead}>
+          <button
+            type="button"
+            class={styles.sectionButton}
+            aria-expanded={!closed}
+            aria-controls={id}
+            onClick={() => toggleSection(s.key)}
+          >
+            <Icon.ChevronDown size={14} class={closed ? styles.chevronClosed : styles.chevron} />
+            <span class={styles.sectionTitle}>{s.milestone?.title ?? tr("queue.noMilestone")}</span>
+            {due && <span class={styles.due}>{tr("queue.milestoneDue", { date: due })}</span>}
+            <span class={styles.sectionCount}>{s.issues.length}</span>
+          </button>
+        </h3>
+        {!closed && (
+          <ul
+            id={id}
+            class={styles.sectionCards}
+            aria-label={s.milestone?.title ?? tr("queue.noMilestone")}
+          >
+            {s.issues.map((i) => card(backlogRow(i)))}
+          </ul>
+        )}
+      </li>
+    );
+  };
+
   const counts: Record<QueueTab, number> = {
     backlog: narrowed.length,
     brainstorm: cards.length,
@@ -800,6 +869,8 @@ export function WorkQueue({
             onTicked={setTicked}
             hideSubIssues={hideSubIssues}
             onHideSubIssues={setHideSubIssues}
+            byMilestone={byMilestone}
+            onByMilestone={setByMilestone}
             touch={touch}
           />
         )}
@@ -809,7 +880,7 @@ export function WorkQueue({
           (tab !== "backlog" || backlog) && (
             <ul class={touch ? styles.rows : styles.list} aria-label={tr(list.label)}>
               {!rows[tab].length && <li class={styles.empty}>{tr(list.empty)}</li>}
-              {rows[tab].map(card)}
+              {tab === "backlog" && sections ? sections.map(section) : rows[tab].map(card)}
             </ul>
           )
         )}

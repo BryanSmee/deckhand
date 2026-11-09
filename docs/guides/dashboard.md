@@ -130,8 +130,11 @@ needing input): drop one on the graph to start it (in the mode picked in **Start
 page's header), on a node to queue it after that one; one with sub-issues brings them along.
 Above the list, a text field narrows it by number and title, **Labels** to the issues with any
 of the labels ticked (or with none, **No label**), and **Hide sub-issues** leaves out those
-whose parent is listed: starting the parent lays them out. Your browser keeps the labels ticked
-for each repository and the toggle for all of them.
+whose parent is listed: starting the parent lays them out. When an issue has a milestone,
+**Group by milestone** splits the list into a section per milestone: those with a due date
+first, soonest first, then the others by title, then **No milestone**; the other filters apply
+inside them, and a section's header collapses it. Your browser keeps the labels ticked and the
+sections collapsed for each repository, and the toggles for all of them.
 An issue whose last run was stopped, failed or interrupted keeps its node on the graph; once it
 is back in the backlog (at its next read), drag the node as you would its card (in the open to
 start it, onto another node to queue it after that one). A `done` issue's node and a pull request's stay where they

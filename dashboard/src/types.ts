@@ -1015,6 +1015,15 @@ export interface BacklogIssue {
   // Its parent's number, when it is a sub-issue of another listed issue: the Backlog can
   // hide it, its parent laying it out.
   parent?: number;
+  // Its milestone, when it has one: the Backlog's sections ("Group by milestone").
+  milestone?: BacklogMilestone;
+}
+
+// `dueOn`: its due date in epoch ms, null without one.
+export interface BacklogMilestone {
+  number: number;
+  title: string;
+  dueOn: number | null;
 }
 
 export interface BacklogLabel {
