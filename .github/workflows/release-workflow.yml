@@ -61,6 +61,9 @@ jobs:
   # annotation (Chart.yaml's `sources`) links the package to this repository, as the images' label.
   chart:
     if: github.ref_type == 'tag'
+    # Every image of the tag pushed first: a chart's appVersion names them, and a failed build
+    # (any leg of the matrix) publishes no chart pointing at images that aren't there.
+    needs: images
     runs-on: ubuntu-latest
     # helm as checks.yml's kubernetes job installs it, the same version and sum
     # (test/release-workflow.test.mjs holds them together).

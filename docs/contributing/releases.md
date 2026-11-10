@@ -37,7 +37,8 @@ machine driver (`deckhand-machine.mjs`, its `VERSION` the tag's) attached. Compo
    ```
 
 4. **What it published**, once the Release run is done: every image at both architectures,
-   `latest` on the same digest as the release, and the chart. A package's first version is
+   `latest` on the same digest as the release, and the chart, pushed once every image is (a
+   failed image build publishes none: run the failed jobs again). A package's first version is
    private: make the chart's package (`charts/deckhand`) public once, as the images', in its
    settings on GitHub.
 
