@@ -62,7 +62,7 @@ export function writeEvent(file, event, fields = {}, options = undefined) {
   file.write(JSON.stringify({ type: "listener", event, ...at, ...fields }) + "\n", options);
 }
 
-// The agent's events whose time a run's log keeps (runs.mjs output()): its tool calls and
+// The agent's events whose time a run's log keeps (run-output.mjs output()): its tool calls and
 // their outputs, for the dashboard's durations, and its messages and answers, for its
 // timestamps (#719). Few: the log barely grows.
 const TIMED_EVENTS = new Set(["tool", "toolOutput", "text", "result"]);
@@ -72,7 +72,7 @@ export const timed = (e) => TIMED_EVENTS.has(e.type);
 // normalize()'s): setup's output, a push's. Blank lines are none.
 export const plainLine = (line, events) => !!line.trim() && !events.length && parse(line) === null;
 
-// When a line of the sandbox's output needs an `at` line before it (runs.mjs output()), at `at`
+// When a line of the sandbox's output needs an `at` line before it (run-output.mjs output()), at `at`
 // (ms): one of the agent's timed events, always; a plain line, when it starts a run of them
 // (`open`, the time of the run's last `at` line, is null) or the second changed (#719). The
 // reader gives the lines of a run the last time said in it (reader()): a noisy `npm ci`
@@ -388,7 +388,7 @@ function listenerEntries(e, agent, seen) {
     const time = new Date(e.at).toISOString().slice(11, 19);
     return [{ kind: "meta", text: `Stopped by @${e.by} at ${time} UTC`, ...at }];
   }
-  // A sandbox still running, silent, after its answer (runs.mjs linger()).
+  // A sandbox still running, silent, after its answer (run-output.mjs linger()).
   if (e.event === "ended") {
     const time = new Date(e.at).toISOString().slice(11, 19);
     const text = `Stopped at ${time} UTC, silent for ${minutes(e.after)} min after its answer: the answer is posted`;

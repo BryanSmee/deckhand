@@ -429,7 +429,7 @@ export function createChats(
   const idleAt = (chat) =>
     Math.max(chat.lastActiveAt, answered.get(chat.id) ?? 0) + config.chatIdleMs;
 
-  // Its run answered (runs.mjs output()): the idle timer from now.
+  // Its run answered (run-output.mjs output()): the idle timer from now.
   function answer(task) {
     const chat = chats.get(task.id.slice("chat-".length));
     if (!chat) return;
@@ -462,7 +462,7 @@ export function createChats(
     }
   }
 
-  // Its run stopped (runs.mjs cancel()) and its queued messages dropped: `why` in the log.
+  // Its run stopped (run-end.mjs cancel()) and its queued messages dropped: `why` in the log.
   // → whether something was stopped.
   function stop(chat, why) {
     const task = taskOf(chat);

@@ -108,7 +108,9 @@ orchestrator/ the orchestrator (#506): server.mjs (wiring: its lease, then the q
               lives, from ../listener/'s modules); two copies, active/passive
 listener/     the modules edge and the orchestrator run (no entry point of its own): http.mjs (the
               dashboard's API and the deliveries, the orchestrator's), tasks.mjs (queue),
-              runs.mjs, restart.mjs, … (docs/contributing/architecture.md), runner/ (Docker and
+              runs.mjs (a run's start and follow; its output, end and replies in run-output.mjs,
+              run-end.mjs and run-replies.mjs, external runs in external-runs.mjs), restart.mjs, …
+              (docs/contributing/architecture.md), runner/ (Docker and
               Kubernetes backends), agents/ (each agent's specifics: install, env, hosts, session,
               normalize(); the credentials' names, credentials.mjs)
 github/       the github service (#502): the only one with the GitHub App's key; server.mjs
@@ -221,6 +223,14 @@ docs/         the docs, and the site built from them (VitePress, build-time only
   or a condition, or goes through the policies; bug fixes and changes to existing keys go on as
   usual. `test/repo-config.test.mjs` holds `REVIEW_KEYS` to its list. The rule is lifted when
   the review loop runs on the engine (#1041).
+- **Renovate proposes the dependency bumps** (`renovate.json`, Mend's hosted app, #1013): weekly
+  pull requests labelled `dependencies`, grouped (each of valkey's and BuildKit's images with the
+  Helm values; node across every Dockerfile, its major never: the `node:26-*` tags float, so its
+  patches come with each build, not from Renovate), none automerged. A version pinned
+  by hand (a Dockerfile's `ARG`, checks.yml's env) gets a `# renovate: datasource=… depName=…`
+  comment on the line above, or Renovate can't see it (the agents' defaults in
+  `listener/config.mjs`: a manager of their own). A pin with a sha256 beside it comes labelled
+  `needs-sha`: its body says which sums to update, and CI fails until they are.
 - **Nothing project-specific.** No PocketBerry, Linear, pnpm or Postgres in the services, base
   image or generic prompts: a project brings those through its per-repo config, Dockerfile
   and extra instructions. Names, hosts and volume names come from settings.

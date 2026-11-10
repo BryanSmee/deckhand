@@ -14,7 +14,7 @@ import { leaseMetric, STATUS_LABELS, statusLabel } from "../lib/metrics.mjs";
 // A run's length, in seconds: from under a minute to hours.
 const RUN_BUCKETS = [30, 60, 120, 300, 600, 900, 1800, 2700, 3600, 5400, 7200, 14400, 28800];
 
-// How a run ends, as its `done (…)` line says (runs.mjs finish()).
+// How a run ends, as its `done (…)` line says (run-end.mjs finish()).
 export const OUTCOMES = ["ok", "needs-input", "error", "cancelled"];
 
 // What started a run (runKind()).
@@ -315,7 +315,7 @@ export function orchestratorMetrics(registry, { ctx }) {
       const { record } = live;
       started.inc({ mode: modeLabel(live.mode), agent: record.agent, kind: runKind(record) });
     },
-    // runs.mjs finish(): its `done (…)` line, or its error's.
+    // run-end.mjs finish(): its `done (…)` line, or its error's.
     runFinished(live, at = Date.now()) {
       const labels = { mode: modeLabel(live.mode), outcome: live.record.status };
       finished.inc(labels);

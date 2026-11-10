@@ -275,7 +275,7 @@ export async function logPart(run, options, readLog) {
 }
 
 // The listener's half: previews for the form, the digest for the run. `runs()`: ctx.runs;
-// `secrets()`: the values no digest may carry (runs.mjs hidden()). Each run's part is kept
+// `secrets()`: the values no digest may carry (run-output.mjs hidden()). Each run's part is kept
 // once built: a finished run's log no longer changes, and the form previews often.
 export function createAnalysis({
   runs,

@@ -19,7 +19,7 @@
 //                                         { action: "dequeue", number }
 //                                         { action: "stop", number }: a brainstorm's wrap-up
 //                                         { action: "cancel", number, pr? }: stops the run
-//                                         (runs.mjs cancel()), or drops the queued comments
+//                                         (run-end.mjs cancel()), or drops the queued comments
 //   POST /api/repos/<owner>/<repo>/answer { number, pr?, answers: [{ options: [i], text }] }
 //                                         { number, pr?, text }
 //                                         answers to a task's open questions (answers.mjs);
@@ -166,7 +166,7 @@ export function checkAction(body) {
 // `label(repo, number, on)`: the needs-input label; `inputs` (inputs.mjs), which the backlog
 // also fills (seedInputs()).
 // `runOf(id)`: a run's record (runs.mjs, with the comments it ran on), or null.
-// `cancel(key, user)`: stops the task's run or drops its queued comments (runs.mjs cancel()):
+// `cancel(key, user)`: stops the task's run or drops its queued comments (run-end.mjs cancel()):
 // "running", "queued", "following" or null. `queuedTask(key)` (its `others` included), `unqueue(key, user, until)`: a task
 // waiting for a slot whose newest comment that starts a run can wait for another issue
 // instead, with its author's queued comments, and taking it out of the queue for that
