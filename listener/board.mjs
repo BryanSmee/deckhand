@@ -12,7 +12,7 @@
 //                   routed to a user's machines (`machine`, claims.mjs) waits for one of them
 //   in-review       its pull request is in the automatic review-and-fix loop, between its
 //                   runs: the next review or fix run queued or being decided, or the
-//                   auto-merge waiting for checks (`review`, reviews.mjs reviewLoop()); while
+//                   auto-merge waiting for checks (`review`, review-loop.mjs reviewLoop()); while
 //                   one runs, the task has that run's state, and its `review` says the round
 //   waiting         a comment waits for other issues to be done ("/after #12", waits.mjs)
 //                   (needs-input once they are, while its open questions aren't answered)
@@ -31,7 +31,7 @@
 import { askingRun } from "./dismissals.mjs";
 import { parseKey, taskKey } from "./events.mjs";
 import { APART, talkOf } from "./modes.mjs";
-import { LOOP_STEPS, LOOPING, loopState } from "./reviews.mjs";
+import { LOOP_STEPS, LOOPING, loopState } from "./review-loop.mjs";
 import { taskId } from "./spelling.mjs";
 
 export const STATES = [
@@ -314,7 +314,7 @@ function onMachine(t, m) {
 // The reasons of the loop's own runs (reviews.mjs).
 const STEPS = LOOP_STEPS;
 
-// The fix loop of the task's pull request `p` (reviews.mjs reviewLoop()) as its `review`,
+// The fix loop of the task's pull request `p` (review-loop.mjs reviewLoop()) as its `review`,
 // from the reason of its run going or queued (`q`), or, its last run one of the loop's and
 // over, the step the listener said is on its way. `in-review` between the loop's runs: done,
 // or queued for the loop's next run; a maintainer's comment queued meanwhile stays queued.

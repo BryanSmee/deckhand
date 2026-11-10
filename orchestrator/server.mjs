@@ -99,7 +99,8 @@ import { createRepoSettings } from "../listener/repo-settings.mjs";
 import { createRepoApi, createRepoList } from "../listener/repos.mjs";
 import { createRestart, endsWaitingWarnings } from "../listener/restart.mjs";
 import { createReviewers, openerOf } from "../listener/reviewers.mjs";
-import { createReviews, stepsGoing } from "../listener/reviews.mjs";
+import { stepsGoing } from "../listener/review-loop.mjs";
+import { createReviews } from "../listener/reviews.mjs";
 import { loadRuns, moveSummaries, saveSummary, SUMMARIES } from "../listener/runlog.mjs";
 import { networkCallers } from "../lib/service-token.mjs";
 import { createRunnerClient } from "../runner/client.mjs";
@@ -430,8 +431,7 @@ const edge = createEdgeClient({
   log,
 });
 
-// Where sandboxes, images and the runs' logs are: the runner service (RUNNER is
-// its setting).
+// Where sandboxes, images and the runs' logs are: the runner service (RUNNER is its setting).
 const runnerClient = createRunnerClient({
   urls: config.runnerUrl,
   token: () => brokerCaller.header("runner"),

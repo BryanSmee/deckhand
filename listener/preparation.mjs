@@ -24,7 +24,7 @@ import { grantsBy } from "./grants.mjs";
 import { imageRef } from "./images.mjs";
 import { CONFIG_FILE } from "./repo-config.mjs";
 import { contextNote, handoffMessage } from "./prompts.mjs";
-import { reviewThread } from "./reviews.mjs";
+import { reviewThread } from "./review-post.mjs";
 import { ceilingOf, leftOut, narrowProfile } from "./profiles.mjs";
 import { buildOutput, enterPhase } from "./runlog.mjs";
 import { operatorSecrets, redact } from "./secrets.mjs";
@@ -258,7 +258,7 @@ export function createPreparation(ctx) {
   // would be a way out for what it serves.
   const openHosts = (agent) => ({ hosts: ["*"], trusted: mandatoryHosts(config, agent) });
 
-  // A review's thread (reviews.mjs reviewThread()): only what the App and the allowed users
+  // A review's thread (review-post.mjs reviewThread()): only what the App and the allowed users
   // who may start a work run (`runs:start:work`) wrote, redacted like any output. Not read: no review, rather than one on the whole thread.
   async function reviewDigest(task, settings, note) {
     const { repo } = task;

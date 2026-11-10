@@ -11,29 +11,27 @@ import { opaBinary } from "../policy-service/opa.mjs";
 import { parseRepoConfig } from "../listener/repo-config.mjs";
 import { openStore } from "../lib/store.mjs";
 import { storeMap } from "../lib/store-map.mjs";
+import { reviewLoop, stepsGoing } from "../listener/review-loop.mjs";
+import { mergeBlockers, mergeInput } from "../listener/review-merge.mjs";
+import { parsePostedReview, parseReview } from "../listener/review-parse.mjs";
 import {
+  fixMessage,
+  latestReview,
+  postReview,
+  reviewBody,
+  reviewEvent,
+  reviewThread,
+} from "../listener/review-post.mjs";
+import {
+  blockingText,
   CI_NEXT,
-  mergeInput,
   ciFailedText,
   ciFixMessage,
-  createReviews,
   FOLLOW_UP_LABEL,
   FOLLOW_UPS_MAX,
-  fixMessage,
   followUpBody,
-  latestReview,
-  parsePostedReview,
-  parseReview,
-  postReview,
-  reviewThread,
-  reviewBody,
-  mergeBlockers,
-  reviewCandidate,
-  reviewEvent,
-  reviewLoop,
-  blockingText,
-  stepsGoing,
-} from "../listener/reviews.mjs";
+} from "../listener/review-texts.mjs";
+import { createReviews, reviewCandidate } from "../listener/reviews.mjs";
 import { createStopped } from "../listener/stopped.mjs";
 import {
   localService,

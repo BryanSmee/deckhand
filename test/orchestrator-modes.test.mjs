@@ -110,7 +110,7 @@ allow_capabilities contains "read:pulls"
       /when there is a\s+blocking comment or a critical, high or medium finding/,
     );
     assert.doesNotMatch(runEnv, /This review tolerates/);
-    // Its thread from the listener (reviews.mjs reviewThread(), unit-tested there).
+    // Its thread from the listener (review-post.mjs reviewThread(), unit-tested in reviews.test.mjs).
     const args = readFileSync(join(dir, "run-args"), "utf8");
     assert.match(args, /^TASK_DIGEST=http:\/\/[^/]+\/run\/digest$/m);
     for (const path of ["/issues/13/comments?", "/pulls/13/reviews?"]) {

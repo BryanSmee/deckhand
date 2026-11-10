@@ -132,7 +132,7 @@ export function unreadable(permissions) {
 // An Actions run's or job's logs (paths under the API's base): GitHub answers with a redirect
 // to a storage host of its own (Azure blobs, behind a signed URL), which the egress proxy
 // doesn't let a sandbox reach. The gateway follows it (proxied()), once, without any
-// credential, and sends the logs back: what a CI fix run reads (reviews.mjs ciFixMessage()).
+// credential, and sends the logs back: what a CI fix run reads (review-texts.mjs ciFixMessage()).
 export const ACTIONS_LOGS = new RegExp(
   String.raw`^${REPO}\/actions\/(?:jobs\/\d+|runs\/\d+(?:\/attempts\/\d+)?)\/logs$`,
   "i",

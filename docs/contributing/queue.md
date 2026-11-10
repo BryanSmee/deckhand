@@ -138,7 +138,7 @@ item as if from a comment (`trigger: "work"`, no comment, no sender, `reason: "c
 in its task's session through `tasks.accept()`. The `(head, base)` commits of each attempt are kept
 in the store's `conflicts`, so the same pair never starts a second run, even after a restart. Before
 the item is queued, the repo's policies are asked (`deny_fix`, `reason: "conflict"`, the review and
-fix input of `reviews.mjs` `readPullInput()`, through `policies.mjs` `denyKept()`, which keeps the
+fix input of `review-merge.mjs` `readPullInput()`, through `policies.mjs` `denyKept()`, which keeps the
 decision for the task's page). A refusal queues nothing and is kept as the pair's attempt: a "No
 rebase run" comment quotes its messages, and once posted they are kept with it (`said`), so a later
 pair refused for the same ones isn't said again (a base that keeps moving says it once). A refusal

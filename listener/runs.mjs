@@ -11,7 +11,7 @@ import { brainstormDefaults, customMode, entryRun, isApart, isFresh } from "./mo
 import { TALKS, WRAP_UPS } from "./modes.mjs";
 import { createPreparation } from "./preparation.mjs";
 import { openingMessages, promptFor } from "./prompts.mjs";
-import { reviewStart } from "./reviews.mjs";
+import { reviewStart } from "./review-post.mjs";
 import { addRun, enterPhase, newRecord, writeEvent } from "./runlog.mjs";
 import { sandboxSpec, sessionName, sessionOf } from "./sandbox-spec.mjs";
 import { countRun, isChat, noLongerAllowed, pickedTask, refusedItems } from "./tasks.mjs";
