@@ -72,7 +72,8 @@ ends ([Run tokens](security/tokens.md#run-tokens)). Through the egress proxy it 
   ([Network](security/network.md#network)).
 
 It can't push to the default branch, merge or review a pull request, write files through the
-API, read another repository's code, reach a host path you didn't grant, or reach the
+API, read another repository's code (but the [context repos](repo-config.md#context-repos) its
+grants list and its policies give it), reach a host path you didn't grant, or reach the
 services, the Docker socket or another sandbox. It runs as uid 1000, without capabilities,
 with `no-new-privileges` and limits ([Hardening](security/mounts-and-engine.md#hardening)). A
 token stolen from it is refused from any other network. What the policies give each run is
