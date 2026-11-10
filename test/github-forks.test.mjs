@@ -10,7 +10,6 @@ import { gzipSync } from "node:zlib";
 import { createBroker } from "../listener/broker.mjs";
 import { GITHUB_FILES } from "../listener/egress.mjs";
 import {
-  advertisedRefs,
   advertisementReader,
   callTargets,
   createForkChecks,
@@ -26,6 +25,13 @@ import { createGraphqlChecks, githubSchema } from "../listener/github-graphql.mj
 import { pkt, pktLines } from "../listener/pkt-line.mjs";
 import { parse } from "../listener/vendor/graphql.mjs";
 import { needsBash, serve, tempDir, tokenBroker } from "./helpers.mjs";
+
+// advertisementReader()'s refs of a whole advertisement.
+function advertisedRefs(buffer) {
+  const reader = advertisementReader();
+  reader.push(buffer);
+  return reader.refs();
+}
 
 const OWN = "a".repeat(40); // on the default branch
 const HEAD = "b".repeat(40); // a branch's head, not on the default one

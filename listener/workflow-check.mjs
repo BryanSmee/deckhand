@@ -440,7 +440,7 @@ const PUSH_FILTERS = new Set(["branches", "paths", "paths-ignore"]);
 // request"): the strict rules stay. Names and keys compared exactly, unlike field(): folding
 // makes the other checks stricter, here it would lift the rules for a spelling (`Push`,
 // `brancheſ`) GitHub might read otherwise.
-export function notDefaultBranchOnly(doc, base) {
+function notDefaultBranchOnly(doc, base) {
   const on = doc instanceof Map ? doc.get("on") : undefined;
   if (!(on instanceof Map) || !on.size) return "its `on:` isn't a mapping of triggers";
   for (const [trigger, value] of on) {

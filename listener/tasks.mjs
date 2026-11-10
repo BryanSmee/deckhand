@@ -40,8 +40,8 @@ import { asksForRun } from "./stopped.mjs";
 
 // How long Deckhand's own item waits before it is queued again, when its task's machine route
 // can't be read (queue()).
-export const ROUTE_RETRY_MS = 60_000;
-export const ROUTE_RETRIES = 5;
+const ROUTE_RETRY_MS = 60_000;
+const ROUTE_RETRIES = 5;
 
 // How long a comment whose admission GitHub kept failing (its repo's settings, GitHubUnavailable
 // after the App's own tries) is held before it is admitted again, each time; after those, its
@@ -105,7 +105,7 @@ export const isMachinePool = (pool) => pool === MACHINES || pool.startsWith("mac
 export const poolOf = (task) => task?.pool ?? (isChat(task) ? CHATS : SHARED);
 
 // Each pool's cap but shared's (MAX_PARALLEL, which startable() takes on its own).
-export const poolCaps = (config) => new Map([[CHATS, config.maxRunningChats ?? 0]]);
+const poolCaps = (config) => new Map([[CHATS, config.maxRunningChats ?? 0]]);
 
 // Its sandbox counted among its pool's runs going: shared's in `ctx.running` (MAX_PARALLEL), the
 // others' in `ctx.pools` (pool → count). `n` is 1 as it starts, -1 once it is over: in the pool

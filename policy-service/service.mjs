@@ -57,13 +57,10 @@ export function settingsOf(env, read = undefined) {
   return readSomeSettings(env, specs, { read });
 }
 
-// The grants folder alone.
-export const grantsDirOf = (env, read = undefined) => settingsOf(env, read).GRANTS_DIR;
-
 // What the runner may ask (#498): a repository's grants, of the operator's layer alone. It
 // checks specs and builds against them, and has no business with a run's writes or
 // a repository's own files. Throws a Refused otherwise.
-export function runnerAsks(body) {
+function runnerAsks(body) {
   if (body.decision !== "grant" || body.repo != null || body.repoAllow) {
     throw new Refused(403, "the runner asks a repository's grants only, of the operator's layer");
   }

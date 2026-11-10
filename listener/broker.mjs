@@ -44,7 +44,7 @@ function hash(secret) {
 }
 
 // Where a broker without the broker service gets its tokens (the tests that sign none): nowhere.
-export const NO_ISSUER = {
+const NO_ISSUER = {
   issue: async () => {
     throw new Error("no broker service to sign the run's tokens");
   },
@@ -54,7 +54,7 @@ export const NO_ISSUER = {
 };
 
 // Where a broker without the github service tells its runs: nowhere.
-export const NO_GATEWAY = { put: async () => {}, end: async () => {} };
+const NO_GATEWAY = { put: async () => {}, end: async () => {} };
 
 // Whether `branch` (without refs/heads/) is one of `patterns`: the same name, or one that
 // starts with a pattern's text before its final "*" ("issue-12-*"). Case-sensitive, as git is.

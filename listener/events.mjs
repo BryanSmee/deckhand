@@ -157,7 +157,7 @@ export function splitTrigger(config, body) {
 // { head, commands } or null. The longest run whose commands are all known: "use /model x, then
 // /effort high" still ends with "/effort high"; a command in the middle of a sentence ("use
 // /effort high to …") or with a refused value ("/effort huge") ends none.
-export function trailingCommands(line, names) {
+function trailingCommands(line, names) {
   // Only from the start of a run of spaces: from inside one, the search would be quadratic.
   const start = new RegExp(`(?<!\\s)\\s+(?=\\/(?:${names.join("|")})\\s)`, "gi");
   const known = (l) =>

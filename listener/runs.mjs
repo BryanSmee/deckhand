@@ -59,7 +59,7 @@ class Cancelled extends Error {}
 // How long a sandbox may stay silent after its answer, its inbox closed, before the listener
 // stops it and posts that answer (linger()): the agent should have exited, but one that left
 // background work behind can go on, or never exit (#204).
-export const ANSWER_GRACE_MS = 2 * 60_000;
+const ANSWER_GRACE_MS = 2 * 60_000;
 
 // How long a restored run whose grace passed while no listener was there waits, once the
 // follow has skipped what was read before, for its sandbox's output from meanwhile before it is

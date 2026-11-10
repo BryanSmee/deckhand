@@ -38,7 +38,7 @@ const configReference = CONFIG_PAGES.map((page) =>
 ).join("\n\n");
 
 // A config reference page's `text` as the onboarding prompt has it (configReference).
-export function onboardingReference(text) {
+function onboardingReference(text) {
   return compactTables(text)
     .replace(/^<!-- onboarding: skip: ([^\n]*?) -->\n[^]*?^<!-- onboarding: end -->\n/gm, "$1\n")
     .replace(/^<!--[^\n]*-->\n\n/gm, "");

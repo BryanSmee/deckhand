@@ -212,6 +212,12 @@ docs/         the docs, and the site built from them (VitePress, build-time only
   limit only tightens: split the file (a module of its own for the part you touch). A file that
   really can't be split gets a ceiling in `test/file-sizes.json` that says why
   (`"path": { "lines": 900, "why": "#<issue>" }`), which the review weighs; never one just to make room.
+- **No new `review:` key until the workflow engine exists** (#1035): the pull request
+  lifecycle grows through that block, and each key makes it harder to follow and the engine
+  (#1040) harder to reach with parity. New lifecycle behaviour waits for the engine, as a step
+  or a condition, or goes through the policies; bug fixes and changes to existing keys go on as
+  usual. `test/repo-config.test.mjs` holds `REVIEW_KEYS` to its list. The rule is lifted when
+  the review loop runs on the engine (#1041).
 - **Nothing project-specific.** No PocketBerry, Linear, pnpm or Postgres in the services, base
   image or generic prompts: a project brings those through its per-repo config, Dockerfile
   and extra instructions. Names, hosts and volume names come from settings.
