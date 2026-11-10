@@ -10,7 +10,7 @@ import { answersOnly } from "./capabilities.mjs";
 import { branchConfigReport } from "./onboarding.mjs";
 import { CONFIG_FILE } from "./repo-config.mjs";
 import { isOpen } from "./pulls.mjs";
-import { postReview } from "./reviews.mjs";
+import { postReview } from "./review-post.mjs";
 import { minutes, summaryOf, writeEvent } from "./runlog.mjs";
 import { isChat } from "./tasks.mjs";
 

@@ -355,7 +355,7 @@ export interface Task {
   // With its questions: false when its repo's `wait_for_answers` is off, and Start and Queue
   // go ahead without them (listener/work.mjs act()).
   waitForAnswers?: boolean;
-  // Its pull request's review-and-fix loop (listener/reviews.mjs reviewLoop()), or its
+  // Its pull request's review-and-fix loop (listener/review-loop.mjs reviewLoop()), or its
   // maintainers' reviews alone (`manual`); absent when Deckhand never reviewed it.
   review?: ReviewLoop;
 }

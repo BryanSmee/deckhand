@@ -30,7 +30,7 @@ import {
   taskSandboxName,
 } from "./repo-config.mjs";
 import { queueId } from "./restart.mjs";
-import { LOOPING, loopState } from "./reviews.mjs";
+import { LOOPING, loopState } from "./review-loop.mjs";
 import { minutes, writeEvent } from "./runlog.mjs";
 import { sameTask, taskId } from "./spelling.mjs";
 import { createTaskModes } from "./task-modes.mjs";
@@ -546,7 +546,7 @@ export function createTasks(ctx) {
   // own going nor queued: its last run was picked (or followed a pick) and its work isn't done.
   // That is while the run waits for an answer to its questions (#591: anything on the picked
   // task until it is done), and while its pull request, open, is between two steps of its review
-  // loop (reviews.mjs loopState(), the dashboard's in-review): waiting for CI, the next step being
+  // loop (review-loop.mjs loopState(), the dashboard's in-review): waiting for CI, the next step being
   // decided or on its way. The records, the loop's entry and the set-asides are kept through a
   // restart. Done: the issue closed, the pull request merged or closed, a close seen since that
   // run (picks.mjs, a reopen included), its questions set aside (dismissals.mjs), the loop over,

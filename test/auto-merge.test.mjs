@@ -7,17 +7,12 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { parseRepoConfig } from "../listener/repo-config.mjs";
 import { createPolicies } from "../listener/policies.mjs";
-import {
-  createReviews,
-  dryRunText,
-  githubSamples,
-  mergeBlockers,
-  mergeRefusal,
-  parseReview,
-  reviewEvent,
-  reviewLoop,
-  trustedFile,
-} from "../listener/reviews.mjs";
+import { dryRunText, githubSamples } from "../listener/review-dry-run.mjs";
+import { reviewLoop } from "../listener/review-loop.mjs";
+import { mergeBlockers, mergeRefusal, trustedFile } from "../listener/review-merge.mjs";
+import { parseReview } from "../listener/review-parse.mjs";
+import { reviewEvent } from "../listener/review-post.mjs";
+import { createReviews } from "../listener/reviews.mjs";
 import { allowOnly, builtInPolicies } from "../policy-service/engine.mjs";
 import { opaBinary } from "../policy-service/opa.mjs";
 import {

@@ -32,7 +32,7 @@ import { GRANTS } from "../listener/grants.mjs";
 import { issueServiceTokens, serviceTokens } from "../lib/service-token.mjs";
 import { publishKey, signingKey } from "../lib/tokens.mjs";
 import { policyClient } from "../listener/policy-client.mjs";
-import { mergeInput } from "../listener/reviews.mjs";
+import { mergeInput } from "../listener/review-merge.mjs";
 import {
   evalResult,
   fakeOpa as sharedFakeOpa,

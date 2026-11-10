@@ -91,7 +91,7 @@ import { MAX_NAME, createLanes, laneName } from "./lanes.mjs";
 import { leadsTo, planSummary, readTree, repoOf, waitsOf } from "./plans.mjs";
 import { isApart } from "./modes.mjs";
 import { CONFIG_FILE, modeNames } from "./repo-config.mjs";
-import { latestReview } from "./reviews.mjs";
+import { latestReview } from "./review-post.mjs";
 import { issueList, waitsFor } from "./waits.mjs";
 import { taskId } from "./spelling.mjs";
 import { Refused, readJsonBody, refuse, send } from "../lib/http.mjs";

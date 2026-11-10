@@ -7,7 +7,7 @@ import { mandatoryHosts } from "./egress.mjs";
 import { languageLine } from "./language.mjs";
 import { FRESH, INBOX, MODES, TALKS, talkOf } from "./modes.mjs";
 import { triggerWord } from "./onboarding.mjs";
-import { blockingSeverities } from "./reviews.mjs";
+import { blockingSeverities } from "./review-parse.mjs";
 
 // The config's reference, its pages in reading order (the orchestrator's image copies them).
 export const CONFIG_PAGES = [
@@ -150,11 +150,11 @@ function followUpRule(text, filed) {
 }
 
 // A review (reviews.mjs) of pull request `pull`: its task may be the issue the pull request
-// closes. Its thread is the run's file TASK_DIGEST names (reviews.mjs reviewThread()).
+// closes. Its thread is the run's file TASK_DIGEST names (review-post.mjs reviewThread()).
 // `instructions`: the repo's `review.instructions` file, if any; `text`: what the
 // "/mode review" comment adds; `allowed`: the review's tolerance (verdictRule()); `ciNote`: why
-// CI hadn't passed when the listener queued it (`review.ci`, reviews.mjs ciNoteText());
-// `reviewed`: { sha, base } of the pull request at the run's start (reviews.mjs reviewStart()),
+// CI hadn't passed when the listener queued it (`review.ci`, review-texts.mjs ciNoteText());
+// `reviewed`: { sha, base } of the pull request at the run's start (review-post.mjs reviewStart()),
 // the commit it reads and its review is posted on; null when GitHub couldn't say: its head
 // whenever it reads it.
 function reviewPrompt(

@@ -23,7 +23,7 @@ import { QUIET_EVENTS } from "./github-app.mjs";
 import { deliveryResult, operatorRefuses } from "./metrics.mjs";
 import { isApart, kindOf } from "./modes.mjs";
 import { onboardingTargets } from "./onboarding.mjs";
-import { LOOP_STEPS } from "./reviews.mjs";
+import { LOOP_STEPS } from "./review-loop.mjs";
 import { applyInput, inputEvent } from "./questions.mjs";
 import { forgottenFor, refreshFor } from "./repos.mjs";
 import { labelAdded, pullClosed } from "./auto-pickup.mjs";
