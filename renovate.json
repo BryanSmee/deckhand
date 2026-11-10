@@ -158,7 +158,7 @@
         "prometheus/prometheus"
       ],
       "prBodyNotes": [
-        "**needs-sha**: update the matching `*_SHA256` in `.github/workflows/checks.yml`'s `kubernetes` job, the sha256 of the `linux-amd64` tarball its install step downloads."
+        "**needs-sha**: update the matching `*_SHA256` in `.github/workflows/checks.yml`'s `kubernetes` job, the sha256 of the `linux-amd64` tarball its install step downloads. helm's in `.github/workflows/release-workflow.yml`'s `chart` job too, the same sum (`test/release-workflow.test.mjs`)."
       ]
     },
     {
