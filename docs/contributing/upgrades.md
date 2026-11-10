@@ -77,7 +77,7 @@ client's, in its own volume, nothing else. Its two copies are both active, on on
 The dashboard's API, `/status` and the screenshots, edge passes on to the orchestrator
 (`edge/forward.mjs`), with the signed-in user, its service token, and the browser's Host and
 Origin; the answer comes back as it streams (a run's live log, which ends once its user signs
-out). The API's contract (`dashboard/src/types.ts`) and the UI's origin don't change: the CSP
+out). The API's contract (`dashboard/src/types/`) and the UI's origin don't change: the CSP
 and the `SameSite` cookies are as before. Edge's internal port is the orchestrator's alone: the
 stream, read and acknowledged; the App's public parts; the dashboard's "From the dashboard by"
 tags, signed with the key the webhook secret gives (the orchestrator posts those lines, and

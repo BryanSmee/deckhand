@@ -720,7 +720,7 @@ describe("listener", options, () => {
     assert.equal(board.user, "alice");
     assert.ok(!JSON.stringify(board).includes("op-policy-text"));
     assert.equal(board.githubUrl, github.url);
-    // The shape dashboard/src/types.ts expects: change both together.
+    // The shape dashboard/src/types/ expects: change both together.
     assertShape(board, STATE_KEYS, "State");
     assertShape(board.server, SERVER_KEYS, "ServerInfo");
     // org/repo's: its task, done, is still known.
@@ -946,7 +946,7 @@ describe("listener", options, () => {
     assert.equal((await sync({ origin: "https://hooks.example.com" })).status, 429);
   });
 
-  // dashboard/src/types.ts, key by key: [required, optional].
+  // dashboard/src/types/, key by key: [required, optional].
   const STATE_KEYS = [
     [
       "user",
@@ -1066,8 +1066,8 @@ describe("listener", options, () => {
   function assertShape(value, [required, optional], name) {
     const keys = Object.keys(value);
     const unknown = keys.filter((k) => !required.includes(k) && !optional.includes(k));
-    assert.deepEqual(unknown, [], `${name}: keys types.ts doesn't have`);
+    assert.deepEqual(unknown, [], `${name}: keys types/ doesn't have`);
     const missing = required.filter((k) => !keys.includes(k));
-    assert.deepEqual(missing, [], `${name}: keys types.ts requires`);
+    assert.deepEqual(missing, [], `${name}: keys types/ requires`);
   }
 });

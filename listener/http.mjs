@@ -459,7 +459,7 @@ export function createHttp(ctx) {
     if (!user) return res.writeHead(401).end();
     res.setHeader("cache-control", "no-store");
     if (url.pathname === "/api/state") return sendJson(res, await state(user));
-    // RunData (dashboard/src/types.ts): all retained shared runs, before board truncation.
+    // RunData (dashboard/src/types/server.ts): all retained shared runs, before board truncation.
     if (url.pathname === "/api/run-data") {
       const filters = Object.fromEntries(
         [...DIMENSIONS, "task"].map((k) => [k, url.searchParams.get(k)]),
