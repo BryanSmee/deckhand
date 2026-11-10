@@ -109,7 +109,7 @@ export const CAPABILITIES = [
     // at the start whatever the policies say (grants.mjs grantCheck()).
     what: "read-only clones of the other repositories its `context_repos` names, at their refs",
     enforcedBy:
-      "the listener at start (each repository against the operator's `context_repos` grant)",
+      "the listener at start (each repository against the operator's `context_repos` grant); the GitHub gateway (git alone, a token for each repository)",
   },
 ];
 

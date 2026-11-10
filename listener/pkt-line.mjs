@@ -1,7 +1,7 @@
 // Git's pkt-lines (gitprotocol-common): a 4-digit hex length, its own 4 bytes included, then
 // the payload; 0000 a flush, 0001 and 0002 delimiters. One reader for the git gateway's pushes
-// (git-gateway.mjs) and the GitHub gateway's fetch checks (github-forks.mjs): two parsers in
-// security checks would drift apart.
+// (git-gateway.mjs), the GitHub gateway's fetch checks (github-forks.mjs) and the answers it
+// counts (packIn()): two parsers in security checks would drift apart.
 
 // One pkt-line holding `data` (a string or bytes).
 export function pkt(data) {
@@ -44,4 +44,47 @@ export function pktLines(buffer) {
   const lines = [];
   pktReader((line) => lines.push(line)).push(buffer);
   return lines;
+}
+
+// What a pack request's answer says, read pkt-line by pkt-line from its start: whether it
+// carries the pack (protocol v2's "packfile" section line, v0's pack on side-band 1 or bare
+// after the acknowledgments), or GitHub's error ("ERR …", side-band 3: an object it doesn't
+// have, say). Neither: a round of negotiation, or ls-refs. Whole lines only, so a ref named
+// …packfile is no pack. Read until one of them, within its first MAX_PACK_SCAN bytes.
+const MAX_PACK_SCAN = 1024 * 1024;
+export function packIn() {
+  let held = Buffer.alloc(0);
+  let seen = 0;
+  // null while reading; "pack", "error", or "unknown" for what isn't pkt-lines.
+  let said = null;
+  function line(payload) {
+    if (payload.toString("latin1") === "packfile\n") return "pack";
+    if (payload.subarray(0, 4).toString("latin1") === "ERR ") return "error";
+    if (payload[0] === 1 && payload.subarray(1, 5).toString("latin1") === "PACK") return "pack";
+    if (payload[0] === 3) return "error";
+    return null;
+  }
+  return {
+    push(chunk) {
+      if (said || seen > MAX_PACK_SCAN) return;
+      seen += chunk.length;
+      held = Buffer.concat([held, chunk]);
+      while (!said && held.length >= 4) {
+        const head = held.subarray(0, 4).toString("latin1");
+        if (head === "PACK") return void (said = "pack");
+        if (!/^[0-9a-f]{4}$/i.test(head)) return void (said = "unknown");
+        const length = parseInt(head, 16);
+        // A flush, delimiter or response-end packet: no payload.
+        if (length < 4) {
+          held = held.subarray(4);
+          continue;
+        }
+        if (held.length < length) return;
+        said = line(held.subarray(4, length));
+        held = held.subarray(length);
+      }
+    },
+    found: () => said === "pack",
+    failed: () => said === "error",
+  };
 }
