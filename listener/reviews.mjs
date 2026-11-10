@@ -1357,7 +1357,7 @@ const stoppedWhy = (issue) =>
 
 // The comments an auto-merge posts on the pull request, for the maintainer to find later.
 // `fixes`: how many fix runs came before (a boolean in waits saved before the rounds).
-export function mergedText(sha, method, fixes, review = null) {
+function mergedText(sha, method, fixes, review = null) {
   const n = Number(fixes);
   const after =
     n > 1
@@ -1374,17 +1374,17 @@ export function mergedText(sha, method, fixes, review = null) {
 }
 
 // What a fix run the policies refused (`deny_fix`) says on the pull request.
-export function noFixText(why) {
+function noFixText(why) {
   return `**No fix run** (\`review.fix\`): ${why}. The review's findings wait for a maintainer.`;
 }
 
 // What the CI step says when a CI fix run leaves the pull request to the maintainer.
-export function ciStoppedText(why) {
+function ciStoppedText(why) {
   return `**No review** (\`review.ci\`): ${why}. It waits for a maintainer.`;
 }
 
 // What a fix loop that ran out of rounds says, without auto-merge (with it: notMergedText()).
-export function roundsOutText(review, fixes) {
+function roundsOutText(review, fixes) {
   return `**No more fix runs** (\`review.fix\`): the review ${afterFixes(fixes)} still has ${blockingWhat(review, review.allowed)}. They wait for a maintainer.`;
 }
 
@@ -1761,7 +1761,7 @@ export function githubSamples(repo, pr, modes = {}) {
 // The branch a dry run asks `deny_link_branch` about: the pull request's head, as the work run
 // on `issue` (GitHub's, the one it closes, else the pull request itself) would have had it
 // linked, at its base's head (docs/repo-config/policy-inputs.md#the-linked-branch-input). → { what, input }
-export function linkSample(repo, pr, issue = null) {
+function linkSample(repo, pr, issue = null) {
   const number = issue?.number ?? pr.number;
   return {
     what: `a work run's branch linked to #${number}`,
@@ -1831,7 +1831,7 @@ const DRY_RUN_INPUT = 50_000;
 // A message as code: it may repeat a pull request's title, which mustn't mention anyone.
 const quote = (m) => `\`${m.replace(/`/g, "'")}\``;
 
-export function notMergedText(why) {
+function notMergedText(why) {
   return `**Not merged automatically** (\`review.merge\`): ${why}. It waits for a maintainer's review and merge.`;
 }
 
@@ -1877,14 +1877,14 @@ export const FOLLOW_UPS_MAX = 10;
 
 // How far the `labeled` event of a follow-up filed with the auto-pickup label may be from its
 // issue's creation, as GitHub gives both to the second (followUpPick()).
-export const PICK_SKEW_MS = 2000;
+const PICK_SKEW_MS = 2000;
 
 // The comment listing the follow-ups filed (`filed`), those an issue already had (`linked`),
 // and the titles left past FOLLOW_UPS_MAX (`left`), quoted as code: a model wrote them, and
 // they mustn't mention anyone or format the comment.
 // `pickup`: who the filed ones are auto-picked for ({ by }), or why not ({ why }), when the
 // repo asks for it (`review.follow_ups_auto_pickup`).
-export function followUpsText(filed, linked = [], left = [], pickup = null) {
+function followUpsText(filed, linked = [], left = [], pickup = null) {
   const list = (ns) => ns.map((n) => `#${n}`).join(", ");
   const parts = [];
   if (filed.length) parts.push(`filed ${list(filed)}`);
@@ -1928,7 +1928,7 @@ export function reviewCandidate(config, event, p, skip = () => null) {
 // Who opened `pr`, for the automatic review → { author, own, bot }: the App (`own`), another
 // bot (`bot`), or a user of ALLOWED_USERS (`author`, their login, checked again with the repo's
 // `users`; null for the App's and a bot's). Null for anyone else.
-export function openedBy(config, pr) {
+function openedBy(config, pr) {
   const login = pr.user?.login?.toLowerCase() ?? "";
   const own = !!config.bot && login === config.bot.toLowerCase();
   const bot = !own && pr.user?.type === "Bot";

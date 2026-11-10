@@ -47,7 +47,7 @@ export async function itemMay(permissions, log, item, action, what = "") {
 export const startAction = (mode) => `runs:start:${mode}`;
 
 // The actions on a repository the dashboard has controls for (#732), besides the starts.
-export const SHOWN_ACTIONS = ["tasks:read", "logs:read", "runs:manage", "repo:config:read"];
+const SHOWN_ACTIONS = ["tasks:read", "logs:read", "runs:manage", "repo:config:read"];
 const START = startAction("");
 
 // What an action's pattern, given or denied, says of the modes a run may start in: a mode's

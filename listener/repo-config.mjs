@@ -70,11 +70,11 @@ export const REVIEW_KEYS = [
 // or opened as ready; `manual`, only with a "/mode review" line.
 const REVIEW_ON = ["ready", "manual"];
 // How an auto-merge merges (`review.merge_method`), GitHub's merge_method values.
-export const MERGE_METHODS = ["squash", "merge", "rebase"];
+const MERGE_METHODS = ["squash", "merge", "rebase"];
 // `review.max_allowed_severity`'s values: the most severe finding an automatic review in the
 // fix loop (`review.fix`) or deciding an auto-merge (reviews.mjs) may have without requesting
 // changes: it starts no fix run, and may merge. Critical and high always block.
-export const ALLOWED_SEVERITIES = ["low", "medium"];
+const ALLOWED_SEVERITIES = ["low", "medium"];
 // `review.merge_wait`: how many minutes an auto-merge waits for the GitHub Actions runs still
 // going on the reviewed commit (reviews.mjs), at most a day; 0 refuses at once.
 const MERGE_WAIT_MINUTES = 60;

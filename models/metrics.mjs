@@ -20,10 +20,10 @@ export const STATUSES = [...STATUS_LABELS, "credential"];
 const AT_ZERO = ["200", "429", "529"];
 export const DIRECTIONS = ["input", "output", "cache_read", "cache_write"];
 // Each plan's provider (usage.mjs PLANS), as the calls' label names it.
-export const PLAN_PROVIDERS = { claude: "anthropic", codex: "openai", antigravity: "google" };
+const PLAN_PROVIDERS = { claude: "anthropic", codex: "openai", antigravity: "google" };
 
 // An agent's call streams for minutes: from a model list's milliseconds to IDLE_MS.
-export const CALL_BUCKETS = [0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60, 120, 300, 600];
+const CALL_BUCKETS = [0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60, 120, 300, 600];
 
 // The largest answer (a JSON one) or SSE line read for its usage: past it, its tokens aren't
 // counted, and nothing is held of it. An OpenAI stream's last event holds the whole response.

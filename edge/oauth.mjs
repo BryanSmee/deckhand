@@ -49,7 +49,7 @@ const MAX_BODY = 16 * 1024;
 const MAX_REDIRECTS = 5;
 const GRANTS = ["authorization_code", "refresh_token"];
 
-export const SCOPES = {
+const SCOPES = {
   "deckhand:read": "Read your repositories, tasks, runs, their logs and the schedule",
   "deckhand:work": "Start, rerun, queue and cancel runs, as you can on the dashboard",
   "deckhand:machine": "Register machines of yours that take Deckhand's tasks",
