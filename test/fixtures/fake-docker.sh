@@ -214,7 +214,7 @@ case "$1" in
     env > "$dir/run-env.part" && mv "$dir/run-env.part" "$dir/run-env"
     printf '%s\n' "$@" > "$dir/run-args.part" && mv "$dir/run-args.part" "$dir/run-args"
     # The services' names it calls (lib/services.mjs SANDBOX_URLS), through the egress proxy the
-    # test plays (DECKHAND_TEST_PROXY, orchestrator-server.test.mjs sandboxProxy()), in origin-form.
+    # test plays (DECKHAND_TEST_PROXY, orchestrator-harness.mjs sandboxProxy()), in origin-form.
     for var in DECKHAND_BROKER_URL ANTHROPIC_BASE_URL OPENAI_BASE_URL GOOGLE_GEMINI_BASE_URL \
       TASK_DIGEST DECKHAND_CA; do
       value=${!var-}

@@ -156,6 +156,9 @@ deploy/       kubernetes/: the manifests for a cluster (#396), a kustomize base 
               grafana/deckhand.json: the Grafana dashboard, alerts/: the alert rules and their
               promtool tests (#661; docs/guides/metrics.md), the chart carrying copies of both in
               helm/deckhand/files/, held the same by test/metrics-deploy.test.mjs
+test/         the tests (`node --test`), their shared fakes in helpers.mjs and fixtures/;
+              orchestrator-harness.mjs: edge, the orchestrator and the services around them,
+              started for the end-to-end orchestrator-*.test.mjs files, one per area (#1071)
 docs/         the docs, and the site built from them (VitePress, build-time only like the
               dashboard's, published to GitHub Pages by .github/workflows/docs.yml): index.md (the
               site's home), get-started/ (what Deckhand is, the quick start, core ideas),
@@ -334,7 +337,7 @@ The details, and how to find the runs an update broke: `docs/contributing/restar
 - `node --test` with `node:assert`. Inject what touches the outside: `fetch` for GitHub,
   the runner for Docker, a clock for timers, a temp dir for state files.
 - Shared fakes live in `test/helpers.mjs` (`listening`, `serve`, `tempDir`, `testConfig`,
-  `recordingFetch`) and `test/fixtures/` (the fake `docker` of `orchestrator-server.test.mjs`):
+  `recordingFetch`) and `test/fixtures/` (the fake `docker` of `orchestrator-harness.mjs`):
   reuse them rather than write another copy. A temp dir goes with its test (`tempDir(t)`).
 - The suite passes as root and as any other user, and inside a Deckhand sandbox (Deckhand
   testing itself): CI runs it both ways. A test whose subject is "a user can't write here"
@@ -355,10 +358,13 @@ The details, and how to find the runs an update broke: `docs/contributing/restar
   test holds (`forwarder`), or one the OS never hands out (`listenToRestart`). Time: an injected
   clock (or `t.mock.timers`) rather than a wall-clock bound, and a wait for what the test
   asserts on rather than a fixed delay.
-- `orchestrator-server.test.mjs` starts edge and the orchestrator (and the runner beside them)
-  per test, the suite's slowest part: one wiring test per area there, the cases themselves in
-  the module's own unit tests. Its `handOver()` starts the orchestrator's next copy, waiting
-  for the lease, before it stops the one acting. `edge-server.test.mjs` starts edge alone.
+- The `orchestrator-*.test.mjs` end-to-end files (runs, writes, restarts, triggers, modes,
+  dashboard, start) start edge and the orchestrator (and the runner beside them) per test
+  through `orchestrator-harness.mjs`'s `listen()`, the suite's slowest part: one wiring test
+  per area there, the cases themselves in the module's own unit tests. A file per area, so
+  `node --test` runs them side by side (#1071): a new test goes in its area's file. `listen()`'s
+  `handOver()` starts the orchestrator's next copy, waiting for the lease, before it stops the
+  one acting. `edge-server.test.mjs` starts edge alone.
 - Dashboard specs share `dashboard/src/testUtils.ts` (`mockApi`, `makeTask`, `makeState`) and
   `vitest.setup.ts` (the global stubs and cleanup).
 - Cover the decisions that matter: allowlist and config narrowing, mount path checks,

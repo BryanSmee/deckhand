@@ -199,8 +199,8 @@ const COMPILE_CACHE = process.env.NODE_COMPILE_CACHE || join(import.meta.dirname
 // output() and until() read, other processes' (what a run does is logged on every side).
 // until(text or RegExp) → the output once it has it, rejected if the service exits first;
 // exited → { code, out } once it did, its output read to the end ("close", not "exit": the
-// line it logged before exiting too). NODE_COMPILE_CACHE: orchestrator-server.test.mjs alone
-// starts some 800 of them, each compiling the same modules otherwise.
+// line it logged before exiting too). NODE_COMPILE_CACHE: the orchestrator's end-to-end
+// tests alone start some 800 of them, each compiling the same modules otherwise.
 export function startService(t, script, env, { also } = {}) {
   const child = spawn(process.execPath, [script], {
     cwd: join(import.meta.dirname, ".."),
