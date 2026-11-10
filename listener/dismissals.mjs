@@ -51,13 +51,14 @@ export function createDismissals({ dismissed = new Map(), now = Date.now } = {})
     return true;
   }
 
-  // Drops the entries whose run is no longer their task's last. `runs`: newest first, as
-  // ctx.runs is.
+  // Drops the entries whose run is no longer their task's last, nor (questions set aside) the
+  // run still asking (askingRun()). `runs`: newest first, as ctx.runs is.
   function prune(runs) {
-    const last = new Map();
-    for (const r of runs) if (!last.has(taskId(r.key))) last.set(taskId(r.key), r.id);
-    for (const [key, { runId }] of [...dismissed]) {
-      if (last.get(taskId(key)) !== runId) dismissed.delete(key);
+    const tasks = byTask(runs);
+    for (const [key, { runId, questions }] of [...dismissed]) {
+      const own = tasks.get(taskId(key)) ?? [];
+      const kept = own[0]?.id === runId || (questions && askingRun(own)?.id === runId);
+      if (!kept) dismissed.delete(key);
     }
   }
 
@@ -78,27 +79,54 @@ export function createDismissals({ dismissed = new Map(), now = Date.now } = {})
   };
 }
 
-// Task `key`'s last run when it stopped to ask: { key, runId, finishedAt }, under the run's
-// spelling of the key, else null. A run labels its own task's issue or pull request (runs.mjs),
-// even when it replied on another (an issue's task, on its pull request), so the label taken off
-// there is what sets its questions aside. `runs`: newest first, as ctx.runs is.
-export function askedOn(runs, key) {
-  const last = runs.find((r) => taskId(r.key) === taskId(key));
-  if (last?.status !== "needs-input") return null;
-  return { key: last.key, runId: last.id, finishedAt: last.finishedAt ?? last.startedAt ?? 0 };
+// The runs after a task's run that stopped to ask which leave its questions waiting: a review
+// of its pull request, and a light run, which keep the needs-input label on when they start
+// (runs.mjs start(): a light one with `wait_for_answers`, which only helps answer them). A
+// review requesting changes then has its fix skipped for the input awaited (reviews.mjs).
+const leavesAsking = (r) => r.status !== "running" && (r.taskMode === "review" || !!r.light);
+
+// The run of a task that stopped to ask and still waits for answers, from its runs newest
+// first: its last, or the last before those that leave its questions waiting; else null.
+export function askingRun(runs) {
+  for (const r of runs) {
+    if (r.status === "needs-input") return r;
+    if (!leavesAsking(r)) return null;
+  }
+  return null;
 }
 
-// The tasks whose last run stopped to ask and whose issue or pull request is known closed or
-// merged, for setAsideClosed(): [{ key, repo, numbers }]. `closed(key)`: how the task's issue
-// or pull request closed (titles.mjs), null while open; `pr(key)`: its pull request (pulls.mjs).
-export function closedTasks(runs, closed, pr) {
-  const seen = new Set();
-  const tasks = [];
+// `runs` (newest first) by taskId() of their key, each task's newest first.
+function byTask(runs) {
+  const tasks = new Map();
   for (const r of runs) {
-    if (seen.has(taskId(r.key))) continue;
-    seen.add(taskId(r.key));
-    const target = parseKey(r.key);
-    if (r.status !== "needs-input" || !target || target.kind === "discussion") continue;
+    const id = taskId(r.key);
+    if (!tasks.has(id)) tasks.set(id, []);
+    tasks.get(id).push(r);
+  }
+  return tasks;
+}
+
+// Task `key`'s run that stopped to ask and still waits (askingRun()): { key, runId,
+// finishedAt }, under the run's spelling of the key, else null. A run labels its own task's
+// issue or pull request (runs.mjs), even when it replied on another (an issue's task, on its
+// pull request), so the label taken off there is what sets its questions aside. `runs`: newest
+// first, as ctx.runs is.
+export function askedOn(runs, key) {
+  const asked = askingRun(runs.filter((r) => taskId(r.key) === taskId(key)));
+  if (!asked) return null;
+  return { key: asked.key, runId: asked.id, finishedAt: asked.finishedAt ?? asked.startedAt ?? 0 };
+}
+
+// The tasks whose run that stopped to ask still waits (askingRun()) and whose issue or pull
+// request is known closed or merged, for setAsideClosed(): [{ key, repo, numbers }].
+// `closed(key)`: how the task's issue or pull request closed (titles.mjs), null while open;
+// `pr(key)`: its pull request (pulls.mjs).
+export function closedTasks(runs, closed, pr) {
+  const tasks = [];
+  for (const own of byTask(runs).values()) {
+    const r = askingRun(own);
+    const target = r && parseKey(r.key);
+    if (!target || target.kind === "discussion") continue;
     const pull = pr(r.key);
     const numbers = new Set();
     if (closed(r.key)) numbers.add(target.number);
