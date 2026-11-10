@@ -1,9 +1,10 @@
 // What a repo's runs get, for the dashboard's config panel: its .deckhand.yaml's settings
 // against the operator's, each value tagged "repo", "operator", "refused", or "unknown" when
 // it needs a grant and the operator's grants have errors. Built from the same checks a run
-// makes (grantFor, operatorHosts, resolveMounts, customMode) so the panel can't say
+// makes (grantFor, operatorHosts, resolveMounts, refusedContext, customMode) so the panel can't say
 // something a run wouldn't do.
 import { realpathSync, statSync } from "node:fs";
+import { patternMatches, refusedContext } from "./context-repos.mjs";
 import { mandatoryHosts } from "./egress.mjs";
 import { grantFor, grantsFrom, resolveMounts, ungranted } from "./grants.mjs";
 import { defaultSettings, KEYS } from "./repo-config.mjs";
@@ -98,6 +99,21 @@ function mountRows(settings, grant, fs = {}) {
   });
 }
 
+// The repositories its config asks to read (context_repos), each with the operator's pattern that
+// grants it, or refused (it stops every run) with the reason the run's reply would give.
+// `grant`: null when the grants have errors, so no pattern is known.
+function contextRows(settings, grant) {
+  const refused = grant ? refusedContext(grant, settings) : [];
+  return settings.contextRepos.map(({ repo, ref, folder }) => {
+    const row = { repo, ref, folder, pattern: null };
+    if (!grant) return { ...row, source: "unknown", note: UNKNOWN };
+    const pattern = grant.contextRepos.find((p) => patternMatches(p, repo));
+    if (pattern) return { ...row, source: "repo", pattern, note: null };
+    const why = refused.find((r) => r.startsWith(`\`${repo}\`: `)) ?? "";
+    return { ...row, source: "refused", note: plain(why.slice(repo.length + 4)) || null };
+  });
+}
+
 // What the operator grants the repo, as the panel shows it, with the files it comes from.
 function grantRows(grant) {
   return {
@@ -114,6 +130,7 @@ function grantRows(grant) {
     allowMachines: grant.allowMachines,
     hosts: grant.hosts,
     cachedHosts: grant.cachedHosts,
+    contextRepos: grant.contextRepos,
     mounts: grant.mounts.map(({ root, readOnly }) => ({ root, readOnly })),
     allowProjects: grant.allowProjects,
     limits: grant.limits,
@@ -135,6 +152,7 @@ export function effectiveView(
     settings: settingRows(config, settings, shown, !!grant),
     hosts: hostRows(config, shown),
     mounts: mountRows(settings, grant, fs),
+    contextRepos: contextRows(settings, grant),
     grant: grant ? grantRows(grant) : null,
   };
 }

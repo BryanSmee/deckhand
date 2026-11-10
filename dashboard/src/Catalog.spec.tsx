@@ -123,6 +123,7 @@ const CONFIG: RepoConfig = {
     ],
     hosts: [{ host: "pypi.org", source: "operator", note: "grants/acme/app.yaml" }],
     mounts: [],
+    contextRepos: [],
     grant: {
       files: ["acme/app.yaml"],
       grantFiles: [],
@@ -136,6 +137,7 @@ const CONFIG: RepoConfig = {
       allowMachines: false,
       hosts: ["pypi.org"],
       cachedHosts: [],
+      contextRepos: [],
       mounts: [],
       allowProjects: [],
       limits: { cpus: "2", memory: "4g", pids: 2048 },

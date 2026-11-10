@@ -507,13 +507,15 @@ export const answersOnly = (live) =>
 export const listed = (used) => (used.length ? used.join(", ") : "none");
 
 // The catalogue as the config page shows it: each capability's name, what it gives and needs,
-// the .deckhand.yaml keys that ask for it, the grant that gates it and what enforces it.
+// the .deckhand.yaml keys that ask for it, the grant that gates it and what enforces it. Its
+// texts are Markdown for the runs' replies; the page shows text.
+const plain = (text) => text.replaceAll("`", "");
 export const catalogueView = () =>
   CAPABILITIES.map((c) => ({
     name: c.name,
-    what: c.what,
+    what: plain(c.what),
     needs: c.needs,
     config: c.config ?? [],
     grant: c.grant ?? null,
-    enforcedBy: c.enforcedBy,
+    enforcedBy: plain(c.enforcedBy),
   }));

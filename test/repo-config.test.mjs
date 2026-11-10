@@ -873,9 +873,12 @@ test("fileLines: each error and warning at the line of its key, mounts at their 
     "  - path: /srv/a",
     "  - /srv/b",
     "my key: 1",
+    "context_repos:",
+    "  - acme/a",
+    "  - { repo: Acme/B, ref: v1 }",
   ].join("\n");
   const { errors, warnings, fixes } = parseRepoConfig(text, config);
-  const { lineOf, mountLine, locate } = fileLines(text);
+  const { lineOf, itemLine, mountLine, locate } = fileLines(text);
   const located = errors.map((e) => locate(e, fixes));
   const review = located.find((e) => e.key === "modes.review");
   assert.equal(review.line, 3);
@@ -893,6 +896,8 @@ test("fileLines: each error and warning at the line of its key, mounts at their 
   assert.equal(lineOf("users"), 1);
   assert.equal(lineOf("model"), null);
   assert.deepEqual([mountLine("/srv/a"), mountLine("/srv/b"), mountLine("/srv/c")], [6, 7, null]);
+  const second = (item) => item?.ref === "v1";
+  assert.deepEqual([itemLine("context_repos", second), itemLine("caches", second)], [11, null]);
   // A syntax error: its own line; what isn't about a key, none.
   const broken = fileLines("users: [a\nmodel: x\n");
   const [syntax] = parseRepoConfig("users: [a\n", testConfig()).errors;

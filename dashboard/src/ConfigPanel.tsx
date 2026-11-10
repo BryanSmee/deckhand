@@ -1,47 +1,43 @@
 // One repository's config (docs/design/dashboard-redesign.md › Pages › Settings › A repository's
 // config): where it was read, Read again and Edit on GitHub, its tabs (Config, Policies:
-// PolicyConfig.tsx, Capabilities: Capabilities.tsx); then what stops or worries its runs (each error with its key, its fix and a
-// link to its line, the warnings, the auto-merge risk), or, when all is fine, a green banner and
-// the facts at a glance, with the details folded but for what the repo sets. Then what its runs
-// get, each value tagged with its source and filtered by it, the hosts, mounts, the operator's
-// grant and the raw .deckhand.yaml, its bad lines marked. Read from GitHub when it opens and on
-// Read again; changing it is a commit on the default branch.
+// PolicyConfig.tsx, Capabilities: Capabilities.tsx); then what stops or worries its runs (each
+// error with its key, its fix and a link to its line, the warnings, the auto-merge risk), or,
+// when all is fine, a green banner and the facts at a glance, with the details folded but for
+// what the repo sets. Then what its runs get, each value tagged with its source and filtered by
+// it, the hosts, mounts, context repos, the operator's grant (ConfigAccess.tsx) and the raw
+// .deckhand.yaml, its bad lines marked. Read from GitHub when it opens and on Read again;
+// changing it is a commit on the default branch.
 import type { ComponentChildren } from "preact";
 import { useEffect, useState } from "preact/hooks";
 import { useRepoConfig } from "./api";
 import { RunDataPanel } from "./RunData";
 import { Capabilities, capabilityTrouble } from "./Capabilities";
-import { ago, type Tone } from "./format";
+import {
+  ACCESS,
+  anchor,
+  ContextRepos,
+  GrantSection,
+  Hosts,
+  Mounts,
+  type Part,
+  Row,
+} from "./ConfigAccess";
+import { ago } from "./format";
 import { t, tx } from "./i18n";
 import type { Plain } from "./locales";
 import { copyText } from "./logExport";
 import { PolicyConfig, policyTrouble, refusing } from "./PolicyConfig";
 import { RepoBadge } from "./RepoBadge";
 import { type ConfigTab, formatRoute } from "./route";
-import type { Grant, MountRow, Repo, RepoConfig, SettingRow, Source } from "./types";
+import type { Repo, RepoConfig, SettingRow, Source } from "./types";
 import { Button, buttonClass } from "./ui/Button";
 import { Segmented } from "./ui/Choice";
 import { Code, linesOf } from "./ui/Code";
 import { Count } from "./ui/Count";
 import { Alert, Check, ChevronRight, External, Sync, Warning } from "./ui/icons";
-import { StatusBadge, toneClass } from "./ui/Status";
+import { StatusBadge } from "./ui/Status";
 import tabs from "./ui/Tabs.module.css";
 import styles from "./ConfigPanel.module.css";
-
-// A source's tag and its tone: unknown asks for a look (a grant to fix), unlike an unknown
-// status; the operator's is quiet, most values are. Keys, written when shown.
-const TAGS: Record<Source, [Plain, Tone | "quiet"]> = {
-  repo: ["config.tagRepo", "run"],
-  operator: ["config.tagOperator", "quiet"],
-  refused: ["config.tagRefused", "err"],
-  unknown: ["config.tagUnknown", "input"],
-};
-
-function Tag({ source }: { source: Source }) {
-  const [label, tone] = TAGS[source];
-  const cls = tone === "quiet" ? styles.quiet : toneClass(tone);
-  return <span class={`${styles.tag} ${cls}`}>{t(label)}</span>;
-}
 
 // What stops its runs, each with the key it is about, how to fix it and its line in the file.
 interface Problem {
@@ -97,13 +93,23 @@ function problemsOf(config: RepoConfig): Problem[] {
       line: m.line,
     });
   }
+  const contextFix = tx("config.contextFix", {
+    key: <code>context_repos</code>,
+    file: <code>.deckhand.yaml</code>,
+  });
+  for (const c of config.effective.contextRepos.filter((c) => c.source === "refused")) {
+    const repo = c.ref ? `${c.repo}@${c.ref}` : c.repo;
+    problems.push({
+      key: "context_repos",
+      message: tx("config.contextRefused", { repo: <code>{repo}</code>, note: c.note ?? "" }),
+      text: t("config.contextRefused", { repo, note: c.note ?? "" }),
+      fix: contextFix,
+      line: c.line,
+    });
+  }
   return problems;
 }
 
-// The page's parts, for its links and folds. A fine config folds hosts, mounts and the grant
-// into one ("access").
-type Part = "problems" | "runs" | "hosts" | "mounts" | "grant" | "access" | "yaml";
-const anchor = (part: Part) => `config-${part}`;
 const lineAnchor = (n: number) => `config-line-${n}`;
 
 // After the render that opens its fold.
@@ -264,20 +270,21 @@ interface BodyProps {
 
 function Body({ config, opened, toggle, setOpened }: BodyProps) {
   const problems = problemsOf(config);
-  const { settings, hosts, mounts, grant } = config.effective;
+  const { settings, hosts, mounts, contextRepos, grant } = config.effective;
   // Nothing to say but that its runs start: the details fold. The policies' errors don't stop
   // runs: they have their own tab.
   const fine = !!config.file && !problems.length && !config.warnings.length;
   const fromRepo = settings.filter((s) => s.source !== "operator");
   const repoMounts = mounts.length > 0;
+  const repoContext = contextRepos.length > 0;
   // A fold's state: by hand, else open for what the repo sets (or always, with problems).
   const defaults: Partial<Record<Part, boolean>> = fine
-    ? { runs: fromRepo.length > 0, access: repoMounts, yaml: false }
+    ? { runs: fromRepo.length > 0, access: repoMounts || repoContext, yaml: false }
     : { yaml: true };
   const isOpen = (part: Part) => opened[part] ?? defaults[part] ?? true;
   // A link to a part (or a line) opens its fold, then shows it.
   const go = (part: Part, id = anchor(part)) => {
-    const fold = fine && ["hosts", "mounts", "grant"].includes(part) ? "access" : part;
+    const fold = fine && ACCESS.includes(part) ? "access" : part;
     setOpened((o) => ({ ...o, [fold]: true }));
     scrollTo(id);
   };
@@ -293,6 +300,7 @@ function Body({ config, opened, toggle, setOpened }: BodyProps) {
     ["runs", t("config.runsGet")],
     ["hosts", t("config.tocHosts")],
     ...(repoMounts ? [["mounts", t("config.mounts")] as [Part, string]] : []),
+    ...(repoContext ? [["context", t("config.context")] as [Part, string]] : []),
     ["grant", t("config.grant")],
     ...(config.file ? [["yaml", ".deckhand.yaml"] as [Part, string]] : []),
   ];
@@ -300,6 +308,7 @@ function Body({ config, opened, toggle, setOpened }: BodyProps) {
     <>
       <Hosts hosts={hosts} />
       {repoMounts && <Mounts mounts={mounts} />}
+      {repoContext && <ContextRepos repos={contextRepos} />}
       <GrantSection grant={grant} />
     </>
   );
@@ -375,6 +384,7 @@ function Body({ config, opened, toggle, setOpened }: BodyProps) {
             meta={[
               t("config.hostsCount", { count: hosts.length }),
               repoMounts ? t("config.mountsCount", { count: mounts.length }) : t("config.noMounts"),
+              ...(repoContext ? [t("config.contextCount", { count: contextRepos.length })] : []),
               ...(grant?.allowResearch ? [t("config.researchOn")] : []),
             ].join(" · ")}
             open={isOpen("access")}
@@ -597,128 +607,6 @@ function Rows({ rows }: { rows: SettingRow[] }) {
         <Row key={s.key} name={s.key} value={s.value} note={s.note} source={s.source} />
       ))}
     </ul>
-  );
-}
-
-// A row: its name, its value and note, its source's tag. Refused ones are tinted.
-function Row({
-  name,
-  value,
-  note,
-  source,
-}: {
-  name: ComponentChildren;
-  value?: ComponentChildren;
-  note?: ComponentChildren;
-  source: Source;
-}) {
-  return (
-    <li class={`${styles.row} ${source === "refused" ? styles.refused : ""}`}>
-      <code class={styles.key}>{name}</code>
-      <span class={styles.cell}>
-        {value !== undefined && <span class={styles.value}>{value}</span>}
-        {note && <span class={styles.note}>{note}</span>}
-      </span>
-      <Tag source={source} />
-    </li>
-  );
-}
-
-function Hosts({ hosts }: { hosts: RepoConfig["effective"]["hosts"] }) {
-  return (
-    <section id={anchor("hosts")} class={styles.section}>
-      <h2>{t("config.hostsTitle")}</h2>
-      <ul class={`${styles.card} ${styles.rows}`} aria-label={t("config.hostsList")}>
-        {hosts.map((h) => (
-          <Row key={h.host} name={h.host} note={h.note} source={h.source} />
-        ))}
-      </ul>
-    </section>
-  );
-}
-
-function Mounts({ mounts }: { mounts: MountRow[] }) {
-  return (
-    <section id={anchor("mounts")} class={styles.section}>
-      <h2>{t("config.mounts")}</h2>
-      <ul class={`${styles.card} ${styles.rows}`} aria-label={t("config.mounts")}>
-        {mounts.map((m) => (
-          <Row
-            key={m.path}
-            name={m.path}
-            value={t(m.readOnly ? "config.readOnly" : "config.readWrite")}
-            note={m.note}
-            source={m.source}
-          />
-        ))}
-      </ul>
-    </section>
-  );
-}
-
-function GrantSection({ grant }: { grant: Grant | null }) {
-  return (
-    <section id={anchor("grant")} class={styles.section}>
-      <h2>{t("config.grant")}</h2>
-      {grant ? <GrantCard grant={grant} /> : <p class={styles.muted}>{t("config.grantUnknown")}</p>}
-    </section>
-  );
-}
-
-// Its switches as on/off pills, the grants the operator's policies give (`allow_grant`), then
-// what its files list.
-function GrantCard({ grant }: { grant: Grant }) {
-  const { cpus, memory, pids } = grant.limits;
-  const flags: [string, boolean | string][] = [
-    ["dockerfile", grant.allowDockerfile],
-    ["branch_docker_images", grant.allowBranchDockerImages],
-    ["docker", grant.allowDocker],
-    ["research", grant.allowResearch],
-    ["workflows", grant.allowWorkflows],
-    ["workflow_secrets", grant.allowWorkflowSecrets],
-    ["auto_merge", grant.allowAutoMerge],
-    ["machines", grant.allowMachines],
-  ];
-  const policies = grant.grantFiles.length
-    ? grant.grantFiles.map((f) => `policy/${f}`).join(t("list.comma"))
-    : t("config.grantNoPolicy");
-  const lists: [string, string][] = [
-    ["files", grant.files.join(t("list.comma")) || t("config.grantNoFile")],
-    ["policies", policies],
-    ["hosts", grant.hosts.join(t("list.comma")) || t("config.none")],
-  ];
-  if (grant.cachedHosts.length)
-    lists.push(["cached_hosts", grant.cachedHosts.join(t("list.comma"))]);
-  if (grant.mounts.length) {
-    const roots = grant.mounts.map((m) =>
-      m.readOnly ? t("config.grantRootReadOnly", { root: m.root }) : m.root,
-    );
-    lists.push(["mounts", roots.join(t("list.comma"))]);
-  }
-  if (grant.allowProjects.length)
-    lists.push(["allow_projects", grant.allowProjects.join(t("list.comma"))]);
-  lists.push(["limits", t("config.grantLimits", { cpus, memory, pids: String(pids) })]);
-  return (
-    <div class={styles.card}>
-      <ul class={styles.flags} aria-label={t("config.grantSwitches")}>
-        {flags.map(([key, value]) => (
-          <li key={key}>
-            <code class={styles.key}>{key}</code>
-            <span class={`${styles.pill} ${value ? styles.on : styles.off}`}>
-              {value === true ? t("config.on") : value === false ? t("config.off") : value}
-            </span>
-          </li>
-        ))}
-      </ul>
-      <ul class={styles.lists} aria-label={t("config.grantLists")}>
-        {lists.map(([key, value]) => (
-          <li key={key}>
-            <code class={styles.key}>{key}</code>
-            <span>{value}</span>
-          </li>
-        ))}
-      </ul>
-    </div>
   );
 }
 
