@@ -263,7 +263,8 @@ test("settings: agent, brainstorm_agent and wait_for_answers have their rows", (
 test("settings: every key the file takes has its row, or a table of its own", () => {
   const elsewhere = Object.keys(KEYS).filter((key) => !KEYS[key].display);
   // hosts, cached_hosts and preview (#574) only get a warning: the file no longer sets them.
-  assert.deepEqual(elsewhere, ["hosts", "cached_hosts", "mounts", "preview"]);
+  // context_repos' table is the dashboard's (#931).
+  assert.deepEqual(elsewhere, ["hosts", "cached_hosts", "mounts", "context_repos", "preview"]);
   const { settings } = view("modes:\n  audit:\n    instructions: audit.md\n");
   for (const key of Object.keys(KEYS).filter((k) => KEYS[k].display)) {
     assert.ok(

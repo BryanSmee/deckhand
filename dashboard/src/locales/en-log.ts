@@ -115,7 +115,7 @@ export const log = {
   "questions.answers": "Answers",
   "questions.rawPlaceholder": "Answer them here, as you would in a comment",
   "questions.title": "Open questions",
-  "questions.fromRun": "from its last run",
+  "questions.fromRun": "from the run that asked",
   "questions.inIssue": "in the issue",
   "questions.sending": "Sending…",
   "questions.send": "Send answers",

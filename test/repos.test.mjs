@@ -908,6 +908,7 @@ test("a repo's config: what each mode's runs get, the file that decided it, what
     fork: false,
     trigger: null,
     command: null,
+    context_repos: [],
   });
   const work = capabilities.modes.find((m) => m.mode === "work");
   assert.equal(work.custom, false);

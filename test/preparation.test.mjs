@@ -454,6 +454,7 @@ test("a work run's capabilities: decided once, in its tokens and log, its input 
       fork: true,
       trigger: null,
       command: null,
+      context_repos: [],
     },
   ]);
   // The config asks for its setup and caches; no Dockerfile or engine.
@@ -618,7 +619,7 @@ test("`pull` with `internet` on a repository not known to be public: refused unl
     workRun(t, "org/repo", { policies: open, grants }),
     (e) =>
       e instanceof RunError &&
-      /- `pull` with `internet`: a private repository's code next to the open internet: .+ Refused unless an allow rule of the operator's policies gives `pull\+internet`/.test(
+      /- `pull` with `internet`: a private repository's code \(its own or a context repo's\) next to the open internet: .+ Refused unless an allow rule of the operator's policies gives `pull\+internet`/.test(
         e.message,
       ),
   );
