@@ -78,7 +78,7 @@
       "enabled": false
     },
     {
-      "description": "Node, every Dockerfile and setup-node in one pull request. Node 26 is a decision (AGENTS.md, checks.yml's node-version, esbuild's --target=node26), never a major bump of its own.",
+      "description": "Node's image, every Dockerfile in one pull request (setup-node and CI's node:26 container follow the major, below). Node 26 is a decision (AGENTS.md, checks.yml's node-version, esbuild's --target=node26), never a major bump of its own. The node:26-* tags float, so Node's patches come with each build, not from Renovate.",
       "matchDepNames": ["node"],
       "groupName": "node"
     },
@@ -125,6 +125,8 @@
     },
     {
       "matchManagers": ["github-actions"],
+      "description": "The actions only: the workflows' service and container images (CI's Redis) come as their own pull requests.",
+      "matchDepTypes": ["action"],
       "groupName": "GitHub Actions"
     },
     {
@@ -164,6 +166,13 @@
       "matchDepNames": ["@anthropic-ai/claude-code", "@openai/codex"],
       "prBodyNotes": [
         "The sandboxes install this agent on first use. `docs/security/network.md` lists the hosts it calls, checked against one version: check the new one calls no other."
+      ]
+    },
+    {
+      "matchManagers": ["custom.regex"],
+      "matchDepNames": ["@anthropic-ai/claude-code"],
+      "prBodyNotes": [
+        "`machine/deckhand-machine.mjs`'s `CHECKED_WITH` names the Claude Code version the machine driver was checked against: decide whether this one needs checking again."
       ]
     }
   ]

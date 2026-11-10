@@ -219,8 +219,9 @@ docs/         the docs, and the site built from them (VitePress, build-time only
   usual. `test/repo-config.test.mjs` holds `REVIEW_KEYS` to its list. The rule is lifted when
   the review loop runs on the engine (#1041).
 - **Renovate proposes the dependency bumps** (`renovate.json`, Mend's hosted app, #1013): weekly
-  pull requests labelled `dependencies`, grouped (node across every Dockerfile, its major never;
-  each of valkey's and BuildKit's images with the Helm values), none automerged. A version pinned
+  pull requests labelled `dependencies`, grouped (each of valkey's and BuildKit's images with the
+  Helm values; node across every Dockerfile, its major never: the `node:26-*` tags float, so its
+  patches come with each build, not from Renovate), none automerged. A version pinned
   by hand (a Dockerfile's `ARG`, checks.yml's env) gets a `# renovate: datasource=… depName=…`
   comment on the line above, or Renovate can't see it (the agents' defaults in
   `listener/config.mjs`: a manager of their own). A pin with a sha256 beside it comes labelled
