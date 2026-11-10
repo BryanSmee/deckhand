@@ -17,7 +17,7 @@ export interface RepoAccess {
 
 // GET api/access, for Settings › Access (server:read only): each of ALLOWED_USERS's actions,
 // server-wide and on each repository the App's installations list, with the files that decided
-// them (listener/http.mjs accessReport()). `error`: why the repositories can't be listed.
+// them (listener/http-state.mjs accessReport()). `error`: why the repositories can't be listed.
 export interface AccessReport {
   users: UserAccess[];
   repos: string[];

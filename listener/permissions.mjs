@@ -153,7 +153,7 @@ export function createPermissions({ policies = null, usersOf = () => null, infoO
 
   // The repositories among `repos` (names) where `login` may do `action` (null: visible()), by
   // their names in lower case: one decision each, asked together, for a filter that can't wait
-  // (http.mjs state()). `listed`: each repository as last listed (answerOf()'s), for a filter
+  // (http-state.mjs state()). `listed`: each repository as last listed (answerOf()'s), for a filter
   // over what the dashboard shows; never for a check that guards something on its own (a log
   // stream), which reads it as a single decision does.
   async function which(login, repos, action = null, { listed = false } = {}) {
