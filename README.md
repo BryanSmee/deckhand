@@ -35,7 +35,7 @@ The dashboard follows every task and run, across your repositories ([the dashboa
 
 ## Quick start
 
-You need a server with Docker Engine 26 or later and the compose plugin, Node 20 or later, an HTTPS address
+You need a server with Docker Engine 26 or later and the compose plugin, an HTTPS address
 GitHub can reach forwarding to port 8080, and a Claude credential (a token from
 `claude setup-token`, or an `ANTHROPIC_API_KEY`).
 
@@ -44,7 +44,8 @@ git clone https://github.com/BryanSmee/deckhand.git
 cd deckhand
 cp .env.example .env              # CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY
 cp -r server.example server       # your GitHub login in server/config.yaml's allowed_users
-node cli/deckhand.mjs up         # the latest release, pinned in .env, its images pulled and started
+docker compose pull
+docker compose up -d
 docker compose logs edge          # prints a one-time …/setup?token=… link
 ```
 

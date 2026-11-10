@@ -289,6 +289,43 @@ test(
 );
 
 test(
+  "update from a release older than the notes' page (0.0.x): every section listed",
+  { skip: needsBash },
+  async (t) => {
+    const d = deckhand(t, "DECKHAND_VERSION=0.0.2\n");
+    const gh = github({
+      [`v0.1.0 docs/guides/upgrade-notes.md`]: NOTES_V1,
+      "v0.1.0 compose.yaml": "new\n",
+    });
+    await d.cli(gh.fetch).update("0.1.0", { yes: true });
+    assert.ok(gh.calls.some((url) => url.endsWith("/v0.0.2/docs/guides/upgrade-notes.md")));
+    assert.match(d.logs.join("\n"), /- Upgrading from v0\.0\.x \(v0\.1\.0\)/);
+    assert.deepEqual(d.calls(), ["compose pull (0.1.0)", "compose up -d (0.1.0)"]);
+  },
+);
+
+test(
+  "up: a checkout that isn't on the pinned release's tag, warned and left there",
+  { skip: needsBash },
+  async (t) => {
+    const repo = checkout(t);
+    const d = deckhand(t, "DECKHAND_VERSION=0.2.0\n", { dir: repo.dir });
+    d.env.GIT_CONFIG_GLOBAL = repo.env.GIT_CONFIG_GLOBAL;
+    d.env.GIT_CONFIG_NOSYSTEM = "1";
+    const warning = /The checkout isn't on v0\.2\.0, the release \.env pins/;
+    await d.cli(github({}).fetch).up();
+    assert.match(d.logs.join("\n"), warning);
+    assert.equal(repo.git("describe", "--tags", "--exact-match"), "v0.1.0");
+    assert.deepEqual(d.calls(), ["compose pull (0.2.0)", "compose up -d (0.2.0)"]);
+    // On the tag: nothing said.
+    repo.git("checkout", "--quiet", "--detach", "v0.2.0");
+    d.logs.length = 0;
+    await d.cli(github({}).fetch).up();
+    assert.doesNotMatch(d.logs.join("\n"), /isn't on/);
+  },
+);
+
+test(
   "A git checkout never moved to a release without the deckhand command",
   { skip: needsBash },
   async (t) => {

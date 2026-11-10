@@ -6,8 +6,7 @@ the details of each step and the rest: other agents, two copies of each service,
 
 ## What you need
 
-- A server with Docker Engine 26 or later and the compose plugin, and Node 20 or later for the
-  `deckhand` command (Linux, macOS or WSL2).
+- A server with Docker Engine 26 or later and the compose plugin.
 - An HTTPS address GitHub can reach (your reverse proxy, or a tunnel), forwarding to edge's
   port, 8080. A home server or a laptop has none: [a stable tunnel](../guides/tunnels.md)
   gives it one (Tailscale Funnel, a cloudflared named tunnel or an ngrok static domain).
@@ -36,13 +35,13 @@ leave it for now ([The server folder](../reference/server-folder.md)).
 ## 2. Start
 
 ```sh
-node cli/deckhand.mjs up
+docker compose pull
+docker compose up -d
 docker compose logs edge
 ```
 
-`deckhand up` pins the latest release in `.env` (`DECKHAND_VERSION`), moves the checkout to its
-tag so `compose.yaml` matches it, pulls every image (the sandbox's too) and starts the services.
-Edge's logs print a one-time setup link, `…/setup?token=…`.
+This pulls the released images (`latest`, or the release `DECKHAND_VERSION` names in `.env`)
+and starts the services. Edge's logs print a one-time setup link, `…/setup?token=…`.
 
 ## 3. Create the GitHub App
 
@@ -91,4 +90,5 @@ orchestrator`: a login missing from `allowed_users` is logged there.
 - [Per-repo config](../repo-config.md): a repository's own `.deckhand.yaml`.
 - [Security model](../security.md): read it before you install Deckhand on a repository other
   people write to.
-- [Updating](../guides/updating.md): `node cli/deckhand.mjs update`, at any time.
+- [Updating](../guides/updating.md): `docker compose pull` and `docker compose up -d`, at any
+  time.

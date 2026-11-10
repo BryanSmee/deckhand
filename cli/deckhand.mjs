@@ -124,23 +124,26 @@ export function createCli({
   const call = (command, args, capture = false, quiet = false) =>
     run(command, args, { cwd: dir, env: childEnv, capture, quiet });
 
-  async function get(url, what) {
+  // `missing`: a 404 answers null rather than failing.
+  async function get(url, what, missing = false) {
     let res;
     try {
       res = await fetch(url, { headers: { "user-agent": `deckhand-cli/${VERSION}` } });
     } catch (error) {
       throw new Error(`Couldn't read ${what} (${url}): ${error.cause?.message ?? error.message}`);
     }
+    if (missing && res.status === 404) return null;
     if (!res.ok) throw new Error(`Couldn't read ${what} (${url}): ${res.status}`);
     return res;
   }
-  const raw = async (version, path) =>
-    (
-      await get(
-        `https://raw.githubusercontent.com/${repo()}/${refOf(version)}/${path}`,
-        `${path} of ${version}`,
-      )
-    ).text();
+  async function raw(version, path, missing = false) {
+    const res = await get(
+      `https://raw.githubusercontent.com/${repo()}/${refOf(version)}/${path}`,
+      `${path} of ${version}`,
+      missing,
+    );
+    return res && res.text();
+  }
 
   async function latestRelease() {
     const url = `https://api.github.com/repos/${repo()}/releases/latest`;
@@ -233,6 +236,22 @@ export function createCli({
     );
   }
 
+  // A pin set by hand leaves the checkout where it is: say so when its compose.yaml may then be
+  // another release's (a single release only: 1.2 and edge name no one commit to compare).
+  async function onPin(version) {
+    if (!RELEASE.test(version) || !existsSync(join(dir, ".git"))) return;
+    const commit = async (ref) => {
+      const { code, stdout } = await call("git", ["rev-parse", "--verify", "-q", ref], true, true);
+      return code === 0 ? stdout.trim() : null;
+    };
+    const tag = await commit(`v${version}^{commit}`);
+    if (tag && tag === (await commit("HEAD"))) return;
+    log(
+      `The checkout isn't on v${version}, the release .env pins: its compose.yaml may be ` +
+        `another release's. git fetch --tags && git checkout v${version} puts it there.`,
+    );
+  }
+
   // The release .env pins; with none (or `latest`), the latest, pinned.
   async function up() {
     await check();
@@ -245,6 +264,8 @@ export function createCli({
       pin(version);
     } else if (!PINNED.test(version)) {
       throw new Error(`.env's DECKHAND_VERSION is ${version}: a release (1.2.3), or edge.`);
+    } else {
+      await onPin(version);
     }
     await start(version);
   }
@@ -261,7 +282,9 @@ export function createCli({
       log(`${target} is older than ${current}: what a release moved isn't moved back (${page}).`);
       return true;
     }
-    const added = newNotes(await raw(current, NOTES), await raw(target, NOTES));
+    // A release older than the page (0.0.x) had no notes: every section is one since it.
+    const before = (await raw(current, NOTES, true)) ?? "";
+    const added = newNotes(before, await raw(target, NOTES));
     if (!added.length) {
       log(`No upgrade notes between ${current} and ${target}.`);
       return false;
@@ -281,6 +304,7 @@ export function createCli({
       throw new Error(`deckhand update ${requested}: a release (1.2.3), latest or edge.`);
     if (target === current && target !== "edge") {
       log(`Already on ${target}: its images pulled again.`);
+      await onPin(target);
     } else {
       const move = await prepare(target);
       log(`Updating from ${current || "latest"} to ${target}.`);

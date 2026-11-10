@@ -11,7 +11,8 @@ and `latest`. Each commit of `main` whose checks pass publishes them too, tagged
 
 `cli/deckhand.mjs` (attached to each release as `deckhand.mjs` too: one file, Node 20 or later,
 on Linux, macOS and WSL2) updates a Compose install from the folder of its `compose.yaml` and
-`.env` (or `--dir <folder>`):
+`.env` (or `--dir <folder>`). It comes with the releases after v0.2.0: before one of them is out,
+update [with docker compose](#with-docker-compose).
 
 ```sh
 node cli/deckhand.mjs update          # the latest release
@@ -23,7 +24,8 @@ It lists the [upgrade notes](upgrade-notes.md) the new release added since the o
 skips the question, in a script). Then it moves `compose.yaml` to that release: a git checkout
 goes to its tag, any other folder gets the tag's file, the old one kept as `compose.yaml.bak`.
 Last, it pins the release in `.env`, pulls every image, the sandbox's included, and runs
-`docker compose up -d`.
+`docker compose up -d`. Outside a checkout, `compose.yaml` is the only file that follows: should
+a release need another one beside it, its upgrade notes say so.
 
 A checkout isn't moved, and nothing changes, when it has local changes (yours belong in
 `compose.override.yaml`) or when the release predates the command (its tag has no
@@ -31,8 +33,10 @@ A checkout isn't moved, and nothing changes, when it has local changes (yours be
 [with docker compose](#with-docker-compose).
 
 `node cli/deckhand.mjs up` starts the release `.env` pins as it is, pulling its images first;
-with `DECKHAND_VERSION=latest` (or none), it pins the latest release the same way. Run either
-again after a failed pull: nothing is lost in between.
+with `DECKHAND_VERSION=latest` (or none), it pins the latest release the same way. A checkout
+that isn't on the pinned release's tag (a pin set by hand) gets a warning: its `compose.yaml` may
+not be that release's (`git checkout v1.2.3` puts it there). Run either again after a
+failed pull: nothing is lost in between.
 
 The pin is `.env`'s: a `DECKHAND_VERSION` your shell exports, which docker compose prefers, is
 left out of the commands it runs (it says so; unset it for your own `docker compose`). A fork
