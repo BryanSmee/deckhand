@@ -1275,7 +1275,7 @@ export function fakeDocker({
 // What Deckhand's default policies (policy/mode-*.rego) give each mode, as capabilities.test.mjs
 // checks with the real opa: a work run (and the operator's ceiling for a repo's own modes) all of
 // it, a research run the open internet, a chat the code, its reads and the setup, the others the
-// code and its reads.
+// code and its reads; each but research, its context repos (`read:context`, #929).
 const LIGHT_CAPABILITIES = ["pull", "image:repo", "read:issues", "read:pulls", "read:actions"];
 export const WORK_CAPABILITIES = [
   "pull",
@@ -1289,12 +1289,15 @@ export const WORK_CAPABILITIES = [
   "read:actions",
 ];
 export function defaultCapabilities({ mode, custom_mode }) {
-  if (mode === "work" || custom_mode) return WORK_CAPABILITIES;
   if (mode === "research") return ["internet"];
+  return [...modeCapabilities({ mode, custom_mode }), "read:context"];
+}
+const modeCapabilities = ({ mode, custom_mode }) => {
+  if (mode === "work" || custom_mode) return WORK_CAPABILITIES;
   if (mode === "discussion") return [...LIGHT_CAPABILITIES, "read:discussions"];
   if (mode === "chat") return [...LIGHT_CAPABILITIES, "setup"];
   return LIGHT_CAPABILITIES;
-}
+};
 
 // The policies' capabilityRules() (policies.mjs) without opa: each input gets what
 // `operator(input)` names from the operator's layer (file "mode.rego"), and a repo's own mode

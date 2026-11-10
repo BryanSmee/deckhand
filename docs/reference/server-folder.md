@@ -70,6 +70,9 @@ hosts: ["*.acme.dev", pypi.org]
 # Of the hosts it may reach, those whose answers the egress proxy keeps, HTTPS too (see
 # Download cache in the guides), besides default.yaml's.
 cached_hosts: [apt.acme.dev]
+# Other repositories its .deckhand.yaml may ask to read (context_repos), besides default.yaml's:
+# exact owners, `*` within the name only.
+context_repos: [acme/shared-docs, "acme/templates-*"]
 # Organization projects (v2), <organization>/<number>, its runs add their issues and pull
 # requests to, and the orchestrator moves its issues on (see Projects in repo-config/issues.md). Needs the
 # App's Organization projects permission. Per repository only.
@@ -112,6 +115,8 @@ so they grant nothing ([Upgrading](../guides/upgrade-notes.md#upgrading-the-prev
   Hosts its sandboxes may reach through the egress proxy, besides the mandatory ones; both files' add up ([Where a sandbox's hosts come from](../security/network.md#where-a-sandboxs-hosts-come-from)).
 - **`cached_hosts`** · `default.yaml` and a repository's file\
   Of the hosts it may reach, those whose answers the egress proxy keeps for every run, HTTPS too ([Download cache](../guides/download-cache.md)).
+- **`context_repos`** · `default.yaml` and a repository's file\
+  Other repositories its `.deckhand.yaml` may ask to read ([Context repos](../repo-config.md#context-repos)): `<owner>/<name>` patterns, the owner exact and `*` matching within the name only (`acme/*`, `acme/templates-*`), case-insensitive, on the whole name; both files' add up. An owner wildcard (`*/*`, `*/docs`, `*`) is an error. A pattern nobody asks for gives nothing; a repository asked for that no pattern lists stops its runs, the reply naming it. The run also needs `read:context` from the policies ([Capabilities](../security/policies.md#capabilities)).
 - **`limits`** · `default.yaml` and a repository's file\
   `cpus`, `memory`, `pids` of each sandbox (and its container engine); a repository's file overrides each one, else `default.yaml`'s, else the built-in 2 CPUs, `4g` and 2048.
 - **`mounts`** · a repository's file only\

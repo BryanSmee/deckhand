@@ -20,6 +20,7 @@
 //       limits: { memory: 8g }   # over the built-in 2 CPUs, 4g, 2048 pids
 //     acme/api.yaml      # acme/api, matched case-insensitively
 //       hosts: ["*.example.com"]
+//       context_repos: [acme/templates-*]  # what its .deckhand.yaml may read (context-repos.mjs)
 //       allow_projects: [acme/3] # its issues and pull requests on these projects (per repo only)
 //       limits: { cpus: 4 }      # over default.yaml's, over the built-in ones
 //       mounts:                  # per repo only
@@ -33,6 +34,7 @@
 import { readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { isAbsolute, join, posix, relative, sep } from "node:path";
 import { ConfigError, parseLimits } from "./config.mjs";
+import { parseContextPatterns, refusedContext } from "./context-repos.mjs";
 import { hostProblem } from "./egress.mjs";
 import { PLAIN_PATH, projectName, RESERVED } from "./repo-config.mjs";
 import { isMap, parseYaml } from "../lib/yaml.mjs";
@@ -181,7 +183,8 @@ function moved(key, file, value) {
 // in its cache, HTTPS too (proxy/cache.mjs, proxy/authority.mjs).
 const HOST_LISTS = { hosts: "hosts", cached_hosts: "cachedHosts" };
 
-// One file's text → { hosts, cachedHosts, mounts, allowProjects, limits, warnings }, limits null
+// One file's text → { hosts, cachedHosts, contextRepos, mounts, allowProjects, limits, warnings },
+// limits null
 // unless it sets them; warnings, what it has that is ignored (REMOVED). `file` names it
 // in errors; `base`: the limits its own start from. Throws a GrantsError listing every error.
 function parseGrant(text, file, base, { isDefault = false } = {}) {
@@ -197,6 +200,7 @@ function parseGrant(text, file, base, { isDefault = false } = {}) {
   const grant = {
     hosts: [],
     cachedHosts: [],
+    contextRepos: [],
     mounts: [],
     allowProjects: [],
     limits: null,
@@ -212,6 +216,8 @@ function parseGrant(text, file, base, { isDefault = false } = {}) {
       fail(moved(key, file, v));
     } else if (Object.hasOwn(HOST_LISTS, key)) {
       parseHosts(key, v, grant[HOST_LISTS[key]], fail);
+    } else if (key === "context_repos") {
+      parseContextPatterns(v, grant.contextRepos, fail);
     } else if (key === "limits") {
       try {
         if (!isMap(v)) throw new ConfigError("limits: expected cpus, memory, pids");
@@ -234,6 +240,7 @@ function parseGrant(text, file, base, { isDefault = false } = {}) {
       const keys = [
         "hosts",
         "cached_hosts",
+        "context_repos",
         "limits",
         ...(isDefault ? [] : ["mounts", "allow_projects"]),
       ];
@@ -474,7 +481,8 @@ export function autoMergeFiles(files) {
 }
 
 // What one repo gets: default.yaml's grants and its own file's, else nothing extra and the
-// operator's limits: hosts add up, and cached hosts too; limits are its own over default.yaml's
+// operator's limits: hosts add up, and cached hosts and context repos' patterns too; limits are
+// its own over default.yaml's
 // over the built-in ones. `files`: where it comes from; `hostFiles` and `limitsFile` too, for the
 // dashboard. The yes-or-no grants (GRANTS) all false: the policies' (withGrants()). Throws its
 // file's GrantsError when that file has errors.
@@ -490,9 +498,13 @@ export function grantFor(grants, config, repo) {
     for (const host of grant?.hosts ?? []) hostFiles[host] ??= file;
   }
   const cachedHosts = [...new Set([...(defaults?.cachedHosts ?? []), ...(own?.cachedHosts ?? [])])];
+  const contextRepos = [
+    ...new Set([...(defaults?.contextRepos ?? []), ...(own?.contextRepos ?? [])]),
+  ];
   return {
     hosts: Object.keys(hostFiles),
     cachedHosts,
+    contextRepos,
     ...NO_GRANTS,
     grantFiles: [],
     mounts: own?.mounts ?? [],
@@ -567,7 +579,8 @@ export function autoMergeProblems(grant, settings, isPrivate = null) {
 
 // What the operator's grants refuse in a repo's settings, checked as a run checks them before
 // it starts: { error } when its grants have errors or its policies can't decide them (a
-// GrantsError), else { grant, missing, mounts } (ungranted(), resolveMounts()). Shared by the
+// GrantsError), else { grant, missing, mounts, context } (ungranted(), resolveMounts(), and the
+// context repos no pattern grants: context-repos.mjs refusedContext()). Shared by the
 // run's preflight and the dashboard's repo list, so the list can't call a repo configured when
 // no run starts there. `load`: the grants folder (loadGrants(); throws when its layout has
 // errors); `granted(repo)`: the policies' grants (grantOf()); `fs`: realpath and stat.
@@ -588,12 +601,14 @@ export async function grantCheck(
     grant,
     missing: ungranted(grant, settings),
     mounts: resolveMounts(settings.mounts, grant, { caches: settings.caches, ...fs }),
+    context: refusedContext(grant, settings),
   };
 }
 
 // Whether grantCheck() found anything that stops every run.
 export const refusedByGrants = (check) =>
-  !!check.error || check.missing.length + check.mounts.refused.length > 0;
+  !!check.error ||
+  check.missing.length + check.mounts.refused.length + (check.context?.length ?? 0) > 0;
 
 // Whether `path` is the grants folder `dir` or under it, in the host's own paths: unlike the
 // mounts' (Linux's, within()), `\` on Windows, where the tests run too (#565).
