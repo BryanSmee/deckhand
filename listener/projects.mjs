@@ -39,7 +39,8 @@ const SET = `mutation($project: ID!, $item: ID!, $field: ID!, $option: String!) 
   }) { projectV2Item { id } }
 }`;
 
-// What the listener sends, for the test that validates them against GitHub's pinned schema.
+// What the listener sends, exported only for the test that validates them against GitHub's
+// pinned schema.
 export const PROJECT_QUERIES = { PROJECT, ISSUE, PULL, ADD, SET };
 
 // A pull request's dashboard states (pulls.mjs) past which its issue's work is no longer

@@ -209,6 +209,7 @@ export const CONFIG: RepoConfig = {
       { host: "registry.npmjs.org", source: "operator", note: "grants/default.yaml" },
     ],
     mounts: [],
+    contextRepos: [],
     grant: {
       files: ["default.yaml"],
       grantFiles: [],
@@ -222,6 +223,7 @@ export const CONFIG: RepoConfig = {
       allowAutoMerge: false,
       hosts: ["registry.npmjs.org"],
       cachedHosts: [],
+      contextRepos: [],
       mounts: [],
       allowProjects: [],
       limits: { cpus: "2", memory: "4g", pids: 2048 },

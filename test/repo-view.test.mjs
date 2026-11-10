@@ -133,6 +133,59 @@ test(
   },
 );
 
+test("context repos: granted with the pattern that grants them, refused with the reason", () => {
+  const yaml = [
+    "context_repos:",
+    "  - acme/templates-web",
+    "  - { repo: Acme/Docs, ref: release/1 }",
+    "  - other/lib",
+  ].join("\n");
+  const grants = { "org/app.yaml": "context_repos: [acme/templates-*, acme/docs]\n" };
+  const { contextRepos, grant } = view(yaml, grants);
+  assert.deepEqual(contextRepos, [
+    {
+      repo: "acme/templates-web",
+      ref: null,
+      folder: "/context/acme/templates-web",
+      pattern: "acme/templates-*",
+      source: "repo",
+      note: null,
+    },
+    {
+      repo: "acme/docs",
+      ref: "release/1",
+      folder: "/context/acme/docs@release-1",
+      pattern: "acme/docs",
+      source: "repo",
+      note: null,
+    },
+    {
+      repo: "other/lib",
+      ref: null,
+      folder: "/context/other/lib",
+      pattern: null,
+      source: "refused",
+      note: "no pattern of the operator's context_repos grants it (acme/templates-*, acme/docs)",
+    },
+  ]);
+  assert.deepEqual(grant.contextRepos, ["acme/templates-*", "acme/docs"]);
+
+  // No pattern at all; broken grants: unknown.
+  const none = view(yaml).contextRepos;
+  assert.ok(none.every((c) => c.source === "refused"));
+  assert.equal(
+    none[0].note,
+    "the operator grants this repository no context repositories (context_repos)",
+  );
+  const { settings } = parseRepoConfig(yaml, config);
+  const broken = effectiveView(config, "org/app", settings, null).contextRepos;
+  assert.deepEqual(
+    broken.map((c) => [c.source, c.note]),
+    Array(3).fill(["unknown", "depends on the operator's grants, which have errors"]),
+  );
+  assert.deepEqual(view("").contextRepos, []);
+});
+
 test("broken grants: the defaults, and no grant shown", () => {
   const { settings } = parseRepoConfig("", config);
   const v = effectiveView(config, "org/app", settings, null);

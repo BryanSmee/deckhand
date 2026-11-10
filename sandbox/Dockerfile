@@ -108,6 +108,9 @@ COPY sandbox/agents/claude/managed-settings.json /etc/claude-code/managed-settin
 # /opt/claude-code: a new volume mounted there takes this owner, root: the listener installs
 # Claude Code as root and sandboxes mount it read-only (../docs/security.md).
 RUN install -d -o node -g node /workspace && install -d /opt/claude-code
+# The run's context repos (entrypoint.sh clone_context()): node's, in the container's own layer,
+# so they are cloned fresh each run.
+RUN install -d -o node -g node /context
 
 # Codex's: its installer. Its home (/home/node/.codex, the issue's session volume) gets its
 # config and hooks from agents/codex.sh on every start; a new volume mounted there takes the

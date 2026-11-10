@@ -43,7 +43,6 @@ import { runFields, STREAM } from "./runs.mjs";
 // replaced.
 import { RUN_TOKEN_HEADER, SANDBOX_HEADER } from "../lib/broker-client.mjs";
 import { withRequest } from "../lib/log.mjs";
-export { RUN_TOKEN_HEADER, SANDBOX_HEADER };
 
 const RUNNER = ["runner"];
 const SANDBOX = ["proxy"];
@@ -110,7 +109,7 @@ const realSleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms).unref
 
 // `runs`, `files`: runs.mjs's and files.mjs's; `callers`: callers.mjs's; `signing`: the key, for
 // the services' tokens; `store`: for the stream; `metrics`: metrics.mjs brokerMetrics()'s hooks.
-export function createBrokerHandler({
+function createBrokerHandler({
   runs,
   files,
   callers,

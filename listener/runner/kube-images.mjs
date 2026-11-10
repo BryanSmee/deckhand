@@ -63,7 +63,7 @@ const NOT_WRITABLE = 97;
 // pulls through the egress proxy before the runner has seen them (registry.mjs hostsOf()
 // learns the others as the runner reads the registry). Docker Hub's API, token service and
 // layer storage; GitHub's registry's layer storage.
-export const REGISTRY_HOSTS = {
+const REGISTRY_HOSTS = {
   "docker.io": [
     "registry-1.docker.io",
     "auth.docker.io",

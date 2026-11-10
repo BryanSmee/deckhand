@@ -17,8 +17,7 @@ import { SERVICES } from "../lib/services.mjs";
 
 // The audience a pod's token for the broker carries: one projected for it alone, so a token
 // the pod holds for another API (its default one) is never taken.
-export const POD_TOKEN_AUDIENCE = "deckhand-broker";
-export { POD_TOKEN_HEADER };
+const POD_TOKEN_AUDIENCE = "deckhand-broker";
 
 const ACCOUNT = "/var/run/secrets/kubernetes.io/serviceaccount";
 

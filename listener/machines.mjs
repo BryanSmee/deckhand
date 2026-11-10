@@ -26,12 +26,12 @@ import { isMap } from "../lib/yaml.mjs";
 export const HEARTBEAT_MS = 30_000;
 export const ONLINE_MS = 90_000;
 // A machine's runs at once without its own config saying more, and the most it may say.
-export const CAPACITY = 1;
+const CAPACITY = 1;
 export const MAX_CAPACITY = 16;
 // Per owner, and per machine: a driver's mistake (one machine a start) can't fill the store.
 export const MAX_MACHINES = 10;
-export const MAX_LABELS = 20;
-export const MAX_REPOS = 50;
+const MAX_LABELS = 20;
+const MAX_REPOS = 50;
 // What offers() asks at once (a policy decision, then a .deckhand.yaml read from GitHub, per
 // repository), and how long a repository's .deckhand.yaml read is used again, by offers() and
 // takes() for every machine (#914): a machine taking `owner/*` on a large installation, or its
@@ -54,7 +54,7 @@ const LINE = /^[^\p{Cc}]+$/u;
 export const WARNING =
   "An agent will run on this machine on its own, with your files, credentials and network. Deckhand suggests settings for it and enforces none: what it may do there is up to you.";
 
-export const isMachineId = (id) => typeof id === "string" && ID.test(id);
+const isMachineId = (id) => typeof id === "string" && ID.test(id);
 
 // The issue labels that route an issue to its labeller's machines (claims.mjs): `runs-on:<label>`.
 export const RUNS_ON = "runs-on:";

@@ -52,7 +52,7 @@ export const WARNING =
 // What claim takes as a version or a permission mode (listener/mcp.mjs SETUP_WORD).
 const SETUP_WORD = /^[A-Za-z0-9][A-Za-z0-9._+-]{0,39}$/;
 // Where Claude Code has a sandbox (macOS, Linux and WSL2, which Node sees as Linux).
-export const SANDBOXED = new Set(["darwin", "linux"]);
+const SANDBOXED = new Set(["darwin", "linux"]);
 // A post_events call: 1000 lines and 1 MB at most (listener/mcp.mjs); a little under, for the
 // JSON around them.
 const MAX_LINES = 1000;
@@ -188,7 +188,7 @@ function scalar(text, n) {
 }
 
 // ~ and ~/… (or ~\… on Windows) under `home`; others resolved from `base`, the config's folder.
-export function expandPath(value, { home, base, platform = process.platform }) {
+function expandPath(value, { home, base, platform = process.platform }) {
   const p = pathsOf(platform);
   const text = String(value);
   if (text === "~") return home;
@@ -1228,7 +1228,7 @@ function permissionRelay(answer) {
 // (stdio, a JSON-RPC message a line), whose one tool, `approve`, asks the driver that started the
 // run (DECKHAND_MACHINE_RELAY, with the run's DECKHAND_MACHINE_RUN): no token of its own. Its
 // answer is Claude Code's, as text; anything that fails denies.
-export async function permissionServer({
+async function permissionServer({
   input = process.stdin,
   output = process.stdout,
   env = process.env,
@@ -1318,7 +1318,7 @@ const fence = (text) => `\`\`\`\n${String(text).replace(/```/g, "ˋˋˋ").slice(
 // --- The command line ------------------------------------------------------------------------
 
 // Where the driver keeps its files: DECKHAND_MACHINE_HOME, else ~/.deckhand-machine.
-export const driverHomeOf = (env = process.env, home = homedir()) =>
+const driverHomeOf = (env = process.env, home = homedir()) =>
   env.DECKHAND_MACHINE_HOME || pathsOf(process.platform).join(home, ".deckhand-machine");
 
 function readJson(file, fallback) {

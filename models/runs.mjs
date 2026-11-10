@@ -21,7 +21,7 @@ export const NOT_ITS_SANDBOX = "this run's token only works from its own sandbox
 
 // How long the broker's word on a run is taken, and how long, the broker away, the last one is.
 export const RECORD_MS = 30_000;
-export const RECORD_STALE_MS = 10 * 60_000;
+const RECORD_STALE_MS = 10 * 60_000;
 // How long a run's API state is kept: as long as its agent token.
 export const STATE_TTL_MS = 8 * 24 * 60 * 60_000;
 

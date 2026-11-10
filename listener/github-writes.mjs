@@ -1467,7 +1467,7 @@ const refusal = (status, message) => ({ status, message });
 const failedRefusal = (refused) => Object.defineProperty(refused, "failed", { value: true });
 // Whether a refusal's look-ups count against the run's MAX_REFUSED_LOOKUPS: a rule's or a built-in
 // check's, not GitHub's or the policy service's failing, nor the budget's own.
-export const chargeable = (refused) => !refused.failed && ![429, 502, 503].includes(refused.status);
+const chargeable = (refused) => !refused.failed && ![429, 502, 503].includes(refused.status);
 // Copilot's logins, over REST and GraphQL (a Bot's login with `[bot]`, github-graphql.mjs).
 const COPILOT = new Set(["copilot", "copilot[bot]", "copilot-swe-agent", "copilot-swe-agent[bot]"]);
 // The issues a run labels besides its own, which never get or lose the needs-input label from it.

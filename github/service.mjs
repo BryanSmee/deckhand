@@ -39,6 +39,7 @@ import { healthAnswer, healthInfo } from "../lib/health.mjs";
 import { readJsonBody, Refused, sendJson } from "../lib/http.mjs";
 import { serviceGuard } from "../lib/service-token.mjs";
 import { repoAllowed } from "../listener/config.mjs";
+import { contextGraphql } from "../listener/context-gateway.mjs";
 import { pullEntry } from "../listener/events.mjs";
 import { createGitGateway } from "../listener/git-gateway.mjs";
 import { createForkChecks } from "../listener/github-forks.mjs";
@@ -56,7 +57,7 @@ import { createRuns, STREAM } from "./runs.mjs";
 // call expects (404, 410: not logged as failures): client.mjs's, which the listener has alone.
 import { EXPECTED_HEADER, GITHUB_STATUS, IDEMPOTENCY_HEADER } from "./client.mjs";
 import { withRequest } from "../lib/log.mjs";
-export { EXPECTED_HEADER, GITHUB_STATUS, IDEMPOTENCY_HEADER };
+export { GITHUB_STATUS };
 
 // Where the operator's credentials' fingerprints are kept, and how often a copy reads them.
 const FINGERPRINTS_KEY = "fingerprints";
@@ -125,7 +126,7 @@ const MAX_BODY = 16 * 1024 * 1024;
 const MAX_KEPT = 1024 * 1024;
 // How long a key's answer is given again, how long a call in flight holds it, and how long one
 // asked again waits for it.
-export const IDEMPOTENCY_TTL_MS = 24 * 3600_000;
+const IDEMPOTENCY_TTL_MS = 24 * 3600_000;
 const PENDING_TTL_MS = 5 * 60_000;
 const PENDING_WAIT_MS = 30_000;
 // The orchestrator's long poll of the events.
@@ -295,7 +296,8 @@ export function createGithubService({
   });
   const graphqlChecks = createGraphqlChecks({
     validator: createValidator().check,
-    files: forkChecks.checkGraphql,
+    // A context repo named by `repository(owner:, name:)` first (git alone reads it).
+    files: async (run, call) => contextGraphql(run, call) ?? forkChecks.checkGraphql(run, call),
     nodes: (repo, ids) => lookupNodes(github, repo, ids),
     checkWrite: writeChecks.checkWrite,
     budget: writeChecks.budget,

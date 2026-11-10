@@ -25,7 +25,7 @@ function onPath(name) {
 }
 
 // How long a short process may take: `opa check` of a few files, or `capabilities`.
-export const RUN_TIMEOUT_MS = 10_000;
+const RUN_TIMEOUT_MS = 10_000;
 
 // Runs `bin` once: `args`, `input` on stdin, an empty environment, killed after `timeoutMs`.
 // → { code, stdout, stderr, timedOut }.
@@ -52,7 +52,7 @@ export function opaRunner(bin = "opa") {
 }
 
 // How long a server may take to load its policies and answer /health.
-export const START_TIMEOUT_MS = 10_000;
+const START_TIMEOUT_MS = 10_000;
 
 // An HTTP request to the server on `socket` → { status, body } (body: its text). `timeoutMs`:
 // past it, the request is cut, which cancels opa's evaluation (its context ends with the

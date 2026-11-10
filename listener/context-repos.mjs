@@ -131,3 +131,13 @@ export function refusedContext(grant, settings) {
         : `\`${repo}\`: the operator grants this repository no context repositories (\`context_repos\`)`,
     );
 }
+
+// Whether an item of the file's `context_repos` is the one parsed into { repo, ref }: where the
+// dashboard finds its line (repo-config.mjs fileLines() itemLine()).
+export const isEntry =
+  ({ repo, ref }) =>
+  (item) => {
+    const entry = isMap(item) ? item : { repo: item };
+    const name = typeof entry.repo === "string" ? entry.repo.toLowerCase() : null;
+    return name === repo && (entry.ref ?? null) === ref;
+  };

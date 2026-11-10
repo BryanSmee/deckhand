@@ -10,6 +10,7 @@
 # discussions) skips the branch, and SANDBOX_SETUP is only set with `setup`. SANDBOX_NO_CLONE=1 (research runs: the open internet, nothing from GitHub) skips the clone
 # and git's credential helper too: the agent starts in an empty /workspace. SANDBOX_FULL_CLONE=1
 # (a work run that isn't a fork's) clones whole, and makes a kept blobless clone whole.
+# SANDBOX_CONTEXT lists the other repositories it reads, cloned read-only under /context.
 #
 #   (no arguments)      the agent, interactive
 #   -p "<task>" …       arguments for the agent's CLI, e.g. a headless task
@@ -290,6 +291,44 @@ if [ -n "${DECKHAND_GIT_URL:-}" ] && [ -z "${SANDBOX_LIGHT:-}" ] && [ -z "${SAND
   git config --global "url.$DECKHAND_GIT_URL/git/.pushInsteadOf" "${REPO_URL%/*/*}/"
 fi
 
+# The run's context repos (SANDBOX_CONTEXT, ../listener/context-access.mjs): other repositories it
+# reads, a `<repo> <ref> <folder>` line each (`-`: the default branch; a commit's whole id is
+# fetched alone), cloned shallow through the GitHub gateway, which fetches them with a token for
+# each alone, or none for a public one (../listener/context-gateway.mjs). Fresh every run, before
+# the setup, and made read-only: a hint to the agent, the gateways refusing every write. One that
+# fails stops the run with git's message: it never goes on with part of its context.
+clone_context() {
+  local repo ref folder url log=/tmp/context-clone.log
+  while read -r repo ref folder; do
+    [ -n "$repo" ] || continue
+    url="${REPO_URL%/*/*}/$repo.git"
+    if [ -e "$folder" ]; then
+      chmod -R u+w "$folder"
+      rm -rf "$folder"
+    fi
+    mkdir -p "${folder%/*}"
+    if [[ $ref =~ ^([0-9a-f]{40}|[0-9a-f]{64})$ ]]; then
+      local format=sha1
+      [ "${#ref}" = 40 ] || format=sha256
+      git init --quiet --object-format="$format" "$folder" &&
+        git -C "$folder" remote add origin "$url" &&
+        git -C "$folder" fetch --quiet --depth 1 origin "$ref" &&
+        git -C "$folder" checkout --quiet --detach FETCH_HEAD
+    elif [ "$ref" = - ]; then
+      git clone --quiet --depth 1 "$url" "$folder"
+    else
+      git clone --quiet --depth 1 --branch "$ref" "$url" "$folder"
+    fi > "$log" 2>&1 || {
+      echo "Context repo $repo (${ref/#-/its default branch}): its clone into $folder failed" >&2
+      cat "$log" >&2
+      exit 1
+    }
+    chmod -R a-w "$folder"
+    echo "Context repo $repo: $folder, read-only" >&2
+  done <<< "${SANDBOX_CONTEXT:-}"
+}
+[ -n "${SANDBOX_NO_CLONE:-}" ] || clone_context
+
 # The run's container engine (../listener/runner/engine.mjs): the containers it builds and
 # runs get the egress proxy by address (from the docker CLI's config), since they can't
 # resolve names on the run's network. Where the engine shares the sandbox's address (a
@@ -494,6 +533,15 @@ What the last run left uncommitted in the clone was stashed before you started
     prompt+="
 
 $setup_failed"
+  fi
+  # Where the context repos are, and that they are read-only, untrusted input (prompts.mjs
+  # contextNote()): a continued session's prompt too, as they may change between runs; once, as
+  # TASK_PROMPT has it already.
+  if [ -z "${SANDBOX_NO_CLONE:-}" ] && [ -n "${SANDBOX_CONTEXT_NOTE:-}" ] &&
+    [[ $prompt != *"$SANDBOX_CONTEXT_NOTE"* ]]; then
+    prompt+="
+
+$SANDBOX_CONTEXT_NOTE"
   fi
   prompt+="
 

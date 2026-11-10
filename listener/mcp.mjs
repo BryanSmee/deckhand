@@ -92,7 +92,7 @@ const MACHINE_TOOL = {
 
 // The work area's actions a client may ask for (work.mjs checkAction()): not a brainstorm's
 // wrap-up, which the task's own comments ask for.
-export const SCHEDULE_ACTIONS = ["start", "queue", "plan", "dequeue", "cancel"];
+const SCHEDULE_ACTIONS = ["start", "queue", "plan", "dequeue", "cancel"];
 
 const INSTRUCTIONS = `Deckhand runs coding agents on GitHub issues and pull requests. These tools \
 read what its dashboard shows you: your repositories, their tasks (an issue or pull request and \

@@ -3,6 +3,7 @@
 // run` arguments (sandboxArgs()). Pure: runs.mjs start() gathers the parts. `run`: { config,
 // task (with its `live`, runs.mjs), agent (agents/), bot (the App's git identity), publicUrl,
 // broker (broker.mjs, which signs the run's tokens: tokens()) }.
+import { contextEnv } from "./context-access.mjs";
 import { proxyEnv } from "./egress.mjs";
 import { languageLine } from "./language.mjs";
 import { restricted } from "./github-forks.mjs";
@@ -245,6 +246,10 @@ export function sandboxEnv(
     // A run the gateways check clones whole: they let it fetch the repository's commits only,
     // never a blob on its own, as a blobless clone does on demand (github-forks.mjs).
     SANDBOX_FULL_CLONE: !open && checked(live) ? "1" : "",
+    // Its context repos (context-access.mjs): `<repo> <ref> <folder>` lines, cloned read-only
+    // before its setup, then what the agent is told of them at the end of every prompt.
+    SANDBOX_CONTEXT: open ? "" : contextEnv(live.context?.clones),
+    SANDBOX_CONTEXT_NOTE: open ? "" : (live.context?.note ?? ""),
     SANDBOX_SETUP: caps.has("setup") ? (settings.setup ?? "") : "",
     // Read by the sandbox from its default branch (origin/BASE_BRANCH), like the config.
     SANDBOX_INSTRUCTIONS: open ? "" : (settings.instructions ?? ""),
