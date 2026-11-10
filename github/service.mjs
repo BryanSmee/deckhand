@@ -39,6 +39,7 @@ import { healthAnswer, healthInfo } from "../lib/health.mjs";
 import { readJsonBody, Refused, sendJson } from "../lib/http.mjs";
 import { serviceGuard } from "../lib/service-token.mjs";
 import { repoAllowed } from "../listener/config.mjs";
+import { contextGraphql } from "../listener/context-gateway.mjs";
 import { pullEntry } from "../listener/events.mjs";
 import { createGitGateway } from "../listener/git-gateway.mjs";
 import { createForkChecks } from "../listener/github-forks.mjs";
@@ -295,7 +296,8 @@ export function createGithubService({
   });
   const graphqlChecks = createGraphqlChecks({
     validator: createValidator().check,
-    files: forkChecks.checkGraphql,
+    // A context repo named by `repository(owner:, name:)` first (git alone reads it).
+    files: async (run, call) => contextGraphql(run, call) ?? forkChecks.checkGraphql(run, call),
     nodes: (repo, ids) => lookupNodes(github, repo, ids),
     checkWrite: writeChecks.checkWrite,
     budget: writeChecks.budget,

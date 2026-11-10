@@ -141,6 +141,7 @@ export function createBroker({
       sandbox = null,
       issued = [],
       caps = null,
+      context = null,
     } = {},
   ) {
     const run = {
@@ -160,6 +161,8 @@ export function createBroker({
       // run's as saved (restart.mjs). None until then: its token reads nothing, nor clones.
       caps: [],
       decided: false,
+      // The other repositories it reads, and those it may not fetch (readContext()).
+      context: context ?? { repos: [], fenced: [] },
       sandbox: typeof sandbox === "string" && sandbox ? sandbox : null,
       issued: (Array.isArray(issued) ? issued : [])
         .filter(isToken)
@@ -224,6 +227,14 @@ export function createBroker({
     if (run) withCaps(run, caps);
   }
 
+  // Its context repos (context-access.mjs contextOf()): { repos: [{ repo, installed }], the
+  // ones its git fetches, each with a token of its own; fenced: the names and patterns of those
+  // it may not fetch } (context-gateway.mjs). Before issue(): the github service gets them then.
+  function readContext(handle, context) {
+    const run = runOf(handle);
+    if (run) run.context = context;
+  }
+
   // What its token reads follows them (github-app.mjs readsOf()), and a run without `pull` gets
   // nothing from GitHub at all (github-gateway.mjs).
   // `decided`: whether they are (a run before grant() has none yet, which says nothing of them).
@@ -266,6 +277,7 @@ export function createBroker({
       fork: run.fork,
       caps: run.caps,
       decided: run.decided,
+      context: run.context,
       sandbox: run.sandbox,
       created: run.created,
       reruns: run.reruns,
@@ -395,6 +407,7 @@ export function createBroker({
     register,
     allow,
     grant,
+    readContext,
     provide,
     watchPushes,
     watchChanges,

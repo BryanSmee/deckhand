@@ -603,8 +603,7 @@ export function createRestart(ctx) {
           ]
             .concat(["trusted", "cached", "uncached", "branches", "lines", "result", "later"])
             .concat(["cancelled", "overflow", "answered", "logPhase", "created", "reruns", "fork"])
-            .concat(["graceUntil"])
-            .concat(["capabilities", "engine", "mounts", "once"])
+            .concat(["graceUntil", "capabilities", "engine", "mounts", "once", "context"])
             // A review's commit (runs.mjs launch()): its review is posted there.
             .concat(["reviewFrom"])
             // An external run's machine, its inbox and whether it is open (runs.mjs
@@ -829,8 +828,9 @@ export function createRestart(ctx) {
       agentToken: movedTokens.get(saved.id)?.agentToken ?? null,
       sandbox: saved.sandbox ?? null,
       issued: movedTokens.get(saved.id)?.runTokens ?? [],
-      // Its tokens' `caps`, which its token reads with (and no token without `pull`).
+      // Its tokens' `caps` (no token without `pull`), and its context repos (context-access.mjs).
       caps: savedCapabilities(saved),
+      context: saved.context ?? null,
     });
     // State saved before runs had branches: none, rather than any; before they kept whether they
     // were a fork's, not one: what it fetches is checked (github-forks.mjs).
