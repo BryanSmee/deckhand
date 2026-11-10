@@ -63,10 +63,8 @@ import {
 import { readOf, runInput } from "./run-policy.mjs";
 import { CONFIG_FILE } from "./repo-config.mjs";
 import { ownReady, requestInput, reviewersFor, runFields } from "./reviewers.mjs";
+import { SEVERITIES } from "./severities.mjs";
 import { respellMap } from "./spelling.mjs";
-
-// The repo's `severity: *` labels' names, most severe first.
-export const SEVERITIES = ["critical", "high", "medium", "low"];
 
 // The label of the issues Deckhand files from its reviews' follow-ups (fileFollowUps()).
 export const FOLLOW_UP_LABEL = "follow-up";

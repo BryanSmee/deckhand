@@ -15,6 +15,7 @@ work_capabilities := {
   "read:issues",
   "read:pulls",
   "read:actions",
+  "read:context",
 }
 
 allow_capabilities contains c if {

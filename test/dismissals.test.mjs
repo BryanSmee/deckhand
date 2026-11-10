@@ -150,3 +150,46 @@ test("closed since their run asked: set aside after GitHub's closed_at, not befo
   });
   assert.deepEqual([none, logs], [[], ["org/app#2: when #2 closed: 502"]]);
 });
+
+// #1002: a review of its pull request (or a light run) after the run that asked leaves its
+// questions waiting: they are still that run's to set aside, kept, or closed.
+test("a review after the run that asked: askedOn, closedTasks and prune() still find that run", () => {
+  const r = (id, key, status, extra = {}) => ({ id, key, status, finishedAt: 10, ...extra });
+  const review = (id, key, extra = {}) => r(id, key, "ok", { taskMode: "review", ...extra });
+  // Newest first.
+  const runs = [
+    review("rev-5", "org/app#5"),
+    r("ask-5", "org/app#5", "needs-input"),
+    r("light-6", "org/app#6", "ok", { light: true }),
+    review("rev-6", "org/app#6"),
+    r("ask-6", "org/app#6", "needs-input"),
+    review("rev-7", "org/app#7", { status: "running" }),
+    r("ask-7", "org/app#7", "needs-input"),
+    r("work-8", "org/app#8", "ok", { taskMode: "work" }),
+    r("ask-8", "org/app#8", "needs-input"),
+  ];
+  assert.equal(askedOn(runs, "org/app#5").runId, "ask-5");
+  assert.equal(askedOn(runs, "org/app#6").runId, "ask-6");
+  // A review going, or a work run since: nothing waits.
+  assert.equal(askedOn(runs, "org/app#7"), null);
+  assert.equal(askedOn(runs, "org/app#8"), null);
+  const merged = { state: "merged", number: 9 };
+  assert.deepEqual(
+    closedTasks(
+      runs,
+      () => null,
+      () => merged,
+    ),
+    [
+      { key: "org/app#5", repo: "org/app", numbers: [9] },
+      { key: "org/app#6", repo: "org/app", numbers: [9] },
+    ],
+  );
+  // prune(): a set-aside stays while its run still asks; a failure dismissed, while it is last.
+  const d = createDismissals({ now: () => 1 });
+  d.setAside("org/app#5", "ask-5", null);
+  d.setAside("org/app#8", "ask-8", null);
+  d.dismiss("org/app#6", "ask-6", "alice");
+  d.prune(runs);
+  assert.deepEqual(d.keys(), ["org/app#5"]);
+});

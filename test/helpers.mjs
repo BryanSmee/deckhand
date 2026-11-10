@@ -46,6 +46,7 @@ import { openLog } from "../listener/runlog.mjs";
 import { overlaps } from "../lib/subnets.mjs";
 import { signer } from "../lib/s3.mjs";
 import { parseYaml } from "../lib/yaml.mjs";
+import { localToken } from "../edge/local.mjs";
 
 // Whether the real `opa` is on the PATH (the listener's image has it): the tests that evaluate
 // Deckhand's policies as written skip without it, the fakes cover the listener's side. Asked
@@ -266,6 +267,14 @@ export function freshRedisPrefix(t, url) {
 }
 
 // A signing key of the test's own: { privateKey, publicKey, kid }.
+// /status as edge/status.mjs asks it from inside edge's container (#1019): edge's port, its
+// DATA_DIR.
+export async function localStatus(port, dataDir) {
+  const token = localToken(readFileSync(join(dataDir, "session.key")));
+  const headers = { authorization: `Bearer ${token}` };
+  return (await fetch(`http://127.0.0.1:${port}/status`, { headers })).json();
+}
+
 export function testKey() {
   const { privateKey, publicKey } = generateKeyPairSync("ed25519");
   return { privateKey, publicKey, kid: keyId(publicKey) };
@@ -1275,7 +1284,7 @@ export function fakeDocker({
 // What Deckhand's default policies (policy/mode-*.rego) give each mode, as capabilities.test.mjs
 // checks with the real opa: a work run (and the operator's ceiling for a repo's own modes) all of
 // it, a research run the open internet, a chat the code, its reads and the setup, the others the
-// code and its reads.
+// code and its reads; each but research, its context repos (`read:context`, #929).
 const LIGHT_CAPABILITIES = ["pull", "image:repo", "read:issues", "read:pulls", "read:actions"];
 export const WORK_CAPABILITIES = [
   "pull",
@@ -1289,12 +1298,15 @@ export const WORK_CAPABILITIES = [
   "read:actions",
 ];
 export function defaultCapabilities({ mode, custom_mode }) {
-  if (mode === "work" || custom_mode) return WORK_CAPABILITIES;
   if (mode === "research") return ["internet"];
+  return [...modeCapabilities({ mode, custom_mode }), "read:context"];
+}
+const modeCapabilities = ({ mode, custom_mode }) => {
+  if (mode === "work" || custom_mode) return WORK_CAPABILITIES;
   if (mode === "discussion") return [...LIGHT_CAPABILITIES, "read:discussions"];
   if (mode === "chat") return [...LIGHT_CAPABILITIES, "setup"];
   return LIGHT_CAPABILITIES;
-}
+};
 
 // The policies' capabilityRules() (policies.mjs) without opa: each input gets what
 // `operator(input)` names from the operator's layer (file "mode.rego"), and a repo's own mode

@@ -20,6 +20,7 @@ import { randomBytes } from "node:crypto";
 import { keepLast } from "../lib/capped.mjs";
 import { Refused } from "../lib/http.mjs";
 import { mapLimited } from "../lib/pool.mjs";
+import { isMap } from "../lib/yaml.mjs";
 
 // How often a driver says it is there, and how long a machine stays online without it.
 export const HEARTBEAT_MS = 30_000;
@@ -79,6 +80,35 @@ export function machineLabel(value) {
   if (typeof value !== "string") return null;
   const label = value.trim().toLowerCase();
   return LABEL.test(label) ? label : null;
+}
+
+// `machines: true`, or `machines: { labels: [unreal] }`: its tasks may run on its users' own
+// machines (below), with the operator's `machines` grant too; `labels` narrows them to
+// the machines that have one of these. → settings.machines: null (off), or { labels } (null:
+// any label). Every key is checked: a mistyped one would offer more machines than meant.
+export function parseMachines(value, { key, settings, fail }) {
+  if (typeof value === "boolean") {
+    settings.machines = value ? { labels: null } : null;
+    return;
+  }
+  if (!isMap(value)) return fail(key, "expected true, false or { labels: [...] }");
+  let ok = true;
+  for (const other of Object.keys(value)) {
+    if (other !== "labels") {
+      ok = false;
+      fail(`machines.${other}`, "unknown key (expected labels)");
+    }
+  }
+  const labels = value.labels;
+  if (labels === undefined || labels === null) {
+    if (ok) settings.machines = { labels: null };
+    return;
+  }
+  const kept = Array.isArray(labels) ? labels.map(machineLabel) : [];
+  if (!kept.length || kept.includes(null)) {
+    return fail("machines.labels", 'expected a list of labels (letters, digits, ".", "_" and "-")');
+  }
+  if (ok) settings.machines = { labels: [...new Set(kept)] };
 }
 
 // Whether `repo` ("owner/name") is among `patterns` (a machine's `repos`).

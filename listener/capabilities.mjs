@@ -8,12 +8,13 @@
 // outcomeOf(), says what a run gets: runs start with it (preparation.mjs), and the repository's
 // config page shows it for each mode (repos.mjs). Format: ../docs/repo-config/policies.md#capabilities.
 import { BUILT_IN, customMode, MODES, RESEARCH } from "./modes.mjs";
+import { contextNames } from "./context-repos.mjs";
 import { GRANTS, grantCheck, grantsBy, notGranted, ungranted } from "./grants.mjs";
 import { POLICY_DIR } from "./policies.mjs";
 import { personStarted, runTrigger } from "./run-policy.mjs";
 
 // The catalogue: each capability's name, the capabilities it needs (`needs`), the
-// .deckhand.yaml keys that ask for it (`config`, settings fields: repo-config.mjs) and the
+// .deckhand.yaml keys that ask for it (`config`: repo-config.mjs KEYS, FIELDS) and the
 // grant that gates it (`grant`, grants.mjs GRANTS: the operator's `allow_grant` rules, per
 // repository), if any: one the policies allow and the config asks for stops the run without its
 // grant, unless `optional`. What it gives (`what`) and what enforces
@@ -100,7 +101,20 @@ export const CAPABILITIES = [
     what: "its GitHub Actions runs and their logs, check runs and commit statuses",
     enforcedBy: "GitHub (actions, checks and statuses: read)",
   },
+  {
+    name: "read:context",
+    needs: ["pull"],
+    config: ["context_repos"],
+    // Each repository its config names also needs the operator's `context_repos` grant, checked
+    // at the start whatever the policies say (grants.mjs grantCheck()).
+    what: "read-only clones of the other repositories its `context_repos` names, at their refs",
+    enforcedBy:
+      "the listener at start (each repository against the operator's `context_repos` grant)",
+  },
 ];
+
+// A config key's settings field, where its name differs (asked()).
+const FIELDS = { context_repos: "contextRepos" };
 
 const BY_NAME = new Map(CAPABILITIES.map((c) => [c.name, c]));
 export const NAMES = CAPABILITIES.map((c) => c.name);
@@ -108,14 +122,15 @@ export const NAMES = CAPABILITIES.map((c) => c.name);
 // The combinations refused unless an allow rule of the operator's names them (its `name`, as
 // `allow_capabilities` gives it): a private repository's code, untrusted content from the open
 // internet and a way out, in one run. Checked here so that replacing a default file can't drop
-// them. `applies(repo)`: whether it is risky in that repo ({ private }, unknown counting as
-// private).
+// them. `applies(repo, context)`: whether it is risky in that repo ({ private }, unknown counting
+// as private), with the context repos the run reads (`context`: [{ private }], none without
+// `read:context`).
 export const RISKY = [
   {
     name: "pull+internet",
     capabilities: ["pull", "internet"],
-    applies: (repo) => repo.private !== false,
-    why: "a private repository's code next to the open internet: what a web page says could make the run send it out",
+    applies: (repo, context) => repo.private !== false || context.some((c) => c.private !== false),
+    why: "a private repository's code (its own or a context repo's) next to the open internet: what a web page says could make the run send it out",
   },
 ];
 
@@ -128,7 +143,8 @@ export const KNOWN = new Set([...NAMES, ...RISKY.map((r) => r.name)]);
 // comment's; `fork`: whether a fork's pull request's comments started it; `trigger`: what a
 // person started it from, as the run input says it (run-policy.mjs runTrigger(): "comment",
 // "dashboard", "auto-pickup", "inbox", "discussion"), null for a run the listener starts
-// itself; `command`: its last comment's first line ("work", "stop", "review"…), null when none.
+// itself; `command`: its last comment's first line ("work", "stop", "review"…), null when none;
+// `context_repos`: the repositories its config's `context_repos` names (`settings`), each once.
 export function capabilitiesInput({
   repo,
   mode,
@@ -137,6 +153,7 @@ export function capabilitiesInput({
   fork,
   trigger = null,
   command = null,
+  settings = null,
 }) {
   return {
     // Lower case, as the run input's `repo` and the GitHub input's (run-policy.mjs runInput()).
@@ -151,12 +168,13 @@ export function capabilitiesInput({
     fork: fork === true,
     trigger: trigger ?? null,
     command: command ?? null,
+    context_repos: contextNames(settings),
   };
 }
 
 // The input of a run started by `item`, its queue's last (tasks.mjs): as the run input says
 // it, the comment's command apart (`deny_run`'s, run-policy.mjs runInput()).
-export const runInput = ({ repo, mode, issue = null, item, fork }) =>
+export const runInput = ({ repo, mode, issue = null, item, fork, settings = null }) =>
   capabilitiesInput({
     repo,
     mode,
@@ -165,6 +183,7 @@ export const runInput = ({ repo, mode, issue = null, item, fork }) =>
     fork,
     trigger: personStarted(item) ? runTrigger(item) : null,
     command: item.trigger ?? null,
+    settings,
   });
 
 // What a run of `mode` started by `item` gets (outcomeOf()), decided by the policies on `base`
@@ -178,7 +197,7 @@ export async function runOutcome(
   { config, policies },
   { repo, base, settings, mode, issue = null, item, fork, unforked = false },
 ) {
-  const input = runInput({ repo, mode, issue, item, fork });
+  const input = runInput({ repo, mode, issue, item, fork, settings });
   const inputs = { run: input, ...(unforked && fork && { unforked: { ...input, fork: false } }) };
   const said = policies
     ? await policies.capabilityRules(repo.name, base, inputs)
@@ -203,7 +222,7 @@ export async function runOutcome(
 // What the config asks for: a capability with a config side is used only when one of its keys
 // is set.
 const asked = (settings, c) =>
-  !c.config || c.config.some((key) => [settings?.[key]].flat().some(Boolean));
+  !c.config || c.config.some((key) => [settings?.[FIELDS[key] ?? key]].flat().some(Boolean));
 
 // What a run gets → { capabilities, used, errors, warnings }: `capabilities`, one row per
 // catalogue entry, { name, status, used, files, reason }: `status` "used", "denied" (a deny
@@ -219,8 +238,9 @@ const asked = (settings, c) =>
 // each { allow: name → [files], deny: [{ capability, reason, file }] }, the repo's absent when it
 // has no files; `custom`: whether its mode is the repo's own (it needs the repo's allow too);
 // `settings`: the repo's (.deckhand.yaml); `grant`: the operator's (grants.mjs), null when it
-// can't be read (nothing it gates is used); `repo`: { private }; `mode`: the run's, for the
-// modes that can't do without `pull` (NEED_PULL).
+// can't be read (nothing it gates is used); `repo`: { private, context }, `context` each context
+// repo's visibility (name → true, false or null: unknown, which counts as private; absent: all
+// unknown); `mode`: the run's, for the modes that can't do without `pull` (NEED_PULL).
 export function outcomeOf({ rules, custom, settings, grant, repo, mode = null }) {
   const errors = [];
   const warnings = [];
@@ -328,8 +348,12 @@ export function outcomeOf({ rules, custom, settings, grant, repo, mode = null })
       if (!has.has(need)) errors.push(`\`${name}\` needs \`${need}\`, which the run doesn't get`);
     }
   }
+  // The context repos the run reads, for the risky combinations: none without `read:context`.
+  const context = has.has("read:context")
+    ? contextNames(settings).map((name) => ({ private: repo.context?.[name] ?? null }))
+    : [];
   for (const risk of RISKY) {
-    if (!risk.capabilities.every((c) => has.has(c)) || !risk.applies(repo)) continue;
+    if (!risk.capabilities.every((c) => has.has(c)) || !risk.applies(repo, context)) continue;
     const named = allowedBy("operator", risk.name).length > 0;
     const said = `\`${risk.capabilities.join("` with `")}\`: ${risk.why}`;
     if (named) warnings.push(`${said} (the operator's \`${risk.name}\` allows it)`);
@@ -411,7 +435,10 @@ export function modesOf(settings, grant = null) {
 export async function modeOutcomes({ repo, settings, grant, decide }) {
   const modes = modesOf(settings, grant);
   const inputs = Object.fromEntries(
-    modes.map(({ mode }) => [mode, capabilitiesInput({ repo, mode, fork: false, issue: null })]),
+    modes.map(({ mode }) => [
+      mode,
+      capabilitiesInput({ repo, mode, fork: false, issue: null, settings }),
+    ]),
   );
   const said = await decide(inputs);
   if (said.error) return { error: said.error };
@@ -452,7 +479,7 @@ function ungrantedFor({ used, errors }, grant, settings) {
 export async function capabilityNameWarnings({ repo, settings, decide }) {
   const modes = modesOf({ ...settings, review: settings?.review ?? {} }, { allowResearch: true });
   const inputs = Object.fromEntries(
-    modes.map(({ mode }) => [mode, capabilitiesInput({ repo, mode, fork: false })]),
+    modes.map(({ mode }) => [mode, capabilitiesInput({ repo, mode, fork: false, settings })]),
   );
   const said = await decide(inputs);
   if (said.error) return [];
