@@ -16,7 +16,13 @@ import { drain } from "../lib/drain.mjs";
 import { redact } from "../lib/redact.mjs";
 import { networkCallers } from "../lib/service-token.mjs";
 import { openStore } from "../lib/store.mjs";
-import { keyFolder } from "../lib/tokens.mjs";
+import {
+  AGENT_AUDIENCE,
+  AGENT_TOKEN_TTL_MS,
+  keyFolder,
+  signToken,
+  TOKEN_VERSION,
+} from "../lib/tokens.mjs";
 import { EPOCH_HEADER } from "../lib/service-client.mjs";
 import { SANDBOX_URLS } from "../lib/services.mjs";
 import { createBrokerService } from "../listener/broker-service.mjs";
@@ -31,7 +37,7 @@ import {
   runnerOf,
   unreadableCredentials,
 } from "../models/server.mjs";
-import { RECORD_MS } from "../models/runs.mjs";
+import { createRuns, RECORD_MS } from "../models/runs.mjs";
 import { createProxy } from "../proxy/proxy.mjs";
 import { assertHealth, assertMode, listening, serve, tempDir, testKey } from "./helpers.mjs";
 
@@ -801,4 +807,49 @@ test("/ready: out of rotation until the broker answered this copy (#391)", async
   assert.equal(await ready(), 503);
   answered = true;
   assert.equal(await ready(), 200);
+});
+
+test("the broker's run record: one failed call asked again, two in a row a 503 (#1107)", async () => {
+  const key = testKey();
+  const token = signToken(
+    {
+      ver: TOKEN_VERSION,
+      jti: "run-1",
+      sandbox: "net-1",
+      agent: { provider: "google", credential: "AGY_AUTH_FILE" },
+    },
+    { ...key, audience: AGENT_AUDIENCE, ttlMs: AGENT_TOKEN_TTL_MS },
+  );
+  const req = { headers: { "x-deckhand-sandbox": "net-1" } };
+  let failures = 0;
+  let asked = 0;
+  const logged = [];
+  const runs = createRuns({
+    keys: new Map([[key.kid, key.publicKey]]),
+    record: async () => {
+      asked++;
+      if (failures-- > 0) throw new Error("socket hang up");
+      return { sandbox: "net-1" };
+    },
+    store: openStore("memory:"),
+    log: (line) => logged.push(line),
+  });
+  failures = 1;
+  const checked = await runs.check(token, req);
+  assert.equal(checked.run?.id, "run-1");
+  assert.equal(asked, 2);
+  assert.match(logged.join("\n"), /the broker, about run run-1 \(socket hang up\), asking again/);
+
+  // Once its record is past RECORD_MS and none answers twice: refused for now, not taken.
+  const later = createRuns({
+    keys: new Map([[key.kid, key.publicKey]]),
+    record: async () => {
+      throw new Error("socket hang up");
+    },
+    store: openStore("memory:"),
+  });
+  assert.deepEqual(await later.check(token, req), {
+    status: 503,
+    message: "the broker can't say whether this run still goes",
+  });
 });
