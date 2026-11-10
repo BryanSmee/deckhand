@@ -186,10 +186,11 @@ case "$1" in
   info)
     echo '{"runc":{}}' ;;
   compose)
-    # cli/deckhand.mjs's calls (cli.test.mjs): logged with the release .env pins as compose
-    # reads it there, a pull that fails when the test leaves pull-fails.
+    # cli/deckhand.mjs's calls (cli.test.mjs): logged with the release compose would run, the
+    # shell's DECKHAND_VERSION before .env's as compose has it; a pull that fails when the test
+    # leaves pull-fails.
     [ "$2" = version ] && { echo "Docker Compose version v2.40.0"; exit; }
-    pinned=$(sed -n 's/^DECKHAND_VERSION=//p' .env)
+    pinned=${DECKHAND_VERSION:-$(sed -n 's/^DECKHAND_VERSION=//p' .env)}
     echo "$* ($pinned)" >> "$dir/docker-calls"
     [ "$2" = pull ] && [ -e "$dir/pull-fails" ] && exit 1
     exit 0 ;;

@@ -21,13 +21,24 @@ node cli/deckhand.mjs update 1.2.3    # a release of your choice, or edge
 It lists the [upgrade notes](upgrade-notes.md) the new release added since the one `.env` pins
 (each with its link: read them before you go on) and asks before it changes anything (`--yes`
 skips the question, in a script). Then it moves `compose.yaml` to that release: a git checkout
-goes to its tag (refused with local changes: yours belong in `compose.override.yaml`), any other
-folder gets the tag's file, the old one kept as `compose.yaml.bak`. Last, it pins the release in
-`.env`, pulls every image, the sandbox's included, and runs `docker compose up -d`.
+goes to its tag, any other folder gets the tag's file, the old one kept as `compose.yaml.bak`.
+Last, it pins the release in `.env`, pulls every image, the sandbox's included, and runs
+`docker compose up -d`.
+
+A checkout isn't moved, and nothing changes, when it has local changes (yours belong in
+`compose.override.yaml`) or when the release predates the command (its tag has no
+`cli/deckhand.mjs`, which the checkout would lose): run that one
+[with docker compose](#with-docker-compose).
 
 `node cli/deckhand.mjs up` starts the release `.env` pins as it is, pulling its images first;
 with `DECKHAND_VERSION=latest` (or none), it pins the latest release the same way. Run either
 again after a failed pull: nothing is lost in between.
+
+The pin is `.env`'s: a `DECKHAND_VERSION` your shell exports, which docker compose prefers, is
+left out of the commands it runs (it says so; unset it for your own `docker compose`). A fork
+names its repository in `DECKHAND_REPOSITORY=<owner>/<repo>` (in `.env` or the shell), where the
+command reads its releases, `compose.yaml` and upgrade notes, as `DECKHAND_REGISTRY` names its
+images.
 
 Why a pinned release: with `latest`, which release runs is whatever the last pull got, and an
 updater that follows running containers (Watchtower) never pulls the sandbox image, as compose's

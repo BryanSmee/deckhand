@@ -63,9 +63,7 @@ function github(files, latest = "v0.2.0") {
   const fetch = async (url) => {
     calls.push(url);
     if (url.endsWith("/releases/latest")) return Response.json({ tag_name: latest });
-    const m = /^https:\/\/raw\.githubusercontent\.com\/BryanSmee\/deckhand\/([^/]+)\/(.+)$/.exec(
-      url,
-    );
+    const m = /^https:\/\/raw\.githubusercontent\.com\/[^/]+\/[^/]+\/([^/]+)\/(.+)$/.exec(url);
     const text = m && files[`${m[1]} ${m[2]}`];
     return text === undefined ? new Response("Not Found", { status: 404 }) : new Response(text);
   };
@@ -215,15 +213,13 @@ test(
       /since the release you ran \(latest\): https:\/\/github\.com\/.*\/blob\/v0\.1\.1\//,
     );
     await assert.rejects(d.cli(gh.fetch).update("0.2"), /a release \(1\.2\.3\), latest or edge/);
-    await assert.rejects(
-      d.cli(gh.fetch).update("1.0.0", { yes: true }),
-      /upgrade-notes\.md of 1\.0\.0.*404/,
-    );
+    await assert.rejects(d.cli(gh.fetch).update("1.0.0", { yes: true }), /of 1\.0\.0.*404/);
     assert.equal(readVersion(readFileSync(join(d.dir, ".env"), "utf8")), "0.1.1");
   },
 );
 
-// A clone of a repository whose tags v0.1.0 and v0.2.0 have their own compose.yaml, on v0.1.0.
+// A clone of a repository whose tags v0.1.0 and v0.2.0 have their own compose.yaml, on v0.1.0,
+// and main a commit past v0.2.0. v0.1.0 predates the deckhand command (no cli/deckhand.mjs).
 function checkout(t) {
   const env = {
     ...process.env,
@@ -238,11 +234,15 @@ function checkout(t) {
   const origin = tempDir(t);
   git(origin, "init", "--quiet", "--initial-branch=main");
   writeFileSync(join(origin, ".gitignore"), ".env\n");
-  for (const version of ["0.1.0", "0.2.0"]) {
+  for (const version of ["0.1.0", "0.2.0", "edge"]) {
     writeFileSync(join(origin, "compose.yaml"), `${version}\n`);
+    if (version === "0.2.0") {
+      mkdirSync(join(origin, "cli"));
+      writeFileSync(join(origin, "cli", "deckhand.mjs"), "");
+    }
     git(origin, "add", ".");
     git(origin, "commit", "--quiet", "-m", version);
-    git(origin, "tag", `v${version}`);
+    if (version !== "edge") git(origin, "tag", `v${version}`);
   }
   const dir = join(tempDir(t), "deckhand");
   mkdirSync(dir);
@@ -252,7 +252,7 @@ function checkout(t) {
 }
 
 test(
-  "update: a git checkout moved to the release's tag, never over local changes",
+  "update: a git checkout moved to the release's tag or to main, never over local changes",
   { skip: needsBash },
   async (t) => {
     const repo = checkout(t);
@@ -262,6 +262,7 @@ test(
     const gh = github({
       [`v0.1.0 docs/guides/upgrade-notes.md`]: NOTES_V1,
       [`v0.2.0 docs/guides/upgrade-notes.md`]: NOTES_V2,
+      [`main docs/guides/upgrade-notes.md`]: NOTES_V2,
     });
     writeFileSync(join(repo.dir, "compose.yaml"), "mine\n");
     await assert.rejects(d.cli(gh.fetch).update(undefined, { yes: true }), /local changes/);
@@ -277,6 +278,56 @@ test(
     assert.deepEqual(d.calls(), ["compose pull (0.2.0)", "compose up -d (0.2.0)"]);
     // No compose.yaml asked of GitHub: the checkout has it.
     assert.ok(gh.calls.every((url) => !url.endsWith("compose.yaml")));
+
+    // edge: main's newest commit.
+    await d.cli(gh.fetch).update("edge", { yes: true });
+    assert.equal(readFileSync(join(repo.dir, "compose.yaml"), "utf8"), "edge\n");
+    assert.equal(repo.git("rev-parse", "HEAD"), repo.git("rev-parse", "origin/main"));
+    assert.equal(readVersion(readFileSync(join(repo.dir, ".env"), "utf8")), "edge");
+    assert.match(d.logs.join("\n"), /The checkout is on origin\/main now/);
+  },
+);
+
+test(
+  "A git checkout never moved to a release without the deckhand command",
+  { skip: needsBash },
+  async (t) => {
+    const repo = checkout(t);
+    repo.git("checkout", "--quiet", "--detach", "v0.2.0");
+    const d = deckhand(t, "DECKHAND_VERSION=0.2.0\n", { dir: repo.dir });
+    d.env.GIT_CONFIG_GLOBAL = repo.env.GIT_CONFIG_GLOBAL;
+    d.env.GIT_CONFIG_NOSYSTEM = "1";
+    // Refused before anything is asked: the checkout, .env and the services as they were.
+    await assert.rejects(
+      d.cli(github({}).fetch, () => assert.fail("asked")).update("0.1.0"),
+      /v0\.1\.0 has no cli\/deckhand\.mjs: it predates the deckhand command.*Nothing changed/,
+    );
+    assert.equal(repo.git("describe", "--tags", "--exact-match"), "v0.2.0");
+    assert.equal(readVersion(readFileSync(join(repo.dir, ".env"), "utf8")), "0.2.0");
+    // up, when the latest release is one without it: nothing pinned.
+    writeFileSync(join(repo.dir, ".env"), "DECKHAND_VERSION=latest\n");
+    await assert.rejects(d.cli(github({}, "v0.1.0").fetch).up(), /predates the deckhand command/);
+    assert.equal(readVersion(readFileSync(join(repo.dir, ".env"), "utf8")), "latest");
+    assert.equal(repo.git("describe", "--tags", "--exact-match"), "v0.2.0");
+    assert.deepEqual(d.calls(), []);
+  },
+);
+
+test(
+  "A fork's releases (DECKHAND_REPOSITORY), and the shell's DECKHAND_VERSION left out",
+  { skip: needsBash },
+  async (t) => {
+    const d = deckhand(t, "DECKHAND_VERSION=latest\nDECKHAND_REPOSITORY=someone/fork\n");
+    // compose would run the shell's release rather than the one .env pins.
+    d.env.DECKHAND_VERSION = "0.1.0";
+    const gh = github({ "v0.2.0 compose.yaml": "new\n" });
+    await d.cli(gh.fetch).up();
+    assert.deepEqual(gh.calls, [
+      "https://api.github.com/repos/someone/fork/releases/latest",
+      "https://raw.githubusercontent.com/someone/fork/v0.2.0/compose.yaml",
+    ]);
+    assert.deepEqual(d.calls(), ["compose pull (0.2.0)", "compose up -d (0.2.0)"]);
+    assert.match(d.logs.join("\n"), /Your shell sets DECKHAND_VERSION=0\.1\.0/);
   },
 );
 

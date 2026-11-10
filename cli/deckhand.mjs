@@ -11,7 +11,8 @@
 // compose.yaml the one beside it, and the sandbox image, which an updater following running
 // containers never pulls (compose's `sandbox` service exits at once), pulled with the rest.
 // compose.yaml follows the release: a git checkout moves to its tag, any other folder gets the
-// tag's file (the old one kept as compose.yaml.bak).
+// tag's file (the old one kept as compose.yaml.bak). A fork's releases: DECKHAND_REPOSITORY, in
+// the shell or .env, as DECKHAND_REGISTRY names its images.
 import { spawn } from "node:child_process";
 import { copyFileSync, existsSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
@@ -23,22 +24,26 @@ export const VERSION = "0.1.0";
 // Where the releases, compose.yaml and the upgrade notes come from (DECKHAND_REPOSITORY: a fork).
 export const REPOSITORY = "BryanSmee/deckhand";
 export const NOTES = "docs/guides/upgrade-notes.md";
+// This file, in a checkout: a ref without it would leave the checkout without the command.
+export const SELF = "cli/deckhand.mjs";
 // A release update takes (the images' tag: 1.2.3, no "v"); what .env may pin besides (1.2, edge).
 const RELEASE = /^\d+\.\d+\.\d+$/;
 const PINNED = /^(\d+\.\d+(\.\d+)?|edge)$/;
 
 // --- .env ------------------------------------------------------------------------------------
 
-// The value .env gives DECKHAND_VERSION, as compose reads it (the last line setting it), or "".
-export function readVersion(text) {
-  let version = "";
+// The value .env gives `name`, as compose reads it (the last line setting it), or "".
+export function readSetting(text, name) {
+  const setting = new RegExp(`^\\s*(?:export\\s+)?${name}\\s*=\\s*(.*?)\\s*$`);
+  let value = "";
   for (const line of String(text).split(/\r?\n/)) {
-    const m = /^\s*(?:export\s+)?DECKHAND_VERSION\s*=\s*(.*?)\s*$/.exec(line);
+    const m = setting.exec(line);
     // A quoted value as it is, an unquoted one up to its comment.
-    if (m) version = /^(["'])(.*)\1$/.exec(m[1])?.[2] ?? m[1].replace(/\s+#.*$/, "");
+    if (m) value = /^(["'])(.*)\1$/.exec(m[1])?.[2] ?? m[1].replace(/\s+#.*$/, "");
   }
-  return version;
+  return value;
 }
+export const readVersion = (text) => readSetting(text, "DECKHAND_VERSION");
 
 // .env with DECKHAND_VERSION set to `version`: its lines setting it replaced (a comment
 // mentioning it left as it is), or one added at the end. The rest kept byte for byte.
@@ -89,7 +94,8 @@ export const refOf = (version) => (version === "edge" ? "main" : `v${version}`);
 
 // --- The commands ----------------------------------------------------------------------------
 
-// `run(command, args, { cwd, env, capture })`: its exit code, and its output when captured.
+// `run(command, args, { cwd, env, capture, quiet })`: its exit code, and its output when captured
+// (`quiet`: its errors too, left unsaid).
 // `ask(question)`: the answer typed, or null without a terminal. Both injected by the tests.
 export function createCli({
   dir,
@@ -98,13 +104,25 @@ export function createCli({
   run = runCommand,
   ask = askTerminal,
   log = console.log,
-  repository = env.DECKHAND_REPOSITORY || REPOSITORY,
+  repository,
 }) {
   const files = {
     compose: join(dir, "compose.yaml"),
     env: join(dir, ".env"),
   };
-  const call = (command, args, capture = false) => run(command, args, { cwd: dir, env, capture });
+  const dotEnv = () => readFileSync(files.env, "utf8");
+  // Read once .env is known to be there (check()).
+  const repo = () =>
+    repository ||
+    env.DECKHAND_REPOSITORY ||
+    readSetting(dotEnv(), "DECKHAND_REPOSITORY") ||
+    REPOSITORY;
+  // compose prefers a DECKHAND_VERSION of the shell's to .env's: the pin is .env's, so the
+  // commands run without it (check() says so).
+  const childEnv = { ...env };
+  delete childEnv.DECKHAND_VERSION;
+  const call = (command, args, capture = false, quiet = false) =>
+    run(command, args, { cwd: dir, env: childEnv, capture, quiet });
 
   async function get(url, what) {
     let res;
@@ -119,13 +137,13 @@ export function createCli({
   const raw = async (version, path) =>
     (
       await get(
-        `https://raw.githubusercontent.com/${repository}/${refOf(version)}/${path}`,
+        `https://raw.githubusercontent.com/${repo()}/${refOf(version)}/${path}`,
         `${path} of ${version}`,
       )
     ).text();
 
   async function latestRelease() {
-    const url = `https://api.github.com/repos/${repository}/releases/latest`;
+    const url = `https://api.github.com/repos/${repo()}/releases/latest`;
     const tag = String((await (await get(url, "the latest release")).json()).tag_name ?? "");
     const version = tag.replace(/^v/, "");
     if (!RELEASE.test(version)) throw new Error(`The latest release is ${tag}: not a version.`);
@@ -150,6 +168,12 @@ export function createCli({
     }
     if (result.code !== 0)
       throw new Error("docker compose failed: Deckhand needs Docker's compose plugin.");
+    if (env.DECKHAND_VERSION)
+      log(
+        `Your shell sets DECKHAND_VERSION=${env.DECKHAND_VERSION}, which docker compose prefers ` +
+          "to .env's: deckhand leaves it out, but unset it before you run docker compose " +
+          "yourself (unset DECKHAND_VERSION).",
+      );
   }
 
   async function compose(...args) {
@@ -163,9 +187,12 @@ export function createCli({
     return stdout;
   }
 
-  // compose.yaml as `version` has it: a checkout moved to its tag (its local changes refused,
-  // as the move would carry them onto files they weren't written for), else the tag's file.
-  async function follow(version) {
+  // compose.yaml as `version` has it, in two steps: what can refuse, before anything is asked or
+  // changed, then the move it returns. A checkout moves to the release's tag: refused over local
+  // changes (the move would carry them onto files they weren't written for), and to a ref
+  // without this file (the checkout would lose the command it runs the next update with).
+  // Any other folder gets the tag's file.
+  async function prepare(version) {
     if (existsSync(join(dir, ".git"))) {
       if ((await git("status", "--porcelain", "--untracked-files=no")).trim())
         throw new Error(
@@ -174,19 +201,28 @@ export function createCli({
         );
       await git("fetch", "--quiet", "--tags", "origin");
       const ref = version === "edge" ? "origin/main" : `v${version}`;
-      await git("checkout", "--quiet", "--detach", ref);
-      log(`The checkout is on ${ref} now.`);
-      return;
+      if ((await call("git", ["cat-file", "-e", `${ref}:${SELF}`], true, true)).code !== 0)
+        throw new Error(
+          `${ref} has no ${SELF}: it predates the deckhand command, and the checkout would lose ` +
+            `it. Nothing changed. To run ${version} anyway: git checkout ${ref}, set ` +
+            `DECKHAND_VERSION=${version} in .env, then docker compose pull and docker compose ` +
+            "up -d (docs/guides/updating.md, With docker compose).",
+        );
+      return async () => {
+        await git("checkout", "--quiet", "--detach", ref);
+        log(`The checkout is on ${ref} now.`);
+      };
     }
     const text = await raw(version, "compose.yaml");
-    if (readFileSync(files.compose, "utf8") === text) return;
-    copyFileSync(files.compose, `${files.compose}.bak`);
-    writeFileSync(files.compose, text);
-    log(`compose.yaml is ${version}'s now (the old one: compose.yaml.bak).`);
+    return async () => {
+      if (readFileSync(files.compose, "utf8") === text) return;
+      copyFileSync(files.compose, `${files.compose}.bak`);
+      writeFileSync(files.compose, text);
+      log(`compose.yaml is ${version}'s now (the old one: compose.yaml.bak).`);
+    };
   }
 
-  const pin = (version) =>
-    writeFileSync(files.env, withVersion(readFileSync(files.env, "utf8"), version));
+  const pin = (version) => writeFileSync(files.env, withVersion(dotEnv(), version));
 
   async function start(version) {
     await compose("pull");
@@ -200,11 +236,12 @@ export function createCli({
   // The release .env pins; with none (or `latest`), the latest, pinned.
   async function up() {
     await check();
-    let version = readVersion(readFileSync(files.env, "utf8"));
+    let version = readVersion(dotEnv());
     if (!version || version === "latest") {
       version = await latestRelease();
+      const move = await prepare(version);
       log(`Pinning the latest release, ${version}, in .env (deckhand update moves it).`);
-      await follow(version);
+      await move();
       pin(version);
     } else if (!PINNED.test(version)) {
       throw new Error(`.env's DECKHAND_VERSION is ${version}: a release (1.2.3), or edge.`);
@@ -215,7 +252,7 @@ export function createCli({
   // The upgrade notes between the release running and `target`: the sections its page has and
   // the running one's hasn't, or the page alone when the running release is no single tag.
   async function notes(current, target) {
-    const page = `https://github.com/${repository}/blob/${refOf(target)}/${NOTES}`;
+    const page = `https://github.com/${repo()}/blob/${refOf(target)}/${NOTES}`;
     if (!RELEASE.test(current)) {
       log(`Read the upgrade notes since the release you ran (${current || "unknown"}): ${page}`);
       return true;
@@ -237,7 +274,7 @@ export function createCli({
 
   async function update(requested = "latest", { yes = false } = {}) {
     await check();
-    const current = readVersion(readFileSync(files.env, "utf8"));
+    const current = readVersion(dotEnv());
     let target = requested.replace(/^v(?=\d)/, "");
     if (target === "latest") target = await latestRelease();
     if (!RELEASE.test(target) && target !== "edge")
@@ -245,6 +282,7 @@ export function createCli({
     if (target === current && target !== "edge") {
       log(`Already on ${target}: its images pulled again.`);
     } else {
+      const move = await prepare(target);
       log(`Updating from ${current || "latest"} to ${target}.`);
       if ((await notes(current, target)) && !yes) {
         const answer = await ask(`Update to ${target} now? [y/N] `);
@@ -255,7 +293,7 @@ export function createCli({
           return;
         }
       }
-      await follow(target);
+      await move();
       pin(target);
     }
     await start(target);
@@ -266,12 +304,12 @@ export function createCli({
 
 // --- The command line ------------------------------------------------------------------------
 
-function runCommand(command, args, { cwd, env, capture }) {
+function runCommand(command, args, { cwd, env, capture, quiet }) {
   return new Promise((done, fail) => {
     const child = spawn(command, args, {
       cwd,
       env,
-      stdio: capture ? ["ignore", "pipe", "inherit"] : "inherit",
+      stdio: capture ? ["ignore", "pipe", quiet ? "ignore" : "inherit"] : "inherit",
     });
     let stdout = "";
     child.stdout?.on("data", (chunk) => (stdout += chunk));
