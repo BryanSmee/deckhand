@@ -170,6 +170,7 @@ projects:
 | `docker`                                | none                                    | a container engine for work runs (`true`, or `cache: true`); needs the `docker` grant                                                                                                |
 | `caches`                                | none                                    | absolute paths in the sandbox kept in a volume per repo and path                                                                                                                     |
 | `mounts`                                | none                                    | host paths requested (`- path: /nfs/work/api`, `read_only`); only under granted roots                                                                                                |
+| `context_repos`                         | none                                    | other repositories its runs read, each `owner/name` or `{ repo, ref }`; only those the operator's grants list (see [Context repos](#context-repos))                                  |
 | `modes.<name>`                          | none                                    | the repo's own modes, picked with `/mode <name>` (see [Modes](repo-config/modes.md#modes))                                                                                           |
 | `review.on`                             | none: off; `manual` with the block      | `ready`: a pull request that turns ready gets a review; `manual`: `/mode review` only                                                                                                |
 | `review.instructions`                   | none                                    | Markdown file of the repo, added to the built-in review prompt                                                                                                                       |
@@ -209,6 +210,40 @@ APIs the repository needs; the onboarding issue lists them. See
 A `mounts` entry is only a request: it is mounted when the operator grants the repository a
 root holding it, after resolving `..` and symlinks. Otherwise the run stops and the reply
 says which path was refused and why. See [Security model](security.md).
+
+## Context repos
+
+A run reads one repository, its own. `context_repos` asks for others: a template repository,
+shared docs, the app a plugin targets, several versions of it. Each is an exact `owner/name`
+(no wildcards), with a `ref` (a branch, tag or commit) or without one (its default branch). The
+same repository may appear once per ref:
+
+```yaml
+context_repos:
+  - acme/shared-docs # /context/acme/shared-docs
+  - { repo: acme/app, ref: v1.4 } # /context/acme/app@v1.4
+  - { repo: acme/app, ref: release/2.0 } # /context/acme/app@release-2.0
+```
+
+Each goes in a folder of its own: `/context/<owner>/<name>`, or `/context/<owner>/<name>@<ref>`
+with a ref, its `/` made `-`. These are errors in this file: a name that isn't an exact
+`owner/name`, the repository itself (it is `/workspace`), the same repository and ref twice, and
+two entries in one folder (`release/1` and `release-1`).
+
+Nothing is read unless the operator allows it twice:
+
+- **Their grant** lists the repositories this one may read (`context_repos` patterns in its
+  grants file or `default.yaml`, [The grants folder](reference/server-folder.md#the-grants-folder)).
+  A repository asked for that no pattern lists stops every run, and the reply names it, as
+  refused mounts do.
+- **Their policies** give the run `read:context`
+  ([Capabilities](security/policies.md#capabilities)). Deckhand's defaults give it to every
+  built-in mode that has `pull` (all but research), and never to a run on a fork's pull request
+  (`context.rego`). The policies see the names asked for (`input.context_repos`), so a
+  `deny_capabilities` rule can refuse it for a given repository.
+
+The clones themselves, read-only and fresh at each run, come with #930: until then, a run that
+gets `read:context` has no folder yet.
 
 ### YAML
 

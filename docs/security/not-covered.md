@@ -73,7 +73,8 @@ What Deckhand doesn't check, or accepts, across every area. Part of the [Securit
 - Edge's port (8080: dashboard, webhook) is on no run's network, but a sandbox may reach its
   published address through the proxy, as any host its run may reach; it needs a dashboard
   session (a signed-in allowed user, see [The dashboard](../guides/dashboard.md#signing-in)) or the webhook's
-  signature. `/status` also answers calls from inside edge's container (see
+  signature. `/status` also answers calls from inside edge's container that prove it with a
+  token from edge's session key (see
   [The dashboard](webhooks-and-sign-in.md#the-dashboard)).
   Deliveries without a signature or over 5 MB are refused before their body is read (a push
   that large only delays a config's refresh). At most 16 are read at once, 4 per client

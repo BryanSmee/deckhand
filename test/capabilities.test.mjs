@@ -39,6 +39,7 @@ const full = {
   setup: "npm ci",
   dockerfile: "Dockerfile",
   docker: { cache: false },
+  contextRepos: [{ repo: "org/docs", ref: null, folder: "/context/org/docs" }],
 };
 const granted = {
   allowDockerfile: true,
@@ -79,6 +80,7 @@ test("the catalogue: its names, dependencies and config sides", () => {
       "read:pulls",
       "read:discussions",
       "read:actions",
+      "read:context",
     ],
   );
   const needs = Object.fromEntries(
@@ -95,6 +97,7 @@ test("the catalogue: its names, dependencies and config sides", () => {
     "read:pulls": ["pull"],
     "read:discussions": ["pull"],
     "read:actions": ["pull"],
+    "read:context": ["pull"],
   });
   for (const c of CAPABILITIES) {
     assert.ok(c.what && c.enforcedBy, c.name);
@@ -241,7 +244,7 @@ test("the risky combination: `pull` of a repository not known to be public with 
   assert.equal(refused.errors.length, 1);
   assert.match(
     refused.errors[0],
-    /^`pull` with `internet`: a private repository's code next to the open internet: .+\. Refused unless an allow rule of the operator's policies gives `pull\+internet`$/,
+    /^`pull` with `internet`: a private repository's code \(its own or a context repo's\) next to the open internet: .+\. Refused unless an allow rule of the operator's policies gives `pull\+internet`$/,
   );
   // Unknown visibility counts as private; a public repository's code is no secret.
   assert.equal(outcome({ allow, isPrivate: null }).errors.length, 1);
@@ -383,6 +386,7 @@ test("the input: the repo and its visibility, the mode, its issue, reason, fork,
       fork: true,
       trigger: "comment",
       command: "work",
+      context_repos: [],
     },
   );
   // Lower case, as the run input's: GitHub's spelling doesn't decide a rule.
@@ -400,6 +404,7 @@ test("the input: the repo and its visibility, the mode, its issue, reason, fork,
     fork: false,
     trigger: null,
     command: null,
+    context_repos: [],
   });
 });
 
@@ -485,7 +490,7 @@ test(
       decide: (asked) => policies.capabilityRules("org/repo", "main", asked),
     });
     const work = outcomes.modes.find((m) => m.mode === "work");
-    assert.deepEqual(work.used, WORK_CAPABILITIES);
+    assert.deepEqual(work.used, [...WORK_CAPABILITIES, "read:context"]);
     assert.deepEqual(work.errors, []);
     // Nothing its token reads that its capabilities don't give.
     assert.deepEqual(work.warnings, []);

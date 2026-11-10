@@ -198,7 +198,7 @@ export async function branchConfigReport(request, config, repo, number, policies
   const file = await readRepoFile(request, repo, CONFIG_FILE, branch);
   const where = `\`${CONFIG_FILE}\` on \`${branch}\``;
   if (!file) return `⚠️ ${where}: not found, so nothing was checked.`;
-  const { settings, errors, warnings } = parseRepoConfig(file.text, config);
+  const { settings, errors, warnings } = parseRepoConfig(file.text, config, { repo });
   const named = [
     ["dockerfile", settings.dockerfile],
     ["instructions", settings.instructions],

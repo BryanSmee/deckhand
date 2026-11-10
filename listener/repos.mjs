@@ -227,7 +227,7 @@ export function createRepoList({
   async function read(info) {
     const base = info.default_branch || "main";
     const file = await readRepoFile(app.request, info.full_name, CONFIG_FILE, base);
-    const parsed = file ? parseRepoConfig(file.text, config) : null;
+    const parsed = file ? parseRepoConfig(file.text, config, { repo: info.full_name }) : null;
     const known = {
       repo: info.full_name,
       at: now(),
