@@ -1,6 +1,6 @@
 // Edge's process (edge/server.mjs, #506) end to end, alone: the broker service in this process
 // (its service tokens, the screenshots), a fake github service and a fake orchestrator. The deliveries' way to a
-// run and back to a reply goes through the orchestrator too: orchestrator-server.test.mjs.
+// run and back to a reply goes through the orchestrator too: orchestrator-runs.test.mjs.
 import assert from "node:assert/strict";
 import { createHash, createHmac } from "node:crypto";
 import { writeFileSync } from "node:fs";
