@@ -17,7 +17,8 @@ import { waitsForInput } from "./comments.mjs";
 import { headInRepo, mergeConflict, parseKey } from "./events.mjs";
 import { getJson } from "./github.mjs";
 import { denyKept, passed } from "./policies.mjs";
-import { fixInput, policyWhy, readPullInput } from "./reviews.mjs";
+import { fixInput, readPullInput } from "./review-merge.mjs";
+import { policyWhy } from "./review-texts.mjs";
 import { respellMap } from "./spelling.mjs";
 
 // The results of checkPull() a pass counts: the dashboard's Sync says them.

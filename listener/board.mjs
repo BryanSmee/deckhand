@@ -12,7 +12,7 @@
 //                   routed to a user's machines (`machine`, claims.mjs) waits for one of them
 //   in-review       its pull request is in the automatic review-and-fix loop, between its
 //                   runs: the next review or fix run queued or being decided, or the
-//                   auto-merge waiting for checks (`review`, reviews.mjs reviewLoop()); while
+//                   auto-merge waiting for checks (`review`, review-loop.mjs reviewLoop()); while
 //                   one runs, the task has that run's state, and its `review` says the round
 //   waiting         a comment waits for other issues to be done ("/after #12", waits.mjs)
 //                   (needs-input once they are, while its open questions aren't answered)
@@ -28,9 +28,10 @@
 // A task whose last run is error, interrupted or cancelled is `rerunnable` when it may run
 // again, and `dismissed` ({ by, at }) while that run is the one someone dismissed from the
 // dashboard (dismissals.mjs): it keeps its state, but no longer asks for attention.
+import { askingRun } from "./dismissals.mjs";
 import { parseKey, taskKey } from "./events.mjs";
 import { APART, talkOf } from "./modes.mjs";
-import { LOOP_STEPS, LOOPING, loopState } from "./reviews.mjs";
+import { LOOP_STEPS, LOOPING, loopState } from "./review-loop.mjs";
 import { taskId } from "./spelling.mjs";
 
 export const STATES = [
@@ -109,12 +110,13 @@ function dismissedOf(t, d) {
   return t.state === last.status ? { by: d.by, at: d.at } : null;
 }
 
-// `aside`: the run's questions were set aside, so only the issue's body asks.
-function questionsFor(t, last, input, aside) {
+// `asker`: the run that stopped to ask and still waits (askingRun()); `aside`: its questions
+// were set aside, so only the issue's body asks.
+function questionsFor(t, asker, input, aside) {
   if (t.state !== "needs-input") return null;
-  // The run's are the latest: one starting takes the label off.
-  if (!aside && last?.status === "needs-input" && last.questions) {
-    return { source: "run", runId: last.id, ...last.questions };
+  // The run's are the latest: one starting takes the label off, not a review of its pull request.
+  if (!aside && asker?.questions) {
+    return { source: "run", runId: asker.id, ...asker.questions };
   }
   return input?.questions ? { source: "issue", ...input.questions } : null;
 }
@@ -127,7 +129,8 @@ function questionsFor(t, last, input, aside) {
 // in the store's `reviews`, for its `review`. `machines`: the tasks routed to a user's machines
 // (claims.mjs board()), each with its `machine`.
 // A task waiting for input carries `questions`: { source, runId?, items, raw }, from the reply
-// of its last run when it stopped to ask, else from its issue's body (questions.mjs).
+// of its run that stopped to ask (askingRun(): its last, or the last before reviews of its pull
+// request), else from its issue's body (questions.mjs).
 export function board({
   runs,
   queued,
@@ -255,7 +258,8 @@ function settle(t, q, b, w, input, aside = null) {
   else if (b?.status === "idle") t.state = "idle-brainstorm";
   else t.state = last ? runState(last) : "done";
   // A run's questions nobody will answer: set aside since it asked.
-  const setAside = !!last && aside?.runId === last.id;
+  const asker = askingRun(t.runs);
+  const setAside = !!asker && aside?.runId === asker.id;
   if (t.state === "needs-input" && setAside) t.state = "done";
   // The label outlasts how the last run ended (a run starting takes it off), not a live one,
   // and is what a wait whose issues are done still waits for (waits.mjs). With the run's
@@ -270,8 +274,13 @@ function settle(t, q, b, w, input, aside = null) {
     t.kind ??= "issue";
     t.since = Math.max(t.since, input.since ?? 0);
   }
-  const asked = questionsFor(t, last, input, setAside && !putBack);
+  const asked = questionsFor(t, asker, input, setAside && !putBack);
   if (asked) t.questions = asked;
+  // Answered, it goes on in the session that asked, where it replied: not a review's since.
+  if (asked?.source === "run") {
+    t.mode = asker.taskMode ?? t.mode;
+    t.replyTo = asker.replyTo ?? t.replyTo;
+  }
   if (b && b.status !== "stopped") {
     // A grooming is one too (modes.mjs `talk`), shown as itself.
     t.kind = b.mode === "grooming" ? "grooming" : "brainstorm";
@@ -292,7 +301,7 @@ function settle(t, q, b, w, input, aside = null) {
 
 // A task routed to a user's machines (claims.mjs), `m` its board() entry: its `machine` ({ owner,
 // want, via, machine, claimed, available }). Claimed, it is at work there (its external run's
-// record, runs.mjs startExternal(), once it has one); queued, it waits for that machine, which
+// record, external-runs.mjs startExternal(), once it has one); queued, it waits for that machine, which
 // the dashboard says.
 function onMachine(t, m) {
   if (!m) return;
@@ -305,7 +314,7 @@ function onMachine(t, m) {
 // The reasons of the loop's own runs (reviews.mjs).
 const STEPS = LOOP_STEPS;
 
-// The fix loop of the task's pull request `p` (reviews.mjs reviewLoop()) as its `review`,
+// The fix loop of the task's pull request `p` (review-loop.mjs reviewLoop()) as its `review`,
 // from the reason of its run going or queued (`q`), or, its last run one of the loop's and
 // over, the step the listener said is on its way. `in-review` between the loop's runs: done,
 // or queued for the loop's next run; a maintainer's comment queued meanwhile stays queued.

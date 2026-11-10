@@ -71,11 +71,10 @@ case "${1:-}" in
     wait=${DECKHAND_TOKEN_FIRST:-$every}
     # Stopped between two steps, never halfway through a write (its `.part` left behind), and its
     # sleep with it: bash runs a trap once the command it waits for is done, and `wait` is one
-    # that a signal ends at once.
-    sleeping=
-    trap 'rm -f "$file.part"; [ -z "$sleeping" ] || kill "$sleeping" 2> /dev/null; exit 0' TERM INT
-    while sleep "$wait" & sleeping=$! && wait "$sleeping"; do
-      sleeping=
+    # that a signal ends at once. The sleep found through `jobs -p`, not a `sleeping=$!`: a signal
+    # handled right after `sleep &`, before that assignment, would leave it running (#1108).
+    trap 'rm -f "$file.part"; kill $(jobs -p) 2> /dev/null || :; exit 0' TERM INT
+    while sleep "$wait" & wait $!; do
       if renew; then
         wait=$every
       else

@@ -1,7 +1,7 @@
 // The fake API the docs' screenshots are taken against (../screenshots.mjs): the specs' fixture
 // (fixture.json) for api/state, and what the pages shot read beside it. Fake data only, on
 // github.example.com: no real repository, user or host ever shows in the docs. Typed against
-// types.ts, so `npm run build` fails here when the contract changes, not the screenshots
+// types/, so `npm run build` fails here when the contract changes, not the screenshots
 // silently. Read by Node as it is (type stripping): type-only imports, nothing else of src/.
 import fixture from "./fixture.json" with { type: "json" };
 import type {
@@ -209,6 +209,7 @@ export const CONFIG: RepoConfig = {
       { host: "registry.npmjs.org", source: "operator", note: "grants/default.yaml" },
     ],
     mounts: [],
+    contextRepos: [],
     grant: {
       files: ["default.yaml"],
       grantFiles: [],
@@ -222,6 +223,7 @@ export const CONFIG: RepoConfig = {
       allowAutoMerge: false,
       hosts: ["registry.npmjs.org"],
       cachedHosts: [],
+      contextRepos: [],
       mounts: [],
       allowProjects: [],
       limits: { cpus: "2", memory: "4g", pids: 2048 },

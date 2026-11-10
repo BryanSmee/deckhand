@@ -187,22 +187,27 @@ export function createRegistry({ fetch = globalThis.fetch, auths = async () => (
     return { type: res.headers.get("content-type")?.split(";")[0], body: await res.json() };
   }
 
-  // When the image `ref` was built (its config's `created`), as milliseconds; 0 when it says
-  // nothing. A multi-platform index: its first image's.
-  async function created(ref) {
+  // The image `ref`'s config (its `created`, its `config.Labels`…), or {} when it has none. A
+  // multi-platform index: its first image's.
+  async function imageConfig(ref) {
     const { host, name, reference } = parseRef(ref);
     const scope = `repository:${name}:pull`;
     let manifest = await json(host, `${name}/manifests/${reference}`, scope, MANIFESTS);
     if (INDEXES.has(manifest.type) || manifest.body.manifests) {
       const first = manifest.body.manifests?.[0]?.digest;
-      if (!first) return 0;
+      if (!first) return {};
       manifest = await json(host, `${name}/manifests/${first}`, scope, MANIFESTS);
     }
     const config = manifest.body.config?.digest;
-    if (!config) return 0;
-    const { body } = await json(host, `${name}/blobs/${config}`, scope);
-    return Date.parse(body.created ?? "") || 0;
+    if (!config) return {};
+    return (await json(host, `${name}/blobs/${config}`, scope)).body ?? {};
   }
+
+  // When the image `ref` was built, as milliseconds; 0 when it says nothing.
+  const created = async (ref) => Date.parse((await imageConfig(ref)).created ?? "") || 0;
+
+  // The image `ref`'s labels, {} without any.
+  const labels = async (ref) => (await imageConfig(ref)).config?.Labels ?? {};
 
   // Deletes the manifest `digest` of `repository`, and with it every tag that points at it;
   // or, given a tag, that tag alone, where the registry can (not every one does). Gone
@@ -221,6 +226,7 @@ export function createRegistry({ fetch = globalThis.fetch, auths = async () => (
     digest,
     tags,
     created,
+    labels,
     remove,
     // The hosts `host` sent this client to so far (seen above).
     hostsOf: (host) => [...(seen.get(host) ?? [])],

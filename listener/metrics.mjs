@@ -12,9 +12,9 @@ import { pickedTask } from "./tasks.mjs";
 import { leaseMetric, STATUS_LABELS, statusLabel } from "../lib/metrics.mjs";
 
 // A run's length, in seconds: from under a minute to hours.
-export const RUN_BUCKETS = [30, 60, 120, 300, 600, 900, 1800, 2700, 3600, 5400, 7200, 14400, 28800];
+const RUN_BUCKETS = [30, 60, 120, 300, 600, 900, 1800, 2700, 3600, 5400, 7200, 14400, 28800];
 
-// How a run ends, as its `done (…)` line says (runs.mjs finish()).
+// How a run ends, as its `done (…)` line says (run-end.mjs finish()).
 export const OUTCOMES = ["ok", "needs-input", "error", "cancelled"];
 
 // What started a run (runKind()).
@@ -39,13 +39,13 @@ export function endingRuns(ends) {
 }
 
 // What became of a delivery (deliveryResult()).
-export const DELIVERY_RESULTS = ["taken", "ignored", "refused"];
+const DELIVERY_RESULTS = ["taken", "ignored", "refused"];
 
 // A conflict check of one pull request (conflicts.mjs checkPull()).
-export const CONFLICT_RESULTS = ["started", "clean", "pending", "refused", "skipped", "error"];
+const CONFLICT_RESULTS = ["started", "clean", "pending", "refused", "skipped", "error"];
 
 // A review that requests changes, and its fix round (reviews.mjs queueFix()).
-export const FIX_RESULTS = ["started", "refused", "exhausted", "skipped", "error"];
+const FIX_RESULTS = ["started", "refused", "exhausted", "skipped", "error"];
 
 // The services the orchestrator calls, as their clients name them.
 export const CALLEES = ["broker", "runner", "github", "models", "policy"];
@@ -137,7 +137,7 @@ const FOLLOWED = new Set([
   "installation_repositories",
 ]);
 
-// What became of a delivery (http.mjs deliver()): `refused` by the operator's checks (a repo
+// What became of a delivery (http-deliveries.mjs deliver()): `refused` by the operator's checks (a repo
 // out of ALLOWED_REPOS, an author out of ALLOWED_USERS, not from an installation), whatever
 // else it touched; `taken` when it got past them as a comment for a run (`item`), a state
 // the orchestrator follows, or CI's (`ci`, the dashboard's); `ignored` otherwise (a comment that
@@ -315,7 +315,7 @@ export function orchestratorMetrics(registry, { ctx }) {
       const { record } = live;
       started.inc({ mode: modeLabel(live.mode), agent: record.agent, kind: runKind(record) });
     },
-    // runs.mjs finish(): its `done (…)` line, or its error's.
+    // run-end.mjs finish(): its `done (…)` line, or its error's.
     runFinished(live, at = Date.now()) {
       const labels = { mode: modeLabel(live.mode), outcome: live.record.status };
       finished.inc(labels);
@@ -332,7 +332,7 @@ export function orchestratorMetrics(registry, { ctx }) {
 
 // The runs whose provider failed, put back for the next entry of FALLBACKS (runs.mjs
 // fallBack()): the models service's calls say why, the orchestrator decides them.
-export const fallbacksMetric = (registry) =>
+const fallbacksMetric = (registry) =>
   registry.counter(
     "deckhand_model_fallbacks_total",
     "Runs whose provider failed, put back for the next entry of FALLBACKS (from, to: agent@provider[:credential]).",

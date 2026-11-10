@@ -126,7 +126,7 @@ does the next copy for comments queued for a run still going.
 
 Webhooks no longer reach the orchestrator: edge takes them, and puts each verified delivery on
 the `deliveries` stream of its store before it answers `202`. The orchestrator reads that stream
-(`edge/client.mjs` `consume()`), handles each delivery (`listener/http.mjs` `deliver()`, which
+(`edge/client.mjs` `consume()`), handles each delivery (`listener/http-deliveries.mjs` `deliver()`, which
 resolves once what it admitted is done) and acknowledges it then; one handled whose
 acknowledgement was lost is taken once (`deliveries/handled/<guid>` in its store, an hour). So a
 delivery that arrives while the orchestrator restarts waits in the stream, and the next copy
@@ -256,7 +256,11 @@ one of:
   with where to go;
 - a fallback in the sandbox's scripts that reads both the old form and the new;
 - a check that fails a run at its start with what to run (`docker compose pull sandbox`), when
-  neither side can bridge the change;
+  neither side can bridge the change: bump `SANDBOX_API` in `listener/images.mjs` and the
+  `deckhand.sandbox-api` label in `sandbox/Dockerfile` together (a test holds them equal). A
+  run whose base image carries a lower number, or none, is refused before it starts, on
+  Docker and on Kubernetes (where the runner can read `SANDBOX_IMAGE` from its registry), with
+  what to update (#980); repo images built `FROM` the base inherit the label;
 - a one-time recovery the operator runs, written in the pull request.
 
 Whichever it is, a run that can't work stops at its start with a message, never later on an
@@ -343,7 +347,7 @@ The dashboard's run list comes back from the runs' summaries (`summaries/<run>` 
 orchestrator's store, written when a run ends, listed at the lease's takeover: the same after a
 handover or a crash; those an older release kept in `logs/<run>.json` or `logs/<run>.summary.json`
 moved there first); a run still live is listed from its saved state. A summary the store doesn't
-take at the run's end is tried again every 5 s (`runs.mjs` `summarySaved()`, `QUEUE_RETRY_MS`) until
+take at the run's end is tried again every 5 s (`run-end.mjs` `summarySaved()`, `QUEUE_RETRY_MS`) until
 it lands, the run keeping its sandbox, its state and its task meanwhile: kept nowhere else since
 #619. A copy that stops first leaves the run as it is, for the next copy to end again. Such a run
 holds its task and a parallel slot, as one whose queue write or state's removal waits

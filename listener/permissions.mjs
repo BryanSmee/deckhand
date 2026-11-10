@@ -47,7 +47,7 @@ export async function itemMay(permissions, log, item, action, what = "") {
 export const startAction = (mode) => `runs:start:${mode}`;
 
 // The actions on a repository the dashboard has controls for (#732), besides the starts.
-export const SHOWN_ACTIONS = ["tasks:read", "logs:read", "runs:manage", "repo:config:read"];
+const SHOWN_ACTIONS = ["tasks:read", "logs:read", "runs:manage", "repo:config:read"];
 const START = startAction("");
 
 // What an action's pattern, given or denied, says of the modes a run may start in: a mode's
@@ -153,7 +153,7 @@ export function createPermissions({ policies = null, usersOf = () => null, infoO
 
   // The repositories among `repos` (names) where `login` may do `action` (null: visible()), by
   // their names in lower case: one decision each, asked together, for a filter that can't wait
-  // (http.mjs state()). `listed`: each repository as last listed (answerOf()'s), for a filter
+  // (http-state.mjs state()). `listed`: each repository as last listed (answerOf()'s), for a filter
   // over what the dashboard shows; never for a check that guards something on its own (a log
   // stream), which reads it as a single decision does.
   async function which(login, repos, action = null, { listed = false } = {}) {

@@ -91,7 +91,7 @@ export async function readTree(github, repo, root) {
 
 // A path round the waits, from `starts` (["#11", "#12", "#11"] as numbers), or null: what
 // leadsTo() finds, with the issues on the way to name them. `get(n)`: what n waits for.
-export function cycleIn(get, starts) {
+function cycleIn(get, starts) {
   const state = new Map();
   const path = [];
   const visit = (n) => {

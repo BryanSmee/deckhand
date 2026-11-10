@@ -12,7 +12,7 @@
 //   exitCode(name)       its exit code once it exited, or null
 //   send(run, text, agent)  a message for the agent (a comment that arrived mid-run)
 //   close(run)           no more messages: the agent exits once it has answered (or is
-//                        stopped if it stays silent after that, runs.mjs linger())
+//                        stopped if it stays silent after that, run-output.mjs linger())
 //   closed(run)          whether close() was called, for a listener that restarts
 //   wait(name)           until it exits
 //   kill(name)           ends it now (a cancelled run, or one silent after its answer):

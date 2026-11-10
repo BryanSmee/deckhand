@@ -25,7 +25,7 @@ const RETRY_MS = 5_000;
 const KEYS_AGAIN_MS = 30_000;
 
 // The most of a run's inbox one append sends: under the broker's limit (INBOX_MAX, 8 MiB).
-export const INBOX_CHUNK = 1024 * 1024;
+const INBOX_CHUNK = 1024 * 1024;
 
 const enc = encodeURIComponent;
 

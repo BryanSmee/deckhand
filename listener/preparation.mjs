@@ -16,13 +16,15 @@ import {
 } from "./access.mjs";
 import { agentFor } from "./agents/index.mjs";
 import { listed, runOutcome } from "./capabilities.mjs";
+import { ContextError, contextOf, lookUpContext, visibility } from "./context-access.mjs";
 import { mandatoryHosts, operatorHosts } from "./egress.mjs";
 import { headInRepo } from "./events.mjs";
 import { getJson, paginate } from "./github.mjs";
 import { grantsBy } from "./grants.mjs";
 import { imageRef } from "./images.mjs";
-import { handoffMessage } from "./prompts.mjs";
-import { reviewThread } from "./reviews.mjs";
+import { CONFIG_FILE } from "./repo-config.mjs";
+import { contextNote, handoffMessage } from "./prompts.mjs";
+import { reviewThread } from "./review-post.mjs";
 import { ceilingOf, leftOut, narrowProfile } from "./profiles.mjs";
 import { buildOutput, enterPhase } from "./runlog.mjs";
 import { operatorSecrets, redact } from "./secrets.mjs";
@@ -52,7 +54,8 @@ export function createPreparation(ctx) {
     const { pulls, unread } = await pullRequests(task, items);
     // One that couldn't be looked up may be a fork's: counted as one.
     const fork = !!unread || [...pulls.values()].some((pr) => !headInRepo(pr, task.repo));
-    const { caps, profile } = await capabilitiesOf(task, items, settings, fork, note, unread);
+    const found = await capabilitiesOf(task, items, settings, fork, note, unread);
+    const { caps, profile } = found;
     // Its volume (sandbox-spec.mjs sessionOf()) depends on whether it is a fork's: known before
     // reopen() looks in it. A run without `pull` isn't one (prepareBare()).
     live.fork = caps.has("pull") && fork;
@@ -81,6 +84,7 @@ export function createPreparation(ctx) {
       kept: profile?.mounts ?? null,
     });
     if (profile) narrowHosts(access, profile, agent);
+    live.context = readContext(task, caps, found.context, settings, access.grant, note);
     // The open internet: any public host, private addresses only for those every run needs
     // (access.mjs bareAccess() says why).
     if (caps.has("internet")) {
@@ -150,7 +154,13 @@ export function createPreparation(ctx) {
   async function capabilitiesOf(task, items, settings, fork, note, unread = null) {
     const { live } = task;
     const agent = agentOf(task);
-    const repo = { name: task.repo, private: await isPrivate(task.repo) };
+    // Its context repos' visibility too, for the risky combinations (context-access.mjs).
+    const context = await lookUpContext(ctx.github, task.repo, settings);
+    const repo = {
+      name: task.repo,
+      private: await isPrivate(task.repo),
+      context: visibility(context),
+    };
     // Asked once with the run as a fork's and not, when it might not be one.
     const decided = await runOutcome(ctx, {
       repo,
@@ -199,7 +209,31 @@ export function createPreparation(ctx) {
     if (live.record) live.record.capabilities = used;
     ctx.broker.grant(live.id, used);
     note(`Capabilities: ${listed(used)}`);
-    return { caps: new Set(used), profile };
+    return { caps: new Set(used), profile, context };
+  }
+
+  // The context repos the run reads (context-access.mjs contextOf()), on its live state (saved
+  // with it) and told to the broker, for the github service's gateway: none without
+  // `read:context`. One it can't read (a private repository without the App, a ref that isn't
+  // there) stops it with a reply. → contextOf()'s, null when the run has nothing to do with them.
+  function readContext(task, caps, found, settings, grant, note) {
+    let context;
+    try {
+      context = contextOf(found, settings, grant, caps.has("read:context"));
+    } catch (error) {
+      if (!(error instanceof ContextError)) throw error;
+      throw new RunError(
+        `${cantRun(agentOf(task))}: context repos its \`${CONFIG_FILE}\` asks for can't be read.\n\n${error.problems.map((p) => `- ${p}`).join("\n")}`,
+      );
+    }
+    if (!context) return null;
+    // What the sandbox tells the agent of them, once cloned (prompts.mjs contextNote()).
+    context.note = contextNote(context.clones);
+    ctx.broker.readContext(task.live.id, context);
+    if (context.clones.length) {
+      note(`Context repos: ${context.clones.map((c) => c.folder).join(", ")}, cloned read-only`);
+    }
+    return context;
   }
 
   // A chat's hosts, as its profile keeps them (narrowProfile()): the granted hosts it turned
@@ -224,7 +258,7 @@ export function createPreparation(ctx) {
   // would be a way out for what it serves.
   const openHosts = (agent) => ({ hosts: ["*"], trusted: mandatoryHosts(config, agent) });
 
-  // A review's thread (reviews.mjs reviewThread()): only what the App and the allowed users
+  // A review's thread (review-post.mjs reviewThread()): only what the App and the allowed users
   // who may start a work run (`runs:start:work`) wrote, redacted like any output. Not read: no review, rather than one on the whole thread.
   async function reviewDigest(task, settings, note) {
     const { repo } = task;

@@ -149,6 +149,7 @@ export const chats = {
   "chats.capReadPulls": "Lire les pull requests",
   "chats.capReadDiscussions": "Lire les discussions",
   "chats.capReadActions": "Lire les résultats de la CI",
+  "chats.capReadContext": "Lire les dépôts de contexte",
   "chats.network": "Réseau",
   "chats.noHosts":
     "L’opérateur n’accorde à ce dépôt aucun hôte au-delà de ceux dont toute exécution a besoin.",

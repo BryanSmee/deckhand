@@ -1160,7 +1160,7 @@ test("prompts: the repo's `language` closes every mode's prompt; without it, not
     assert.equal(said, `${plain}\n\n${languageLine("French", options.mode)}`, name);
     assert.doesNotMatch(plain, /Write in French/, name);
   }
-  // A review's whole format is read in English (reviews.mjs parseReview()): it stays so.
+  // A review's whole format is read in English (review-parse.mjs parseReview()): it stays so.
   const review = languageLine("French", "review");
   assert.ok(review.startsWith(line.slice(0, -1)));
   for (const token of [

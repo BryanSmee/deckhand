@@ -10,7 +10,7 @@ false).
 
 A work run's reply goes on its task's open pull request (draft or ready, as `pulls.mjs` knows
 it) once there is one, whether its comment came from the issue or from that pull request
-(`runs.mjs` `post()`, #1053): the questions, the decisions and what changed stay in one thread.
+(`run-replies.mjs` `post()`, #1053): the questions, the decisions and what changed stay in one thread.
 Its `replyTo` (the run's and its record's) becomes the pull request's number, saved before the
 reply is posted, so that the next orchestrator, after a handover, posts it there too rather than
 on the issue (an idempotency key is per path). The issue then gets a short comment of its own
@@ -125,9 +125,13 @@ the first part after the marker when it parses as questions, else the first part
 questions have options, else the first with free-text questions.
 `parseQuestions()` (`questions.mjs`) reads them, all or nothing: a section in another shape
 comes as its markdown only (`items: null`). A task waiting for input carries
-them in `api/state` (`questions`): from the reply of its last run when that run stopped to ask
+them in `api/state` (`questions`): from the reply of its run that stopped to ask
 (kept on the run, and read again from its log after a restart), else from its issue's body
 (kept in the store's `inputs` with the entry, from the `issues` deliveries and the startup lookup).
+That run is the task's last, or the last before the runs that keep the label on when they start
+(`dismissals.mjs` `askingRun()`): a review of its pull request, whose fix waits for the answers
+(#1002), or a light run that only helps answer them. Their answers go on in its session, where
+it replied; setting them aside (the label taken off, a close or merge) is about that run too.
 
 The dashboard answers them too (`work.mjs` `answer`, `answers.mjs`): a task waiting for input
 shows its questions as a form (one option per question, the one ticked on GitHub picked in

@@ -25,6 +25,35 @@ export const KEEP_TAGS = 3;
 // What a branch image's tag starts with.
 const BRANCH = "branch-";
 
+// The contract between the services and the sandbox image's scripts, as a number the base
+// image carries in a label (../sandbox/Dockerfile, the same number): bumped when it changes in
+// a way older images can't follow (AGENTS.md, Runs in flight). A base with a lower one, or
+// none, would start runs that fail later and silently (#393's DECKHAND_CA): refused (#980).
+export const SANDBOX_API = 1;
+export const SANDBOX_API_LABEL = "deckhand.sandbox-api";
+
+// The number an image's labels give, 0 without one.
+const sandboxApi = (labels) => {
+  const value = labels?.[SANDBOX_API_LABEL];
+  return /^\d+$/.test(value ?? "") ? Number(value) : 0;
+};
+
+// Why a base image whose labels are `labels` can't run, or null when it can.
+function staleBase(config, labels) {
+  const found = sandboxApi(labels);
+  if (found >= SANDBOX_API) return null;
+  const update =
+    config.runner === "kubernetes"
+      ? "set SANDBOX_IMAGE to this release's sandbox image (docs/kubernetes/updating.md)"
+      : "run docker compose pull sandbox (docker compose build sandbox from source)";
+  return `the sandbox image ${config.image} is older than Deckhand's services (its ${SANDBOX_API_LABEL} label is ${found || "missing"}, they need ${SANDBOX_API}): ${update}`;
+}
+
+// How long a run without a Dockerfile waits for its base's registry on Kubernetes, and how long
+// a base it couldn't read there is left unchecked (checkPulledBase()).
+const LOOKUP_MS = 5_000;
+const UNREADABLE_MS = 10 * 60_000;
+
 // Which ref a run's image is built from: the default branch, or a pull request's head (its
 // commit's full id) when the operator grants the repo branch images (`grant`, grants.mjs) and the
 // pull request's branch lives in the repo itself. The runner checks that commit is the repo's own
@@ -78,6 +107,7 @@ export function createImages({
   log = () => {},
   metrics = null, // the runner's (../runner/metrics.mjs): builds, prunes and installs counted
   now = Date.now,
+  lookupMs = LOOKUP_MS, // how long checkPulledBase() waits for the registry
 }) {
   const builds = new Map(); // tag → Promise, so two runs never build the same image
   const installs = new Map(); // "<agent>@<version>" → Promise
@@ -98,6 +128,53 @@ export function createImages({
     return out;
   }
 
+  // The base checked against SANDBOX_API, once per image id (an id names its labels too).
+  let checkedBase = null;
+  async function checkBase(id) {
+    if (id === checkedBase) return;
+    const labels = await backend.labels(config.image);
+    const stale = staleBase(config, labels);
+    if (stale) throw new Error(stale);
+    checkedBase = id;
+  }
+
+  // Without a Dockerfile on a registry, the nodes pull the base with their own credentials,
+  // which the runner may not hold, nor reach the registry at all (Kubernetes without the
+  // buildkit component: its NetworkPolicy drops the call, which hangs): checked when it can
+  // read the base within `lookupMs`, else left to start, and not asked again for a while, so
+  // that runs don't each wait for it.
+  let unreadable = -Infinity;
+  async function checkPulledBase() {
+    if (now() - unreadable < UNREADABLE_MS) return;
+    let id = null;
+    let labels = null;
+    const read = async () => {
+      id = await backend.id(config.image);
+      if (id && id !== checkedBase) labels = await backend.labels(config.image);
+    };
+    let timer;
+    try {
+      await Promise.race([
+        read(),
+        new Promise((_, reject) => {
+          timer = setTimeout(() => reject(new Error(`no answer in ${lookupMs} ms`)), lookupMs);
+        }),
+      ]);
+    } catch (error) {
+      unreadable = now();
+      log(`${config.image}: its ${SANDBOX_API_LABEL} label not checked: ${error.message}`);
+      return;
+    } finally {
+      clearTimeout(timer);
+    }
+    // Not in the registry the runner reads: the nodes pull it from elsewhere.
+    if (!id) unreadable = now();
+    if (!id || id === checkedBase) return;
+    const stale = staleBase(config, labels);
+    if (stale) throw new Error(stale);
+    checkedBase = id;
+  }
+
   // The image to run: the base without a Dockerfile, else the repo's, built if needed.
   // `onBuild(tag)` is called when a build starts or is already under way; `output` gets its
   // log (the first caller's only). `branch`: `ref` is a pull request's head (imageRef()).
@@ -115,12 +192,14 @@ export function createImages({
     access = {},
   }) {
     // Without a Dockerfile, a registry's base image is the nodes' to pull, with their own
-    // credentials (a kind or ECR node's): not looked up. A host's Docker must have it.
+    // credentials (a kind or ECR node's): not required here. A host's Docker must have it.
     if (!dockerfile) {
-      if (!backend.repository) await baseId();
+      if (backend.repository) await checkPulledBase();
+      else await checkBase(await baseId());
       return config.image;
     }
     const id = await baseId();
+    await checkBase(id);
     if (!blob)
       throw new Error(
         `${dockerfile} (the config's dockerfile) is not in ${repo} at ${ref ?? "its default branch"}`,

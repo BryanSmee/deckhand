@@ -1,4 +1,4 @@
-// A pull request's review-and-fix loop (Task.review, listener/reviews.mjs reviewLoop()): the
+// A pull request's review-and-fix loop (Task.review, listener/review-loop.mjs reviewLoop()): the
 // marks a ready row gets when the loop left blocking findings or a commit was pushed after its
 // last review, and the Detail page's rounds: the last review's counts and its trend, every
 // review's on hover, those that didn't lower the blocking ones marked, and once the loop is

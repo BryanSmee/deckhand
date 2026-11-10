@@ -99,7 +99,8 @@ import { createRepoSettings } from "../listener/repo-settings.mjs";
 import { createRepoApi, createRepoList } from "../listener/repos.mjs";
 import { createRestart, endsWaitingWarnings } from "../listener/restart.mjs";
 import { createReviewers, openerOf } from "../listener/reviewers.mjs";
-import { createReviews, stepsGoing } from "../listener/reviews.mjs";
+import { stepsGoing } from "../listener/review-loop.mjs";
+import { createReviews } from "../listener/reviews.mjs";
 import { loadRuns, moveSummaries, saveSummary, SUMMARIES } from "../listener/runlog.mjs";
 import { networkCallers } from "../lib/service-token.mjs";
 import { createRunnerClient } from "../runner/client.mjs";
@@ -430,8 +431,7 @@ const edge = createEdgeClient({
   log,
 });
 
-// Where sandboxes, images and the runs' logs are: the runner service (RUNNER is
-// its setting).
+// Where sandboxes, images and the runs' logs are: the runner service (RUNNER is its setting).
 const runnerClient = createRunnerClient({
   urls: config.runnerUrl,
   token: () => brokerCaller.header("runner"),
@@ -535,7 +535,7 @@ const ctx = {
   store,
   // The models service: the agents' credentials' fingerprints, a run's API state at its end.
   models,
-  // The runs whose provider failed, another entry of FALLBACKS taking over (runs.mjs fallBack()):
+  // The runs whose provider failed, another entry of FALLBACKS taking over (run-replies.mjs fallBack()):
   // the models service's calls say why, the fallback is decided here.
   fallbacks,
   storeSecrets: () => operatorSecrets(ctx),
@@ -1304,7 +1304,7 @@ githubService.consume({
     ctx.broker.runOf(run)?.pushed?.({ branch, at, head }),
   note: async ({ run, message }) => ctx.broker.runOf(run)?.note?.(message),
   // An installation token the gateway used for a run, by its fingerprint: what its log and reply
-  // are redacted of (runs.mjs hidden()), the token itself never leaving the service.
+  // are redacted of (run-output.mjs hidden()), the token itself never leaving the service.
   token: async ({ run, fingerprints }) => {
     const found = ctx.broker.runOf(run);
     if (found) (found.scrubs ??= []).push(fingerprintRedactor(fingerprints));
@@ -1496,7 +1496,7 @@ sigterm = () => {
   saved.then(() => drain(policy, { graceMs: POLICY_DRAIN_MS })).finally(() => process.exit(0));
 };
 
-// Verified deliveries, from edge's stream, each acknowledged once handled (http.mjs deliver()):
+// Verified deliveries, from edge's stream, each acknowledged once handled (http-deliveries.mjs deliver()):
 // none is lost while this copy hands over. One handled already whose acknowledgement was lost
 // (edge away, this copy stopped in between) is read again: taken once, by its GUID, kept an hour
 // (an acknowledgement isn't lost for longer: edge's stream keeps the delivery until then).

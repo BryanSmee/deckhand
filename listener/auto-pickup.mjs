@@ -1,8 +1,10 @@
 // Auto-pickup (#546): the open issues labelled AUTO_PICKUP_LABEL in the repos whose
-// `auto_pickup` opts in are started by the listener itself, oldest created first, in the
-// AUTO_PICKUP_SLOTS reserved within MAX_PARALLEL (repo-config.mjs startable()). A sweep looks
-// every SWEEP_MS, soon after a picked run ends, the label is added or one of Deckhand's pull
-// requests closes, and fills the reserved slots that are free. A repo whose
+// `auto_pickup` opts in are started by the listener itself, most severe first (#866: their
+// `severity: *` labels, severities.mjs; an issue without one after `low`), then oldest created,
+// across the repos, in the AUTO_PICKUP_SLOTS reserved within MAX_PARALLEL (repo-config.mjs
+// startable()). A low one waits while more severe ones keep coming: the label is the
+// maintainer's lever. A sweep looks every SWEEP_MS, soon after a picked run ends, the label is
+// added or one of Deckhand's pull requests closes, and fills the reserved slots that are free. A repo whose
 // `auto_pickup_max_ready` is reached (that many of Deckhand's pull requests ready for review,
 // #973) has none of its issues picked meanwhile: they keep their label, nothing is said on them.
 //
@@ -28,6 +30,7 @@ import { graphql, paginate } from "./github.mjs";
 import { hasRunsOn } from "./machines.mjs";
 import { startAction } from "./permissions.mjs";
 import { CONFIG_FILE } from "./repo-config.mjs";
+import { severityRank } from "./severities.mjs";
 import { newLogContext, newRequestId } from "../lib/log.mjs";
 
 export const SWEEP_MS = 5 * 60000;
@@ -69,7 +72,7 @@ export const allowed = (actor, config, users, may = null) =>
   (!may || may.has(lower(actor.login)));
 
 // The mode an auto-picked issue runs in: what its starter, and whoever edited it since, need.
-export const PICKED_ACTION = startAction("work");
+const PICKED_ACTION = startAction("work");
 
 // Why the issue's text isn't the one the label vouched for, or null: its title renamed (its
 // events) or its description edited (`history`: its edits, as lastEdits() reads them) at or
@@ -82,7 +85,7 @@ export const PICKED_ACTION = startAction("work");
 // GitHub lists an edited description's original as an edit by its author at its creation, the
 // label's second too. That one edit by the App is no edit since; any later one of its is.
 // `may`: allowed()'s.
-export function editedSince(events, history, since, config, users, created = null, may = null) {
+function editedSince(events, history, since, config, users, created = null, may = null) {
   const after = (at) => Date.parse(at ?? "") >= since;
   const second = (at) => Math.floor(Date.parse(at ?? "") / 1000);
   const original =
@@ -243,7 +246,7 @@ export function createAutoPickup({
   // adding the label again (a new labelling) tries again.
   const stuck = new Set();
 
-  // The free reserved slots, filled with the oldest eligible labelled issues. → the keys
+  // The free reserved slots, filled with the most severe, then oldest, eligible labelled issues. → the keys
   // started.
   // Under a request of its own: every repository's, not that of what asked for it (a run's end).
   function sweep() {
@@ -285,8 +288,14 @@ export function createAutoPickup({
         log(`Auto-pickup: ${repo}: ${error.message ?? error}`);
       }
     }
-    // Oldest created first, across the repos.
-    candidates.sort((a, b) => Date.parse(a.issue.created_at) - Date.parse(b.issue.created_at));
+    // Most severe first (its `severity: *` labels, none after `low`), then oldest created, across
+    // the repos.
+    const rank = new Map(candidates.map((c) => [c, severityRank(c.issue.labels)]));
+    candidates.sort(
+      (a, b) =>
+        rank.get(a) - rank.get(b) ||
+        Date.parse(a.issue.created_at) - Date.parse(b.issue.created_at),
+    );
     const pulls = new Map();
     // What is live, once for every candidate.
     const isLive = live();

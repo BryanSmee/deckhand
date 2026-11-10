@@ -104,7 +104,7 @@ export const isReady = (t: Pick<Task, "pr" | "review">) => t.pr?.state === "read
 
 // The loop's states while it goes on: a review or fix run of it queued or running, its
 // auto-merge waiting for checks, its review waiting for CI or a CI fix run, a conflict run whose
-// end it goes on from (listener/reviews.mjs reviewLoop()).
+// end it goes on from (listener/review-loop.mjs reviewLoop()).
 const LOOPING: LoopState[] = ["reviewing", "fixing", "checks", "ci", "ci-fix", "rebasing"];
 export const inLoop = (t: Pick<Task, "review">) => !!t.review && LOOPING.includes(t.review.loop);
 

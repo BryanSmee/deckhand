@@ -17,6 +17,7 @@
 // onboarding status are read at each list, so their changes show at once.
 import { capabilityNameWarnings, catalogueView, modeOutcomes } from "./capabilities.mjs";
 import { repoAllowed } from "./config.mjs";
+import { isEntry } from "./context-repos.mjs";
 import {
   autoMergeProblems,
   GrantsError,
@@ -118,7 +119,7 @@ export function createRepoList({
 }) {
   let listing = null; // Promise<repo infos>, while fresh
   let listedAt = 0;
-  // The repos' names as last listed, for what can't wait for a listing (http.mjs state()).
+  // The repos' names as last listed, for what can't wait for a listing (http-state.mjs state()).
   let listedNames = [];
   // What GitHub said of each, by its name in lower case, for access() (infoOf()), and when it
   // answered: what it says is used LIST_MS at most, never cleared by a later listing alone.
@@ -227,7 +228,7 @@ export function createRepoList({
   async function read(info) {
     const base = info.default_branch || "main";
     const file = await readRepoFile(app.request, info.full_name, CONFIG_FILE, base);
-    const parsed = file ? parseRepoConfig(file.text, config) : null;
+    const parsed = file ? parseRepoConfig(file.text, config, { repo: info.full_name }) : null;
     const known = {
       repo: info.full_name,
       at: now(),
@@ -588,8 +589,9 @@ export function createRepoApi({
     // What stops its merges: the grant, the repository's visibility (the parse's own warning
     // already says what its file lacks).
     const merging = grant ? autoMergeProblems(grant, settings, info.private === true) : [];
-    // What the file says, with the line each error, warning, setting and mount comes from.
-    const { lineOf, mountLine, locate } = fileLines(file?.text ?? "");
+    // What the file says, with the line each error, warning, setting, mount and context repo
+    // comes from.
+    const { lineOf, itemLine, mountLine, locate } = fileLines(file?.text ?? "");
     const effective = effectiveView(config, info.full_name, settings, grant, fs);
     const branch = base.split("/").map(encodeURIComponent).join("/");
     send(res, 200, {
@@ -610,6 +612,10 @@ export function createRepoApi({
         ...effective,
         settings: effective.settings.map((s) => ({ ...s, line: lineOf(s.key) })),
         mounts: effective.mounts.map((m) => ({ ...m, line: mountLine(m.path) })),
+        contextRepos: effective.contextRepos.map((c) => ({
+          ...c,
+          line: itemLine("context_repos", isEntry(c)),
+        })),
       },
       policies: await policyView(info, base, settings),
       capabilities: await capabilityView(info, base, settings, grant),

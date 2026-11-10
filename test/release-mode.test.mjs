@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import { parseRepoConfig } from "../listener/repo-config.mjs";
-import { githubSamples, pushSample } from "../listener/reviews.mjs";
+import { githubSamples, pushSample } from "../listener/review-dry-run.mjs";
 import { refusal } from "../listener/git-gateway.mjs";
 import { defaultPolicies, hasOpa, testConfig } from "./helpers.mjs";
 

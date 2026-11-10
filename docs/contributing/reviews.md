@@ -26,7 +26,7 @@ severity, the rating (capped by the most severe finding, `parseReview()`), `REQU
 review in a fix loop (`review.fix`), or deciding an auto-merge, may tolerate medium findings
 (`review.max_allowed_severity`, `reviews.tolerance()`): those post as `COMMENT`. `runs.mjs` works
 that tolerance out at launch too, and `reviewPrompt()` fills `prompts/review.md`'s verdict rule with
-it (`<blocking>`, `<tolerated>`, from `reviews.mjs`'s `blockingSeverities()`); the tolerance at post
+it (`<blocking>`, `<tolerated>`, from `review-parse.mjs`'s `blockingSeverities()`); the tolerance at post
 time is the one that counts, should the settings change during the run.
 
 With `review.fix`, once the review's run is torn down (so it no longer makes the task busy),

@@ -49,7 +49,7 @@ const DISCUSSION =
 const names = (labels) => (labels ?? []).map((l) => (typeof l === "string" ? l : l?.name));
 
 // An issue or pull request as GitHub's REST API gives it (`kind`: "issue" or "pr") → what
-// readTarget() says of it; the dry run's samples (reviews.mjs runSamples()) take it too.
+// readTarget() says of it; the dry run's samples (review-dry-run.mjs runSamples()) take it too.
 export function readOf(found, kind) {
   return {
     labels: names(found.labels),

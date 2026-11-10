@@ -12,6 +12,18 @@ export function createDockerImages({ config, docker }) {
     return code === 0 ? out : null;
   }
 
+  // The image's labels ({} without any), or null when there is no such image.
+  async function labels(ref) {
+    const { code, out } = await docker([
+      "image",
+      "inspect",
+      "--format",
+      "{{json .Config.Labels}}",
+      ref,
+    ]);
+    return code === 0 ? (JSON.parse(out || "null") ?? {}) : null;
+  }
+
   // `dir`: the checkout, the build's context; `dockerfile` in it. `output`: the build's log.
   function build({ dir, dockerfile, tag, labels = {}, output }) {
     return docker(
@@ -50,6 +62,7 @@ export function createDockerImages({ config, docker }) {
 
   return {
     id,
+    labels,
     build,
     tags,
     remove,
