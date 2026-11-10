@@ -108,7 +108,9 @@ orchestrator/ the orchestrator (#506): server.mjs (wiring: its lease, then the q
               lives, from ../listener/'s modules); two copies, active/passive
 listener/     the modules edge and the orchestrator run (no entry point of its own): http.mjs (the
               dashboard's API and the deliveries, the orchestrator's), tasks.mjs (queue),
-              runs.mjs, restart.mjs, … (docs/contributing/architecture.md), runner/ (Docker and
+              runs.mjs (a run's start and follow; its output, end and replies in run-output.mjs,
+              run-end.mjs and run-replies.mjs, external runs in external-runs.mjs), restart.mjs, …
+              (docs/contributing/architecture.md), runner/ (Docker and
               Kubernetes backends), agents/ (each agent's specifics: install, env, hosts, session,
               normalize(); the credentials' names, credentials.mjs)
 github/       the github service (#502): the only one with the GitHub App's key; server.mjs

@@ -535,7 +535,7 @@ const ctx = {
   store,
   // The models service: the agents' credentials' fingerprints, a run's API state at its end.
   models,
-  // The runs whose provider failed, another entry of FALLBACKS taking over (runs.mjs fallBack()):
+  // The runs whose provider failed, another entry of FALLBACKS taking over (run-replies.mjs fallBack()):
   // the models service's calls say why, the fallback is decided here.
   fallbacks,
   storeSecrets: () => operatorSecrets(ctx),
@@ -1304,7 +1304,7 @@ githubService.consume({
     ctx.broker.runOf(run)?.pushed?.({ branch, at, head }),
   note: async ({ run, message }) => ctx.broker.runOf(run)?.note?.(message),
   // An installation token the gateway used for a run, by its fingerprint: what its log and reply
-  // are redacted of (runs.mjs hidden()), the token itself never leaving the service.
+  // are redacted of (run-output.mjs hidden()), the token itself never leaving the service.
   token: async ({ run, fingerprints }) => {
     const found = ctx.broker.runOf(run);
     if (found) (found.scrubs ??= []).push(fingerprintRedactor(fingerprints));

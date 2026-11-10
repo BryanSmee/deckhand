@@ -241,7 +241,7 @@ The other pages poll the list without `backlog` and cost no read.
 (`POST /api/repos/<owner>/<repo>/work { action: "cancel", number, pr? }`, with the work area's
 checks of the repository and user, and the App's comment "Stopped from the dashboard by @user") end
 a run now. `admit()` takes the comment before the queue, so it never reaches the agent's inbox, and
-gives it 👍. `runs.mjs` `cancel()` writes a `cancelled` line (who, when) to the run's log and its
+gives it 👍. `run-end.mjs` `cancel()` writes a `cancelled` line (who, when) to the run's log and its
 saved state, stops its inbox, then `runner.kill()` (`docker stop -t 10`). The follow loop sees the
 sandbox exit and `finish()` ends the run as `cancelled` whatever the exit looked like: a "Stopped by
 @user" reply with the usual footer (a run that had `answered` posts that answer, then "Stopped by

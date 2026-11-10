@@ -10,7 +10,7 @@ false).
 
 A work run's reply goes on its task's open pull request (draft or ready, as `pulls.mjs` knows
 it) once there is one, whether its comment came from the issue or from that pull request
-(`runs.mjs` `post()`, #1053): the questions, the decisions and what changed stay in one thread.
+(`run-replies.mjs` `post()`, #1053): the questions, the decisions and what changed stay in one thread.
 Its `replyTo` (the run's and its record's) becomes the pull request's number, saved before the
 reply is posted, so that the next orchestrator, after a handover, posts it there too rather than
 on the issue (an idempotency key is per path). The issue then gets a short comment of its own
