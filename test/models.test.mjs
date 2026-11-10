@@ -809,7 +809,7 @@ test("/ready: out of rotation until the broker answered this copy (#391)", async
   assert.equal(await ready(), 200);
 });
 
-test("the broker's run record: one failed call asked again, two in a row a 503 (#1107)", async () => {
+test("the broker's run record: a failed connection asked again, twice or a timeout a 503 (#1107)", async () => {
   const key = testKey();
   const token = signToken(
     {
@@ -821,35 +821,39 @@ test("the broker's run record: one failed call asked again, two in a row a 503 (
     { ...key, audience: AGENT_AUDIENCE, ttlMs: AGENT_TOKEN_TTL_MS },
   );
   const req = { headers: { "x-deckhand-sandbox": "net-1" } };
-  let failures = 0;
-  let asked = 0;
-  const logged = [];
-  const runs = createRuns({
-    keys: new Map([[key.kid, key.publicKey]]),
-    record: async () => {
-      asked++;
-      if (failures-- > 0) throw new Error("socket hang up");
-      return { sandbox: "net-1" };
-    },
-    store: openStore("memory:"),
-    log: (line) => logged.push(line),
-  });
-  failures = 1;
-  const checked = await runs.check(token, req);
-  assert.equal(checked.run?.id, "run-1");
-  assert.equal(asked, 2);
-  assert.match(logged.join("\n"), /the broker, about run run-1 \(socket hang up\), asking again/);
+  const reset = () => Object.assign(new Error("socket hang up"), { code: "ECONNRESET" });
+  const refused = { status: 503, message: "the broker can't say whether this run still goes" };
+  // `answers`: what each call to the broker gets, an error or a record. → { runs, asked, logged }
+  function runsWith(answers) {
+    const seen = { asked: 0, logged: [] };
+    seen.runs = createRuns({
+      keys: new Map([[key.kid, key.publicKey]]),
+      record: async () => {
+        const answer = answers[seen.asked++] ?? { sandbox: "net-1" };
+        if (answer instanceof Error) throw answer;
+        return answer;
+      },
+      store: openStore("memory:"),
+      log: (line) => seen.logged.push(line),
+    });
+    return seen;
+  }
 
-  // Once its record is past RECORD_MS and none answers twice: refused for now, not taken.
-  const later = createRuns({
-    keys: new Map([[key.kid, key.publicKey]]),
-    record: async () => {
-      throw new Error("socket hang up");
-    },
-    store: openStore("memory:"),
-  });
-  assert.deepEqual(await later.check(token, req), {
-    status: 503,
-    message: "the broker can't say whether this run still goes",
-  });
+  const once = runsWith([reset()]);
+  assert.equal((await once.runs.check(token, req)).run?.id, "run-1");
+  assert.equal(once.asked, 2);
+  assert.match(
+    once.logged.join("\n"),
+    /the broker, about run run-1 \(socket hang up\), asking again/,
+  );
+
+  // No record yet, and the connection fails twice: refused for now.
+  const twice = runsWith([reset(), reset()]);
+  assert.deepEqual(await twice.runs.check(token, req), refused);
+  assert.equal(twice.asked, 2);
+
+  // A broker that didn't answer in time (lib/broker-client.mjs: no `code`) isn't waited on again.
+  const slow = runsWith([new Error("the broker didn't answer GET /runs/run-1")]);
+  assert.deepEqual(await slow.runs.check(token, req), refused);
+  assert.equal(slow.asked, 1);
 });

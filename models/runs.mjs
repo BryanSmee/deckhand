@@ -48,14 +48,15 @@ export function createRuns({
   const views = new Map(); // id → view()
 
   // The broker's run, as fresh as RECORD_MS; its last answer while it doesn't answer, for
-  // RECORD_STALE_MS. Throws past that. Asked twice before it does: one failed call (a kept-alive
-  // connection the broker closed as it was reused, a moment's load) mustn't fail the agent's
-  // (#1107).
+  // RECORD_STALE_MS. Throws past that. A connection that failed (a kept-alive one the broker
+  // closed as it was reused: an error with a `code`) is asked again once rather than failing the
+  // agent's call (#1107); a broker that answered, or didn't in time, isn't.
   async function liveRecord(id) {
     const cached = records.get(id);
     if (cached && now() - cached.at < RECORD_MS) return cached.value;
     try {
       const value = await record(id).catch((error) => {
+        if (!error?.code) throw error;
         log(`Models: the broker, about run ${id} (${error.message}), asking again`);
         return record(id);
       });
