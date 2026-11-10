@@ -18,7 +18,7 @@ import { keepLast } from "../lib/capped.mjs";
 export const CALLERS = ["orchestrator", "edge", "runner", "proxy", "github"];
 // The rate limits watched: GitHub has a few more (code_search, actions_runner_registration…)
 // which Deckhand doesn't spend.
-export const RESOURCES = ["core", "graphql", "search"];
+const RESOURCES = ["core", "graphql", "search"];
 
 // What the service does with git:
 //   clone          a mirror's first fetch, the whole repository (git-mirror.mjs); an empty
@@ -30,12 +30,12 @@ export const RESOURCES = ["core", "graphql", "search"];
 //                  brings none: not counted), refused or failed at the request that was, a
 //                  4xx of GitHub's or an answer cut short failed (github-gateway.mjs)
 //   push           a sandbox's push, through the git gateway (git-gateway.mjs)
-export const GIT_OPS = ["clone", "mirror_update", "fetch", "push"];
+const GIT_OPS = ["clone", "mirror_update", "fetch", "push"];
 //   ok        done
 //   refused   Deckhand refused it (pushes_refused_total says why)
 //   rejected  GitHub answered, refusing some of its refs (a branch protection, a ruleset)
 //   failed    GitHub (or git) failed, or couldn't be reached
-export const GIT_RESULTS = ["ok", "refused", "rejected", "failed"];
+const GIT_RESULTS = ["ok", "refused", "rejected", "failed"];
 // Why the git gateway refused a push:
 //   default_branch  to the default branch, which no sandbox pushes
 //   branch          not a branch, or one that isn't the run's

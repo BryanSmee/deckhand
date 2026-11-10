@@ -22,7 +22,7 @@
 import { createServer } from "node:http";
 import { DRAIN_MS, drain, drainable } from "../lib/drain.mjs";
 import { healthAnswer, healthInfo } from "../lib/health.mjs";
-import { readBody, readJsonBody, Refused, send, sendJson } from "../lib/http.mjs";
+import { readBody, readJsonBody, Refused, sendJson } from "../lib/http.mjs";
 import { createFence } from "../lib/fence.mjs";
 import { serviceGuard } from "../lib/service-token.mjs";
 import { LOGIN_REFRESH_MARGIN_MS, LOGIN_REFRESH_MS, MIN_REFRESH_MS } from "../lib/services.mjs";
@@ -114,7 +114,7 @@ function named(value, what) {
 // OAuth token endpoint, then the CLI's own calls (../listener/agents/antigravity.mjs hosts),
 // tunnelled, never relayed: this is the one place the real tokens go out. Its telemetry stays
 // refused, as for runs.
-export const REFRESH_HOSTS = ["oauth2.googleapis.com", ...antigravity.hosts];
+const REFRESH_HOSTS = ["oauth2.googleapis.com", ...antigravity.hosts];
 
 // How long the refresh may take on Kubernetes, its agent's install included: within the models
 // service's lease on the login (../lib/services.mjs LOGIN_REFRESH_MS), a minute to spare, so

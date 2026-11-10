@@ -244,8 +244,13 @@ Nothing is read unless the operator allows it twice:
   (`context.rego`). The policies see the names asked for (`input.context_repos`), so a
   `deny_capabilities` rule can refuse it for a given repository.
 
-The clones themselves, read-only and fresh at each run, come with #930: until then, a run that
-gets `read:context` has no folder yet.
+A run that gets them has each one cloned before its setup: shallow, at its ref, fresh at every
+run, read-only. Its prompt lists the folders as untrusted input. Its git fetches them with a
+token for each repository alone where the GitHub App is installed (on any account), else with
+none, which only a public repository allows; their API, pages and raw files are refused, and so
+is a push ([The GitHub gateway](security/github.md#the-github-gateway)). A private repository
+without the App, a ref that doesn't exist or a failed clone stops the run, saying why: it never
+goes on with part of its context.
 
 ### YAML
 

@@ -20,12 +20,7 @@ export { validRepo };
 
 // The repository's grant, with what the operator's policies grant it (`granted`), or a Refused:
 // no grant read is no build.
-export async function grantOrRefuse(
-  config,
-  repo,
-  grants = () => loadGrants(config),
-  granted = null,
-) {
+async function grantOrRefuse(config, repo, grants = () => loadGrants(config), granted = null) {
   if (!validRepo(repo)) throw new Refused(400, "repo?");
   try {
     return await grantOf(config, repo, { load: grants, granted });

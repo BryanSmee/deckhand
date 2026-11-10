@@ -14,9 +14,9 @@ import { pipeline } from "node:stream/promises";
 import { inspectWorkflow } from "./workflow-check.mjs";
 
 // GitHub refuses pushes over 2 GiB: a bigger one isn't kept on disk to find out.
-export const MAX_PUSH = 2 * 1024 ** 3;
+const MAX_PUSH = 2 * 1024 ** 3;
 // A workflow file bigger than this isn't read: refused.
-export const MAX_WORKFLOW = 512 * 1024;
+const MAX_WORKFLOW = 512 * 1024;
 const GIT_MS = 5 * 60_000;
 // How many fetches a fork's run's push may cost, each for an object it reaches and doesn't carry,
 // all its branches together: one per branch pointed at a pull request's head is the usual, more

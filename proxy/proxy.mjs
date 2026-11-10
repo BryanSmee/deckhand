@@ -78,7 +78,7 @@ export function drainMs(text) {
 
 // The header that named, on a relayed request, the address of the sandbox it came from: no
 // service reads it, and a client's own is dropped.
-export const CLIENT_HEADER = "x-deckhand-client";
+const CLIENT_HEADER = "x-deckhand-client";
 
 // What the services read a sandbox's call by (lib/broker-client.mjs), and the request ID their
 // lines are logged under (lib/log.mjs): whatever the client sent in them is dropped, so a

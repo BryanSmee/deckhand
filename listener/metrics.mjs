@@ -12,7 +12,7 @@ import { pickedTask } from "./tasks.mjs";
 import { leaseMetric, STATUS_LABELS, statusLabel } from "../lib/metrics.mjs";
 
 // A run's length, in seconds: from under a minute to hours.
-export const RUN_BUCKETS = [30, 60, 120, 300, 600, 900, 1800, 2700, 3600, 5400, 7200, 14400, 28800];
+const RUN_BUCKETS = [30, 60, 120, 300, 600, 900, 1800, 2700, 3600, 5400, 7200, 14400, 28800];
 
 // How a run ends, as its `done (…)` line says (runs.mjs finish()).
 export const OUTCOMES = ["ok", "needs-input", "error", "cancelled"];
@@ -39,13 +39,13 @@ export function endingRuns(ends) {
 }
 
 // What became of a delivery (deliveryResult()).
-export const DELIVERY_RESULTS = ["taken", "ignored", "refused"];
+const DELIVERY_RESULTS = ["taken", "ignored", "refused"];
 
 // A conflict check of one pull request (conflicts.mjs checkPull()).
-export const CONFLICT_RESULTS = ["started", "clean", "pending", "refused", "skipped", "error"];
+const CONFLICT_RESULTS = ["started", "clean", "pending", "refused", "skipped", "error"];
 
 // A review that requests changes, and its fix round (reviews.mjs queueFix()).
-export const FIX_RESULTS = ["started", "refused", "exhausted", "skipped", "error"];
+const FIX_RESULTS = ["started", "refused", "exhausted", "skipped", "error"];
 
 // The services the orchestrator calls, as their clients name them.
 export const CALLEES = ["broker", "runner", "github", "models", "policy"];
@@ -332,7 +332,7 @@ export function orchestratorMetrics(registry, { ctx }) {
 
 // The runs whose provider failed, put back for the next entry of FALLBACKS (runs.mjs
 // fallBack()): the models service's calls say why, the orchestrator decides them.
-export const fallbacksMetric = (registry) =>
+const fallbacksMetric = (registry) =>
   registry.counter(
     "deckhand_model_fallbacks_total",
     "Runs whose provider failed, put back for the next entry of FALLBACKS (from, to: agent@provider[:credential]).",

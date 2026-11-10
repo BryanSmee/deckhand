@@ -142,7 +142,7 @@ export function createNetworkGate({ config, env, resolvConf, now = Date.now } = 
 
 // The gate's container, from `image` (the base image's node), Pod Security `restricted` as the
 // pod's user, small: it only connects.
-export function gateContainer({ image, targets, until }) {
+function gateContainer({ image, targets, until }) {
   const resources = { cpu: "100m", memory: "128Mi" };
   return {
     name: GATE_CONTAINER,
