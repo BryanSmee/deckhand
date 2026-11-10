@@ -49,6 +49,11 @@ function staleBase(config, labels) {
   return `the sandbox image ${config.image} is older than Deckhand's services (its ${SANDBOX_API_LABEL} label is ${found || "missing"}, they need ${SANDBOX_API}): ${update}`;
 }
 
+// How long a run without a Dockerfile waits for its base's registry on Kubernetes, and how long
+// a base it couldn't read there is left unchecked (checkPulledBase()).
+const LOOKUP_MS = 5_000;
+const UNREADABLE_MS = 10 * 60_000;
+
 // Which ref a run's image is built from: the default branch, or a pull request's head (its
 // commit's full id) when the operator grants the repo branch images (`grant`, grants.mjs) and the
 // pull request's branch lives in the repo itself. The runner checks that commit is the repo's own
@@ -102,6 +107,7 @@ export function createImages({
   log = () => {},
   metrics = null, // the runner's (../runner/metrics.mjs): builds, prunes and installs counted
   now = Date.now,
+  lookupMs = LOOKUP_MS, // how long checkPulledBase() waits for the registry
 }) {
   const builds = new Map(); // tag → Promise, so two runs never build the same image
   const installs = new Map(); // "<agent>@<version>" → Promise
@@ -133,15 +139,40 @@ export function createImages({
   }
 
   // Without a Dockerfile on a registry, the nodes pull the base with their own credentials,
-  // which the runner may not hold: checked when it can read the base, else left to start.
+  // which the runner may not hold, nor reach the registry at all (Kubernetes without the
+  // buildkit component: its NetworkPolicy drops the call, which hangs): checked when it can
+  // read the base within `lookupMs`, else left to start, and not asked again for a while, so
+  // that runs don't each wait for it.
+  let unreadable = -Infinity;
   async function checkPulledBase() {
+    if (now() - unreadable < UNREADABLE_MS) return;
     let id = null;
-    try {
+    let labels = null;
+    const read = async () => {
       id = await backend.id(config.image);
+      if (id && id !== checkedBase) labels = await backend.labels(config.image);
+    };
+    let timer;
+    try {
+      await Promise.race([
+        read(),
+        new Promise((_, reject) => {
+          timer = setTimeout(() => reject(new Error(`no answer in ${lookupMs} ms`)), lookupMs);
+        }),
+      ]);
     } catch (error) {
+      unreadable = now();
       log(`${config.image}: its ${SANDBOX_API_LABEL} label not checked: ${error.message}`);
+      return;
+    } finally {
+      clearTimeout(timer);
     }
-    if (id) await checkBase(id);
+    // Not in the registry the runner reads: the nodes pull it from elsewhere.
+    if (!id) unreadable = now();
+    if (!id || id === checkedBase) return;
+    const stale = staleBase(config, labels);
+    if (stale) throw new Error(stale);
+    checkedBase = id;
   }
 
   // The image to run: the base without a Dockerfile, else the repo's, built if needed.

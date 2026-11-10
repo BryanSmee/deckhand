@@ -59,11 +59,18 @@ const config = {
 const PULL = { auths: { [REGISTRY]: { username: "bot", password: "pw" } } };
 
 // An OCI registry over fetch, with token auth: `images` "host/name:tag" → { digest, created,
-// labels } (labels: the current SANDBOX_API's by default), the base image there from the start. Every request is in `calls` ("METHOD url"). `deletes`:
-// false answers 405, as a registry without deletes does; `tagDeletes`: false refuses to delete a
-// tag alone, as registries before OCI distribution 1.1 do. `privateBase`: the base image's
-// registry refuses the runner, whose credentials are the operator's registry's only.
-function fakeRegistry({ deletes = true, tagDeletes = true, privateBase = false } = {}) {
+// labels } (labels: the current SANDBOX_API's by default), the base image there from the start.
+// Every request is in `calls` ("METHOD url"). `deletes`: false answers 405, as a registry
+// without deletes does; `tagDeletes`: false refuses to delete a tag alone, as registries before
+// OCI distribution 1.1 do. `privateBase`: the base image's registry refuses the runner, whose
+// credentials are the operator's registry's only; `hangBase`: it never answers, as a call a
+// NetworkPolicy drops.
+function fakeRegistry({
+  deletes = true,
+  tagDeletes = true,
+  privateBase = false,
+  hangBase = false,
+} = {}) {
   const images = new Map([[BASE, { digest: "sha256:base1", created: 1 }]]);
   const calls = [];
   const tokens = new Set();
@@ -72,6 +79,7 @@ function fakeRegistry({ deletes = true, tagDeletes = true, privateBase = false }
     const url = new URL(input);
     const method = init.method ?? "GET";
     calls.push(`${method} ${url.href}`);
+    if (hangBase && url.host !== REGISTRY) return new Promise(() => {});
     const headers = init.headers ?? {};
     if (url.pathname === "/token") {
       // Credentials for the operator's registry; anonymous elsewhere (a public base image).
@@ -380,6 +388,8 @@ function setup(
       backend,
       jobs: {},
       log: (line) => decided.push(line),
+      now: () => clock.at,
+      lookupMs: 10,
       checkout: async (repo, ref) => {
         checkouts.push(ref);
         return buildContext(t, `blob@${ref}`);
@@ -1042,6 +1052,30 @@ test("a run without a Dockerfile doesn't need its base image in the registry: th
     refused.decided.join("\n"),
     /deckhand-sandbox:1\.2: its deckhand\.sandbox-api label not checked: a token from ghcr\.io: HTTP 401/,
   );
+  // Its config unreadable (the manifest is), the same.
+  const unread = setup(t);
+  unread.registry.images.set(BASE, { digest: "sha256:old", created: 1, labels: {} });
+  unread.registry.undated.add("sha256:old");
+  assert.equal(
+    await unread.images.imageFor({ repo: "org/a", ref: "main", dockerfile: null }),
+    BASE,
+  );
+  assert.match(unread.decided.join("\n"), /label not checked: reading .*: HTTP 500/);
+});
+
+// A registry the runner can't reach (no buildkit component: its NetworkPolicy drops the call)
+// costs the runs no wait but the first's, until it is asked again 10 minutes later.
+test("a base whose registry never answers is waited for once in a while, not at every run", async (t) => {
+  const { images, registry, decided, clock } = setup(t, { registry: { hangBase: true } });
+  const ask = () => images.imageFor({ repo: "org/a", ref: "main", dockerfile: null });
+  assert.equal(await ask(), BASE);
+  assert.match(decided.join("\n"), /label not checked: no answer in 10 ms/);
+  const asked = registry.calls.length;
+  assert.equal(await ask(), BASE);
+  assert.equal(registry.calls.length, asked);
+  clock.at += 10 * 60_000;
+  assert.equal(await ask(), BASE);
+  assert.equal(registry.calls.length, asked + 1);
 });
 
 test("a prune whose pods the API can't list is logged, and the run has its image", async (t) => {
