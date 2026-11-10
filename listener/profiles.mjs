@@ -263,7 +263,7 @@ const plain = (text) => String(text).replaceAll("`", "");
 
 // What a chat's agent may ask for (../sandbox/deckhand-permissions): a host, a GitHub level, the
 // container engine or one of the repository's granted mounts.
-export const REQUEST_KINDS = ["host", "github", "engine", "mount"];
+const REQUEST_KINDS = ["host", "github", "engine", "mount"];
 
 // What the agent is told of a request beyond the ceiling: refused without asking the chat's
 // owner (#479's decision), who couldn't approve it anyway. Only the operator's grants folder

@@ -20,7 +20,8 @@ export function outcome(result) {
   return asksInput(result.text) ? "needs-input" : "ok";
 }
 
-// The agent's last result in these log lines, if any.
+// The agent's last result in these log lines, if any. Only the tests call it, to read how a
+// recorded or finished log ended through each agent's normalize(): kept here, beside outcome().
 export function lastResult(lines, agent) {
   for (let i = lines.length - 1; i >= 0; i--) {
     const result = agent.normalize(lines[i]).findLast((e) => e.type === "result");
@@ -83,7 +84,7 @@ export function needsStamp(line, events, at, open) {
 }
 
 // An `at` line of the listener's (writeEvent()): when the next line came, or null.
-export function stampOf(line) {
+function stampOf(line) {
   if (!line.includes('"event":"at"')) return null;
   const e = parse(line);
   return e?.type === "listener" && e.event === "at" && Number.isFinite(e.at) ? e.at : null;
@@ -353,10 +354,12 @@ const STARTING = {
   chat: "Starting a chat",
 };
 
+// A wrap-up says the conversation it ends (`taskMode`, talkOf()): a log without it is a
+// brainstorm's, the only one there was before #1081.
 const GOING_ON = {
-  "wrap-up": "Wrapping up the brainstorm",
-  restore: "Restoring the session after a pause",
-  continue: "Continuing the session",
+  "wrap-up": (e) => `Wrapping up the ${e.taskMode ?? "brainstorm"}`,
+  restore: () => "Restoring the session after a pause",
+  continue: () => "Continuing the session",
 };
 
 // Runs the listener started itself (conflicts.mjs, reviews.mjs).
@@ -402,7 +405,7 @@ function listenerEntries(e, agent, seen) {
   }
   const own = e.taskMode && e.taskMode !== "work" ? `Starting the ${e.taskMode} mode` : null;
   const what =
-    (REASONS[e.reason] ?? GOING_ON[e.mode] ?? STARTING[e.kind] ?? own ?? "Starting") +
+    (REASONS[e.reason] ?? GOING_ON[e.mode]?.(e) ?? STARTING[e.kind] ?? own ?? "Starting") +
     (e.model ? ` (${e.model}, ${e.effort} effort${e.speed === "fast" ? ", fast" : ""})` : "");
   // A fallback's run (runs.mjs): what it took over from, and why.
   const fell = e.fallback && !e.fallback.sticky;

@@ -174,7 +174,7 @@ async function askJson(fetch, url, init) {
 
 // A poll that can't work with this credential, whatever the time: not asked again by this
 // copy (a new credential means a restart).
-export class LastingRefusal extends Error {}
+class LastingRefusal extends Error {}
 
 // The plans' usage calls, each `async () → windows`, or null when it skipped this time, given
 // what they need: the Claude plan's token and Anthropic's address; the ChatGPT and Google AI

@@ -18,6 +18,7 @@ import {
   repoPath,
   RESERVED,
   RESERVED_MODES,
+  REVIEW_KEYS,
   KEYS,
   reviewText,
   sandboxName,
@@ -639,6 +640,33 @@ modes:
   const picked = parseRepoConfig("agent: antigravity", google);
   assert.deepEqual(picked.errors, []);
   assert.equal(picked.settings.agent, "antigravity");
+});
+
+// AGENTS.md, Conventions: no new `review:` key until the review loop runs on the workflow
+// engine (#1035, lifted by #1041). Bug fixes and changes to existing keys go on as usual.
+test("review: its keys are frozen until the workflow engine (#1035)", () => {
+  assert.deepEqual(
+    [...REVIEW_KEYS].sort(),
+    [
+      "agent",
+      "ci",
+      "ci_fix",
+      "ci_wait",
+      "effort",
+      "fix",
+      "follow_ups",
+      "follow_ups_auto_pickup",
+      "instructions",
+      "max_allowed_severity",
+      "merge",
+      "merge_method",
+      "merge_wait",
+      "model",
+      "on",
+      "request",
+    ],
+    "new lifecycle behaviour waits for the workflow engine (#1040): a step, a condition or a policy",
+  );
 });
 
 test("review: off without the block, manual with true, its keys checked", () => {

@@ -167,10 +167,10 @@ export function endsWaitingWarnings(
 }
 
 // How long a start waits for the runner to say whether the restored runs' inboxes are open.
-export const RESTORE_WAIT_MS = 10_000;
+const RESTORE_WAIT_MS = 10_000;
 
 // How long a run's state, or its end, waits for its log to be at the runner.
-export const LOG_SENT_MS = 5000;
+const LOG_SENT_MS = 5000;
 
 // Once what the run's log was written is at the runner, or LOG_SENT_MS on.
 export function logSent(live, ms = LOG_SENT_MS) {

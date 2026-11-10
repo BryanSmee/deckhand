@@ -5,7 +5,7 @@
 // first on its stdin (never logged), the job's own input after it; WRAPPER runs the job's
 // command with the rest of its stdin, and prints its stdout encrypted with that key
 // (AES-256-GCM), its stderr as it comes (no secret there: the refresh's own rule, #242).
-import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
+import { createDecipheriv, randomBytes } from "node:crypto";
 
 // `node -e WRAPPER <command> <args…>`: the base image's node, CommonJS, nothing but node:*. The
 // key line, then the command's stdin; on its end, iv ‖ tag ‖ ciphertext in base64 on stdout,

@@ -30,7 +30,7 @@ const GEMINI_ROUTES = [
 // The Antigravity CLI's Cloud Code host: its API, and its quota (usage.mjs).
 export const CLOUDCODE_HOST = "daily-cloudcode-pa.googleapis.com";
 
-export const RELAYED_PATHS = {
+const RELAYED_PATHS = {
   [CLOUDCODE_HOST]: ["POST", "v1internal:[A-Za-z]+"],
   "www.googleapis.com": ["GET", "oauth2/v2/userinfo"],
 };

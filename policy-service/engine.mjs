@@ -61,7 +61,7 @@ export const TIMEOUT_MS = 2000;
 export const MAX_INPUTS = MAX_CAPABILITY_INPUTS;
 
 // The servers kept at once: each is one policy set, about 40 MB.
-export const MAX_SERVERS = 8;
+const MAX_SERVERS = 8;
 // The sets whose compile check is remembered (a broken one isn't checked again at each decision).
 const MAX_CHECKED = 500;
 
@@ -88,7 +88,7 @@ export function restrictedCapabilities(current) {
 }
 
 // Deckhand's allow rules (policy/allow.rego): every decision allowed unless a deny rule says
-// otherwise. Its name, and its file alone, which tests build on.
+// otherwise. Its name, and its file alone: allowOnly(), kept for the tests' engines to start from.
 export const ALLOW = "allow.rego";
 export const allowOnly = (dir = BUILT_IN_DIR) =>
   new Map([[ALLOW, readFileSync(join(dir, ALLOW), "utf8")]]);

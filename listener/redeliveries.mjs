@@ -13,7 +13,7 @@ import { QUIET_EVENTS } from "./github-app.mjs";
 import { openStore } from "../lib/store.mjs";
 
 // How long GitHub keeps deliveries.
-export const RETENTION_MS = 3 * 24 * 3600_000;
+const RETENTION_MS = 3 * 24 * 3600_000;
 // A scan looks this far before the last one: a delivery GitHub lists late is still seen.
 const OVERLAP_MS = 10 * 60_000;
 const CHECK_MS = 5 * 60_000;

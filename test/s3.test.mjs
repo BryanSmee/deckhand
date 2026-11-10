@@ -4,16 +4,11 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { test } from "node:test";
 import { inspect } from "node:util";
-import {
-  canonicalRequest,
-  checkKey,
-  EMPTY_SHA256,
-  s3Client,
-  S3Error,
-  signer,
-  uriEncode,
-} from "../lib/s3.mjs";
+import { canonicalRequest, checkKey, s3Client, S3Error, signer, uriEncode } from "../lib/s3.mjs";
 import { fakeS3 } from "./helpers.mjs";
+
+// An empty payload's hash, as SigV4 signs a call without a body.
+const EMPTY_SHA256 = createHash("sha256").update("").digest("hex");
 
 // The generic suite's key pair (aws-sig-v4-test-suite), service `service`.
 const SUITE = {

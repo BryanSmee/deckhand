@@ -103,7 +103,7 @@ const says = (list) => list.map((t) => `${t.what} (${at(t)})`).join(", ");
 
 // The targets that answered and mustn't have, as the reason runs are refused, or null: `targets`
 // are { what, host, port, proto, reach }, `reached` the probe's booleans, in their order.
-export function probeProblem(targets, reached) {
+function probeProblem(targets, reached) {
   const leaks = targets.filter((t, i) => !t.reach && reached[i]);
   if (!leaks.length) return null;
   return `a pod labelled as a sandbox reached ${says(leaks)}${UNENFORCED}`;
@@ -113,7 +113,7 @@ const UNENFORCED =
   ": does the network plugin enforce NetworkPolicies? (Calico and Cilium do, Flannel alone doesn't)";
 
 // The targets that had to answer and didn't (the egress proxy).
-export const probeMissed = (targets, reached) => targets.filter((t, i) => t.reach && !reached[i]);
+const probeMissed = (targets, reached) => targets.filter((t, i) => t.reach && !reached[i]);
 
 // The probe pod: a sandbox's labels (`labels`), so the policies that pick sandboxes pick it,
 // and Pod Security `restricted`, as podSpec() (kubernetes.mjs) has them; no Secret, claim,
@@ -141,7 +141,7 @@ export function probePod({ pod, image, labels, targets, pullSecret = null, gate 
 
 // The probe's peer: the probe pod's labels and spec, listening on PEER_PORT, Ready once it
 // answers there. `deadlineMs`: how long it may live, should the runner stop before removing it.
-export function peerPod({ pod, image, labels, pullSecret = null, gate = null, deadlineMs }) {
+function peerPod({ pod, image, labels, pullSecret = null, gate = null, deadlineMs }) {
   return sandboxLike({
     pod,
     labels,

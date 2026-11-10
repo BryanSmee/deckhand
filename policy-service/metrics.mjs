@@ -25,15 +25,15 @@ export const POLICIES = [
 //   deny   an allow rule false or a deny rule's reason
 //   error  the policies couldn't be evaluated (they don't compile, took over 2 s, gave a rule
 //          the wrong type, opa down): the caller refuses
-export const DECISION_RESULTS = ["allow", "deny", "error"];
+const DECISION_RESULTS = ["allow", "deny", "error"];
 // A load of the operator's policies (the first a decision read, then each change to its files):
 //   ok     they compile
 //   error  they can't be read, or don't compile: every decision is refused until they are
 //          fixed (fail closed, never the last good set)
-export const RELOAD_RESULTS = ["ok", "error"];
+const RELOAD_RESULTS = ["ok", "error"];
 
 // From a few milliseconds to past the 2 s limit, where a decision is cut.
-export const DECISION_BUCKETS = [0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 1.5, 2, 2.5];
+const DECISION_BUCKETS = [0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 1.5, 2, 2.5];
 
 // The hooks the engine calls when no registry is given: counting nothing.
 export const NO_METRICS = { decision() {}, reload() {} };

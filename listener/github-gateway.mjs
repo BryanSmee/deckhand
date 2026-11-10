@@ -56,9 +56,9 @@ import { baseOf, forward, forwarded, IDLE_MS, MAX_IN_FLIGHT } from "../lib/upstr
 import { sendJson } from "../lib/http.mjs";
 
 // The largest write body read: GitHub's own limits for an issue or a comment are far below.
-export const MAX_WRITE = 16 * 1024 * 1024;
+const MAX_WRITE = 16 * 1024 * 1024;
 // How much of a watched write's answer is read: an issue's JSON is far below.
-export const MAX_ANSWER = 1024 * 1024;
+const MAX_ANSWER = 1024 * 1024;
 // The redacted writes and refused calls a run's log notes, each once and only so many.
 export const MAX_NOTED = 20;
 
@@ -109,7 +109,7 @@ export function ownIssuePath(path, run) {
 }
 // The same path by its repository's id → the id it names, or null when it isn't the run's
 // issue's path under some id (whether the id is its repository's is the gateway's to look up).
-export function ownIssueId(path, run) {
+function ownIssueId(path, run) {
   const match = /^repositories\/(\d+)\/issues\/(\d+)(?:\/comments)?\/?$/i.exec(path);
   if (!match || !Number.isInteger(run.issue) || Number(match[2]) !== run.issue) return null;
   return Number(match[1]);
@@ -118,7 +118,7 @@ export function ownIssueId(path, run) {
 export const CHAT_READS =
   "a chat only reads GitHub: its permissions profile's level is read only, and its answers stay in the conversation";
 // What a run is told when it reads issues beyond its own without `read:issues`.
-export const ownIssueOnly = (run) =>
+const ownIssueOnly = (run) =>
   `this run's capabilities don't give \`read:issues\`: it reads ${Number.isInteger(run.issue) ? `its own issue (#${run.issue}) only` : "no issue"}`;
 // The read capability that gives a token permission (github-app.mjs READ_PERMISSIONS).
 const CAPABILITY_OF = Object.fromEntries(
@@ -335,7 +335,7 @@ function readBody(req, max, idleMs, clock) {
 }
 
 // A run's calls in flight, counted in this process: the gateway's default (`inFlight`).
-export function countInFlight() {
+function countInFlight() {
   const calls = new WeakMap();
   return {
     // → the call's slot, or null when the run has `max` in flight.

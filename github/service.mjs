@@ -57,7 +57,7 @@ import { createRuns, STREAM } from "./runs.mjs";
 // call expects (404, 410: not logged as failures): client.mjs's, which the listener has alone.
 import { EXPECTED_HEADER, GITHUB_STATUS, IDEMPOTENCY_HEADER } from "./client.mjs";
 import { withRequest } from "../lib/log.mjs";
-export { EXPECTED_HEADER, GITHUB_STATUS, IDEMPOTENCY_HEADER };
+export { GITHUB_STATUS };
 
 // Where the operator's credentials' fingerprints are kept, and how often a copy reads them.
 const FINGERPRINTS_KEY = "fingerprints";
@@ -126,7 +126,7 @@ const MAX_BODY = 16 * 1024 * 1024;
 const MAX_KEPT = 1024 * 1024;
 // How long a key's answer is given again, how long a call in flight holds it, and how long one
 // asked again waits for it.
-export const IDEMPOTENCY_TTL_MS = 24 * 3600_000;
+const IDEMPOTENCY_TTL_MS = 24 * 3600_000;
 const PENDING_TTL_MS = 5 * 60_000;
 const PENDING_WAIT_MS = 30_000;
 // The orchestrator's long poll of the events.

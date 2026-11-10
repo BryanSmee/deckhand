@@ -50,7 +50,7 @@ export class GitHubUnavailable extends Error {
 
 // The most a status read before a failure is taken as GitHub's at the time: three of the github
 // service's reads (../github/status.mjs INTERVAL_MS).
-export const STATUS_MAX_AGE_MS = 15 * 60_000;
+const STATUS_MAX_AGE_MS = 15 * 60_000;
 
 // What GitHub's own status page said when a run failed on its 5xx (#943), from `status`: the
 // github service's last read (GET /status, ../github/status.mjs current()). One sentence, the
