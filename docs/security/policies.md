@@ -5,7 +5,7 @@ What the operator grants a repository, and how the policies decide what each run
 ## The grants folder
 
 What you give a repository beyond what every sandbox gets lives in the grants folder
-(`GRANTS_DIR`, `grants/` in the server folder): its hosts, cached hosts, projects, mounts and
+(`GRANTS_DIR`, `grants/` in the server folder): its hosts, cached hosts, context repos, projects, mounts and
 limits, a file per repository and `default.yaml` for every one, and your policies in `policy/`,
 which hold [the grants](#the-grants) (a Dockerfile, an engine, research, workflows, auto-merge).
 Its layout, every key and how errors stop runs:
@@ -55,6 +55,10 @@ rules say:
   it to none, a best-effort check.
 - **Yours only**: a repository's own `.deckhand/policy/` never grants itself anything.
 - **Fail closed**: when the policies can't be evaluated, the repository gets nothing.
+- **Context repos are listed, not granted by a rule**: the other repositories a repository's
+  runs may read are `context_repos` patterns in its grants file or `default.yaml`, the owner
+  always exact ([Keys](../reference/server-folder.md#keys)); the run needs `read:context` from
+  the policies too, which Deckhand's `context.rego` refuses to a fork's pull request.
 - **The runner asks too**, and checks every sandbox spec and image build against them, whatever
   the orchestrator says ([The runner service](services.md#the-runner-service)).
 
@@ -211,19 +215,20 @@ of its own (`<issue>-bare-…`, a light run's `<issue>-light-bare-…`: no earli
 transcript), and only the hosts every run
 needs.
 
-| Capability         | Gives                                                                  | Needs                | Asked by (`.deckhand.yaml`) | [Grant](#the-grants)   | Enforced by                                                                            |
-| ------------------ | ---------------------------------------------------------------------- | -------------------- | --------------------------- | ---------------------- | -------------------------------------------------------------------------------------- |
-| `pull`             | a clone of the repository, its granted hosts and mounts, screenshots   |                      |                             |                        | the orchestrator at start; GitHub (`contents: read`); the gateway (nothing without it) |
-| `push`             | its branches (the token's `branches`), its issue's branch and draft PR | `pull`               |                             |                        | the git gateway                                                                        |
-| `setup`            | the `setup` command, the repository's caches                           | `pull`               | `setup` or `caches`         |                        | the orchestrator at start                                                              |
-| `image:repo`       | the image built from its `dockerfile`                                  | `pull`               | `dockerfile`                | `dockerfile`           | the orchestrator at start                                                              |
-| `image:branch`     | on a pull request, the image of its branch's Dockerfile                | `push`, `image:repo` | `dockerfile`                | `branch_docker_images` | the orchestrator at start (never a fork's)                                             |
-| `docker`           | a [container engine](mounts-and-engine.md#container-engine)            | `pull`               | `docker`                    | `docker`               | the orchestrator at start (never for a fork's pull request)                            |
-| `internet`         | any public host (as [research runs](#research-runs))                   |                      |                             | `research`             | the egress proxy                                                                       |
-| `read:issues`      | every issue, lists and search included (without it, its own only)      | `pull`               |                             |                        | GitHub (`issues: read`); the gateway (its own issue only without it)                   |
-| `read:pulls`       | every pull request, lists and search included                          | `pull`               |                             |                        | GitHub (`pull_requests: read`)                                                         |
-| `read:discussions` | its discussions                                                        | `pull`               |                             |                        | GitHub (`discussions: read`)                                                           |
-| `read:actions`     | its GitHub Actions runs and logs, check runs and commit statuses       | `pull`               |                             |                        | GitHub (`actions`, `checks`, `statuses: read`)                                         |
+| Capability         | Gives                                                                             | Needs                | Asked by (`.deckhand.yaml`) | [Grant](#the-grants)                       | Enforced by                                                                            |
+| ------------------ | --------------------------------------------------------------------------------- | -------------------- | --------------------------- | ------------------------------------------ | -------------------------------------------------------------------------------------- |
+| `pull`             | a clone of the repository, its granted hosts and mounts, screenshots              |                      |                             |                                            | the orchestrator at start; GitHub (`contents: read`); the gateway (nothing without it) |
+| `push`             | its branches (the token's `branches`), its issue's branch and draft PR            | `pull`               |                             |                                            | the git gateway                                                                        |
+| `setup`            | the `setup` command, the repository's caches                                      | `pull`               | `setup` or `caches`         |                                            | the orchestrator at start                                                              |
+| `image:repo`       | the image built from its `dockerfile`                                             | `pull`               | `dockerfile`                | `dockerfile`                               | the orchestrator at start                                                              |
+| `image:branch`     | on a pull request, the image of its branch's Dockerfile                           | `push`, `image:repo` | `dockerfile`                | `branch_docker_images`                     | the orchestrator at start (never a fork's)                                             |
+| `docker`           | a [container engine](mounts-and-engine.md#container-engine)                       | `pull`               | `docker`                    | `docker`                                   | the orchestrator at start (never for a fork's pull request)                            |
+| `internet`         | any public host (as [research runs](#research-runs))                              |                      |                             | `research`                                 | the egress proxy                                                                       |
+| `read:issues`      | every issue, lists and search included (without it, its own only)                 | `pull`               |                             |                                            | GitHub (`issues: read`); the gateway (its own issue only without it)                   |
+| `read:pulls`       | every pull request, lists and search included                                     | `pull`               |                             |                                            | GitHub (`pull_requests: read`)                                                         |
+| `read:discussions` | its discussions                                                                   | `pull`               |                             |                                            | GitHub (`discussions: read`)                                                           |
+| `read:actions`     | its GitHub Actions runs and logs, check runs and commit statuses                  | `pull`               |                             |                                            | GitHub (`actions`, `checks`, `statuses: read`)                                         |
+| `read:context`     | read-only clones of the [context repos](../repo-config.md#context-repos) it names | `pull`               | `context_repos`             | `context_repos` patterns (the grants file) | the orchestrator at start (each repository against the patterns)                       |
 
 **Greedy**: a capability is used when the policies allow it, when a key of `.deckhand.yaml`
 asks for it if it has one, and when its grant gives it if one gates it. Allowed and asked for
@@ -265,7 +270,8 @@ a run that fails them doesn't start, and its reply says why:
   (`-fork-workspace`, a light run's too): the issue's other runs never start where a fork's
   code was fetched.
 - **A risky combination**: `pull` of a repository GitHub doesn't say is public, with
-  `internet`: its private code, untrusted content from any page and a way out, in one run.
+  `internet`: its private code, untrusted content from any page and a way out, in one run. The
+  same with `read:context` when one of its context repos isn't known to be public.
   Refused unless an allow rule of **yours** gives `pull+internet` (a repository's can't), and
   said as a warning on its config page even then.
 - **The open internet, whatever the mode**: a run with `internet` gets no host mount (what you

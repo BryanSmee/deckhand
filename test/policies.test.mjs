@@ -278,7 +278,7 @@ test("builtInPolicies: Deckhand's policy/*.rego, each in package deckhand; no fo
   for (const [name, text] of own) {
     assert.match(
       name,
-      /^(access(-roles)?|allow|review|run|machines|gh-[a-z0-9-]+|mode-[a-z]+)\.rego$/,
+      /^(access(-roles)?|allow|context|review|run|machines|gh-[a-z0-9-]+|mode-[a-z]+)\.rego$/,
       name,
     );
     // A feature allowed everywhere (gh-checks.rego) ships its file for its docs and its name
