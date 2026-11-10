@@ -119,7 +119,7 @@ export function createRepoList({
 }) {
   let listing = null; // Promise<repo infos>, while fresh
   let listedAt = 0;
-  // The repos' names as last listed, for what can't wait for a listing (http.mjs state()).
+  // The repos' names as last listed, for what can't wait for a listing (http-state.mjs state()).
   let listedNames = [];
   // What GitHub said of each, by its name in lower case, for access() (infoOf()), and when it
   // answered: what it says is used LIST_MS at most, never cleared by a later listing alone.

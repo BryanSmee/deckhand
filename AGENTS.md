@@ -107,13 +107,14 @@ edge/         edge (#506), the only service the internet reaches: server.mjs (wi
 orchestrator/ the orchestrator (#506): server.mjs (wiring: its lease, then the queue and the runs'
               lives, from ../listener/'s modules); two copies, active/passive
 listener/     the modules edge and the orchestrator run (no entry point of its own): http.mjs (the
-              dashboard's API and the deliveries, the orchestrator's), tasks.mjs (queue),
-              runs.mjs (a run's start and follow; its output, end and replies in run-output.mjs,
-              run-end.mjs and run-replies.mjs, external runs in external-runs.mjs), restart.mjs,
-              reviews.mjs (the review loop, createReviews(); reading, posting, merging, its texts,
-              its state and its dry run in review-parse.mjs, review-post.mjs, review-merge.mjs,
-              review-texts.mjs, review-loop.mjs and review-dry-run.mjs, #1067), …
-              (docs/contributing/architecture.md), runner/ (Docker and
+              dashboard's API, the orchestrator's; its api/state in http-state.mjs, the reads
+              beside it in http-reads.mjs, the deliveries in http-deliveries.mjs), tasks.mjs
+              (queue), runs.mjs (a run's start and follow; its output, end and replies in
+              run-output.mjs, run-end.mjs and run-replies.mjs, external runs in
+              external-runs.mjs), restart.mjs, reviews.mjs (the review loop, createReviews();
+              reading, posting, merging, its texts, its state and its dry run in review-parse.mjs,
+              review-post.mjs, review-merge.mjs, review-texts.mjs, review-loop.mjs and
+              review-dry-run.mjs, #1067), … (docs/contributing/architecture.md), runner/ (Docker and
               Kubernetes backends), agents/ (each agent's specifics: install, env, hosts, session,
               normalize(); the credentials' names, credentials.mjs)
 github/       the github service (#502): the only one with the GitHub App's key; server.mjs

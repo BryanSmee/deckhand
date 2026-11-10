@@ -137,7 +137,7 @@ const FOLLOWED = new Set([
   "installation_repositories",
 ]);
 
-// What became of a delivery (http.mjs deliver()): `refused` by the operator's checks (a repo
+// What became of a delivery (http-deliveries.mjs deliver()): `refused` by the operator's checks (a repo
 // out of ALLOWED_REPOS, an author out of ALLOWED_USERS, not from an installation), whatever
 // else it touched; `taken` when it got past them as a comment for a run (`item`), a state
 // the orchestrator follows, or CI's (`ci`, the dashboard's); `ignored` otherwise (a comment that

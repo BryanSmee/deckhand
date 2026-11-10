@@ -1496,7 +1496,7 @@ sigterm = () => {
   saved.then(() => drain(policy, { graceMs: POLICY_DRAIN_MS })).finally(() => process.exit(0));
 };
 
-// Verified deliveries, from edge's stream, each acknowledged once handled (http.mjs deliver()):
+// Verified deliveries, from edge's stream, each acknowledged once handled (http-deliveries.mjs deliver()):
 // none is lost while this copy hands over. One handled already whose acknowledgement was lost
 // (edge away, this copy stopped in between) is read again: taken once, by its GUID, kept an hour
 // (an acknowledgement isn't lost for longer: edge's stream keeps the delivery until then).
