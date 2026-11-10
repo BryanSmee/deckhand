@@ -38,6 +38,13 @@ RUN echo "$DECKHAND_VERSION" > VERSION && chmod -R u=rwX,go=rX .
 
 FROM node:26-bookworm
 
+# The contract between Deckhand's services and this image's scripts (the variables a run
+# starts with, the endpoints and answers they rely on): bumped with SANDBOX_API in
+# ../listener/images.mjs when it changes in a way older images can't follow. A run on a base
+# with a lower number (or none) is refused before it starts (#980); repo images built FROM
+# this one inherit it.
+LABEL deckhand.sandbox-api="1"
+
 # gh from GitHub's apt repository. The docker CLI with buildx and compose from Docker's, no
 # daemon: a run granted a container engine talks to it (DOCKER_HOST, set by the listener).
 # certutil (libnss3-tools): Chromium trusts the egress proxy's CA through it (entrypoint.sh).

@@ -175,8 +175,13 @@ case "$1" in
   image)
     # Asked while the run is prepared, so a test can change things then.
     [ "$2" = inspect ] && [ -x "$dir/while-preparing" ] && "$dir/while-preparing"
-    # The base image exists; repo images don't, until built.
-    [ "$2" = inspect ] && case "$*" in *-repo-*) exit 1 ;; *) echo sha256:base ;; esac ;;
+    # The base image exists, with the label of sandbox/Dockerfile (images.mjs SANDBOX_API);
+    # repo images don't, until built.
+    [ "$2" = inspect ] && case "$*" in
+      *-repo-*) exit 1 ;;
+      *Config.Labels*) echo '{"deckhand.sandbox-api":"1"}' ;;
+      *) echo sha256:base ;;
+    esac ;;
   create|cp|start)
     echo "$*" >> "$dir/docker-calls" ;;
   build)

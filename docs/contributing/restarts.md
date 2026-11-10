@@ -256,7 +256,11 @@ one of:
   with where to go;
 - a fallback in the sandbox's scripts that reads both the old form and the new;
 - a check that fails a run at its start with what to run (`docker compose pull sandbox`), when
-  neither side can bridge the change;
+  neither side can bridge the change: bump `SANDBOX_API` in `listener/images.mjs` and the
+  `deckhand.sandbox-api` label in `sandbox/Dockerfile` together (a test holds them equal). A
+  run whose base image carries a lower number, or none, is refused before it starts, on
+  Docker and on Kubernetes (where the runner can read `SANDBOX_IMAGE` from its registry), with
+  what to update (#980); repo images built `FROM` the base inherit the label;
 - a one-time recovery the operator runs, written in the pull request.
 
 Whichever it is, a run that can't work stops at its start with a message, never later on an

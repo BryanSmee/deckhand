@@ -319,6 +319,13 @@ GitHub's TLS, without a word.
   broken runs), written in the pull request for the operator.
 - **Never fail silently.** A run that can't work stops at its start with a message saying why,
   not at its first GitHub call with a TLS error.
+- **Bump the sandbox's contract number** when the change is one a new run on an older base
+  image can't follow and neither side bridges it (a variable it must read in a new form, an
+  endpoint or answer its scripts need that older ones lack): `SANDBOX_API` in
+  `listener/images.mjs` and the `deckhand.sandbox-api` label in `sandbox/Dockerfile`, together
+  (#980). A base with a lower number, or none, is refused before the run starts, saying to
+  pull the sandbox image. Not for what a fallback or a shim already bridges: every bump makes
+  every operator pull the base before the next run.
 
 The details, and how to find the runs an update broke: `docs/contributing/restarts.md`, Runs in flight.
 

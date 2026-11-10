@@ -12,18 +12,19 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { antigravity } from "../listener/agents/antigravity.mjs";
 import { claude } from "../listener/agents/claude.mjs";
-import { createImages, imageRef, KEEP_TAGS } from "../listener/images.mjs";
-import { buildArgs } from "../listener/runner/buildkit.mjs";
 import {
-  BUILD_MS,
-  builderIsolationProblem,
-  createKubernetesImages,
-  writable,
-} from "../listener/runner/kube-images.mjs";
+  createImages,
+  imageRef,
+  KEEP_TAGS,
+  SANDBOX_API,
+  SANDBOX_API_LABEL,
+} from "../listener/images.mjs";
+import { buildArgs } from "../listener/runner/buildkit.mjs";
+import { BUILD_MS, createKubernetesImages, writable } from "../listener/runner/kube-images.mjs";
+import { builderIsolationProblem } from "../listener/runner/kube-builder.mjs";
 import { createNetworkGate } from "../listener/runner/kube-gate.mjs";
 import { INSTALL_USER } from "../listener/runner/kubernetes.mjs";
 import { WRAPPER } from "../listener/runner/kube-seal.mjs";
-import { authsOf, challenge, createRegistry, parseRef } from "../listener/runner/registry.mjs";
 import { SANDBOX_USER } from "../listener/sandbox-spec.mjs";
 import { LOGIN_REFRESH_MS } from "../lib/services.mjs";
 import { loginRefresh } from "../runner/service.mjs";
@@ -57,11 +58,19 @@ const config = {
 
 const PULL = { auths: { [REGISTRY]: { username: "bot", password: "pw" } } };
 
-// An OCI registry over fetch, with token auth: `images` "host/name:tag" → { digest, created },
-// the base image there from the start. Every request is in `calls` ("METHOD url"). `deletes`:
-// false answers 405, as a registry without deletes does; `tagDeletes`: false refuses to delete a
-// tag alone, as registries before OCI distribution 1.1 do.
-function fakeRegistry({ deletes = true, tagDeletes = true } = {}) {
+// An OCI registry over fetch, with token auth: `images` "host/name:tag" → { digest, created,
+// labels } (labels: the current SANDBOX_API's by default), the base image there from the start.
+// Every request is in `calls` ("METHOD url"). `deletes`: false answers 405, as a registry
+// without deletes does; `tagDeletes`: false refuses to delete a tag alone, as registries before
+// OCI distribution 1.1 do. `privateBase`: the base image's registry refuses the runner, whose
+// credentials are the operator's registry's only; `hangBase`: it never answers, as a call a
+// NetworkPolicy drops.
+function fakeRegistry({
+  deletes = true,
+  tagDeletes = true,
+  privateBase = false,
+  hangBase = false,
+} = {}) {
   const images = new Map([[BASE, { digest: "sha256:base1", created: 1 }]]);
   const calls = [];
   const tokens = new Set();
@@ -70,6 +79,7 @@ function fakeRegistry({ deletes = true, tagDeletes = true } = {}) {
     const url = new URL(input);
     const method = init.method ?? "GET";
     calls.push(`${method} ${url.href}`);
+    if (hangBase && url.host !== REGISTRY) return new Promise(() => {});
     const headers = init.headers ?? {};
     if (url.pathname === "/token") {
       // Credentials for the operator's registry; anonymous elsewhere (a public base image).
@@ -77,6 +87,7 @@ function fakeRegistry({ deletes = true, tagDeletes = true } = {}) {
       if (host === REGISTRY && headers.authorization !== `Basic ${btoa("bot:pw")}`) {
         return new Response(null, { status: 401 });
       }
+      if (host !== REGISTRY && privateBase) return new Response(null, { status: 401 });
       const token = `t-${tokens.size}`;
       tokens.add(token);
       return Response.json({ token });
@@ -104,7 +115,11 @@ function fakeRegistry({ deletes = true, tagDeletes = true } = {}) {
     if (kind === "blobs") {
       const found = [...images.values()].find((i) => `sha256:config-${i.digest}` === rest);
       if (undated.has(found.digest)) return new Response("storage down", { status: 500 });
-      return Response.json({ created: new Date(found.created).toISOString() });
+      const labels = found.labels ?? { [SANDBOX_API_LABEL]: String(SANDBOX_API) };
+      return Response.json({
+        created: new Date(found.created).toISOString(),
+        config: { Labels: labels },
+      });
     }
     const found = rest.startsWith("sha256:")
       ? [...images.values()].find((i) => i.digest === rest)
@@ -348,6 +363,7 @@ function setup(
     : fakeApi(apiOptions);
   const build = fakeBuildctl(registry, clock, buildOptions);
   const logged = [];
+  const decided = []; // images.mjs's lines
   const cfg = { ...config, image, kubernetes: { ...config.kubernetes, ...kubernetes } };
   const backend = createKubernetesImages({
     config: cfg,
@@ -371,6 +387,9 @@ function setup(
       config: cfg,
       backend,
       jobs: {},
+      log: (line) => decided.push(line),
+      now: () => clock.at,
+      lookupMs: 10,
       checkout: async (repo, ref) => {
         checkouts.push(ref);
         return buildContext(t, `blob@${ref}`);
@@ -378,7 +397,18 @@ function setup(
     }),
     async (repo, path, ref) => (path === "missing" ? null : { sha: contextBlob(`blob@${ref}`) }),
   );
-  return { ...fake, services, registry, build, backend, images, checkouts, clock, logged };
+  return {
+    ...fake,
+    services,
+    registry,
+    build,
+    backend,
+    images,
+    checkouts,
+    clock,
+    logged,
+    decided,
+  };
 }
 
 const access = { hosts: ["pypi.org", "*.debian.org"], trusted: ["pypi.org"] };
@@ -445,6 +475,21 @@ test("a base image the registry doesn't have is a clear error", async (t) => {
     images.imageFor({ repo: "org/a", ref: "main", dockerfile: "Dockerfile" }),
     /the base image ghcr\.io\/acme\/deckhand-sandbox:1\.2 is not in its registry: SANDBOX_IMAGE/,
   );
+});
+
+// #980: a base older than the services' contract (SANDBOX_API) starts nothing, built or not.
+test("a base image older than the services is refused, with what to update", async (t) => {
+  for (const labels of [{}, { [SANDBOX_API_LABEL]: String(SANDBOX_API - 1) }]) {
+    const { images, registry, build } = setup(t);
+    registry.images.set(BASE, { digest: "sha256:old", created: 1, labels });
+    for (const dockerfile of ["Dockerfile", null]) {
+      await assert.rejects(
+        images.imageFor({ repo: "org/a", ref: "main", dockerfile }),
+        /the sandbox image ghcr\.io\/acme\/deckhand-sandbox:1\.2 is older than Deckhand's services .*: set SANDBOX_IMAGE to this release's sandbox image/,
+      );
+    }
+    assert.equal(build.calls.length, 0);
+  }
 });
 
 test("a failed build is said, and the next run builds again", async (t) => {
@@ -839,96 +884,6 @@ test("caches: none without a class, and the reason for the run's log", async (t)
   assert.deepEqual(created, []);
 });
 
-test("parseRef: a registry host by its dot, port or localhost, else Docker Hub's", () => {
-  assert.deepEqual(parseRef("registry.example.com/dh/x:abc"), {
-    host: "registry.example.com",
-    name: "dh/x",
-    reference: "abc",
-  });
-  assert.deepEqual(parseRef("localhost:5000/x"), {
-    host: "localhost:5000",
-    name: "x",
-    reference: "latest",
-  });
-  assert.deepEqual(parseRef("node:26"), {
-    host: "docker.io",
-    name: "library/node",
-    reference: "26",
-  });
-  assert.deepEqual(parseRef("acme/tool"), {
-    host: "docker.io",
-    name: "acme/tool",
-    reference: "latest",
-  });
-  assert.deepEqual(parseRef("r.example.com:443/a/b:1@sha256:ff"), {
-    host: "r.example.com:443",
-    name: "a/b",
-    reference: "sha256:ff",
-  });
-});
-
-test("authsOf and challenge: a docker config's credentials, a registry's challenge", () => {
-  assert.deepEqual(
-    authsOf({
-      auths: {
-        "https://index.docker.io/v1/": { auth: Buffer.from("me:p:w").toString("base64") },
-        "r.example.com": { username: "u", password: "p" },
-        "empty.example.com": {},
-      },
-    }),
-    {
-      "docker.io": { username: "me", password: "p:w" },
-      "r.example.com": { username: "u", password: "p" },
-    },
-  );
-  assert.deepEqual(challenge('Bearer realm="https://a/token",service="a",scope="x"'), {
-    scheme: "bearer",
-    params: { realm: "https://a/token", service: "a", scope: "x" },
-  });
-  assert.equal(challenge(null), null);
-});
-
-test("registry: Basic auth, a digest hashed when HEAD doesn't say, tags by pages", async () => {
-  const manifest = JSON.stringify({ config: { digest: "sha256:c" } });
-  const seen = [];
-  const fetch = async (input, init = {}) => {
-    const url = new URL(input);
-    seen.push(
-      `${init.method ?? "GET"} ${url.pathname}${url.search} ${init.headers?.authorization ?? "-"}`,
-    );
-    if (!init.headers?.authorization) {
-      return new Response(null, {
-        status: 401,
-        headers: { "www-authenticate": 'Basic realm="r"' },
-      });
-    }
-    if (url.pathname.endsWith("/manifests/1")) {
-      return init.method === "HEAD" ? new Response(null) : new Response(manifest);
-    }
-    if (url.searchParams.get("last") === "b") return Response.json({ tags: ["c"] });
-    return Response.json(
-      { tags: ["a", "b"] },
-      { headers: { link: '</v2/x/tags/list?n=2&last=b>; rel="next"' } },
-    );
-  };
-  const registry = createRegistry({
-    fetch,
-    auths: async () => ({ "r.example.com": { username: "u", password: "p" } }),
-  });
-  assert.equal(
-    await registry.digest("r.example.com/x:1"),
-    `sha256:${createHash("sha256").update(manifest).digest("hex")}`,
-  );
-  assert.deepEqual(await registry.tags("r.example.com/x"), ["a", "b", "c"]);
-  assert.ok(seen.every((s) => s.endsWith("-") || s.endsWith(`Basic ${btoa("u:p")}`)));
-  // Without credentials, a Basic challenge is a 401: nothing to answer it with.
-  const anonymous = createRegistry({ fetch });
-  await assert.rejects(
-    anonymous.digest("r.example.com/x:1"),
-    /looking up r\.example\.com\/x:1: HTTP 401/,
-  );
-});
-
 test("buildctl gets its docker config and PATH, nothing else of the listener's environment", async (t) => {
   const { images, build } = setup(t);
   await images.imageFor({ repo: "org/a", ref: "main", dockerfile: "Dockerfile", access });
@@ -1082,33 +1037,45 @@ test("a tag the registry won't delete alone is logged, and kept", async (t) => {
   assert.match(logged.join("\n"), /Pruning .*:branch-old \(its tag only\): deleting .*: HTTP 400/);
 });
 
-test("a run without a Dockerfile doesn't look its base image up: the nodes pull it", async (t) => {
+// Its label is checked when the runner can read it (#980), not required otherwise.
+test("a run without a Dockerfile doesn't need its base image in the registry: the nodes pull it", async (t) => {
   const { images, registry } = setup(t);
   registry.images.delete(BASE);
-  const before = registry.calls.length;
   assert.equal(await images.imageFor({ repo: "org/a", ref: "main", dockerfile: null }), BASE);
-  assert.equal(registry.calls.length, before);
+  const refused = setup(t, { registry: { privateBase: true } });
+  refused.registry.images.set(BASE, { digest: "sha256:old", created: 1, labels: {} });
+  assert.equal(
+    await refused.images.imageFor({ repo: "org/a", ref: "main", dockerfile: null }),
+    BASE,
+  );
+  assert.match(
+    refused.decided.join("\n"),
+    /deckhand-sandbox:1\.2: its deckhand\.sandbox-api label not checked: a token from ghcr\.io: HTTP 401/,
+  );
+  // Its config unreadable (the manifest is), the same.
+  const unread = setup(t);
+  unread.registry.images.set(BASE, { digest: "sha256:old", created: 1, labels: {} });
+  unread.registry.undated.add("sha256:old");
+  assert.equal(
+    await unread.images.imageFor({ repo: "org/a", ref: "main", dockerfile: null }),
+    BASE,
+  );
+  assert.match(unread.decided.join("\n"), /label not checked: reading .*: HTTP 500/);
 });
 
-test("registry: a tag list's next page as an absolute URL of the same registry, not another's", async () => {
-  const seen = [];
-  const fetch = async (input) => {
-    const url = new URL(input);
-    seen.push(url.href);
-    if (url.searchParams.get("last") === "b") {
-      return Response.json(
-        { tags: ["c"] },
-        { headers: { link: '<https://evil.example/v2/x/tags/list?last=c>; rel="next"' } },
-      );
-    }
-    return Response.json(
-      { tags: ["a", "b"] },
-      { headers: { link: '<https://r.example.com/v2/x/tags/list?n=2&last=b>; rel="next"' } },
-    );
-  };
-  const registry = createRegistry({ fetch });
-  assert.deepEqual(await registry.tags("r.example.com/x"), ["a", "b", "c"]);
-  assert.ok(seen.every((url) => url.startsWith("https://r.example.com/v2/x/tags/list")));
+// A registry the runner can't reach (no buildkit component: its NetworkPolicy drops the call)
+// costs the runs no wait but the first's, until it is asked again 10 minutes later.
+test("a base whose registry never answers is waited for once in a while, not at every run", async (t) => {
+  const { images, registry, decided, clock } = setup(t, { registry: { hangBase: true } });
+  const ask = () => images.imageFor({ repo: "org/a", ref: "main", dockerfile: null });
+  assert.equal(await ask(), BASE);
+  assert.match(decided.join("\n"), /label not checked: no answer in 10 ms/);
+  const asked = registry.calls.length;
+  assert.equal(await ask(), BASE);
+  assert.equal(registry.calls.length, asked);
+  clock.at += 10 * 60_000;
+  assert.equal(await ask(), BASE);
+  assert.equal(registry.calls.length, asked + 1);
 });
 
 test("a prune whose pods the API can't list is logged, and the run has its image", async (t) => {
