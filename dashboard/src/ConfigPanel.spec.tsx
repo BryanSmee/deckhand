@@ -5,7 +5,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-li
 import { beforeEach, expect, test, vi } from "vitest";
 import { ConfigPanel } from "./ConfigPanel";
 import { makeCapabilities, mockApi } from "./testUtils";
-import type { Repo, RepoConfig, SettingRow } from "./types";
+import type { ContextRow, Repo, RepoConfig, SettingRow } from "./types";
 
 const REPO: Repo = {
   repo: "acme/site",
@@ -78,6 +78,7 @@ const BROKEN: RepoConfig = {
       { host: "registry.npmjs.org", source: "operator", note: "grants/default.yaml" },
     ],
     mounts: [],
+    contextRepos: [],
     grant: {
       files: ["default.yaml"],
       grantFiles: [],
@@ -91,6 +92,7 @@ const BROKEN: RepoConfig = {
       allowAutoMerge: false,
       hosts: ["registry.npmjs.org"],
       cachedHosts: [],
+      contextRepos: [],
       mounts: [],
       allowProjects: [],
       limits: { cpus: "2", memory: "4g", pids: 2048 },
@@ -280,4 +282,67 @@ test("the grant's projects are listed when it has some", async () => {
   panel();
   await screen.findByText(/Everything is fine/);
   expect(screen.getByRole("list", { name: "Lists" }).textContent).not.toContain("allow_projects");
+});
+
+const GRANTED: ContextRow = {
+  repo: "acme/templates-web",
+  ref: null,
+  folder: "/context/acme/templates-web",
+  pattern: "acme/templates-*",
+  source: "repo",
+  note: null,
+  line: 9,
+};
+const REFUSED: ContextRow = {
+  repo: "other/lib",
+  ref: "release/1",
+  folder: "/context/other/lib@release-1",
+  pattern: null,
+  source: "refused",
+  note: "no pattern of the operator's context_repos grants it (acme/templates-*)",
+  line: 10,
+};
+
+test("context repos: each with its ref and folder, granted by its pattern, a refused one stops runs", async () => {
+  const grant = { ...BROKEN.effective.grant!, contextRepos: ["acme/templates-*"] };
+  config = {
+    ...BROKEN,
+    effective: { ...BROKEN.effective, contextRepos: [GRANTED, REFUSED], grant },
+  };
+  panel();
+  const alert = await screen.findByRole("alert");
+  const refused = within(alert).getAllByRole("listitem").at(-1)!;
+  expect(refused.textContent).toContain(
+    "context_repos: other/lib@release/1 refused: no pattern of the operator's context_repos grants it",
+  );
+  expect(refused.textContent).toContain(
+    "Only the operator grants it, with a context_repos pattern",
+  );
+  expect(within(refused).getByRole("button", { name: "line 10" })).toBeTruthy();
+  const rows = within(screen.getByRole("list", { name: "Context repositories" })).getAllByRole(
+    "listitem",
+  );
+  expect(rows.map((r) => r.textContent)).toEqual([
+    "acme/templates-webdefault branch, in /context/acme/templates-webgranted by acme/templates-*from repo",
+    "other/librelease/1, in /context/other/lib@release-1no pattern of the operator's context_repos grants it (acme/templates-*)refused",
+  ]);
+  expect(rows[1].className).toMatch(/refused/);
+  expect(screen.getByRole("list", { name: "Lists" }).textContent).toContain(
+    "context_reposacme/templates-*",
+  );
+  const toc = screen.getByRole("navigation", { name: "On this page" });
+  fireEvent.click(within(toc).getByRole("button", { name: "Context repositories" }));
+  await waitFor(() => expect(scrolled).toHaveBeenCalledWith("config-context"));
+});
+
+test("a fine config with context repos: counted in its access fold, open", async () => {
+  config = { ...FINE, effective: { ...FINE.effective, mounts: [], contextRepos: [GRANTED] } };
+  panel();
+  await screen.findByText(/Everything is fine/);
+  const access = fold(/Hosts, mounts and the operator's grant/);
+  expect(access.open).toBe(true);
+  expect(
+    within(access).getByText("2 hosts · no mounts · 1 context repo · research on"),
+  ).toBeTruthy();
+  expect(within(access).getByRole("list", { name: "Context repositories" })).toBeTruthy();
 });

@@ -87,7 +87,7 @@ const CONFIG: RepoConfig = {
   errors: [],
   warnings: [],
   grantsError: null,
-  effective: { settings: [], hosts: [], mounts: [], grant: null },
+  effective: { settings: [], hosts: [], mounts: [], contextRepos: [], grant: null },
   policies: POLICIES,
   capabilities: makeCapabilities(),
   readAt: Date.now(),

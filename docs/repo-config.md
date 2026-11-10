@@ -235,7 +235,9 @@ Nothing is read unless the operator allows it twice:
 - **Their grant** lists the repositories this one may read (`context_repos` patterns in its
   grants file or `default.yaml`, [The grants folder](reference/server-folder.md#the-grants-folder)).
   A repository asked for that no pattern lists stops every run, and the reply names it, as
-  refused mounts do.
+  refused mounts do. The dashboard's config page lists each one asked for, with its ref and
+  folder, the pattern that grants it or why it is refused, and the repository list says a
+  repository with a refused one has errors.
 - **Their policies** give the run `read:context`
   ([Capabilities](security/policies.md#capabilities)). Deckhand's defaults give it to every
   built-in mode that has `pull` (all but research), and never to a run on a fork's pull request

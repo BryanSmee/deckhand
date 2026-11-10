@@ -225,6 +225,13 @@ export const CATALOGUE: CapabilityInfo[] = [
   ["docker", "a container engine next to the sandbox", ["pull"], ["docker"], "docker"],
   ["internet", "any public host, beyond the hosts the operator grants", [], [], "research"],
   ["read:issues", "the repository's issues", [], [], null],
+  [
+    "read:context",
+    "read-only clones of the other repositories its context_repos names, at their refs",
+    ["pull"],
+    ["context_repos"],
+    null,
+  ],
 ].map(([name, what, needs, config, grant]) => ({
   name: name as string,
   what: what as string,
