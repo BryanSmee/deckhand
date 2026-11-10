@@ -45,7 +45,7 @@ const ROUTE_RETRIES = 5;
 
 // How long a comment whose admission GitHub kept failing (its repo's settings, GitHubUnavailable
 // after the App's own tries) is held before it is admitted again, each time; after those, its
-// trigger's reply says so (holdAdmission()). As a run's start (runs.mjs GITHUB_REQUEUE_MS).
+// trigger's reply says so (holdAdmission()). As a run's start (run-replies.mjs GITHUB_REQUEUE_MS).
 export const ADMIT_RETRY_MS = [60_000, 5 * 60_000, 15 * 60_000];
 
 // Why a queued comment may no longer run, or null: its repo left ALLOWED_REPOS, or its author
@@ -385,7 +385,7 @@ export function createTasks(ctx) {
     }
   }
 
-  // A `/cancel` comment: the task's run stops (runs.mjs cancel()), or its queued comments are
+  // A `/cancel` comment: the task's run stops (run-end.mjs cancel()), or its queued comments are
   // dropped, and the comment gets a 👍; the run's reply says who stopped it. With nothing to
   // stop, a reply says so. Its author needs `runs:manage`.
   async function cancelRun(item) {
@@ -690,7 +690,7 @@ export function createTasks(ctx) {
     return item.mode;
   }
 
-  // A run that was stopped is over (runs.mjs teardown()): what was queued behind it doesn't
+  // A run that was stopped is over (run-end.mjs teardown()): what was queued behind it doesn't
   // start a follow-up run, it waits for the next trigger (queue()), unless one came since the
   // stop (the stop lifted). Out of the run order, its 👀 kept; in the queue's next write, which
   // keeps `onHold` too (restart.mjs). → how many were held.
@@ -782,7 +782,7 @@ export function createTasks(ctx) {
       taken(task, items);
       return false;
     }
-    // An external run's machine reads it from its outbox (runs.mjs sendExternal()).
+    // An external run's machine reads it from its outbox (external-runs.mjs sendExternal()).
     if (live.external) ctx.sendExternal(task, liveMessage(live.mode, text));
     else ctx.runner.send(live.id, liveMessage(live.mode, text), agentFor(live.record.agent));
     // A chat's: its owner's message, which the conversation shows as theirs (runlog.mjs).

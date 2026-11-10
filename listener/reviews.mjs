@@ -2494,7 +2494,7 @@ export function createReviews({
     return { item };
   }
 
-  // A review run is over (runs.mjs cleanUp()): its fix run (fix(), the item queued), else, for
+  // A review run is over (run-end.mjs cleanUp()): its fix run (fix(), the item queued), else, for
   // an automatic review (`auto`), with `review.merge` on, the merge ({ sha, method }) or the
   // comment saying why not (null); without, the comment when the rounds ran out (roundsOut()).
   async function settle(run, posted) {
@@ -2518,7 +2518,7 @@ export function createReviews({
     }
     const since = reviewed.get(key)?.nextAt;
     let item = null;
-    // From the start, synchronously in the run's end (runs.mjs cleanUp()): the conflict
+    // From the start, synchronously in the run's end (run-end.mjs cleanUp()): the conflict
     // watcher starts no rebase run meanwhile (looping()).
     return deciding(key, "review", async () => {
       try {
@@ -3137,7 +3137,7 @@ export function createReviews({
     return null;
   }
 
-  // A run of `repo` is over (runs.mjs cleanUp()): its pull requests waiting for CI are decided
+  // A run of `repo` is over (run-end.mjs cleanUp()): its pull requests waiting for CI are decided
   // again, a CI fix run having waited for the issue's task (ciFailed()). Not waited for.
   function runEnded(repo) {
     const keys = [...reviewed]
@@ -3176,7 +3176,7 @@ export function createReviews({
     timer = null;
   }
 
-  // A fix run is over (runs.mjs cleanUp(), `status` its outcome): one more review of what it
+  // A fix run is over (run-end.mjs cleanUp(), `status` its outcome): one more review of what it
   // pushed, once per fix run (reviewedFixes), whose end starts the next fix run or stops the
   // loop (settle()). In auto-merge mode, or with more than one round (a round granted from the
   // dashboard counts): `fix: true` without `merge` reviews nothing after its one fix run, as
@@ -3559,7 +3559,7 @@ export function createReviews({
     return out;
   }
 
-  // A CI fix run is over (runs.mjs cleanUp(), `status` its outcome): what it pushed goes back to
+  // A CI fix run is over (run-end.mjs cleanUp(), `status` its outcome): what it pushed goes back to
   // the CI step (reviewAfterCi()), once per CI fix run (`ciSettled`), and so does the same head
   // when it reran its failed jobs instead (`reruns`, github-writes.mjs: a flaky job). One that
   // failed, or pushed and reran nothing, leaves the pull request to the maintainer, said on it.
@@ -3632,7 +3632,7 @@ export function createReviews({
     });
   }
 
-  // A conflict run is over (runs.mjs cleanUp(), conflicts.mjs, `status` its outcome, `from` the
+  // A conflict run is over (run-end.mjs cleanUp(), conflicts.mjs, `status` its outcome, `from` the
   // head it started from): the loop goes on from the rebased head, as after a fix run. Its
   // review, after the CI step, leads to a fix run or the merge as usual; it uses up no fix
   // round. Only for a pull request the loop reviewed (`head`), with `review.on: ready` still.

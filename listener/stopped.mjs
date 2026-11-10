@@ -1,4 +1,4 @@
-// Tasks whose run was stopped (`/cancel`, the dashboard's Stop: runs.mjs cancel()), by task id
+// Tasks whose run was stopped (`/cancel`, the dashboard's Stop: run-end.mjs cancel()), by task id
 // ("org/repo#12", lowercased) → { by, at } (#1003). Their agent's session is kept (#177), so
 // a plain comment would otherwise go on in it: while the mark is there, nothing starts on the
 // task but what asks for a run (asksForRun()), which clears it. A comment without a trigger

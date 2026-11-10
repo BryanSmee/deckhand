@@ -2,13 +2,13 @@
 
 A task routed to a user's machine (#594: `claims.mjs`, a `runs-on:<label>` label or a
 `/machine` comment) runs there, not in a sandbox: the machine's driver claims it through `/mcp`
-(`claim`) and reports on its run (#597). That run is an **external run** of `runs.mjs`, the same
+(`claim`) and reports on its run (#597). That run is an **external run** of `runs.mjs` (`external-runs.mjs`), the same
 `task.live` as a sandbox run's, its `external` naming the machine (`{ machine, name, owner }`),
 so the dashboard, the log, deliveries, `/cancel` and a run's end are a sandbox run's. What
 differs is that Deckhand starts nothing: no runner, broker, models service nor github service
 state is asked for it (`runs.mjs` skips them for `live.external`).
 
-- **Start**: at the claim (`claims.mjs` `take()`, then `runs.mjs` `startExternal()`): the
+- **Start**: at the claim (`claims.mjs` `take()`, then `external-runs.mjs` `startExternal()`): the
   record of any run (mode, its agent, model and effort as the driver reports them, its
   machine's name in `record.machine`, `start` or `continue` as the claim resumes the session),
   its log's first line, the needs-input label off, its comments' 👀 kept; its state written

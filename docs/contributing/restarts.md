@@ -347,7 +347,7 @@ The dashboard's run list comes back from the runs' summaries (`summaries/<run>` 
 orchestrator's store, written when a run ends, listed at the lease's takeover: the same after a
 handover or a crash; those an older release kept in `logs/<run>.json` or `logs/<run>.summary.json`
 moved there first); a run still live is listed from its saved state. A summary the store doesn't
-take at the run's end is tried again every 5 s (`runs.mjs` `summarySaved()`, `QUEUE_RETRY_MS`) until
+take at the run's end is tried again every 5 s (`run-end.mjs` `summarySaved()`, `QUEUE_RETRY_MS`) until
 it lands, the run keeping its sandbox, its state and its task meanwhile: kept nowhere else since
 #619. A copy that stops first leaves the run as it is, for the next copy to end again. Such a run
 holds its task and a parallel slot, as one whose queue write or state's removal waits
