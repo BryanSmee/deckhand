@@ -1288,6 +1288,7 @@ export async function settled(github, ids) {
   for (const id of ids) {
     await github.waitFor(
       (r) => r.path === `/repos/org/repo/issues/comments/${id}/reactions` && /rocket/.test(r.body),
+      `comment ${id}'s 🚀 (its run's end)`,
     );
   }
 }
