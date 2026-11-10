@@ -127,7 +127,7 @@ export const log = {
   "questions.answers": "Réponses",
   "questions.rawPlaceholder": "Répondez ici, comme dans un commentaire",
   "questions.title": "Questions ouvertes",
-  "questions.fromRun": "de sa dernière exécution",
+  "questions.fromRun": "de l’exécution qui les pose",
   "questions.inIssue": "dans l’issue",
   "questions.sending": "Envoi…",
   "questions.send": "Envoyer les réponses",

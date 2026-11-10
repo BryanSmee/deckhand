@@ -68,6 +68,7 @@ import {
   freshRedisPrefix,
   grantsPolicy,
   listening,
+  localStatus,
   servePolicies,
   isRoot,
   needsBash,
@@ -3025,8 +3026,7 @@ mounts:
     queued.comment = { ...queued.comment, id: 130 };
     await ctx.send(queued);
     for (let i = 0; ; i++) {
-      const status = await (await fetch(`http://127.0.0.1:${ctx.port}/status`)).json();
-      if (status.queued === 1) break;
+      if ((await localStatus(ctx.port, join(ctx.dir, "edge"))).queued === 1) break;
       if (i > 400) throw new Error("timed out waiting for the queued comment");
       await new Promise((resolve) => setTimeout(resolve, 25));
     }

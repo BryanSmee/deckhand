@@ -20,7 +20,8 @@ export function outcome(result) {
   return asksInput(result.text) ? "needs-input" : "ok";
 }
 
-// The agent's last result in these log lines, if any.
+// The agent's last result in these log lines, if any. Only the tests call it, to read how a
+// recorded or finished log ended through each agent's normalize(): kept here, beside outcome().
 export function lastResult(lines, agent) {
   for (let i = lines.length - 1; i >= 0; i--) {
     const result = agent.normalize(lines[i]).findLast((e) => e.type === "result");
@@ -83,7 +84,7 @@ export function needsStamp(line, events, at, open) {
 }
 
 // An `at` line of the listener's (writeEvent()): when the next line came, or null.
-export function stampOf(line) {
+function stampOf(line) {
   if (!line.includes('"event":"at"')) return null;
   const e = parse(line);
   return e?.type === "listener" && e.event === "at" && Number.isFinite(e.at) ? e.at : null;

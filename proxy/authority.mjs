@@ -23,7 +23,7 @@ import { atomicWrite, tempPath } from "./atomic.mjs";
 
 const DAY = 24 * 3600 * 1000;
 export const CA_DAYS = 365;
-export const HOST_DAYS = 7;
+const HOST_DAYS = 7;
 // A host certificate this close to its end is made again; the CA, this close to its own.
 const RENEW_MS = 2 * DAY;
 const CA_RENEW_MS = 30 * DAY;
@@ -33,7 +33,7 @@ const CA_RENEW_MS = 30 * DAY;
 export const EXCLUDED = ["anthropic.com", "openai.com", "chatgpt.com"];
 // Names a CA from before the GitHub gateway excluded: one that still does is made again, or
 // the proxy couldn't relay GitHub's calls (../listener/github-gateway.mjs).
-export const NO_LONGER_EXCLUDED = ["github.com", "githubusercontent.com"];
+const NO_LONGER_EXCLUDED = ["github.com", "githubusercontent.com"];
 export const excluded = (host) =>
   EXCLUDED.some((name) => host === name || host.endsWith(`.${name}`));
 

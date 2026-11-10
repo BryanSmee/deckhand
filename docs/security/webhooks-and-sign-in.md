@@ -38,7 +38,8 @@ filesystem, without capabilities.
 - **What it passes on** (`edge/forward.mjs`): the dashboard's API (`/api/*`, the live logs
   included) and `/status`, to the orchestrator's services port
   under `/edge/…`, with edge's service token and the signed-in user's login in `x-deckhand-user`
-  (or `x-deckhand-local: 1` for a `/status` call from inside edge's container). Edge builds
+  (or `x-deckhand-local: 1` for a `/status` call that proved it comes from inside edge's
+  container, below). Edge builds
   those headers itself: of the browser's request, only `content-type`, `accept` and
   `last-event-id` go on, never its cookies nor an `x-deckhand-user` it sent; its Host and Origin
   go as `x-deckhand-host` and `x-deckhand-origin`, so that the orchestrator's same-origin check
@@ -251,10 +252,13 @@ and restarting edge also signs them out; rotating `session.key` in edge's volume
 out.
 
 `/status` answers calls from inside edge's container without a session (edge passes them on as
-local, `x-deckhand-local`). A reverse
-proxy on the host's network calls from loopback too: a request carrying `Forwarded`,
-`X-Forwarded-For`, `X-Forwarded-Host` or `X-Real-IP` needs a session. If your proxy adds none
-of them, keep `/status` from it.
+local, `x-deckhand-local`), but only those that prove it: `Authorization: Bearer <token>`, the
+token an HMAC of edge's session key (`edge/local.mjs`), which only what reads edge's volume can
+compute (`node edge/status.mjs` does, in the container). Where a call comes from, and which
+headers it carries or leaves out, say nothing (#1019): a reverse proxy on the host's network,
+or in edge's network namespace, calls from loopback too, for anyone, and needs a session on
+`/status` like everyone else. Whoever reads the session key could sign any session already;
+rotating it changes the token too.
 
 ### MCP clients
 

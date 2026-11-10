@@ -512,7 +512,7 @@ export function pendingFailure(pod, why) {
 }
 
 // The init container's exit code when it failed (the agent's install), else null.
-export function failedInit(pod) {
+function failedInit(pod) {
   const code = (pod.status?.initContainerStatuses ?? []).find((s) => s.name === INIT_CONTAINER)
     ?.state?.terminated?.exitCode;
   return code === undefined || code === 0 ? null : code;

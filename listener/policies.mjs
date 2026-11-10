@@ -71,15 +71,15 @@ export const RULES = [
 
 // The inputs one call of the policy service's capabilities takes (lib/policy-files.mjs, its
 // engine's MAX_INPUTS too): more go in several (a repository's modes, for its config page).
-export const CAPABILITY_INPUTS_MAX = MAX_CAPABILITY_INPUTS;
+const CAPABILITY_INPUTS_MAX = MAX_CAPABILITY_INPUTS;
 
 // Where they are now (lib/policy-files.mjs, which the policy service shares): the listener's
 // modules and tests import them from here.
-export { ACCESS_RULES, CAPABILITY_RULES, rulesOf };
+export { rulesOf };
 
 // The decisions only about built-in modes' runs (a review, its fix run, the merge): a repo's
 // allow rule for them would count for no run, and is a config check error.
-export const BUILT_IN_ONLY = new Set(["merge", "review", "fix"]);
+const BUILT_IN_ONLY = new Set(["merge", "review", "fix"]);
 
 // The decisions only the operator's layer makes (#498): a repo's rules for them, allow or deny,
 // are a config check error, and not asked. What a repository gets beyond any run is the
@@ -90,7 +90,7 @@ export const OPERATOR_ONLY = new Set(["grant"]);
 // error, evaluated (one of the wrong shape fails closed) but not counted; its deny rules
 // narrow. Who may do what on a repository is the operator's to say (#730), and a repository's
 // maintainers may only take some of it away.
-export const OPERATOR_ALLOWS = new Set(["access"]);
+const OPERATOR_ALLOWS = new Set(["access"]);
 
 // The actions access() gives (#730): on a repository, and server-wide (asked with no repository).
 // A rule may give a prefix ending in `*` (`runs:start:*`, `server:*`, `*`: all of them), and a
@@ -159,7 +159,7 @@ export function knownMode(action, modes) {
 
 // How many of ALLOWED_USERS' logins the access rules' check asks about at most (each costs three
 // inputs: server-wide, a repository private and public).
-export const MAX_CHECKED_LOGINS = 100;
+const MAX_CHECKED_LOGINS = 100;
 
 // What the config checks say of an action no rule should name (knownAction()).
 const unknownAction = (rule, action, layer) =>
@@ -205,7 +205,7 @@ export const MAX_ACCESS = 5000;
 export const MAX_LATER = 100;
 
 // `deny_merge`, `allow_merge` or `merge` → "merge".
-export const decisionOf = (rule) => rule.replace(/^(?:allow|deny)_/, "");
+const decisionOf = (rule) => rule.replace(/^(?:allow|deny)_/, "");
 
 // Deckhand's default for the reviews that start by themselves, which skips other bots' pull
 // requests: replacing it without a word about them gets a warning (botsReviewed()).
@@ -343,7 +343,7 @@ export async function denyKept(
 export const isPolicyError = (message) => /^policy error/i.test(message);
 
 // What a refusal quotes of a policy: its first messages, each cut.
-export const MAX_MESSAGES = 5;
+const MAX_MESSAGES = 5;
 export const MAX_MESSAGE_LENGTH = 200;
 
 // How long Deckhand's policies, as the policy service gave them, are taken for its own without

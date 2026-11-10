@@ -11,11 +11,11 @@ import { leaseMetric } from "../lib/metrics.mjs";
 
 // Seconds, for a sandbox's start (an image pulled, an agent installed: minutes) and an image's
 // build (a big one: tens of minutes).
-export const START_BUCKETS = [1, 2.5, 5, 10, 20, 30, 60, 120, 300, 600, 1200];
-export const BUILD_BUCKETS = [5, 10, 30, 60, 120, 300, 600, 1200, 1800, 3600];
+const START_BUCKETS = [1, 2.5, 5, 10, 20, 30, 60, 120, 300, 600, 1200];
+const BUILD_BUCKETS = [5, 10, 30, 60, 120, 300, 600, 1200, 1800, 3600];
 // The probe: a pod started and its targets tried (CONNECT_MS each, at once), up to
 // KUBERNETES_PENDING_MINUTES and a minute when its pod waits.
-export const PROBE_BUCKETS = [1, 2.5, 5, 10, 20, 30, 60, 120, 300, 600];
+const PROBE_BUCKETS = [1, 2.5, 5, 10, 20, 30, 60, 120, 300, 600];
 
 export const ENGINES = ["none", "sysbox", "podman"];
 export const RUNNERS = ["docker", "kubernetes"];
@@ -46,10 +46,10 @@ export const START_FAILURES = [
 // The network probe's results: isolated (a sandbox reaches the egress proxy alone), reached (it
 // reached something else: every run refused), unknown (it couldn't tell, tried again at the next
 // run's start).
-export const PROBE_RESULTS = ["isolated", "reached", "unknown"];
+const PROBE_RESULTS = ["isolated", "reached", "unknown"];
 
 // A repo image's old tag: deleted, kept (a sandbox still runs it), or not deleted (an error).
-export const PRUNE_RESULTS = ["deleted", "kept", "failed"];
+const PRUNE_RESULTS = ["deleted", "kept", "failed"];
 
 // `runner`: RUNNER (docker, kubernetes). `sandboxes()`: the acting copy's sandboxes as
 // [{ engine }], or null on the waiting copy (no samples). `active()`: whether this copy acts.

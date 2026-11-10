@@ -10,7 +10,8 @@ import { AGENTS } from "./agents/index.mjs";
 import { EFFORTS, MODEL_NAME, SPEEDS } from "./events.mjs";
 import { GitHubUnavailable, unavailable } from "./github.mjs";
 import { list, normalize } from "./config.mjs";
-import { machineLabel } from "./machines.mjs";
+import { CONTEXT_DIR, parseContextRepos } from "./context-repos.mjs";
+import { parseMachines } from "./machines.mjs";
 import { customMode, PICKED_MODES, RESERVED_MODES } from "./modes.mjs";
 import { FILES_DIR, SCREENSHOT_DIR } from "./runner/inbox.mjs";
 import { isMap, parseYaml } from "../lib/yaml.mjs";
@@ -21,6 +22,7 @@ export const CONFIG_FILE = ".deckhand.yaml";
 // session and install, from its definition, so a new agent can't be left out.
 export const RESERVED = [
   "/workspace",
+  CONTEXT_DIR,
   SCREENSHOT_DIR,
   FILES_DIR,
   ...Object.values(AGENTS).flatMap((a) => [a.session.path, a.install({}).mount]),
@@ -46,7 +48,7 @@ const PROJECT_KEYS = ["project", "field", ...PROJECT_STEPS];
 
 const MODE_KEYS = ["instructions", "session", "agent", "model", "effort", "speed"];
 
-const REVIEW_KEYS = [
+export const REVIEW_KEYS = [
   "on",
   "instructions",
   "agent",
@@ -68,11 +70,11 @@ const REVIEW_KEYS = [
 // or opened as ready; `manual`, only with a "/mode review" line.
 const REVIEW_ON = ["ready", "manual"];
 // How an auto-merge merges (`review.merge_method`), GitHub's merge_method values.
-export const MERGE_METHODS = ["squash", "merge", "rebase"];
+const MERGE_METHODS = ["squash", "merge", "rebase"];
 // `review.max_allowed_severity`'s values: the most severe finding an automatic review in the
 // fix loop (`review.fix`) or deciding an auto-merge (reviews.mjs) may have without requesting
 // changes: it starts no fix run, and may merge. Critical and high always block.
-export const ALLOWED_SEVERITIES = ["low", "medium"];
+const ALLOWED_SEVERITIES = ["low", "medium"];
 // `review.merge_wait`: how many minutes an auto-merge waits for the GitHub Actions runs still
 // going on the reviewed commit (reviews.mjs), at most a day; 0 refuses at once.
 const MERGE_WAIT_MINUTES = 60;
@@ -105,7 +107,8 @@ export function effectiveConfig(config, settings) {
 // The file's text → { settings, errors, warnings, fixes }. Errors stop runs (the reply says
 // why); warnings (unknown keys, users the operator doesn't allow) only go to the run's log.
 // `fixes`: how to fix an error whose message doesn't say, by the error (the dashboard's).
-export function parseRepoConfig(text, config) {
+// `repo`: whose file it is, when the caller knows (a context repo can't be the run's own).
+export function parseRepoConfig(text, config, { repo = null } = {}) {
   const settings = defaultSettings(config);
   const errors = [];
   const warnings = [];
@@ -132,7 +135,8 @@ export function parseRepoConfig(text, config) {
   for (const [key, value] of Object.entries(raw)) {
     if (value === null) continue; // "key:" with nothing: the default
     if (!Object.hasOwn(KEYS, key)) warn(`${key}: unknown, ignored`);
-    else KEYS[key].parse(value, { key, field: KEYS[key].field, settings, config, fail, warn });
+    else
+      KEYS[key].parse(value, { key, field: KEYS[key].field, settings, config, fail, warn, repo });
   }
   // Across two keys, whatever their order in the file.
   if (settings.review?.followUpsAutoPickup && !settings.autoPickup) {
@@ -354,35 +358,6 @@ function parseChats(value, { key, settings, config, fail }) {
   if (n === undefined || n === null) return;
   if (!Number.isInteger(n) || n < 0) return fail("chats.per_user", "expected a whole number");
   settings.chatsPerUser = Math.min(n, config.chatsPerUser);
-}
-
-// `machines: true`, or `machines: { labels: [unreal] }`: its tasks may run on its users' own
-// machines (machines.mjs), with the operator's `machines` grant too; `labels` narrows them to
-// the machines that have one of these. → settings.machines: null (off), or { labels } (null:
-// any label). Every key is checked: a mistyped one would offer more machines than meant.
-function parseMachines(value, { key, settings, fail }) {
-  if (typeof value === "boolean") {
-    settings.machines = value ? { labels: null } : null;
-    return;
-  }
-  if (!isMap(value)) return fail(key, "expected true, false or { labels: [...] }");
-  let ok = true;
-  for (const other of Object.keys(value)) {
-    if (other !== "labels") {
-      ok = false;
-      fail(`machines.${other}`, "unknown key (expected labels)");
-    }
-  }
-  const labels = value.labels;
-  if (labels === undefined || labels === null) {
-    if (ok) settings.machines = { labels: null };
-    return;
-  }
-  const kept = Array.isArray(labels) ? labels.map(machineLabel) : [];
-  if (!kept.length || kept.includes(null)) {
-    return fail("machines.labels", 'expected a list of labels (letters, digits, ".", "_" and "-")');
-  }
-  if (ok) settings.machines = { labels: [...new Set(kept)] };
 }
 
 // The projects (v2) the listener puts the repo's issues on, and the option of their field (by
@@ -793,6 +768,14 @@ export const KEYS = {
   },
   // The panel resolves them in a table of their own (repo-view.mjs mountRows()).
   mounts: { field: "mounts", default: () => [], parse: parseMounts, display: false },
+  // Other repositories its runs read, each the operator's grants must list (context-repos.mjs);
+  // the panel's table of their own is #931's.
+  context_repos: {
+    field: "contextRepos",
+    default: () => [],
+    parse: parseContextRepos,
+    display: false,
+  },
   inbox: {
     field: "inbox",
     default: () => ({}),
@@ -1195,7 +1178,7 @@ export async function readRepoFile(request, repo, path, ref) {
 export async function loadRepoSettings(request, config, repo, ref) {
   const file = await readRepoFile(request, repo, CONFIG_FILE, ref);
   if (!file) return { settings: defaultSettings(config), errors: [], warnings: [] };
-  return parseRepoConfig(file.text, config);
+  return parseRepoConfig(file.text, config, { repo });
 }
 
 // Which of the ready tasks (in priority order) start now: the operator's MAX_PARALLEL

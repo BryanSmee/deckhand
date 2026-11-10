@@ -441,6 +441,52 @@ test("screenshots: into the run's folder, images only, capped, said on the strea
   assert.equal(refused.status, 403);
 });
 
+// An animated WebP, as img2webp writes one (#1050): RIFF…WEBP, a VP8X header whose animation
+// flag is set, the ANIM chunk, then one ANMF frame per step (an empty one is enough here).
+function chunk(fourcc, data) {
+  const head = Buffer.alloc(8);
+  head.write(fourcc, 0, "latin1");
+  head.writeUInt32LE(data.length, 4);
+  return Buffer.concat([head, data, Buffer.alloc(data.length % 2)]);
+}
+const ANIMATED_WEBP = (() => {
+  const vp8x = Buffer.alloc(10);
+  vp8x[0] = 0x02; // animation
+  const body = Buffer.concat([
+    Buffer.from("WEBP", "latin1"),
+    chunk("VP8X", vp8x),
+    chunk("ANIM", Buffer.alloc(6)),
+    chunk("ANMF", Buffer.alloc(16)),
+    chunk("ANMF", Buffer.alloc(16)),
+  ]);
+  const head = Buffer.alloc(8);
+  head.write("RIFF", 0, "latin1");
+  head.writeUInt32LE(body.length, 4);
+  return Buffer.concat([head, body]);
+})();
+
+test("screenshots: an animated WebP, served to edge as one; a .webp that isn't one refused", async (t) => {
+  const { copies } = await brokers(t);
+  const [broker] = copies;
+  const orchestrator = await client(broker, "orchestrator");
+  const proxy = await client(broker, "proxy");
+  const edge = await client(broker, "edge");
+  const { token } = await started(orchestrator);
+  const put = (name, body) =>
+    sandboxCall(proxy, "PUT", `/run/shots/${name}`, token, "net-a", { body });
+  assert.equal((await put("flow.webp", ANIMATED_WEBP)).status, 204);
+  const served = await edge("GET", `/shots/${FOLDER}/flow.webp`);
+  assert.deepEqual([served.status, served.headers["content-type"]], [200, "image/webp"]);
+  assert.deepEqual(served.body, ANIMATED_WEBP);
+  // Another kind of file named .webp: a PNG, a GIF, a RIFF that isn't a WebP (a WAV).
+  const wav = Buffer.from(ANIMATED_WEBP);
+  wav.write("WAVE", 8, "latin1");
+  for (const body of [PNG, Buffer.from("GIF89a"), wav]) {
+    assert.equal((await put("fake.webp", body)).status, 415, body.subarray(0, 12).toString());
+  }
+  assert.equal((await edge("GET", `/shots/${FOLDER}/fake.webp`)).status, 404);
+});
+
 test("screenshots: in blob storage, sent in parts, those of the release before adopted; removed with their run", async (t) => {
   const dir = tempDir(t);
   const clock = { now: 1_900_000_000_000 };

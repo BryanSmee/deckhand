@@ -7,12 +7,12 @@
 //   run      a run's token, at its start and at each renewal that signs a new one
 //   agent    a run's agent token, at its start (the models service takes it)
 //   service  a service's token for one service it calls (POST /service-tokens)
-export const TOKEN_KINDS = ["run", "agent", "service"];
+const TOKEN_KINDS = ["run", "agent", "service"];
 // What a sandbox's renewal (POST /run/token) got:
 //   renewed  a new token
 //   again    the one signed less than a minute before (runs.mjs RENEW_MIN_MS)
 //   refused  none (deckhand_tokens_refused_total says why)
-export const RENEWAL_RESULTS = ["renewed", "again", "refused"];
+const RENEWAL_RESULTS = ["renewed", "again", "refused"];
 // Why a token, a run's or a service's, was refused:
 //   expired         past its expiry (a run token renews up to its grace, the newest only)
 //   invalid         none, not a token, another key's, another service's, a token of another kind
@@ -20,7 +20,7 @@ export const RENEWAL_RESULTS = ["renewed", "again", "refused"];
 //   wrong_sandbox   a run token from another sandbox than its own
 //   unknown_caller  a service token from another service's network, or asked from no service's
 //   not_allowed     a service asking what it may not (an endpoint, another service's token)
-export const REFUSAL_REASONS = [
+const REFUSAL_REASONS = [
   "expired",
   "invalid",
   "run_over",

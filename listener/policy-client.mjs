@@ -18,7 +18,7 @@ const RETRY_MS = 500;
 // One call at most, once taken: longer than the service's worst case for a set's first decision,
 // its check (10 s), its opa's start (10 s) and the query (2 s), so that a slow first decision isn't
 // refused here while the service still finishes it.
-export const CALL_TIMEOUT_MS = 30_000;
+const CALL_TIMEOUT_MS = 30_000;
 
 // Whether `error` (fetch's) is a connection the service didn't take: refused, reset before an
 // answer, or a name that doesn't resolve yet (a container that is starting).

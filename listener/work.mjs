@@ -68,7 +68,7 @@ import { MAX_TEXT, answersComment, parseAnswers } from "./answers.mjs";
 import { labelFailed } from "./comments.mjs";
 import { repoAllowed } from "./config.mjs";
 import { FAILED } from "./board.mjs";
-import { createDismissals } from "./dismissals.mjs";
+import { askingRun, createDismissals } from "./dismissals.mjs";
 import { createOrder } from "./order.mjs";
 import { startAction } from "./permissions.mjs";
 import { tagger } from "./discussions.mjs";
@@ -910,9 +910,8 @@ export function createWorkApi({
     const { comment: text, open } = answersComment(user, questions?.items ?? null, asked, where);
     // Where the run asked: a pull request's run on an issue's task replies on the pull request.
     const replyTo = task.replyTo ?? number;
-    const fromRun = questions
-      ? questions.source === "run"
-      : task.runs?.[0]?.status === "needs-input";
+    // Not a review's since (askingRun()): it leaves the questions of the run before waiting.
+    const fromRun = questions ? questions.source === "run" : !!askingRun(task.runs ?? []);
     // The session goes on in its mode: its start is the user's, before the App's comment, from the
     // dashboard or ticked on GitHub (ticked(), whose caller logs the refusal).
     if (fromRun) await startable(repo, user, task.mode ?? "work");

@@ -12,7 +12,7 @@ import { leaseMetric, OTHER } from "../lib/metrics.mjs";
 import { countKeys } from "../lib/store.mjs";
 
 // The events GitHub sends: the App's (APP_EVENTS), and those it sends every App unasked.
-export const WEBHOOK_EVENTS = [
+const WEBHOOK_EVENTS = [
   ...APP_EVENTS,
   "ping",
   "installation",
@@ -124,10 +124,10 @@ export function routeOf(path) {
 // A status as its class (`4xx`), `none` when the client left before an answer. Anyone can get a
 // 400, 401 or 503 on any route without a session: exact statuses would make route × status a
 // bound only the cap on series holds, and past it a signed-in user's 200 would be `other`.
-export const STATUS_CLASSES = ["1xx", "2xx", "3xx", "4xx", "5xx", "none"];
-export const statusClass = (res) => (res.headersSent ? `${String(res.statusCode)[0]}xx` : "none");
+const STATUS_CLASSES = ["1xx", "2xx", "3xx", "4xx", "5xx", "none"];
+const statusClass = (res) => (res.headersSent ? `${String(res.statusCode)[0]}xx` : "none");
 
-export const SIGN_IN_RESULTS = [
+const SIGN_IN_RESULTS = [
   "allowed", // a session cookie given
   "refused", // signed in on GitHub as someone not in ALLOWED_USERS
   "expired", // back from GitHub without its state (a sign-in left too long, another browser)

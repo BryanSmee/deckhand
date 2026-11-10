@@ -17,13 +17,14 @@ import { drainable } from "../lib/drain.mjs";
 import { readBody, send } from "../lib/http.mjs";
 import { storable } from "../lib/store.mjs";
 import { ciWaitingKey, DELIVERIES } from "./internal.mjs";
+import { provesLocal } from "./local.mjs";
 import { logContext, withRequest } from "../lib/log.mjs";
 
 // On every answer: the dashboard's own scripts, styles and images only (its build has no
 // inline script), never in a frame (a page on a sibling domain, which SameSite=Lax lets
 // through, could get a signed-in user to click Start or Cancel), and never sniffed as another
 // type. Edge's own pages narrow the policy further (html.mjs page()).
-export const SECURITY_HEADERS = {
+const SECURITY_HEADERS = {
   "content-security-policy": "default-src 'self'; frame-ancestors 'none'",
   "x-content-type-options": "nosniff",
 };
@@ -57,20 +58,11 @@ const MAX_MACHINE_BODY = MAX_API_BODY;
 // orchestrator acknowledged goes from it at once (internal.mjs).
 const STREAM_MAX = 10_000;
 
-// Health checks and scripts call from inside the container (docker compose exec). A reverse
-// proxy on the host's network calls from loopback too, for anyone: a request it forwarded
-// (it says so in a header) isn't local.
-const FORWARDED = ["forwarded", "x-forwarded-for", "x-forwarded-host", "x-real-ip"];
-export function local(req) {
-  if (FORWARDED.some((h) => req.headers[h] !== undefined)) return false;
-  return ["127.0.0.1", "::1", "::ffff:127.0.0.1"].includes(req.socket.remoteAddress);
-}
-
 // A delivery's GUID, as the store keeps it: { taking: at } while it goes on the stream, then
 // { kept: at }, for a day. A redelivery of one taken (by hand, or GitHub's own) comes within that;
 // the redeliveries' poller only asks for those GitHub never saw taken.
-export const deliveryKey = (id) => `deliveries/${id}`;
-export const DELIVERY_TTL_MS = 24 * 3600_000;
+const deliveryKey = (id) => `deliveries/${id}`;
+const DELIVERY_TTL_MS = 24 * 3600_000;
 // How long a commit's mark (internal.mjs ciWaitingKey()) lasts, should its entry be lost.
 const CI_WAITING_TTL_MS = 10 * 60_000;
 // A delivery still being taken after this was lost on its way to the stream (a copy that died,
@@ -99,7 +91,8 @@ async function startTaking(store, id, now) {
 // forward.mjs's; `shots`: shots.mjs's; `redeliveries`: whether a delivery is one edge asked again (redelivered());
 // `dashboardDir`: the dashboard's build; `stopping()`: true once SIGTERM came; `waiting()`: true
 // until the broker has answered it (../listener/broker-service.mjs ready()); `metrics`:
-// metrics.mjs edgeMetrics()'s, none: not counted.
+// metrics.mjs edgeMetrics()'s, none: not counted; `localToken()`: the token a call of /status from
+// inside edge's container sends (local.mjs), none: every call needs a session.
 export function createEdgeHttp({
   config,
   app,
@@ -115,6 +108,7 @@ export function createEdgeHttp({
   stopping = () => false,
   waiting = () => false,
   metrics = null,
+  localToken = () => null,
   log = () => {},
   now = Date.now,
 }) {
@@ -342,7 +336,8 @@ export function createEdgeHttp({
     if (oauth?.handle(req, res)) return;
     if (req.method === "POST" && path === "/webhook") return webhook(req, res);
     if (path === "/status") {
-      if (local(req)) return forward(req, res, { isLocal: true });
+      // Whatever a proxy sends or leaves out: only the token says the call is local (#1019).
+      if (provesLocal(req, localToken())) return forward(req, res, { isLocal: true });
       const user = await userOf(req);
       if (!user) return res.writeHead(401).end();
       return forward(req, res, { user });

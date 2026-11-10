@@ -30,7 +30,7 @@ const EFFORTS = { low: "low", medium: "medium", high: "high", xhigh: "high", max
 // flags and the account's avatar, which carry no token, stay a tunnel (its eligibility check
 // stops without the avatar, #224). Telemetry, which carries the token, is refused, whatever the
 // grants say.
-export const RELAYED = ["daily-cloudcode-pa.googleapis.com", "www.googleapis.com"];
+const RELAYED = ["daily-cloudcode-pa.googleapis.com", "www.googleapis.com"];
 const BLOCKED = ["play.googleapis.com"];
 
 // A step's tool call → Deckhand's name and what it is about.

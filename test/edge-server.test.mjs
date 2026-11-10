@@ -4,9 +4,12 @@
 import assert from "node:assert/strict";
 import { createHash, createHmac } from "node:crypto";
 import { writeFileSync } from "node:fs";
+import { execFile } from "node:child_process";
 import { request } from "node:http";
 import { join } from "node:path";
 import { test } from "node:test";
+import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
 import { createCallers } from "../broker/callers.mjs";
 import { createBroker } from "../broker/server.mjs";
 import { signServiceToken } from "../lib/service-token.mjs";
@@ -25,6 +28,8 @@ import {
 const SECRET = "webhook-secret";
 const KEY = Buffer.alloc(32, 3);
 const host = "127.0.0.1";
+const run = promisify(execFile);
+const STATUS_SCRIPT = new URL("../edge/status.mjs", import.meta.url);
 
 // A session cookie for `login`, as edge signs them with KEY.
 function session(login) {
@@ -111,6 +116,7 @@ async function startEdge(t) {
     });
   return {
     child,
+    dir,
     port,
     internalPort,
     metricsPort,
@@ -175,11 +181,12 @@ test("edge: a delivery taken once, read and acknowledged by the orchestrator; th
   const state = await fetch(`${base}/api/state`, { headers: { cookie: session("alice") } });
   assert.deepEqual(await state.json(), { answered: true });
   await fetch(`${base}/api/state`, { headers: { cookie: session("mallory") } });
-  await fetch(`${base}/status`);
-  assert.equal(
-    (await fetch(`${base}/status`, { headers: { "x-forwarded-for": "1.2.3.4" } })).status,
-    401,
-  );
+  // /status: a session, else the token status.mjs reads from inside edge's container (#1019).
+  assert.equal((await fetch(`${base}/status`)).status, 401);
+  const status = await run(process.execPath, [fileURLToPath(STATUS_SCRIPT)], {
+    env: { PATH: process.env.PATH, DATA_DIR: edge.dir, PORT: String(edge.port) },
+  });
+  assert.equal(status.stdout, '{"answered":true}\n');
   // A screenshot: from the broker, never the orchestrator (#609).
   const folder = "0123456789abcdef01234567";
   const png = Buffer.concat([Buffer.from("89504e470d0a1a0a", "hex"), Buffer.from("png")]);
