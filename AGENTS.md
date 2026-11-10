@@ -131,7 +131,9 @@ policy-service/ the policy service (#501): long-lived `opa` servers evaluating t
               metrics.mjs (its decisions, their time, the operator's policies' loads)
 policy/       Deckhand's default policies (*.rego), copied into the policy service's image
 dashboard/    the dashboard: Preact + Vite + TypeScript, built to dist/ in edge's image;
-              screenshots/ takes the docs' pictures (run.mjs, hero.html) against src/shots.ts
+              screenshots/ takes the docs' pictures (run.mjs, hero.html) against src/shots.ts;
+              src/types/: the contract with the API, a file per area (state, log, access, repos,
+              config, work, chats, server), index.ts re-exporting them
 sandbox/      base image: Dockerfile, entrypoint.sh, draft-pr.sh, pre-push, git credential
               helper and gh wrapper; agents/<name>.sh and agents/<name>/ (Claude Code's
               flags, installer, settings, hooks, progress.jq)
@@ -204,8 +206,9 @@ docs/         the docs, and the site built from them (VitePress, build-time only
 - **The dashboard is the exception** (`dashboard/`, issue #22): Preact, Vite and TypeScript,
   with hand-written CSS Modules, no UI or chart library. Its packages are build-time only: the
   image's build stage turns them into static files in `dashboard/dist/`, which edge
-  serves; the released image has no `node_modules`. `src/types.ts` is the contract with
-  `http.mjs` (`api/state`) and `runlog.mjs` (the log stream): change them together. Tests: Vitest and
+  serves; the released image has no `node_modules`. `src/types/` is the contract with
+  `http.mjs` (`api/state`: `state.ts`) and `runlog.mjs` (the log stream: `log.ts`), one file per
+  area of the API that `index.ts` re-exports: change them together. Tests: Vitest and
   Testing Library, named `*.spec.ts(x)`: Node runs `*.test.ts` files itself, and
   `node --test` must leave them alone.
 - **So is the docs site** (`docs/`, issue #982): VitePress, and Mermaid for the ` ```mermaid `

@@ -1,6 +1,5 @@
 // The repository config page's rows (GET api/repos/<owner>/<repo>/config's `effective` and its
-// file's problems: listener/repo-view.mjs, repos.mjs), apart from types.ts, whose size is held
-// (test/file-sizes.test.mjs).
+// file's problems: listener/repo-view.mjs, repos.mjs).
 
 // Where a value comes from: the repo's .deckhand.yaml, the operator (environment, grants
 // folder), or the repo's, refused (a refused host or mount stops every run), or unknown (it
