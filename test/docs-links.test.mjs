@@ -129,11 +129,9 @@ export function references(path, text) {
   return refs;
 }
 
-// Stale, but in a file a run can't push (a workflow with write scopes): the maintainer's to fix,
-// "docs/guides/machines.md" in its place. Listed here, it must stay broken until then.
-const KNOWN = new Set([
-  `.github/workflows/release-workflow.yml:37: ${"docs"}/setup.md, Your own machine`,
-]);
+// Stale, but in a file a run can't push (a workflow with write scopes): the maintainer's to fix.
+// Listed here, it must stay broken until then. None today.
+const KNOWN = new Set([]);
 
 test("every reference to docs/ names a page and a heading that exist", () => {
   const broken = [];

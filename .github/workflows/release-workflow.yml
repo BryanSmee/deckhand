@@ -34,8 +34,9 @@ permissions:
   packages: write
 
 jobs:
-  # The machine driver is one file, attached to each release (docs/setup.md, Your own machine),
-  # its VERSION the tag's so register_machine and heartbeat report the release.
+  # The machine driver and the deckhand command are a file each, attached to each release
+  # (docs/guides/machines.md, docs/guides/updating.md), their VERSION the tag's so register_machine
+  # and heartbeat report the release, and deckhand --version says it.
   machine-driver:
     if: github.ref_type == 'tag'
     runs-on: ubuntu-latest
@@ -49,12 +50,14 @@ jobs:
         run: |
           version="${GITHUB_REF_NAME#v}"
           line="export const VERSION = \"$version\";"
-          sed -i "s|^export const VERSION = \".*\";\$|$line|" machine/deckhand-machine.mjs
-          # A driver whose VERSION line moved would ship saying 0.1.0: fail rather than that.
-          grep -qxF "$line" machine/deckhand-machine.mjs
+          for file in machine/deckhand-machine.mjs cli/deckhand.mjs; do
+            sed -i "s|^export const VERSION = \".*\";\$|$line|" "$file"
+            # A file whose VERSION line moved would ship saying 0.1.0: fail rather than that.
+            grep -qxF "$line" "$file"
+          done
           gh release view "$GITHUB_REF_NAME" > /dev/null 2>&1 ||
             gh release create "$GITHUB_REF_NAME" --verify-tag --generate-notes
-          gh release upload "$GITHUB_REF_NAME" machine/deckhand-machine.mjs --clobber
+          gh release upload "$GITHUB_REF_NAME" machine/deckhand-machine.mjs cli/deckhand.mjs --clobber
 
   # The Helm chart, an OCI artifact next to the images (docs/kubernetes/helm.md): its version and
   # appVersion the tag's, without its `v` as the images', whatever Chart.yaml says. Its source
