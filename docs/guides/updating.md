@@ -59,6 +59,9 @@ Edge takes GitHub's webhooks meanwhile: they wait in its store until the orchest
 them, so none is lost. With two copies of each, an update stops nothing ([Two copies](two-copies.md)).
 A new base image rebuilds a repository's own image on its next run (see
 [Per-repo config](../repo-config.md)); running sandboxes keep the image they started with.
+A base image older than the services (its `deckhand.sandbox-api` label lower than theirs) runs
+nothing: each run is refused at its start with "the sandbox image … is older than Deckhand's
+services: run docker compose pull sandbox", so pull it with the rest.
 The policy service restarts in a few seconds and holds nothing: the decisions the orchestrator
 asks meanwhile (a run's GitHub write, a merge) wait for it, up to 30 seconds, rather than being
 refused.

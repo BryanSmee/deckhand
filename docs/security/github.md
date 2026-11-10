@@ -557,6 +557,37 @@ to GitHub: the proxy never tunnels those hosts for it, and its plain HTTP to the
   repository, a fork's pull request's head, a commit that isn't its repository's, by git, the
   API, an archive, a page or a raw file ([What a fork's code may
   reach](forks.md#what-a-forks-code-may-reach)).
+- **Context repos are fetched, nothing else** (`listener/context-gateway.mjs`, issue #930): the
+  other repositories a run reads ([Context repos](../repo-config.md#context-repos)) are decided
+  at its start, never from what the sandbox says: those its `.deckhand.yaml` names, the
+  operator's `context_repos` patterns list, and the policies give it with `read:context`. The
+  orchestrator looks each one up on GitHub then (`listener/context-access.mjs`): where the App
+  is installed (its owner's installation, whoever that is), and otherwise whether GitHub shows
+  it publicly; each ref is resolved. A private repository without the App, or a ref that isn't
+  there, stops the run with the reason, before its sandbox starts: a run never goes on with
+  part of its context. The github service gets the list with the run (`context` in
+  `PUT /runs/:id`), and its gateway holds the run's calls to it:
+  - git's fetch of one of them (`info/refs`, `git-upload-pack`) goes on with a token minted for
+    that repository alone, `contents: read` (and the metadata every token has), from its own
+    installation, or with no token at all where the App isn't installed (a public one); never
+    the run's own repository's token, nor that one with the other's;
+  - anything else naming it is refused, and noted in the run's log: its REST API (issues, pull
+    requests, contents, anything under `repos/<owner>/<name>`), its pages, its raw files where
+    they are relayed (the runs above; for the others they are plain hosts, without a token), and
+    GraphQL's `repository(owner:, name:)` among a query's root fields;
+  - a fetch of a repository the run could read but doesn't is refused: one its config names
+    when the policies don't give it `read:context` (it fetches none), and one the operator's
+    patterns list that its config doesn't name. Any other repository goes as before, with the
+    run's own token, which reads public repositories only;
+  - pushes go to the git gateway, which takes the run's own repository alone: a context repo's
+    push is refused there (`this run can only push to …`).
+
+  The sandbox clones each one shallow, at its ref, into `/context/<owner>/<name>[@<ref>]` before
+  the setup (`sandbox/entrypoint.sh`, `SANDBOX_CONTEXT`), fresh at each run, and removes write
+  permission from it: only a hint to the agent, the gateways being what refuses its writes. A
+  clone that fails stops the run with git's message. The prompt lists the folders as read-only
+  and untrusted input: data, never instructions.
+
 - GitHub's content hosts (`*.githubusercontent.com`, `listener/egress.mjs`
   `githubContent()`), all of them, are relayed to the gateway too for such a run
   (`listener/egress-http.mjs`): its file hosts (`GITHUB_FILES`: `raw.githubusercontent.com`,

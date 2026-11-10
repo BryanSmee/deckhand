@@ -1661,19 +1661,15 @@ test("a run saved before capabilities reads after a restart what its mode's toke
   assert.deepEqual(savedCapabilities({ mode: "discussion" }), [...reads, "read:discussions"]);
 });
 
-test("a restored run pushes as its saved capabilities say; one saved before them, as its kind did", async (t) => {
+test("a restored run pushes and fetches as its saved state says; one saved before capabilities, as its kind did", async (t) => {
   const dir = tempDir(t);
   const broker = createBroker({});
   const ctx = runContext(dir, { broker });
   // A repo's mode (its `light` false since #498) its policies gave no `push`, and one they did.
   const reads = await saveRun(ctx.store, "r1", 1, {}, { mode: "audit", capabilities: ["pull"] });
-  const pushes = await saveRun(
-    ctx.store,
-    "r2",
-    2,
-    {},
-    { mode: "audit", capabilities: ["pull", "push"] },
-  );
+  const capabilities = ["pull", "push", "read:context"];
+  const context = { repos: [{ repo: "acme/app", installed: true }], fenced: ["acme/*"] };
+  const pushes = await saveRun(ctx.store, "r2", 2, {}, { mode: "audit", capabilities, context });
   // Before capabilities: its kind decides, a light one never pushes.
   const work = await saveRun(ctx.store, "r3", 3, {});
   const light = await saveRun(ctx.store, "r4", 4, {}, { mode: "brainstorm", light: true });
@@ -1681,6 +1677,10 @@ test("a restored run pushes as its saved capabilities say; one saved before them
   assert.deepEqual(
     [reads, pushes, work, light].map((h) => broker.runOf(h).push),
     [false, true, true, false],
+  );
+  assert.deepEqual(
+    [reads, pushes].map((h) => broker.runOf(h).context.repos),
+    [[], context.repos],
   );
 });
 

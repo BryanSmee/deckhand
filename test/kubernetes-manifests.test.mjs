@@ -17,7 +17,7 @@ import { DRAIN_MS as GITHUB_DRAIN_MS } from "../lib/drain.mjs";
 import { CALLS, SERVICES } from "../lib/services.mjs";
 import { keyId } from "../lib/tokens.mjs";
 import { parseYaml } from "../lib/yaml.mjs";
-import { builderIsolationProblem } from "../listener/runner/kube-images.mjs";
+import { builderIsolationProblem } from "../listener/runner/kube-builder.mjs";
 import { isolationProblem, selects } from "../listener/runner/kubernetes.mjs";
 import { DRAIN_MS as MODELS_DRAIN_MS } from "../models/server.mjs";
 import { DRAIN_MS as POLICY_DRAIN_MS } from "../policy-service/service.mjs";

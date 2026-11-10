@@ -150,10 +150,10 @@ export function parseRepoConfig(text, config, { repo = null } = {}) {
 
 // Where things are in the file's text, for the dashboard, each a line number or null when the
 // file doesn't say: lineOf(key), the line of a dotted key ("modes.review.agent") or of its
-// closest parent the file has; mountLine(path), that of the mount request for `path`;
-// locate(problem, fixes), one of parseRepoConfig()'s errors or warnings as { key, message,
-// line, fix }: with `fixes` (its errors'), an error's fix, or one that fits any error; a
-// warning (no `fixes`) has none.
+// closest parent the file has; itemLine(key, match), that of the first item of the list `key`
+// that `match` picks (mountLine(path): the mount request's for `path`); locate(problem, fixes),
+// one of parseRepoConfig()'s errors or warnings as { key, message, line, fix }: with `fixes`
+// (its errors'), an error's fix, or one that fits any error; a warning (no `fixes`) has none.
 export function fileLines(text) {
   const where = new Map();
   let raw = null;
@@ -168,11 +168,11 @@ export function fileLines(text) {
     }
     return null;
   };
-  const mountLine = (path) => {
-    const mounts = isMap(raw) && Array.isArray(raw.mounts) ? raw.mounts : [];
-    const i = mounts.findIndex((m) => (isMap(m) ? m.path : m) === path);
-    return i < 0 ? null : (where.get(`mounts.${i}`) ?? null);
+  const itemLine = (key, match) => {
+    const i = isMap(raw) && Array.isArray(raw[key]) ? raw[key].findIndex(match) : -1;
+    return i < 0 ? null : (where.get(`${key}.${i}`) ?? null);
   };
+  const mountLine = (path) => itemLine("mounts", (m) => (isMap(m) ? m.path : m) === path);
   // The file's keys, longest first: a problem starts with the one it is about ("my key: …").
   const keys = [...where.keys()].sort((a, b) => b.length - a.length);
   const locate = (problem, fixes = null) => {
@@ -190,7 +190,7 @@ export function fileLines(text) {
     const message = problem.slice(key.length + 2);
     return { key, message, line: lineOf(key), fix: fix(KEY_FIX) };
   };
-  return { lineOf, mountLine, locate };
+  return { lineOf, itemLine, mountLine, locate };
 }
 
 // What fixes an error the check has no better word for.
@@ -769,7 +769,7 @@ export const KEYS = {
   // The panel resolves them in a table of their own (repo-view.mjs mountRows()).
   mounts: { field: "mounts", default: () => [], parse: parseMounts, display: false },
   // Other repositories its runs read, each the operator's grants must list (context-repos.mjs);
-  // the panel's table of their own is #931's.
+  // the panel has a table of their own (repo-view.mjs contextRows()).
   context_repos: {
     field: "contextRepos",
     default: () => [],

@@ -14,6 +14,7 @@ import { randomUUID } from "node:crypto";
 import { fingerprint } from "../lib/fingerprints.mjs";
 import { isToken, RUN_AUDIENCE, TokenError, verifyToken } from "../lib/tokens.mjs";
 import { NOT_ITS_SANDBOX } from "../listener/broker.mjs";
+import { contextFields } from "../listener/context-gateway.mjs";
 
 // A run lasts 7 days at most (its agent token's lifetime): its record, a day more.
 const RUN_TTL_MS = 8 * 24 * 60 * 60_000;
@@ -49,6 +50,8 @@ export function runFields(body) {
     // and the label its questions wait under: the orchestrator's settings, as the run started.
     users: strings(body.users).map((u) => u.toLowerCase()),
     needsInputLabel: string(body.needsInputLabel),
+    // The other repositories it reads, and those it may not fetch (context-gateway.mjs).
+    context: contextFields(body.context),
   };
 }
 

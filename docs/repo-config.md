@@ -235,15 +235,22 @@ Nothing is read unless the operator allows it twice:
 - **Their grant** lists the repositories this one may read (`context_repos` patterns in its
   grants file or `default.yaml`, [The grants folder](reference/server-folder.md#the-grants-folder)).
   A repository asked for that no pattern lists stops every run, and the reply names it, as
-  refused mounts do.
+  refused mounts do. The dashboard's config page lists each one asked for, with its ref and
+  folder, the pattern that grants it or why it is refused, and the repository list says a
+  repository with a refused one has errors.
 - **Their policies** give the run `read:context`
   ([Capabilities](security/policies.md#capabilities)). Deckhand's defaults give it to every
   built-in mode that has `pull` (all but research), and never to a run on a fork's pull request
   (`context.rego`). The policies see the names asked for (`input.context_repos`), so a
   `deny_capabilities` rule can refuse it for a given repository.
 
-The clones themselves, read-only and fresh at each run, come with #930: until then, a run that
-gets `read:context` has no folder yet.
+A run that gets them has each one cloned before its setup: shallow, at its ref, fresh at every
+run, read-only. Its prompt lists the folders as untrusted input. Its git fetches them with a
+token for each repository alone where the GitHub App is installed (on any account), else with
+none, which only a public repository allows; their API, pages and raw files are refused, and so
+is a push ([The GitHub gateway](security/github.md#the-github-gateway)). A private repository
+without the App, a ref that doesn't exist or a failed clone stops the run, saying why: it never
+goes on with part of its context.
 
 ### YAML
 
