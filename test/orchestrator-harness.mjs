@@ -1005,6 +1005,10 @@ export async function listen(t, files, extra = {}, { opa, appRefused = 0 } = {})
   const edgeOut = () => edge.own();
   const others = () => edgeOut() + runnerOut();
   listener = start(listenerEnv(settings), { also: others });
+  // A failed test says what the services logged: CI keeps nothing else (#1107).
+  t.after(() => {
+    if (t.error) t.diagnostic(`The services' output:\n${listener.output()}`);
+  });
   t.after(() => {
     listener.child.kill("SIGKILL");
     edge.child.kill("SIGKILL");
