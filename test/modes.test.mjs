@@ -8,8 +8,13 @@ import {
   customMode,
   entryRun,
   isApart,
+  kindOf,
   MODES,
   RESEARCH,
+  TALKS,
+  talkOf,
+  WRAP_UPS,
+  wrapUpOf,
 } from "../listener/modes.mjs";
 import { modeNames, RESERVED_MODES } from "../listener/repo-config.mjs";
 import { sessionName } from "../listener/sandbox-spec.mjs";
@@ -18,7 +23,14 @@ test("built-in modes: one list, which the dashboard's copy follows", () => {
   assert.deepEqual([...BUILT_IN], RESERVED_MODES);
   assert.ok(RESERVED_MODES.includes("onboarding"));
   // "/mode" picks only some of them.
-  assert.deepEqual(modeNames(null), ["work", "brainstorm", "onboarding", "research", "policy"]);
+  assert.deepEqual(modeNames(null), [
+    "work",
+    "brainstorm",
+    "onboarding",
+    "research",
+    "grooming",
+    "policy",
+  ]);
   // The dashboard (format.ts) can't import the listener: its copy is checked here.
   const source = readFileSync(new URL("../dashboard/src/format.ts", import.meta.url), "utf8");
   const copy = /export const BUILT_IN_MODES = (\[[^\]]*\])/.exec(source);
@@ -43,6 +55,30 @@ test("modes apart from work have volumes of their own, research's apart again", 
   // repo's own modes aren't.
   for (const mode of ["brainstorm", "stop", "onboarding"]) assert.equal(isApart(mode), true, mode);
   for (const mode of ["work", "audit"]) assert.equal(isApart(mode), false, mode);
+});
+
+test("conversations: a brainstorm and a grooming, each wrapped up in a mode of its own (#585)", () => {
+  assert.deepEqual([...TALKS], ["brainstorm", "stop", "grooming", "grooming-stop"]);
+  assert.deepEqual([...WRAP_UPS], ["stop", "grooming-stop"]);
+  assert.equal(wrapUpOf("brainstorm"), "stop");
+  assert.equal(wrapUpOf("grooming"), "grooming-stop");
+  assert.equal(wrapUpOf("audit"), "stop");
+  for (const [mode, talk] of [
+    ["stop", "brainstorm"],
+    ["grooming-stop", "grooming"],
+    ["grooming", "grooming"],
+    ["work", "work"],
+    ["audit", "audit"],
+  ]) {
+    assert.equal(talkOf(mode), talk, mode);
+  }
+  // Both run apart from work, on the light runs' defaults, shown as groomings.
+  for (const mode of ["grooming", "grooming-stop"]) {
+    assert.equal(isApart(mode), true, mode);
+    assert.equal(brainstormDefaults(mode), true, mode);
+    assert.equal(kindOf(mode, "issue"), "grooming", mode);
+    assert.equal(entryRun(mode), false, mode);
+  }
 });
 
 test("a mode's defaults: the light runs' agent, model and effort, or work's", () => {

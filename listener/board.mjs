@@ -29,7 +29,7 @@
 // again, and `dismissed` ({ by, at }) while that run is the one someone dismissed from the
 // dashboard (dismissals.mjs): it keeps its state, but no longer asks for attention.
 import { parseKey, taskKey } from "./events.mjs";
-import { APART } from "./modes.mjs";
+import { APART, talkOf } from "./modes.mjs";
 import { LOOP_STEPS, LOOPING, loopState } from "./reviews.mjs";
 import { taskId } from "./spelling.mjs";
 
@@ -239,7 +239,7 @@ function newTask(key, repo) {
 function settle(t, q, b, w, input, aside = null) {
   const last = t.runs[0];
   t.kind = q?.kind ?? last?.kind ?? w?.kind ?? (b ? "brainstorm" : null);
-  t.mode = (q?.mode === "stop" ? "brainstorm" : q?.mode) ?? w?.mode ?? last?.taskMode ?? null;
+  t.mode = (q?.mode && talkOf(q.mode)) ?? w?.mode ?? last?.taskMode ?? null;
   t.replyTo = q?.replyTo ?? w?.replyTo ?? last?.replyTo ?? t.number;
   // Picked by the listener from its auto-pickup label (auto-pickup.mjs), or what follows such a
   // run until its work is done (tasks.mjs followsPick()): queued so, or its last run was.
@@ -273,8 +273,9 @@ function settle(t, q, b, w, input, aside = null) {
   const asked = questionsFor(t, last, input, setAside && !putBack);
   if (asked) t.questions = asked;
   if (b && b.status !== "stopped") {
-    t.kind = "brainstorm";
-    t.mode = "brainstorm";
+    // A grooming is one too (modes.mjs `talk`), shown as itself.
+    t.kind = b.mode === "grooming" ? "grooming" : "brainstorm";
+    t.mode = b.mode ?? "brainstorm";
     t.deadline = b.deadline;
   }
   // Its place in the run order (tasks.mjs queueOrder()), 1 next to start, while it waits for

@@ -24,7 +24,7 @@ import { Worker } from "node:worker_threads";
 import { REACTION_ENUM } from "./comments.mjs";
 import { PROJECT_WRITE } from "./github-app.mjs";
 import { CONTENTS_WRITE, PULL_WRITE, pullOf } from "./github-pulls.mjs";
-import { labelNames, permissionsOf, reactionSubject } from "./github-writes.mjs";
+import { closeReason, labelNames, permissionsOf, reactionSubject } from "./github-writes.mjs";
 import {
   buildSchema,
   getArgumentValues,
@@ -690,8 +690,7 @@ function idsOf(fields) {
 // spelling for both: `labelIds` → `labels`, `assigneeIds` → `assignees`, `milestoneId` →
 // `milestone`, `actorIds` and `actorLogins` → `assignees`, `baseRefName` → `base`,
 // `blockingIssueId` → `issue_id`, `expectedHeadOid` → `expected_head_sha`, the others in snake
-// case
-// (`subIssueId` → `sub_issue_id`).
+// case (`subIssueId` → `sub_issue_id`).
 const REST_NAMES = {
   blockingIssueId: "issue_id",
   labelIds: "labels",
@@ -1087,10 +1086,11 @@ export function writeOf({ name, spec, input }, nodes, repo) {
   } else {
     return { refused: refusal(403, `${name} on a ${node.__typename} isn't something it checks`) };
   }
-  // What it sets, as a REST write's body would: its target is its path's.
+  // What it sets, as a REST write's body would (its target is its path's), a close's reason too.
   const { [spec.target]: _, ...set } = input;
   const actions = spec.actions(set);
   const change = { fields: Object.keys(set).map(restName), labels_added: [], labels_removed: [] };
+  if (actions.includes("close")) change.state_reason = closeReason(input.stateReason);
   // Labels set to null: none, so a `set` removes them all.
   if (spec.labels && spec.labels.field in input) {
     const names = [];

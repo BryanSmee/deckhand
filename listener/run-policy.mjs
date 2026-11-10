@@ -99,7 +99,7 @@ export function runInput(item, mode, read, now = Date.now) {
 }
 
 // The modes Deckhand's policy/run.rego keeps on issues, unless a comment goes on in them.
-const ISSUE_ONLY = new Set(["brainstorm", "stop", "onboarding"]);
+const ISSUE_ONLY = new Set(["brainstorm", "stop", "grooming", "grooming-stop", "onboarding"]);
 
 // What Deckhand's policy/run.rego, alone and with no repo file, says of `item` in `mode`: the
 // refusals, as opa's evaluation would give them (test/run-policy.test.mjs compares both). It

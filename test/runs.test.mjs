@@ -918,9 +918,9 @@ function replyingWith(statuses) {
   return { answer: comments.answer, bodies };
 }
 
-async function endWith(t, statuses, text, githubStatus) {
+async function endWith(t, statuses, text, githubStatus, mode) {
   const github = replyingWith(statuses);
-  const run = setup(t, { graceMs: 30, answer: github.answer, githubStatus });
+  const run = setup(t, { graceMs: 30, answer: github.answer, githubStatus, mode });
   const live = run.task.live;
   live.handled.push({ comment: { id: 7 } });
   run.runner.out(result(text));
@@ -930,6 +930,13 @@ async function endWith(t, statuses, text, githubStatus) {
   await sleep(20);
   return { ...run, live, bodies: github.bodies };
 }
+
+test("a wrap-up's comments, a brainstorm's or a grooming's, only lose their 👀 (#585)", async (t) => {
+  for (const mode of ["stop", "grooming-stop"]) {
+    const { settled } = await endWith(t, [201], "Wrapped up.", undefined, mode);
+    assert.deepEqual(settled, ["stopped"], mode);
+  }
+});
 
 test("a reply refused as too long is posted shortened: then 🚀", async (t) => {
   const { settled, bodies, live } = await endWith(t, [422, 201], "z".repeat(30000));
@@ -1238,24 +1245,16 @@ test("a restored run's grace: a line read before the follow caught up keeps its 
 });
 
 test("reopenedMode: a run's record once the volume its capabilities give it is known", () => {
+  const reopened = (mode, restored, started, now) => reopenedMode({ mode, restored, started, now });
   // The same answer as its mode's volume: nothing to make again.
-  for (const started of [true, false]) {
-    assert.equal(reopenedMode({ mode: "work", restored: false, started, now: started }), null);
+  for (const s of [true, false]) assert.equal(reopened("work", false, s, s), null);
+  assert.equal(reopened("work", false, false, true), "continue");
+  assert.equal(reopened("work", false, true, false), "start");
+  // A wrap-up (a brainstorm's or a grooming's) and a restored run say so whatever the volume holds.
+  for (const m of ["stop", "grooming-stop"]) {
+    assert.equal(reopened(m, false, true, false), "wrap-up");
   }
-  assert.equal(
-    reopenedMode({ mode: "work", restored: false, started: false, now: true }),
-    "continue",
-  );
-  assert.equal(reopenedMode({ mode: "work", restored: false, started: true, now: false }), "start");
-  // A wrap-up and a restored run say so whatever the volume holds.
-  assert.equal(
-    reopenedMode({ mode: "stop", restored: false, started: true, now: false }),
-    "wrap-up",
-  );
-  assert.equal(
-    reopenedMode({ mode: "work", restored: true, started: false, now: true }),
-    "restore",
-  );
+  assert.equal(reopened("work", true, false, true), "restore");
 });
 
 test("a run's reply carries its idempotency key: asked again after a handover, it isn't posted twice", async (t) => {

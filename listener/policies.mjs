@@ -419,7 +419,7 @@ export const STALE_LISTING_MS = 6 * LISTING_MS;
 // would without opa, so the service's run.rego must be this one for that (deckhandOnly());
 // test/run-policy.test.mjs checks it is policy/run.rego's.
 export const SHIPPED_RUN_SHA256 =
-  "eab827793e7cea52752045d0c2cc8c09e9ca512d1c5c16d5f22065bea2a41a3c";
+  "210f7f37e08992e1b8cb7df798e6fee5b7dbfa95990a861eaa6dd8dc468421f1";
 // Its name.
 const RUN = "run.rego";
 

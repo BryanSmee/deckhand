@@ -184,6 +184,8 @@ test("run kinds as an analysis names them", () => {
     ["work", "brainstorm", "bug", "discussion", "analyze", "research"].map(runKindName),
   ).toEqual(["Work", "Brainstorm", "Bug", "Discussion", "Analysis", "Research"]);
   expect(kindName({ kind: "research" })).toBe("Research");
+  expect(kindName({ kind: "grooming" })).toBe("Grooming");
+  expect(runKindName("grooming")).toBe("Grooming");
   expect(runKindName("review")).toBe("Review");
   expect(runKindName("audit")).toBe("audit");
 });

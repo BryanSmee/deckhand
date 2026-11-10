@@ -388,7 +388,7 @@ test("GET issues: the open issues without a task or pull request, and the repo's
   const res = await call(w.api, "GET", "/api/repos/org/app/issues");
   assert.equal(res.status, 200);
   assert.deepEqual(res.body.issues, [{ number: 1, title: "One", url: "u/1", labels: [] }]);
-  assert.deepEqual(res.body.modes, ["work", "brainstorm", "audit"]);
+  assert.deepEqual(res.body.modes, ["work", "brainstorm", "grooming", "audit"]);
   assert.equal(res.body.errors, false);
   // Cached: GitHub is asked again only after ISSUES_MS.
   const listed = () => w.calls.filter((c) => c.includes("/issues?")).length;
