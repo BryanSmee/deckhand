@@ -101,8 +101,9 @@ edge/         edge (#506), the only service the internet reaches: server.mjs (wi
               public parts, for the orchestrator), app.mjs (the webhook secret, the OAuth
               client's), oauth.mjs (MCP clients' sign-in: an OAuth 2.1 server over GitHub's),
               client.mjs (what the orchestrator calls it with), metrics.mjs (its metrics: the
-              webhooks, the requests by route, sign-ins and sessions), shots.mjs (the runs'
-              screenshots, passed on to the broker)
+              webhooks, the requests by route, sign-ins and sessions), local.mjs and status.mjs
+              (/status from inside its container, a token from the session key, #1019),
+              shots.mjs (the runs' screenshots, passed on to the broker)
 orchestrator/ the orchestrator (#506): server.mjs (wiring: its lease, then the queue and the runs'
               lives, from ../listener/'s modules); two copies, active/passive
 listener/     the modules edge and the orchestrator run (no entry point of its own): http.mjs (the
