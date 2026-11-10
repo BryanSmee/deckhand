@@ -14,7 +14,9 @@ import {
   symlinkSync,
   writeFileSync,
 } from "node:fs";
+import { createServer } from "node:http";
 import { join } from "node:path";
+import { Readable } from "node:stream";
 import { test } from "node:test";
 import { createCallers } from "../broker/callers.mjs";
 import { createBroker, storeSecrets } from "../broker/server.mjs";
@@ -25,7 +27,7 @@ import { createInbox } from "../listener/runner/inbox.mjs";
 import { createBrokerCaller } from "../lib/broker-client.mjs";
 import { openStore } from "../lib/store.mjs";
 import { signToken, TOKEN_VERSION } from "../lib/tokens.mjs";
-import { closedPort, listenToRestart, needsBash, tempDir, testKey } from "./helpers.mjs";
+import { closedPort, listening, listenToRestart, needsBash, tempDir, testKey } from "./helpers.mjs";
 
 const FOLDER = "0123456789abcdef01234567";
 const PNG = Buffer.from("89504e470d0a1a0a", "hex");
@@ -142,6 +144,56 @@ test("stop() ends the asking for service tokens while the broker is away, and a 
   stopped.stop();
   await stopped.start();
   assert.equal(early, 0);
+});
+
+// A broker that closes a kept-alive connection as it is reused (its keep-alive timeout, a busy
+// caller late to see it): the call goes again on a new connection, rather than failing a run's
+// start (#1109). Not a call reset on its connection's first use, one whose answer had begun, nor
+// a streamed body (an upload), which is spent once sent.
+test("a kept-alive connection the broker closed as it was reused: the call sent again, once", async (t) => {
+  const seen = [];
+  const server = createServer((req, res) => {
+    req.socket.calls = (req.socket.calls ?? 0) + 1;
+    seen.push(`${req.url} #${req.socket.calls}`);
+    if (req.url === "/first") return res.end("{}");
+    if (req.url === "/answering") {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.write("{");
+      return setImmediate(() => req.socket.destroy());
+    }
+    if (req.url === "/drop" || req.socket.calls === 2) return req.socket.destroy();
+    res.end('{"ok":true}');
+  });
+  const port = await listening(server);
+  t.after(() => (server.closeAllConnections(), server.close()));
+  // A caller whose connection has carried one call already: the next one reuses it.
+  const reusing = async () => {
+    const caller = createBrokerCaller({ url: `http://127.0.0.1:${port}` });
+    assert.equal((await caller.request("POST", "/first", { body: {} })).status, 200);
+    seen.length = 0;
+    return caller;
+  };
+
+  const again = await (await reusing()).request("POST", "/runs/r/tokens", { body: { a: 1 } });
+  assert.deepEqual(again.json(), { ok: true });
+  assert.deepEqual(seen, ["/runs/r/tokens #2", "/runs/r/tokens #1"]);
+
+  // Its first call on a connection: failed, not sent twice.
+  const fresh = createBrokerCaller({ url: `http://127.0.0.1:${port}` });
+  seen.length = 0;
+  await assert.rejects(fresh.request("POST", "/drop", { body: {} }), { code: "ECONNRESET" });
+  assert.deepEqual(seen, ["/drop #1"]);
+
+  // An upload: its stream can't be read again.
+  const upload = (await reusing()).request("PUT", "/runs/r/files/shot.png", {
+    body: Readable.from([Buffer.from("png")]),
+  });
+  await assert.rejects(upload, { code: "ECONNRESET" });
+  assert.deepEqual(seen, ["/runs/r/files/shot.png #2"]);
+
+  // Its answer begun, then cut: the broker took the call.
+  await assert.rejects((await reusing()).request("POST", "/answering", { body: {} }));
+  assert.deepEqual(seen, ["/answering #2"]);
 });
 
 test("the stream: a screenshot said, left at the broker, acknowledged", async (t) => {

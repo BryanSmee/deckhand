@@ -134,7 +134,11 @@ async function fakeGitHub(files = {}) {
         body,
       };
       requests.push(entry);
-      for (const w of [...waiters]) if (w.match(entry)) w.resolve(entry);
+      for (const w of [...waiters]) {
+        if (!w.match(entry)) continue;
+        waiters.splice(waiters.indexOf(w), 1);
+        w.resolve(entry);
+      }
       for (const h of holds) if (h.match(entry)) await h.released;
       res.setHeader("content-type", "application/json");
       // The repo's policies (.deckhand/policy/ on its default branch), keyed "policy:<name>":
@@ -406,11 +410,12 @@ async function fakeGitHub(files = {}) {
     });
   });
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
-  const waitFor = (match) =>
+  // `what`: what a test that hangs says it waited for (waiting()); the matcher's code if none.
+  const waitFor = (match, what = String(match)) =>
     new Promise((resolve) => {
       const found = requests.find(match);
       if (found) return resolve(found);
-      waiters.push({ match, resolve });
+      waiters.push({ match, resolve, what });
     });
   // Holds back the answers to requests that `match`, until the returned function is called.
   const hold = (match) => {
@@ -422,6 +427,7 @@ async function fakeGitHub(files = {}) {
     url: `http://127.0.0.1:${server.address().port}`,
     requests,
     waitFor,
+    waiting: () => waiters.map((w) => w.what),
     hold,
     server,
   };
@@ -885,8 +891,6 @@ export async function listen(t, files, extra = {}, { opa, appRefused = 0 } = {})
   let edge = null;
   let listener = null;
   let runner = null;
-  // The output of the copies a restart or a handover replaced, for a failed test's diagnostic.
-  const earlier = [];
   // None while the copy has exited: its port, from port 0, may be another process's already.
   const portOf = (copy, re) =>
     !copy || copy.child.exitCode !== null || copy.child.signalCode
@@ -948,8 +952,6 @@ export async function listen(t, files, extra = {}, { opa, appRefused = 0 } = {})
     PORT: "0",
     POLICY_PORT: "0",
     SERVICES_PORT: "0",
-    // A copy killed leaves its lease for this long: the next one waits it out.
-    LEASE_SECONDS: "2",
     EDGE_URL: `http://127.0.0.1:${edgeUrlPort}`,
     // Where the fake sandbox reaches the services' names (fixtures/fake-docker.sh).
     DECKHAND_TEST_PROXY: `http://127.0.0.1:${standIn.port}`,
@@ -989,10 +991,28 @@ export async function listen(t, files, extra = {}, { opa, appRefused = 0 } = {})
   // Started once the listener's is known.
   let runnerSettings = null;
   const runnerOut = () => (runner?.own() ?? "") + modelsOut;
+  // Every copy started, for the report of a test that fails (failed()).
+  const copies = { orchestrator: [], runner: [] };
   const startRunner = (more = {}) => {
-    if (runner) earlier.push(`The runner before:\n${runner.own()}`);
     runner = start({ ...runnerSettings, ...more, PORT: "0" }, { script: "runner/server.mjs" });
+    copies.runner.push(runner);
     return runner.until(/Deckhand runner \(\w+\) on :\d+/);
+  };
+  // The orchestrator's next copy, with `env`.
+  const startListener = (env) => {
+    const copy = start(listenerEnv(env), { also: others });
+    copies.orchestrator.push(copy);
+    return copy;
+  };
+  // What the harness itself waits for (an exit, an answer), named for that report.
+  const steps = new Set();
+  const step = async (what, promise) => {
+    steps.add(what);
+    try {
+      return await promise;
+    } finally {
+      steps.delete(what);
+    }
   };
   // Edge, in front: its own data folder (the App but its key) and store, the orchestrator's
   // services port to pass the dashboard's API on to, its internal port for the orchestrator.
@@ -1007,12 +1027,29 @@ export async function listen(t, files, extra = {}, { opa, appRefused = 0 } = {})
   edge = start(edgeEnv(settings), { script: "edge/server.mjs" });
   const edgeOut = () => edge.own();
   const others = () => edgeOut() + runnerOut();
-  listener = start(listenerEnv(settings), { also: others });
-  // A failed test says what the services logged: CI keeps nothing else (#1107).
+  listener = startListener(settings);
+  // Before they are killed: what the test waited for, and what each service said: CI keeps
+  // nothing else (#1107, #1109).
   t.after(() => {
-    if (t.error) {
-      t.diagnostic(`The services' output:\n${[...earlier, listener.output()].join("\n")}`);
-    }
+    if (t.passed) return;
+    const waits = [
+      ...steps,
+      ...github.waiting().map((what) => `GitHub's request ${what}`),
+      ...[...copies.orchestrator, edge, ...copies.runner].flatMap((copy) => copy.waiting()),
+    ];
+    // Each copy's output, and how it ended if it did: a copy that lost its lease exits.
+    const named = (copy, name) => {
+      const { exitCode, signalCode } = copy.child;
+      const ended = exitCode !== null ? `exit ${exitCode}` : signalCode && `killed (${signalCode})`;
+      return [ended ? `${name}, ${ended}` : name, copy.own()];
+    };
+    const outputs = Object.fromEntries([
+      ...copies.orchestrator.map((copy, i) => named(copy, `orchestrator #${i + 1}`)),
+      named(edge, "edge"),
+      ...copies.runner.map((copy, i) => named(copy, `runner #${i + 1}`)),
+      ["models", modelsOut],
+    ]);
+    t.diagnostic(failed(t, dir, waits, outputs));
   });
   t.after(() => {
     listener.child.kill("SIGKILL");
@@ -1043,15 +1080,18 @@ export async function listen(t, files, extra = {}, { opa, appRefused = 0 } = {})
   // `id`: its GUID (X-GitHub-Delivery), for a redelivery.
   const send = (payload, event = "issue_comment", id) => {
     const body = JSON.stringify(payload);
-    return fetch(`http://127.0.0.1:${port}/webhook`, {
-      method: "POST",
-      headers: {
-        ...(id && { "x-github-delivery": id }),
-        "x-github-event": event,
-        "x-hub-signature-256": `sha256=${createHmac("sha256", SECRET).update(body).digest("hex")}`,
-      },
-      body,
-    });
+    return step(
+      `edge's answer to a ${event} webhook`,
+      fetch(`http://127.0.0.1:${port}/webhook`, {
+        method: "POST",
+        headers: {
+          ...(id && { "x-github-delivery": id }),
+          "x-github-event": event,
+          "x-hub-signature-256": `sha256=${createHmac("sha256", SECRET).update(body).digest("hex")}`,
+        },
+        body,
+      }),
+    );
   };
   // Stops the listener (SIGTERM unless `signal` says otherwise) and starts another one on the
   // same data and ports, with `more` settings.
@@ -1059,9 +1099,11 @@ export async function listen(t, files, extra = {}, { opa, appRefused = 0 } = {})
     const old = listener;
     const { child } = old;
     const exited = new Promise((resolve) => child.on("exit", resolve));
-    const code = child.exitCode ?? (child.signalCode || (child.kill(signal), await exited));
-    earlier.push(`The orchestrator before its restart:\n${old.own()}`);
-    listener = start(listenerEnv({ ...settings, ...more }), { also: others });
+    const code =
+      child.exitCode ??
+      (child.signalCode ||
+        (child.kill(signal), await step(`the orchestrator's exit on ${signal}`, exited)));
+    listener = startListener({ ...settings, ...more });
     await ports(listener);
     return { code, output: old.output() };
   };
@@ -1077,7 +1119,7 @@ export async function listen(t, files, extra = {}, { opa, appRefused = 0 } = {})
   } = {}) => {
     const old = listener;
     const epochOf = (out) => Number(/orchestrator: lease taken \(epoch (\d+)\)/.exec(out)?.[1]);
-    const next = start(listenerEnv({ ...settings, ...more }), { also: others });
+    const next = startListener({ ...settings, ...more });
     await next.until("Waiting for the orchestrator's lease");
     await waiting(next);
     const exited = new Promise((resolve) => old.child.on("exit", resolve));
@@ -1088,8 +1130,7 @@ export async function listen(t, files, extra = {}, { opa, appRefused = 0 } = {})
     await next.until("orchestrator: lease taken");
     const took = Date.now() - killed;
     await ports(next);
-    await exited;
-    earlier.push(`The orchestrator before the handover:\n${old.own()}`);
+    await step(`the old orchestrator's exit on ${signal}`, exited);
     return { output: old.output(), epoch: epochOf(old.own()), next: epochOf(next.own()), took };
   };
   // A service token the broker would sign `sub` for `aud`: the old copy's calls, after it.
@@ -1101,7 +1142,7 @@ export async function listen(t, files, extra = {}, { opa, appRefused = 0 } = {})
     if (child.exitCode !== null || child.signalCode) return;
     const exited = new Promise((resolve) => child.on("exit", resolve));
     child.kill(signal);
-    await exited;
+    await step(`the runner's exit on ${signal}`, exited);
   };
   const restartRunner = async ({ signal = "SIGTERM", ...more } = {}) => {
     await stopRunner(signal);
@@ -1141,6 +1182,29 @@ export async function listen(t, files, extra = {}, { opa, appRefused = 0 } = {})
       broker: settings.BROKER_SERVICE_URL,
     },
   };
+}
+
+// The report of a test that failed or timed out (`t.error`): what it was waiting for, then the
+// services' output and the fake sandboxes', each to its last lines.
+function failed(t, dir, waits, outputs) {
+  const tail = (text, lines = 300) => (text ?? "").split("\n").slice(-lines).join("\n");
+  const sandboxes = (() => {
+    try {
+      return readdirSync(join(dir, "containers"));
+    } catch {
+      return [];
+    }
+  })();
+  const parts = [
+    `${t.fullName} failed (${t.error?.message ?? t.error}), in ${dir}`,
+    `Waiting for:\n${waits.map((w) => `  ${w}`).join("\n") || "  nothing the harness knows of"}`,
+    ...Object.entries(outputs).map(([name, text]) => `--- ${name}:\n${tail(text)}`),
+    `--- docker calls:\n${tail(exists(join(dir, "docker-calls")), 100)}`,
+    ...sandboxes.map(
+      (name) => `--- sandbox ${name}:\n${tail(exists(join(dir, "containers", name, "out")), 100)}`,
+    ),
+  ];
+  return parts.join("\n");
 }
 
 export function comment(login, body = "Deckhand") {
@@ -1224,6 +1288,7 @@ export async function settled(github, ids) {
   for (const id of ids) {
     await github.waitFor(
       (r) => r.path === `/repos/org/repo/issues/comments/${id}/reactions` && /rocket/.test(r.body),
+      `comment ${id}'s 🚀 (its run's end)`,
     );
   }
 }

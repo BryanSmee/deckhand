@@ -35,6 +35,11 @@ import {
   until,
 } from "./orchestrator-harness.mjs";
 
+// The lease of the tests that kill a copy (SIGKILL), which the next one waits out: short, but
+// not so short that a copy whose start a busy machine stalls loses it (renewed a third into its
+// life) and exits, leaving none to act (#1109). The others keep the default 15 s.
+const CRASHED_LEASE = "4";
+
 describe("listener", options, () => {
   // Temporary files of state writes, in the data volume.
   const leftovers = (dir) => readdirSync(dir).filter((f) => f.endsWith(".tmp"));
@@ -483,7 +488,7 @@ describe("listener", options, () => {
   });
 
   test("a listener killed mid-run: Claude answers meanwhile, the next one replies once", async (t) => {
-    const ctx = await holding(t);
+    const ctx = await holding(t, undefined, () => ({ LEASE_SECONDS: CRASHED_LEASE }));
     const { dir, github } = ctx;
     // Claude answers while no listener is there: the sandbox waits for its inbox to close.
     const killed = ctx.listener.child;
@@ -509,7 +514,14 @@ describe("listener", options, () => {
     async (t) => {
       // Long enough for a slow engine to kill the first listener within it.
       const PAUSE_MS = 8000;
-      const ctx = await listen(t, {}, { DEBOUNCE_MS: String(PAUSE_MS) });
+      const ctx = await listen(
+        t,
+        {},
+        {
+          DEBOUNCE_MS: String(PAUSE_MS),
+          LEASE_SECONDS: CRASHED_LEASE,
+        },
+      );
       const sent = Date.now();
       await ctx.send(comment("alice"));
       await ctx.listener.until("queued (work");
