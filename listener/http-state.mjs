@@ -1,6 +1,6 @@
 // The dashboard's api/state (#1069, from http.mjs): what each signed-in user sees of the tasks,
-// the repos' slots and the graph's arrows, and Settings › Access. dashboard/src/types.ts is its
-// contract.
+// the repos' slots and the graph's arrows, and Settings › Access. dashboard/src/types/state.ts is
+// its contract.
 import { board, runPlaces, STATES } from "./board.mjs";
 import { parseKey, prId, taskKey } from "./events.mjs";
 import { isApart, kindOf } from "./modes.mjs";
