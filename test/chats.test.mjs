@@ -1,6 +1,7 @@
 // chats.mjs (#476): a user's chats from the dashboard, with an injected runner, clock and run
-// machinery (runs.mjs and tasks.mjs, whose part runs.test.mjs and orchestrator-server.test.mjs
-// cover), and the dashboard's real checks (repo-check.mjs) over a fake GitHub.
+// machinery (runs.mjs and tasks.mjs, whose part runs.test.mjs and
+// orchestrator-triggers.test.mjs cover), and the dashboard's real checks (repo-check.mjs) over a
+// fake GitHub.
 import assert from "node:assert/strict";
 import { mkdirSync, realpathSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -624,6 +625,7 @@ test("permissions: the ceiling a chat's run gets, a profile saved within it, wha
     fork: false,
     trigger: "dashboard",
     command: null,
+    context_repos: [],
   });
   assert.deepEqual(view.profile, DEFAULT_PROFILE);
   assert.deepEqual(view.ceiling.hosts, ["registry.npmjs.org", "pypi.org"]);

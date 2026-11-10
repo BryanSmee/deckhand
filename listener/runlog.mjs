@@ -20,7 +20,8 @@ export function outcome(result) {
   return asksInput(result.text) ? "needs-input" : "ok";
 }
 
-// The agent's last result in these log lines, if any.
+// The agent's last result in these log lines, if any. Only the tests call it, to read how a
+// recorded or finished log ended through each agent's normalize(): kept here, beside outcome().
 export function lastResult(lines, agent) {
   for (let i = lines.length - 1; i >= 0; i--) {
     const result = agent.normalize(lines[i]).findLast((e) => e.type === "result");
@@ -61,7 +62,7 @@ export function writeEvent(file, event, fields = {}, options = undefined) {
   file.write(JSON.stringify({ type: "listener", event, ...at, ...fields }) + "\n", options);
 }
 
-// The agent's events whose time a run's log keeps (runs.mjs output()): its tool calls and
+// The agent's events whose time a run's log keeps (run-output.mjs output()): its tool calls and
 // their outputs, for the dashboard's durations, and its messages and answers, for its
 // timestamps (#719). Few: the log barely grows.
 const TIMED_EVENTS = new Set(["tool", "toolOutput", "text", "result"]);
@@ -71,7 +72,7 @@ export const timed = (e) => TIMED_EVENTS.has(e.type);
 // normalize()'s): setup's output, a push's. Blank lines are none.
 export const plainLine = (line, events) => !!line.trim() && !events.length && parse(line) === null;
 
-// When a line of the sandbox's output needs an `at` line before it (runs.mjs output()), at `at`
+// When a line of the sandbox's output needs an `at` line before it (run-output.mjs output()), at `at`
 // (ms): one of the agent's timed events, always; a plain line, when it starts a run of them
 // (`open`, the time of the run's last `at` line, is null) or the second changed (#719). The
 // reader gives the lines of a run the last time said in it (reader()): a noisy `npm ci`
@@ -83,7 +84,7 @@ export function needsStamp(line, events, at, open) {
 }
 
 // An `at` line of the listener's (writeEvent()): when the next line came, or null.
-export function stampOf(line) {
+function stampOf(line) {
   if (!line.includes('"event":"at"')) return null;
   const e = parse(line);
   return e?.type === "listener" && e.event === "at" && Number.isFinite(e.at) ? e.at : null;
@@ -353,10 +354,12 @@ const STARTING = {
   chat: "Starting a chat",
 };
 
+// A wrap-up says the conversation it ends (`taskMode`, talkOf()): a log without it is a
+// brainstorm's, the only one there was before #1081.
 const GOING_ON = {
-  "wrap-up": "Wrapping up the brainstorm",
-  restore: "Restoring the session after a pause",
-  continue: "Continuing the session",
+  "wrap-up": (e) => `Wrapping up the ${e.taskMode ?? "brainstorm"}`,
+  restore: () => "Restoring the session after a pause",
+  continue: () => "Continuing the session",
 };
 
 // Runs the listener started itself (conflicts.mjs, reviews.mjs).
@@ -385,7 +388,7 @@ function listenerEntries(e, agent, seen) {
     const time = new Date(e.at).toISOString().slice(11, 19);
     return [{ kind: "meta", text: `Stopped by @${e.by} at ${time} UTC`, ...at }];
   }
-  // A sandbox still running, silent, after its answer (runs.mjs linger()).
+  // A sandbox still running, silent, after its answer (run-output.mjs linger()).
   if (e.event === "ended") {
     const time = new Date(e.at).toISOString().slice(11, 19);
     const text = `Stopped at ${time} UTC, silent for ${minutes(e.after)} min after its answer: the answer is posted`;
@@ -402,7 +405,7 @@ function listenerEntries(e, agent, seen) {
   }
   const own = e.taskMode && e.taskMode !== "work" ? `Starting the ${e.taskMode} mode` : null;
   const what =
-    (REASONS[e.reason] ?? GOING_ON[e.mode] ?? STARTING[e.kind] ?? own ?? "Starting") +
+    (REASONS[e.reason] ?? GOING_ON[e.mode]?.(e) ?? STARTING[e.kind] ?? own ?? "Starting") +
     (e.model ? ` (${e.model}, ${e.effort} effort${e.speed === "fast" ? ", fast" : ""})` : "");
   // A fallback's run (runs.mjs): what it took over from, and why.
   const fell = e.fallback && !e.fallback.sticky;

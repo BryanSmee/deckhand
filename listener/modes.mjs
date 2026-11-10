@@ -105,7 +105,7 @@ export const MODES = {
   // picks it there (modeNames()), and reviews.mjs starts it when a pull request turns ready.
   // Its reply has three sections, must-fix findings, follow-ups (filed as issues once the pull
   // request is merged) and comments, then the same as a `json deckhand-review` block, which
-  // reviews.mjs parseReview() reads first, the markdown when the block is missing or wrong.
+  // review-parse.mjs parseReview() reads first, the markdown when the block is missing or wrong.
   review: { volumes: "apart", defaults: "brainstorm", fresh: true, prompt: "review.md" },
   // A dry run of the repo's policies on a pull request: no run, the listener evaluates them
   // and replies (task-modes.mjs, reviews.mjs dryRun()).

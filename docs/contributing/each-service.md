@@ -209,7 +209,7 @@ blob id; the orchestrator GitHub's own status as it last read it (`GET /status`,
   GitHub left it. A run whose start it stops (its `.deckhand.yaml` unread, say:
   `GitHubUnavailable`, `github.mjs`) ends as `error`, its log and summary saying GitHub's
   status, method and path, and its comments go back in the queue, 👀 kept, for a run 1, 5 then
-  15 minutes later (`runs.mjs` `githubDown()`, `GITHUB_REQUEUE_MS`); after those, its reply
+  15 minutes later (`run-replies.mjs` `githubDown()`, `GITHUB_REQUEUE_MS`); after those, its reply
   says GitHub failed. When it was a `5xx` (or a reply GitHub kept refusing with one), its
   summary, log and reply also say what GitHub's status page reported then (#943, `github.mjs`
   `incidentNote()`): its open incidents (linked in the reply), none, or its description. Nothing
@@ -240,7 +240,8 @@ log).
 - **A call** carries the run's agent token, checked offline with the broker's public keys
   (`models/runs.mjs`): its `agent` claim (a run never gets another agent's credential), from its
   own sandbox, for a run the broker says still goes (`GET /runs/:id`, every 30 s at most per
-  run). The service swaps it for the operator's credential and streams the answer back.
+  run; a failed connection asked again once before the call gets a 503, and its last answer kept for 10 minutes while the
+  broker is away). The service swaps it for the operator's credential and streams the answer back.
 - **The plans' usage** (`models/usage.mjs`, #486) is read from the plan's answers to the runs'
   calls (their rate limit headers; never an API key's, a gateway's or OpenRouter's) and, while a
   dashboard is open, from the plans' own usage calls: the orchestrator asks `GET /usage?poll=1`

@@ -1,8 +1,10 @@
 // GET /shots/<folder>/<file>, as edge serves it (edge/shots.mjs, #609): passed on to the broker,
 // which keeps the screenshots, for the names a sandbox may upload only, as images, streamed.
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import { createShots } from "../edge/shots.mjs";
+import { SHOT_NAME } from "../lib/shots.mjs";
 import { serve } from "./helpers.mjs";
 
 const folder = "0123456789abcdef01234567";
@@ -32,7 +34,13 @@ test("a screenshot from the broker, as an image of its type, cached for good", a
   assert.equal(res.headers.get("cache-control"), "public, max-age=31536000, immutable");
   assert.equal(await res.text(), "PNG");
   assert.equal((await get(`${folder}/photo.jpg?v=2`)).headers.get("content-type"), "image/jpeg");
-  assert.deepEqual(asked, [`GET /shots/${folder}/page.png`, `GET /shots/${folder}/photo.jpg`]);
+  // An animated WebP, the recordings of a flow (#1050).
+  assert.equal((await get(`${folder}/flow.webp`)).headers.get("content-type"), "image/webp");
+  assert.deepEqual(asked, [
+    `GET /shots/${folder}/page.png`,
+    `GET /shots/${folder}/photo.jpg`,
+    `GET /shots/${folder}/flow.webp`,
+  ]);
 });
 
 test("other names are a 404 that never reaches the broker", async (t) => {
@@ -74,4 +82,12 @@ test("a screenshot cut short at the broker is cut short here, never a whole-look
   const { get } = await edge(t, () => new Response(body, { headers: { "content-length": "9" } }));
   // The connection closes before its end: the fetch, or the read of its body, fails.
   await assert.rejects(async () => (await get(`${folder}/page.png`)).arrayBuffer());
+});
+
+test("deckhand-files uploads the names lib/shots.mjs takes, no more, no fewer", () => {
+  // The sandbox's script is CommonJS on its own, its copy of the names kept by hand (#1077).
+  const script = readFileSync(new URL("../sandbox/deckhand-files", import.meta.url), "utf8");
+  const copy = /^const SHOT = \/(.+)\/;$/m.exec(script)?.[1];
+  assert.ok(copy, "deckhand-files has no `const SHOT = /…/;`");
+  assert.equal(copy, SHOT_NAME.source);
 });

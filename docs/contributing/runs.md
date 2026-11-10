@@ -6,7 +6,7 @@ the agent exits: its last result is the reply, posted once its sandbox exits (`f
 (`sandbox/agents/claude.sh`), and the prompt tells the agent to wait for its work in the foreground:
 an agent that ends its turn with background work left gives an early result, and may go on with a
 turn per background task, or never exit. As a safety net, a result with the inbox closed marks the
-run `answered` (saved state) and starts a 2-minute timer (`runs.mjs` `linger()`, `ANSWER_GRACE_MS`);
+run `answered` (saved state) and starts a 2-minute timer (`run-output.mjs` `linger()`, `ANSWER_GRACE_MS`);
 any output restarts it. Its deadline is saved (`graceUntil`): an orchestrator that restarts gives it
 its whole grace while its follow skips the output read before, then keeps to that deadline, with at
 least 10 s to read what the sandbox wrote while no orchestrator was there (Restarts). If the sandbox
@@ -50,7 +50,7 @@ sandbox, tokens, capabilities, inbox, log and restarts. What differs:
   task routed to a user's machines, `machines` then `machine:<id>`, which only a machine's claim
   starts: `claims.mjs`), so the auto-pickup sweep and the board's queue only ever see `shared`. Its
   first message starts its sandbox at once (no debounce). Each answer leaves its inbox open
-  (`runs.mjs` `output()`): the next message goes there, and the agent's turns stream like any run's
+  (`run-output.mjs` `output()`): the next message goes there, and the agent's turns stream like any run's
   log;
 - `CHAT_IDLE_MINUTES` (30) after its last message or its run's last answer, whichever came later (a
   message that waited for a slot is answered after it), its inbox closes (`runs.mjs` `rest()`), so
@@ -65,7 +65,7 @@ sandbox, tokens, capabilities, inbox, log and restarts. What differs:
   model and effort unless the chat names its own, and `policy/mode-chat.rego`'s capabilities:
   the code, its reads and the setup, no `push`, no engine, no GitHub write (no `allow_github`),
   no caches (`preparation.mjs`: its workspace is its own and kept);
-- nothing goes to GitHub: no reply (`runs.mjs` `post()`), no reaction, no label, no project,
+- nothing goes to GitHub: no reply (`run-replies.mjs` `post()`), no reaction, no label, no project,
   no fallback (its messages would all go to the next entry); an error that stops it is a note
   in its log;
 - its owner alone lists it, reads its runs' logs and reaches it (`http.mjs`: the board, `/status`
@@ -77,7 +77,7 @@ sandbox, tokens, capabilities, inbox, log and restarts. What differs:
   reach still lists, without its runs, so they can delete it;
 - `CHATS_PER_USER` (2) caps the chats a user keeps, counted across the repositories; a
   repository's `chats.per_user` may lower it when a chat is created there;
-- a reset or a deletion stops its sandbox (`runs.mjs` `cancel()`), waits for its end, then has
+- a reset or a deletion stops its sandbox (`run-end.mjs` `cancel()`), waits for its end, then has
   the runner remove its session volumes (`DELETE /sessions/<name>?task=<key>`, a chat's only:
   `runner/spec-check.mjs` `chatSandbox()`); a deletion removes its runs' logs and summaries too
   (`history.mjs` `removeRun()`);

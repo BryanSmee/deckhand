@@ -20,17 +20,18 @@ import { randomBytes } from "node:crypto";
 import { keepLast } from "../lib/capped.mjs";
 import { Refused } from "../lib/http.mjs";
 import { mapLimited } from "../lib/pool.mjs";
+import { isMap } from "../lib/yaml.mjs";
 
 // How often a driver says it is there, and how long a machine stays online without it.
 export const HEARTBEAT_MS = 30_000;
 export const ONLINE_MS = 90_000;
 // A machine's runs at once without its own config saying more, and the most it may say.
-export const CAPACITY = 1;
+const CAPACITY = 1;
 export const MAX_CAPACITY = 16;
 // Per owner, and per machine: a driver's mistake (one machine a start) can't fill the store.
 export const MAX_MACHINES = 10;
-export const MAX_LABELS = 20;
-export const MAX_REPOS = 50;
+const MAX_LABELS = 20;
+const MAX_REPOS = 50;
 // What offers() asks at once (a policy decision, then a .deckhand.yaml read from GitHub, per
 // repository), and how long a repository's .deckhand.yaml read is used again, by offers() and
 // takes() for every machine (#914): a machine taking `owner/*` on a large installation, or its
@@ -53,7 +54,7 @@ const LINE = /^[^\p{Cc}]+$/u;
 export const WARNING =
   "An agent will run on this machine on its own, with your files, credentials and network. Deckhand suggests settings for it and enforces none: what it may do there is up to you.";
 
-export const isMachineId = (id) => typeof id === "string" && ID.test(id);
+const isMachineId = (id) => typeof id === "string" && ID.test(id);
 
 // The issue labels that route an issue to its labeller's machines (claims.mjs): `runs-on:<label>`.
 export const RUNS_ON = "runs-on:";
@@ -79,6 +80,35 @@ export function machineLabel(value) {
   if (typeof value !== "string") return null;
   const label = value.trim().toLowerCase();
   return LABEL.test(label) ? label : null;
+}
+
+// `machines: true`, or `machines: { labels: [unreal] }`: its tasks may run on its users' own
+// machines (below), with the operator's `machines` grant too; `labels` narrows them to
+// the machines that have one of these. → settings.machines: null (off), or { labels } (null:
+// any label). Every key is checked: a mistyped one would offer more machines than meant.
+export function parseMachines(value, { key, settings, fail }) {
+  if (typeof value === "boolean") {
+    settings.machines = value ? { labels: null } : null;
+    return;
+  }
+  if (!isMap(value)) return fail(key, "expected true, false or { labels: [...] }");
+  let ok = true;
+  for (const other of Object.keys(value)) {
+    if (other !== "labels") {
+      ok = false;
+      fail(`machines.${other}`, "unknown key (expected labels)");
+    }
+  }
+  const labels = value.labels;
+  if (labels === undefined || labels === null) {
+    if (ok) settings.machines = { labels: null };
+    return;
+  }
+  const kept = Array.isArray(labels) ? labels.map(machineLabel) : [];
+  if (!kept.length || kept.includes(null)) {
+    return fail("machines.labels", 'expected a list of labels (letters, digits, ".", "_" and "-")');
+  }
+  if (ok) settings.machines = { labels: [...new Set(kept)] };
 }
 
 // Whether `repo` ("owner/name") is among `patterns` (a machine's `repos`).

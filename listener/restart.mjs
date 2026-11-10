@@ -109,7 +109,7 @@ export const END_WAITS = {
   state: "its state's removal",
 };
 
-// A run's end waiting for the store (#821): its summary (runs.mjs summarySaved()), or the queue
+// A run's end waiting for the store (#821): its summary (run-end.mjs summarySaved()), or the queue
 // and its state's removal (removeLive()). Such a run holds its task and a parallel slot until
 // the store takes the write, which a store refusing it for good (a summary file it can't write,
 // a Redis ACL without the key) never does: the run is kept in `ctx.endsWaiting` (run id →
@@ -167,10 +167,10 @@ export function endsWaitingWarnings(
 }
 
 // How long a start waits for the runner to say whether the restored runs' inboxes are open.
-export const RESTORE_WAIT_MS = 10_000;
+const RESTORE_WAIT_MS = 10_000;
 
 // How long a run's state, or its end, waits for its log to be at the runner.
-export const LOG_SENT_MS = 5000;
+const LOG_SENT_MS = 5000;
 
 // Once what the run's log was written is at the runner, or LOG_SENT_MS on.
 export function logSent(live, ms = LOG_SENT_MS) {
@@ -567,7 +567,7 @@ export function createRestart(ctx) {
   // What a listener needs to carry on with a run started by a previous one, in the store
   // (`runs/<id>`): written when it starts and whenever a comment reaches it, Claude answers or
   // the reply is posted, and within a second of the output it reads (saveLiveSoon()); removed
-  // once it is over (removeLive(), after runs.mjs teardown() set `over`: a write still due then
+  // once it is over (removeLive(), after run-end.mjs teardown() set `over`: a write still due then
   // writes nothing). In order, each after the comments' 👀 are known. Never its tokens: the
   // next copy asks the broker service for them (#617).
 
@@ -603,8 +603,7 @@ export function createRestart(ctx) {
           ]
             .concat(["trusted", "cached", "uncached", "branches", "lines", "result", "later"])
             .concat(["cancelled", "overflow", "answered", "logPhase", "created", "reruns", "fork"])
-            .concat(["graceUntil"])
-            .concat(["capabilities", "engine", "mounts", "once"])
+            .concat(["graceUntil", "capabilities", "engine", "mounts", "once", "context"])
             // A review's commit (runs.mjs launch()): its review is posted there.
             .concat(["reviewFrom"])
             // An external run's machine, its inbox and whether it is open (runs.mjs
@@ -643,7 +642,7 @@ export function createRestart(ctx) {
     live.soon.unref?.();
   }
 
-  // A run's end (runs.mjs teardown(), once its last write is done): the queue written with what
+  // A run's end (run-end.mjs teardown(), once its last write is done): the queue written with what
   // it put back, then its state removed, so that a copy killed between the two finds its
   // comments in both (the run's win, loadQueue()), never in neither. A write of the queue that
   // fails keeps it in memory and is tried again every QUEUE_RETRY_MS until it lands, the run
@@ -829,8 +828,9 @@ export function createRestart(ctx) {
       agentToken: movedTokens.get(saved.id)?.agentToken ?? null,
       sandbox: saved.sandbox ?? null,
       issued: movedTokens.get(saved.id)?.runTokens ?? [],
-      // Its tokens' `caps`, which its token reads with (and no token without `pull`).
+      // Its tokens' `caps` (no token without `pull`), and its context repos (context-access.mjs).
       caps: savedCapabilities(saved),
+      context: saved.context ?? null,
     });
     // State saved before runs had branches: none, rather than any; before they kept whether they
     // were a fork's, not one: what it fetches is checked (github-forks.mjs).

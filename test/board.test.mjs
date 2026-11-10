@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { loopStep, waitEdges } from "../listener/http.mjs";
+import { loopStep, waitEdges } from "../listener/http-state.mjs";
 import { board, isLive, runPlaces } from "../listener/board.mjs";
 
 const run = (key, startedAt, extra = {}) => ({
@@ -479,6 +479,54 @@ test("dismissed: while the dismissed run is the task's last and the task ended a
   });
   // It keeps its state.
   assert.equal(tasks.find((t) => t.key === "acme/api#1").state, "error");
+});
+
+// #1002: a work run asks, then its pull request is reviewed (the fix skipped for the input
+// awaited); the review leaves the label on, so the work run's questions still wait.
+test("a review of its pull request leaves the questions of the run that asked waiting", () => {
+  const asked = { items: [], raw: "1. Which?" };
+  const ask = (key, at) =>
+    run(key, at, { status: "needs-input", taskMode: "work", replyTo: 9, questions: asked });
+  const review = (key, at, extra = {}) =>
+    run(key, at, { taskMode: "review", reason: "review", replyTo: 9, ...extra });
+  const label = (key) => ({ key, repo: "acme/api", since: 30, questions: null });
+  const tasks = board({
+    runs: [
+      review("acme/api#1", 40),
+      ask("acme/api#1", 30),
+      // A light run that only helps answer them (`wait_for_answers`) leaves them waiting too.
+      run("acme/api#2", 50, { light: true, taskMode: "brainstorm" }),
+      review("acme/api#2", 40),
+      ask("acme/api#2", 30),
+      // A work run since: what asked is over, the label put back asks with the issue's.
+      run("acme/api#3", 40, { taskMode: "work" }),
+      ask("acme/api#3", 30),
+      // Still reviewing: at work, not waiting.
+      review("acme/api#4", 40, { status: "running" }),
+      ask("acme/api#4", 30),
+      // Set aside (the pull request merged): the review doesn't bring them back.
+      review("acme/api#5", 40),
+      ask("acme/api#5", 30),
+    ],
+    queued: [],
+    brainstorms: [],
+    inputs: ["acme/api#1", "acme/api#2", "acme/api#3", "acme/api#4", "acme/api#5"].map(label),
+    dismissals: [{ key: "acme/api#5", runId: "acme/api#5-30", by: null, at: 45, questions: true }],
+  });
+  const of = (key) => tasks.find((t) => t.key === key);
+  const run1 = { source: "run", runId: "acme/api#1-30", ...asked };
+  assert.deepEqual(of("acme/api#1").questions, run1);
+  // It goes on in the work run's session, where it replied.
+  assert.deepEqual([of("acme/api#1").state, of("acme/api#1").mode], ["needs-input", "work"]);
+  assert.equal(of("acme/api#1").replyTo, 9);
+  assert.equal(of("acme/api#2").questions.runId, "acme/api#2-30");
+  assert.equal(of("acme/api#2").mode, "work");
+  assert.deepEqual(
+    [of("acme/api#3").state, of("acme/api#3").questions],
+    ["needs-input", undefined],
+  );
+  assert.deepEqual([of("acme/api#4").state, of("acme/api#4").questions], ["working", undefined]);
+  assert.deepEqual([of("acme/api#5").state, of("acme/api#5").questions], ["done", undefined]);
 });
 
 test("a run's questions no longer wait once set aside, unless the label is put back since", () => {

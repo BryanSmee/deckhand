@@ -51,6 +51,10 @@ docker compose logs edge          # prints a one-time …/setup?token=… link
 Open the setup link through your public address, create the GitHub App and install it on a
 repository. Then comment `Deckhand` on one of its issues.
 
+To update, run `docker compose pull` and `docker compose up -d` again. Watchtower alone isn't
+enough: it doesn't pull the sandbox image, which then lags the services
+([Updating](docs/guides/updating.md)).
+
 The [quick start](docs/get-started/quick-start.md) walks through each step;
 the [guides](docs/guides/install.md) go further, [Server settings](docs/reference/settings.md) has every
 setting and [Comment commands](docs/reference/comment-commands.md) every command, and the [security model](docs/security.md) what to read before you install it on a

@@ -19,7 +19,7 @@
 //                                         { action: "dequeue", number }
 //                                         { action: "stop", number }: a brainstorm's wrap-up
 //                                         { action: "cancel", number, pr? }: stops the run
-//                                         (runs.mjs cancel()), or drops the queued comments
+//                                         (run-end.mjs cancel()), or drops the queued comments
 //   POST /api/repos/<owner>/<repo>/answer { number, pr?, answers: [{ options: [i], text }] }
 //                                         { number, pr?, text }
 //                                         answers to a task's open questions (answers.mjs);
@@ -68,7 +68,7 @@ import { MAX_TEXT, answersComment, parseAnswers } from "./answers.mjs";
 import { labelFailed } from "./comments.mjs";
 import { repoAllowed } from "./config.mjs";
 import { FAILED } from "./board.mjs";
-import { createDismissals } from "./dismissals.mjs";
+import { askingRun, createDismissals } from "./dismissals.mjs";
 import { createOrder } from "./order.mjs";
 import { startAction } from "./permissions.mjs";
 import { tagger } from "./discussions.mjs";
@@ -91,7 +91,7 @@ import { MAX_NAME, createLanes, laneName } from "./lanes.mjs";
 import { leadsTo, planSummary, readTree, repoOf, waitsOf } from "./plans.mjs";
 import { isApart } from "./modes.mjs";
 import { CONFIG_FILE, modeNames } from "./repo-config.mjs";
-import { latestReview } from "./reviews.mjs";
+import { latestReview } from "./review-post.mjs";
 import { issueList, waitsFor } from "./waits.mjs";
 import { taskId } from "./spelling.mjs";
 import { Refused, readJsonBody, refuse, send } from "../lib/http.mjs";
@@ -166,7 +166,7 @@ export function checkAction(body) {
 // `label(repo, number, on)`: the needs-input label; `inputs` (inputs.mjs), which the backlog
 // also fills (seedInputs()).
 // `runOf(id)`: a run's record (runs.mjs, with the comments it ran on), or null.
-// `cancel(key, user)`: stops the task's run or drops its queued comments (runs.mjs cancel()):
+// `cancel(key, user)`: stops the task's run or drops its queued comments (run-end.mjs cancel()):
 // "running", "queued", "following" or null. `queuedTask(key)` (its `others` included), `unqueue(key, user, until)`: a task
 // waiting for a slot whose newest comment that starts a run can wait for another issue
 // instead, with its author's queued comments, and taking it out of the queue for that
@@ -910,9 +910,8 @@ export function createWorkApi({
     const { comment: text, open } = answersComment(user, questions?.items ?? null, asked, where);
     // Where the run asked: a pull request's run on an issue's task replies on the pull request.
     const replyTo = task.replyTo ?? number;
-    const fromRun = questions
-      ? questions.source === "run"
-      : task.runs?.[0]?.status === "needs-input";
+    // Not a review's since (askingRun()): it leaves the questions of the run before waiting.
+    const fromRun = questions ? questions.source === "run" : !!askingRun(task.runs ?? []);
     // The session goes on in its mode: its start is the user's, before the App's comment, from the
     // dashboard or ticked on GitHub (ticked(), whose caller logs the refusal).
     if (fromRun) await startable(repo, user, task.mode ?? "work");

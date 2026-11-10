@@ -699,6 +699,7 @@ function refusedCases(root) {
     dockerfile: ["dockerfile: .deckhand/Dockerfile\n", "", ["dockerfile"]],
     docker: ["docker: true\n", "", ["docker"]],
     mounts: [`mounts: [${root}/data]\n`, `mounts: [${root}]`, []],
+    context: ["model: opus\ncontext_repos: [acme/docs]\n", "context_repos: [acme/*]", []],
   };
 }
 
@@ -729,6 +730,7 @@ test(
     const { api, cases } = refusedSetup(t);
     // Each file parses: only the grants refuse it.
     assert.deepEqual(await statuses(api), {
+      "org/context": "invalid",
       "org/docker": "invalid",
       "org/dockerfile": "invalid",
       "org/mounts": "invalid",
@@ -755,6 +757,7 @@ test(
       Object.entries(cases).map(([repo, [, , names]]) => [`org/${repo}`, names]),
     );
     assert.deepEqual(await statuses(api), {
+      "org/context": "configured",
       "org/docker": "configured",
       "org/dockerfile": "configured",
       "org/mounts": "configured",
@@ -765,6 +768,19 @@ test(
     }
     // The list read no config again: the grants are checked against the kept settings.
     assert.equal(configReads(gh.calls), reads + Object.keys(cases).length);
+    // A context repo, with its pattern and its line in the file.
+    const { body } = await call(api, "GET", "/api/repos/org/context/config");
+    assert.deepEqual(body.effective.contextRepos, [
+      {
+        repo: "acme/docs",
+        ref: null,
+        folder: "/context/acme/docs",
+        pattern: "acme/*",
+        source: "repo",
+        note: null,
+        line: 2,
+      },
+    ]);
     grants.files = {};
     grants.names = {};
     assert.equal((await statuses(api))["org/docker"], "invalid");
@@ -898,6 +914,10 @@ test("a repo's config: what each mode's runs get, the file that decided it, what
     grant: null,
     enforcedBy: "the listener at start",
   });
+  // read:context among them, its texts without the replies' Markdown.
+  const context = capabilities.catalogue.find((c) => c.name === "read:context");
+  assert.deepEqual(context.config, ["context_repos"]);
+  assert.match(context.what, /the other repositories its context_repos names/);
   // Each built-in mode that runs, asked about a comment's run on an issue, not a fork's.
   assert.deepEqual(fake.inputs[0], {
     repo: { name: "org/app", private: true },
@@ -908,6 +928,7 @@ test("a repo's config: what each mode's runs get, the file that decided it, what
     fork: false,
     trigger: null,
     command: null,
+    context_repos: [],
   });
   const work = capabilities.modes.find((m) => m.mode === "work");
   assert.equal(work.custom, false);
@@ -1059,6 +1080,7 @@ test("GET config: raw text, errors, warnings and what runs get; its row updated"
     allowMachines: false,
     hosts: ["registry.npmjs.org"],
     cachedHosts: [],
+    contextRepos: [],
     mounts: [],
     allowProjects: [],
     limits: { cpus: "2", memory: "4g", pids: 2048 },

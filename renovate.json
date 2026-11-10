@@ -1,0 +1,179 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "description": "Deckhand's own dependency updates (#1013): weekly pull requests, nothing automerged. AGENTS.md, Conventions, says how they work.",
+  "extends": [
+    "config:recommended",
+    ":pinAllExceptPeerDependencies",
+    "helpers:pinGitHubActionDigests"
+  ],
+  "dependencyDashboard": true,
+  "schedule": ["before 6am on monday"],
+  "timezone": "UTC",
+  "prConcurrentLimit": 5,
+  "minimumReleaseAge": "3 days",
+  "labels": ["dependencies"],
+  "automerge": false,
+  "ignorePaths": [
+    "**/node_modules/**",
+    "**/examples/**",
+    "**/__tests__/**",
+    "**/test/**",
+    "**/tests/**",
+    "**/__fixtures__/**"
+  ],
+  "kubernetes": {
+    "managerFilePatterns": ["/^deploy/kubernetes(-e2e)?/.+\\.yaml$/"]
+  },
+  "customManagers": [
+    {
+      "customType": "regex",
+      "description": "Versions pinned by hand, marked by a `renovate:` comment on the line above: the Dockerfiles' ARGs, checks.yml's env.",
+      "managerFilePatterns": ["/(^|/)Dockerfile$/", "/^\\.github/workflows/.+\\.ya?ml$/"],
+      "matchStrings": [
+        "#\\s*renovate: datasource=(?<datasource>\\S+) depName=(?<depName>\\S+)( extractVersion=(?<extractVersion>\\S+))?\\s*\\n\\s*(ARG )?[A-Z_]+_VERSION[=:]\\s*(?<currentValue>\\S+)"
+      ]
+    },
+    {
+      "customType": "regex",
+      "description": "Claude Code's default version, in listener/config.mjs (over its size limit: no room for a comment) and in the settings' reference, which move together.",
+      "managerFilePatterns": [
+        "/^listener/config\\.mjs$/",
+        "/^docs/reference/settings/agents\\.md$/"
+      ],
+      "matchStrings": [
+        "\\n  CLAUDE_CODE_VERSION: \\{ default: \"(?<currentValue>[^\"]+)\" \\}",
+        "`CLAUDE_CODE_VERSION`\\*\\* · `claude_code_version` · default: `(?<currentValue>[^`]+)`"
+      ],
+      "datasourceTemplate": "npm",
+      "depNameTemplate": "@anthropic-ai/claude-code"
+    },
+    {
+      "customType": "regex",
+      "description": "Codex's default version, in listener/config.mjs (over its size limit: no room for a comment) and in the settings' reference, which move together.",
+      "managerFilePatterns": [
+        "/^listener/config\\.mjs$/",
+        "/^docs/reference/settings/agents\\.md$/"
+      ],
+      "matchStrings": [
+        "\\n  CODEX_VERSION: \\{ default: \"(?<currentValue>[^\"]+)\" \\}",
+        "`CODEX_VERSION`\\*\\* · `codex_version` · default: `(?<currentValue>[^`]+)`"
+      ],
+      "datasourceTemplate": "npm",
+      "depNameTemplate": "@openai/codex"
+    },
+    {
+      "customType": "regex",
+      "description": "The blob storage guide names Garage's image as compose.yaml pins it.",
+      "managerFilePatterns": ["/^docs/guides/blob-storage\\.md$/"],
+      "matchStrings": ["`dxflrs/garage:(?<currentValue>[^`]+)`"],
+      "datasourceTemplate": "docker",
+      "depNameTemplate": "dxflrs/garage"
+    }
+  ],
+  "packageRules": [
+    {
+      "description": "Deckhand's own images (latest, or the release's tag) and the end-to-end check's fakes are built here, not updated.",
+      "matchDatasources": ["docker"],
+      "matchPackageNames": ["ghcr.io/bryansmee/**", "deckhand-e2e-fakes"],
+      "enabled": false
+    },
+    {
+      "description": "Node's image, every Dockerfile in one pull request (setup-node and CI's node:26 container follow the major, below). Node 26 is a decision (AGENTS.md, checks.yml's node-version, esbuild's --target=node26), never a major bump of its own. The node:26-* tags float, so Node's patches come with each build, not from Renovate.",
+      "matchDepNames": ["node"],
+      "groupName": "node"
+    },
+    {
+      "matchDepNames": ["node"],
+      "matchUpdateTypes": ["major"],
+      "enabled": false
+    },
+    {
+      "description": "setup-node's node-version follows the major, as the node:26-* tags do: not pinned.",
+      "matchManagers": ["github-actions"],
+      "matchDepNames": ["node"],
+      "enabled": false
+    },
+    {
+      "description": "Valkey's and BuildKit's images: the kustomize component and the Helm values in the same pull request, as test/helm-chart.test.mjs holds them equal.",
+      "matchDatasources": ["docker"],
+      "matchPackageNames": ["valkey/valkey"],
+      "groupName": "valkey image"
+    },
+    {
+      "matchDatasources": ["docker"],
+      "matchPackageNames": ["moby/buildkit"],
+      "groupName": "buildkit image"
+    },
+    {
+      "description": "The dashboard's minor and patch updates in one pull request; each major in its own.",
+      "matchFileNames": ["dashboard/package.json"],
+      "matchUpdateTypes": ["minor", "patch", "pin", "digest"],
+      "groupName": "dashboard"
+    },
+    {
+      "description": "The docs site's, the same way.",
+      "matchFileNames": ["docs/package.json"],
+      "matchUpdateTypes": ["minor", "patch", "pin", "digest"],
+      "groupName": "docs site"
+    },
+    {
+      "matchFileNames": ["listener/vendor/package.json"],
+      "matchPackageNames": ["graphql"],
+      "prBodyNotes": [
+        "graphql-js parses the runs' GraphQL in the GitHub gateway: check `listener/vendor/graphql.entry.mjs`'s imports still exist, and that the tests pass against the pinned `github.graphql`."
+      ]
+    },
+    {
+      "matchManagers": ["github-actions"],
+      "description": "The actions only: the workflows' service and container images (CI's Redis) come as their own pull requests.",
+      "matchDepTypes": ["action"],
+      "groupName": "GitHub Actions"
+    },
+    {
+      "description": "Binaries pinned by version and sha256: Renovate's hosted app can't compute the sums, so CI fails until someone updates them.",
+      "matchManagers": ["custom.regex"],
+      "matchDatasources": ["github-releases"],
+      "addLabels": ["needs-sha"]
+    },
+    {
+      "matchManagers": ["custom.regex"],
+      "matchDepNames": ["open-policy-agent/opa"],
+      "prBodyNotes": [
+        "**needs-sha**: update the `amd64` and `arm64` sums in `policy-service/Dockerfile` from the release's `opa_linux_<arch>_static.sha256` (CI's tests read them from there too). A new version may bring builtins that read files or the network: check them against `policy-service/engine.mjs`'s `REMOVED`."
+      ]
+    },
+    {
+      "matchManagers": ["custom.regex"],
+      "matchDepNames": ["moby/buildkit"],
+      "prBodyNotes": [
+        "**needs-sha**: update the `amd64` and `arm64` sums in `runner/Dockerfile`, of the release's `buildkit-v<version>.linux-<arch>.tar.gz` (its digests)."
+      ]
+    },
+    {
+      "matchManagers": ["custom.regex"],
+      "matchDepNames": [
+        "kubernetes-sigs/kustomize",
+        "yannh/kubeconform",
+        "helm/helm",
+        "prometheus/prometheus"
+      ],
+      "prBodyNotes": [
+        "**needs-sha**: update the matching `*_SHA256` in `.github/workflows/checks.yml`'s `kubernetes` job, the sha256 of the `linux-amd64` tarball its install step downloads. helm's in `.github/workflows/release-workflow.yml`'s `chart` job too, the same sum (`test/release-workflow.test.mjs`)."
+      ]
+    },
+    {
+      "matchManagers": ["custom.regex"],
+      "matchDepNames": ["@anthropic-ai/claude-code", "@openai/codex"],
+      "prBodyNotes": [
+        "The sandboxes install this agent on first use. `docs/security/network.md` lists the hosts it calls, checked against one version: check the new one calls no other."
+      ]
+    },
+    {
+      "matchManagers": ["custom.regex"],
+      "matchDepNames": ["@anthropic-ai/claude-code"],
+      "prBodyNotes": [
+        "`machine/deckhand-machine.mjs`'s `CHECKED_WITH` names the Claude Code version the machine driver was checked against: decide whether this one needs checking again."
+      ]
+    }
+  ]
+}

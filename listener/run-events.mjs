@@ -28,7 +28,7 @@ export function createRunEvents({
       const message = `Its sandbox exited with code ${event.exitCode}`;
       log(`${run.record.key}: ${message}`);
       writeEvent(run.logFile, "note", { message });
-      // Said after the run's end, which closed its log's last segment (runs.mjs teardown()):
+      // Said after the run's end, which closed its log's last segment (run-end.mjs teardown()):
       // the segment this note opened closes after it (../runner/logs.mjs).
       if (run.record.finishedAt) run.logFile.close?.();
     }

@@ -56,6 +56,41 @@ jobs:
             gh release create "$GITHUB_REF_NAME" --verify-tag --generate-notes
           gh release upload "$GITHUB_REF_NAME" machine/deckhand-machine.mjs --clobber
 
+  # The Helm chart, an OCI artifact next to the images (docs/kubernetes/helm.md): its version and
+  # appVersion the tag's, without its `v` as the images', whatever Chart.yaml says. Its source
+  # annotation (Chart.yaml's `sources`) links the package to this repository, as the images' label.
+  chart:
+    if: github.ref_type == 'tag'
+    # Every image of the tag pushed first: a chart's appVersion names them, and a failed build
+    # (any leg of the matrix) publishes no chart pointing at images that aren't there.
+    needs: images
+    runs-on: ubuntu-latest
+    # helm as checks.yml's kubernetes job installs it, the same version and sum
+    # (test/release-workflow.test.mjs holds them together).
+    env:
+      # renovate: datasource=github-releases depName=helm/helm extractVersion=^v(?<version>.+)$
+      HELM_VERSION: 4.3.1
+      HELM_SHA256: 0403a88ae20913d11b10a2467b50087721fea7581736da6b9d3992f5357fe54b
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install helm
+        working-directory: ${{ runner.temp }}
+        run: |
+          curl -fsSLo helm.tgz "https://get.helm.sh/helm-v${HELM_VERSION}-linux-amd64.tar.gz"
+          echo "$HELM_SHA256  helm.tgz" | sha256sum -c -
+          mkdir -p bin
+          tar -xzf helm.tgz -C bin --strip-components 1 linux-amd64/helm
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+      - env:
+          TOKEN: ${{ github.token }}
+          OWNER: ${{ github.repository_owner }}
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          helm package deploy/helm/deckhand --version "$version" --app-version "$version" -d "$RUNNER_TEMP"
+          echo "$TOKEN" | helm registry login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          # OCI references are lower case; the owner may not be.
+          helm push "$RUNNER_TEMP/deckhand-$version.tgz" "oci://ghcr.io/${OWNER,,}/charts"
+
   images:
     # Checks passed on a push to this repository's main (`branches` alone also matches a fork's
     # pull request from a branch named main, whose code must never be built with this token), on

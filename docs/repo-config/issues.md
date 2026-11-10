@@ -258,8 +258,8 @@ The App opens the pull request from the branch the machine pushed, which Deckhan
 
 `auto_pickup: true` opts the repository in to the operator's auto-pickup
 ([Auto-pickup](../guides/auto-pickup.md)): its open issues labelled `AUTO_PICKUP_LABEL`
-(`auto-pickup` by default) are started by Deckhand itself, oldest created first across
-every repository that opted in, in `work` mode, in the slots the operator reserves
+(`auto-pickup` by default) are started by Deckhand itself, by `severity: *` label then oldest,
+across every repository that opted in, in `work` mode, in the slots the operator reserves
 (`AUTO_PICKUP_SLOTS`). Without those slots (the default), or without this key, nothing is
 picked. Like the rest of this file, only the default branch's says it, and `max_parallel`
 still caps the repository's runs, auto-picked ones included.

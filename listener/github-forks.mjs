@@ -32,11 +32,11 @@ import { headInRepo } from "./events.mjs";
 import { pktLines, pktReader } from "./pkt-line.mjs";
 
 // How long a pull request's, repository's or commit's answer is kept, and how many of each.
-export const LOOKUP_MS = 10 * 60_000;
+const LOOKUP_MS = 10 * 60_000;
 const MAX_KEPT = 10_000;
 // The advertised objects a run's memory keeps, per repository; past it, the oldest go, and
 // what they named is looked up again.
-export const MAX_REFS = 100_000;
+const MAX_REFS = 100_000;
 // The most of a fetch's request read (inflated).
 export const MAX_FETCH = 16 * 1024 * 1024;
 // The wants of a fetch looked up on GitHub (no ref advertised them), at most: a fetch of many
@@ -49,7 +49,7 @@ const OID = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/i;
 const MAX_SEGMENTS = 20;
 // How long a commit found nowhere in the repository stays refused without asking GitHub again:
 // briefly, as a run may push it meanwhile.
-export const REFUSED_MS = 60_000;
+const REFUSED_MS = 60_000;
 // The GitHub lookups a run's calls may cause in a minute (createForkChecks() ask()).
 export const RUN_LOOKUPS = 120;
 // What may be a commit's id, abbreviated as git allows (4 digits and up).
@@ -126,13 +126,6 @@ export function advertisementReader() {
     if (peeled && OID.test(peeled[1])) add(peeled[1], ref);
   });
   return { push: reader.push, refs: () => refs };
-}
-
-// advertisementReader()'s refs of a whole advertisement.
-export function advertisedRefs(buffer) {
-  const reader = advertisementReader();
-  reader.push(buffer);
-  return reader.refs();
 }
 
 // Whether `text` is spelled as git names refs (git check-ref-format), so that GitHub can't read

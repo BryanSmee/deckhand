@@ -1,7 +1,7 @@
 // The deliveries that move a run's questions (listener/http.mjs deliver()): a close or merge sets
 // them aside, a pull request's label taken off or put back too, and a redelivery is handled as
 // its issue or pull request is now, or as sent but for the questions when GitHub can't say. The
-// orchestrator's own wiring of them is orchestrator-server.test.mjs's.
+// orchestrator's own wiring of them is orchestrator-dashboard.test.mjs's.
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createDismissals } from "../listener/dismissals.mjs";

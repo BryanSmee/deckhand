@@ -25,11 +25,11 @@
 // claim is saved with the queue (restart.mjs): the copy that takes over has it, with a fresh
 // lease.
 //
-// Its run (#597). A claim starts an external run (runs.mjs startExternal()): a sandbox run's
+// Its run (#597). A claim starts an external run (external-runs.mjs startExternal()): a sandbox run's
 // record, log, reactions and end, without a sandbox. Its machine reports on it with the claim's
 // run id: post() its agent's stream-json lines, nextMessage() the comments that reach it
 // meanwhile, ask() or finish() its end, whose reply the App posts before what follows any run's
-// end (runs.mjs cleanUp()). A release, a lease that runs out or the machine removed ends it as
+// end (run-end.mjs cleanUp()). A release, a lease that runs out or the machine removed ends it as
 // interrupted, the issue told. Only the machine holding the claim reaches its run (going()).
 // Its pushes are its owner's own git's: finish() names the issue's branch it pushed, and the App
 // opens its pull request (#598, machine-pulls.mjs).
@@ -511,7 +511,7 @@ export function createClaims(
 
   // Its claim over: its comments back first in the queue, for that machine (it sticks to it) as
   // soon as it claims again. `why`: the log's, and its external run's, which ends as interrupted
-  // with the issue told (runs.mjs interruptExternal(): its comments queued again there).
+  // with the issue told (external-runs.mjs interruptExternal(): its comments queued again there).
   function giveBack(task, why) {
     const { claim: c } = task;
     markPull(task, c);
@@ -565,7 +565,7 @@ export function createClaims(
 
   // --- Its run (#597) -----------------------------------------------------------------------
 
-  // The external run of the owner's machine `id`'s claim `run` (runs.mjs startExternal()), still
+  // The external run of the owner's machine `id`'s claim `run` (external-runs.mjs startExternal()), still
   // going: → its task. Refused (404) for another's machine or claim, (409) for a run that ends.
   function going(owner, id, run) {
     const task = claimed(owner, id, run);
@@ -615,7 +615,7 @@ export function createClaims(
 
   // The run is over, as its machine says: `outcome` "ok", "error" or "needs-input" (ask), its
   // `reply` posted as the App (its last result's text without one), then what follows a sandbox
-  // run's end (runs.mjs cleanUp()). `pushed`: the issue's branch its machine pushed, { branch,
+  // run's end (run-end.mjs cleanUp()). `pushed`: the issue's branch its machine pushed, { branch,
   // sha, ready }, whose pull request the App opens first (machine-pulls.mjs, #598), ready for
   // review with `ready`; refused, the run goes on. → { key, status, pull }.
   async function finish(owner, id, run, { outcome = "ok", reply = null, pushed = null } = {}) {

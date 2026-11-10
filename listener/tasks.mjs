@@ -30,7 +30,7 @@ import {
   taskSandboxName,
 } from "./repo-config.mjs";
 import { queueId } from "./restart.mjs";
-import { LOOPING, loopState } from "./reviews.mjs";
+import { LOOPING, loopState } from "./review-loop.mjs";
 import { minutes, writeEvent } from "./runlog.mjs";
 import { sameTask, taskId } from "./spelling.mjs";
 import { createTaskModes } from "./task-modes.mjs";
@@ -40,12 +40,12 @@ import { asksForRun } from "./stopped.mjs";
 
 // How long Deckhand's own item waits before it is queued again, when its task's machine route
 // can't be read (queue()).
-export const ROUTE_RETRY_MS = 60_000;
-export const ROUTE_RETRIES = 5;
+const ROUTE_RETRY_MS = 60_000;
+const ROUTE_RETRIES = 5;
 
 // How long a comment whose admission GitHub kept failing (its repo's settings, GitHubUnavailable
 // after the App's own tries) is held before it is admitted again, each time; after those, its
-// trigger's reply says so (holdAdmission()). As a run's start (runs.mjs GITHUB_REQUEUE_MS).
+// trigger's reply says so (holdAdmission()). As a run's start (run-replies.mjs GITHUB_REQUEUE_MS).
 export const ADMIT_RETRY_MS = [60_000, 5 * 60_000, 15 * 60_000];
 
 // Why a queued comment may no longer run, or null: its repo left ALLOWED_REPOS, or its author
@@ -105,7 +105,7 @@ export const isMachinePool = (pool) => pool === MACHINES || pool.startsWith("mac
 export const poolOf = (task) => task?.pool ?? (isChat(task) ? CHATS : SHARED);
 
 // Each pool's cap but shared's (MAX_PARALLEL, which startable() takes on its own).
-export const poolCaps = (config) => new Map([[CHATS, config.maxRunningChats ?? 0]]);
+const poolCaps = (config) => new Map([[CHATS, config.maxRunningChats ?? 0]]);
 
 // Its sandbox counted among its pool's runs going: shared's in `ctx.running` (MAX_PARALLEL), the
 // others' in `ctx.pools` (pool → count). `n` is 1 as it starts, -1 once it is over: in the pool
@@ -385,7 +385,7 @@ export function createTasks(ctx) {
     }
   }
 
-  // A `/cancel` comment: the task's run stops (runs.mjs cancel()), or its queued comments are
+  // A `/cancel` comment: the task's run stops (run-end.mjs cancel()), or its queued comments are
   // dropped, and the comment gets a 👍; the run's reply says who stopped it. With nothing to
   // stop, a reply says so. Its author needs `runs:manage`.
   async function cancelRun(item) {
@@ -546,7 +546,7 @@ export function createTasks(ctx) {
   // own going nor queued: its last run was picked (or followed a pick) and its work isn't done.
   // That is while the run waits for an answer to its questions (#591: anything on the picked
   // task until it is done), and while its pull request, open, is between two steps of its review
-  // loop (reviews.mjs loopState(), the dashboard's in-review): waiting for CI, the next step being
+  // loop (review-loop.mjs loopState(), the dashboard's in-review): waiting for CI, the next step being
   // decided or on its way. The records, the loop's entry and the set-asides are kept through a
   // restart. Done: the issue closed, the pull request merged or closed, a close seen since that
   // run (picks.mjs, a reopen included), its questions set aside (dismissals.mjs), the loop over,
@@ -690,7 +690,7 @@ export function createTasks(ctx) {
     return item.mode;
   }
 
-  // A run that was stopped is over (runs.mjs teardown()): what was queued behind it doesn't
+  // A run that was stopped is over (run-end.mjs teardown()): what was queued behind it doesn't
   // start a follow-up run, it waits for the next trigger (queue()), unless one came since the
   // stop (the stop lifted). Out of the run order, its 👀 kept; in the queue's next write, which
   // keeps `onHold` too (restart.mjs). → how many were held.
@@ -782,7 +782,7 @@ export function createTasks(ctx) {
       taken(task, items);
       return false;
     }
-    // An external run's machine reads it from its outbox (runs.mjs sendExternal()).
+    // An external run's machine reads it from its outbox (external-runs.mjs sendExternal()).
     if (live.external) ctx.sendExternal(task, liveMessage(live.mode, text));
     else ctx.runner.send(live.id, liveMessage(live.mode, text), agentFor(live.record.agent));
     // A chat's: its owner's message, which the conversation shows as theirs (runlog.mjs).

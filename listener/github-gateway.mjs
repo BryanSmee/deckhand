@@ -27,6 +27,8 @@
 //   raw.githubusercontent.com, media.githubusercontent.com, patch-diff.githubusercontent.com),
 //   relayed here for such a run only (egress-http.mjs), and sent on anonymously: they never get
 //   a token, nor count towards its calls in flight, as when they were plain hosts;
+// - a run's context repos (context-gateway.mjs): git fetches them with a token for each alone,
+//   `contents: read` (none for a public one where the App isn't installed); nothing else of them;
 // - every write's body is redacted (the run's tokens, the operator's credentials, the tokens
 //   used for it, anything shaped like a GitHub token) before GitHub gets it, and the run's log
 //   says so: what a run posts itself would otherwise skip the redaction of its reply and log;
@@ -44,17 +46,19 @@ import { addressOf } from "./broker.mjs";
 import { githubContent } from "./egress.mjs";
 import { PROJECT_READ, READ_PERMISSIONS, readsGitHub, readsOf } from "./github-app.mjs";
 import { advertisementReader, fetchBody, fetchRequest, MAX_FETCH } from "./github-forks.mjs";
+import { contextCall, tokenFor } from "./context-gateway.mjs";
 import { pullOf } from "./github-pulls.mjs";
-import { pkt } from "./pkt-line.mjs";
+import { packIn, pkt } from "./pkt-line.mjs";
+export { packIn };
 import { classify, writePermissions } from "./github-writes.mjs";
 import { redact } from "../lib/redact.mjs";
 import { baseOf, forward, forwarded, IDLE_MS, MAX_IN_FLIGHT } from "../lib/upstream.mjs";
 import { sendJson } from "../lib/http.mjs";
 
 // The largest write body read: GitHub's own limits for an issue or a comment are far below.
-export const MAX_WRITE = 16 * 1024 * 1024;
+const MAX_WRITE = 16 * 1024 * 1024;
 // How much of a watched write's answer is read: an issue's JSON is far below.
-export const MAX_ANSWER = 1024 * 1024;
+const MAX_ANSWER = 1024 * 1024;
 // The redacted writes and refused calls a run's log notes, each once and only so many.
 export const MAX_NOTED = 20;
 
@@ -105,7 +109,7 @@ export function ownIssuePath(path, run) {
 }
 // The same path by its repository's id → the id it names, or null when it isn't the run's
 // issue's path under some id (whether the id is its repository's is the gateway's to look up).
-export function ownIssueId(path, run) {
+function ownIssueId(path, run) {
   const match = /^repositories\/(\d+)\/issues\/(\d+)(?:\/comments)?\/?$/i.exec(path);
   if (!match || !Number.isInteger(run.issue) || Number(match[2]) !== run.issue) return null;
   return Number(match[1]);
@@ -114,7 +118,7 @@ export function ownIssueId(path, run) {
 export const CHAT_READS =
   "a chat only reads GitHub: its permissions profile's level is read only, and its answers stay in the conversation";
 // What a run is told when it reads issues beyond its own without `read:issues`.
-export const ownIssueOnly = (run) =>
+const ownIssueOnly = (run) =>
   `this run's capabilities don't give \`read:issues\`: it reads ${Number.isInteger(run.issue) ? `its own issue (#${run.issue}) only` : "no issue"}`;
 // The read capability that gives a token permission (github-app.mjs READ_PERMISSIONS).
 const CAPABILITY_OF = Object.fromEntries(
@@ -128,7 +132,7 @@ export function unreadable(permissions) {
 // An Actions run's or job's logs (paths under the API's base): GitHub answers with a redirect
 // to a storage host of its own (Azure blobs, behind a signed URL), which the egress proxy
 // doesn't let a sandbox reach. The gateway follows it (proxied()), once, without any
-// credential, and sends the logs back: what a CI fix run reads (reviews.mjs ciFixMessage()).
+// credential, and sends the logs back: what a CI fix run reads (review-texts.mjs ciFixMessage()).
 export const ACTIONS_LOGS = new RegExp(
   String.raw`^${REPO}\/actions\/(?:jobs\/\d+|runs\/\d+(?:\/attempts\/\d+)?)\/logs$`,
   "i",
@@ -331,7 +335,7 @@ function readBody(req, max, idleMs, clock) {
 }
 
 // A run's calls in flight, counted in this process: the gateway's default (`inFlight`).
-export function countInFlight() {
+function countInFlight() {
   const calls = new WeakMap();
   return {
     // → the call's slot, or null when the run has `max` in flight.
@@ -342,49 +346,6 @@ export function countInFlight() {
       return {};
     },
     release: (run) => calls.set(run, (calls.get(run) ?? 1) - 1),
-  };
-}
-
-// What a pack request's answer says, read pkt-line by pkt-line from its start: whether it
-// carries the pack (protocol v2's "packfile" section line, v0's pack on side-band 1 or bare
-// after the acknowledgments), or GitHub's error ("ERR …", side-band 3: an object it doesn't
-// have, say). Neither: a round of negotiation, or ls-refs. Whole lines only, so a ref named
-// …packfile is no pack. Read until one of them, within its first MAX_PACK_SCAN bytes.
-const MAX_PACK_SCAN = 1024 * 1024;
-export function packIn() {
-  let held = Buffer.alloc(0);
-  let seen = 0;
-  // null while reading; "pack", "error", or "unknown" for what isn't pkt-lines.
-  let said = null;
-  function line(payload) {
-    if (payload.toString("latin1") === "packfile\n") return "pack";
-    if (payload.subarray(0, 4).toString("latin1") === "ERR ") return "error";
-    if (payload[0] === 1 && payload.subarray(1, 5).toString("latin1") === "PACK") return "pack";
-    if (payload[0] === 3) return "error";
-    return null;
-  }
-  return {
-    push(chunk) {
-      if (said || seen > MAX_PACK_SCAN) return;
-      seen += chunk.length;
-      held = Buffer.concat([held, chunk]);
-      while (!said && held.length >= 4) {
-        const head = held.subarray(0, 4).toString("latin1");
-        if (head === "PACK") return void (said = "pack");
-        if (!/^[0-9a-f]{4}$/i.test(head)) return void (said = "unknown");
-        const length = parseInt(head, 16);
-        // A flush, delimiter or response-end packet: no payload.
-        if (length < 4) {
-          held = held.subarray(4);
-          continue;
-        }
-        if (held.length < length) return;
-        said = line(held.subarray(4, length));
-        held = held.subarray(length);
-      }
-    },
-    found: () => said === "pack",
-    failed: () => said === "error",
   };
 }
 
@@ -562,6 +523,10 @@ export function createGithubGateway({
       req.resume();
       return fail(res, 405, `git's ${fetching[2]} takes no ${req.method}`);
     }
+    // Another repository of the run's context (context-gateway.mjs): fetched alone, with its token.
+    const context = contextCall(run, where, fetching);
+    if (context?.refused)
+      return refuseFork(run, req, res, where, call, context.refused, !!fetching);
     const write = !["GET", "HEAD", "OPTIONS"].includes(req.method);
     // A read with a body would go on unread, past redaction and a review's check: git and gh
     // never send one, so it is refused rather than read.
@@ -794,6 +759,7 @@ export function createGithubGateway({
         advertised,
         inflated,
         ownIssue,
+        context: context?.fetch,
         lacks: lacks && { message: lacks.message, paths: readPaths },
       });
     } finally {
@@ -1008,7 +974,7 @@ export function createGithubGateway({
     body,
     watched,
     writing,
-    { advertised = null, inflated = false, lacks = null, ownIssue = false } = {},
+    { advertised = null, inflated = false, lacks = null, ownIssue = false, context = null } = {},
   ) {
     // GitHub's answer, counted once: an API call's status, rate limit and time to its headers.
     // A git fetch (or clone) is counted once whatever number of requests it takes (protocol v2:
@@ -1041,13 +1007,13 @@ export function createGithubGateway({
     // Its reads, and a checked write's own permission: never another write.
     const permissions = writing ? { ...reads, ...writing } : reads;
     try {
-      ({ token } = await github.repoToken(run.repo, permissions));
+      ({ token } = await tokenFor(github, run, permissions, context));
     } catch (error) {
-      log(`GitHub gateway: token for ${run.repo}: ${error.message ?? error}`);
+      log(`GitHub gateway: token for ${context?.repo ?? run.repo}: ${error.message ?? error}`);
       if (advertising || packing) onGit("fetch", "failed");
       return fail(res, 502, "GitHub refused the token");
     }
-    run.tokens.add(token);
+    if (token) run.tokens.add(token);
     const headers = forwarded(req.headers, [
       "authorization",
       "cookie",
@@ -1055,9 +1021,8 @@ export function createGithubGateway({
       ...(inflated ? ["content-encoding"] : []),
     ]);
     // git asks with Basic, as GitHub expects an App's token on its web host.
-    headers.authorization = api
-      ? `token ${token}`
-      : `Basic ${Buffer.from(`x-access-token:${token}`).toString("base64")}`;
+    const basic = () => `Basic ${Buffer.from(`x-access-token:${token}`).toString("base64")}`;
+    if (token) headers.authorization = api ? `token ${token}` : basic();
     if (body !== undefined) headers["content-length"] = String(body.length);
     // A watched write's answer is read as it goes on: uncompressed, and only so much of it.
     let status = 0;

@@ -101,13 +101,20 @@ edge/         edge (#506), the only service the internet reaches: server.mjs (wi
               public parts, for the orchestrator), app.mjs (the webhook secret, the OAuth
               client's), oauth.mjs (MCP clients' sign-in: an OAuth 2.1 server over GitHub's),
               client.mjs (what the orchestrator calls it with), metrics.mjs (its metrics: the
-              webhooks, the requests by route, sign-ins and sessions), shots.mjs (the runs'
-              screenshots, passed on to the broker)
+              webhooks, the requests by route, sign-ins and sessions), local.mjs and status.mjs
+              (/status from inside its container, a token from the session key, #1019),
+              shots.mjs (the runs' screenshots, passed on to the broker)
 orchestrator/ the orchestrator (#506): server.mjs (wiring: its lease, then the queue and the runs'
               lives, from ../listener/'s modules); two copies, active/passive
 listener/     the modules edge and the orchestrator run (no entry point of its own): http.mjs (the
-              dashboard's API and the deliveries, the orchestrator's), tasks.mjs (queue),
-              runs.mjs, restart.mjs, … (docs/contributing/architecture.md), runner/ (Docker and
+              dashboard's API, the orchestrator's; its api/state in http-state.mjs, the reads
+              beside it in http-reads.mjs, the deliveries in http-deliveries.mjs), tasks.mjs
+              (queue), runs.mjs (a run's start and follow; its output, end and replies in
+              run-output.mjs, run-end.mjs and run-replies.mjs, external runs in
+              external-runs.mjs), restart.mjs, reviews.mjs (the review loop, createReviews();
+              reading, posting, merging, its texts, its state and its dry run in review-parse.mjs,
+              review-post.mjs, review-merge.mjs, review-texts.mjs, review-loop.mjs and
+              review-dry-run.mjs, #1067), … (docs/contributing/architecture.md), runner/ (Docker and
               Kubernetes backends), agents/ (each agent's specifics: install, env, hosts, session,
               normalize(); the credentials' names, credentials.mjs)
 github/       the github service (#502): the only one with the GitHub App's key; server.mjs
@@ -125,7 +132,9 @@ policy-service/ the policy service (#501): long-lived `opa` servers evaluating t
               metrics.mjs (its decisions, their time, the operator's policies' loads)
 policy/       Deckhand's default policies (*.rego), copied into the policy service's image
 dashboard/    the dashboard: Preact + Vite + TypeScript, built to dist/ in edge's image;
-              screenshots/ takes the docs' pictures (run.mjs, hero.html) against src/shots.ts
+              screenshots/ takes the docs' pictures (run.mjs, hero.html) against src/shots.ts;
+              src/types/: the contract with the API, a file per area (state, log, access, repos,
+              config, work, chats, server), index.ts re-exporting them
 sandbox/      base image: Dockerfile, entrypoint.sh, draft-pr.sh, pre-push, git credential
               helper and gh wrapper; agents/<name>.sh and agents/<name>/ (Claude Code's
               flags, installer, settings, hooks, progress.jq)
@@ -159,6 +168,9 @@ deploy/       kubernetes/: the manifests for a cluster (#396), a kustomize base 
               grafana/deckhand.json: the Grafana dashboard, alerts/: the alert rules and their
               promtool tests (#661; docs/guides/metrics.md), the chart carrying copies of both in
               helm/deckhand/files/, held the same by test/metrics-deploy.test.mjs
+test/         the tests (`node --test`), their shared fakes in helpers.mjs and fixtures/;
+              orchestrator-harness.mjs: edge, the orchestrator and the services around them,
+              started for the end-to-end orchestrator-*.test.mjs files, one per area (#1071)
 docs/         the docs, and the site built from them (VitePress, build-time only like the
               dashboard's, published to GitHub Pages by .github/workflows/docs.yml): index.md (the
               site's home), get-started/ (what Deckhand is, the quick start, core ideas),
@@ -199,8 +211,9 @@ docs/         the docs, and the site built from them (VitePress, build-time only
 - **The dashboard is the exception** (`dashboard/`, issue #22): Preact, Vite and TypeScript,
   with hand-written CSS Modules, no UI or chart library. Its packages are build-time only: the
   image's build stage turns them into static files in `dashboard/dist/`, which edge
-  serves; the released image has no `node_modules`. `src/types.ts` is the contract with
-  `http.mjs` (`api/state`) and `runlog.mjs` (the log stream): change them together. Tests: Vitest and
+  serves; the released image has no `node_modules`. `src/types/` is the contract with
+  `http.mjs` (`api/state`: `state.ts`) and `runlog.mjs` (the log stream: `log.ts`), one file per
+  area of the API that `index.ts` re-exports: change them together. Tests: Vitest and
   Testing Library, named `*.spec.ts(x)`: Node runs `*.test.ts` files itself, and
   `node --test` must leave them alone.
 - **So is the docs site** (`docs/`, issue #982): VitePress, and Mermaid for the ` ```mermaid `
@@ -215,6 +228,20 @@ docs/         the docs, and the site built from them (VitePress, build-time only
   limit only tightens: split the file (a module of its own for the part you touch). A file that
   really can't be split gets a ceiling in `test/file-sizes.json` that says why
   (`"path": { "lines": 900, "why": "#<issue>" }`), which the review weighs; never one just to make room.
+- **No new `review:` key until the workflow engine exists** (#1035): the pull request
+  lifecycle grows through that block, and each key makes it harder to follow and the engine
+  (#1040) harder to reach with parity. New lifecycle behaviour waits for the engine, as a step
+  or a condition, or goes through the policies; bug fixes and changes to existing keys go on as
+  usual. `test/repo-config.test.mjs` holds `REVIEW_KEYS` to its list. The rule is lifted when
+  the review loop runs on the engine (#1041).
+- **Renovate proposes the dependency bumps** (`renovate.json`, Mend's hosted app, #1013): weekly
+  pull requests labelled `dependencies`, grouped (each of valkey's and BuildKit's images with the
+  Helm values; node across every Dockerfile, its major never: the `node:26-*` tags float, so its
+  patches come with each build, not from Renovate), none automerged. A version pinned
+  by hand (a Dockerfile's `ARG`, checks.yml's env) gets a `# renovate: datasource=… depName=…`
+  comment on the line above, or Renovate can't see it (the agents' defaults in
+  `listener/config.mjs`: a manager of their own). A pin with a sha256 beside it comes labelled
+  `needs-sha`: its body says which sums to update, and CI fails until they are.
 - **Nothing project-specific.** No PocketBerry, Linear, pnpm or Postgres in the services, base
   image or generic prompts: a project brings those through its per-repo config, Dockerfile
   and extra instructions. Names, hosts and volume names come from settings.
@@ -316,6 +343,13 @@ GitHub's TLS, without a word.
   broken runs), written in the pull request for the operator.
 - **Never fail silently.** A run that can't work stops at its start with a message saying why,
   not at its first GitHub call with a TLS error.
+- **Bump the sandbox's contract number** when the change is one a new run on an older base
+  image can't follow and neither side bridges it (a variable it must read in a new form, an
+  endpoint or answer its scripts need that older ones lack): `SANDBOX_API` in
+  `listener/images.mjs` and the `deckhand.sandbox-api` label in `sandbox/Dockerfile`, together
+  (#980). A base with a lower number, or none, is refused before the run starts, saying to
+  pull the sandbox image. Not for what a fallback or a shim already bridges: every bump makes
+  every operator pull the base before the next run.
 
 The details, and how to find the runs an update broke: `docs/contributing/restarts.md`, Runs in flight.
 
@@ -324,7 +358,7 @@ The details, and how to find the runs an update broke: `docs/contributing/restar
 - `node --test` with `node:assert`. Inject what touches the outside: `fetch` for GitHub,
   the runner for Docker, a clock for timers, a temp dir for state files.
 - Shared fakes live in `test/helpers.mjs` (`listening`, `serve`, `tempDir`, `testConfig`,
-  `recordingFetch`) and `test/fixtures/` (the fake `docker` of `orchestrator-server.test.mjs`):
+  `recordingFetch`) and `test/fixtures/` (the fake `docker` of `orchestrator-harness.mjs`):
   reuse them rather than write another copy. A temp dir goes with its test (`tempDir(t)`).
 - The suite passes as root and as any other user, and inside a Deckhand sandbox (Deckhand
   testing itself): CI runs it both ways. A test whose subject is "a user can't write here"
@@ -345,10 +379,13 @@ The details, and how to find the runs an update broke: `docs/contributing/restar
   test holds (`forwarder`), or one the OS never hands out (`listenToRestart`). Time: an injected
   clock (or `t.mock.timers`) rather than a wall-clock bound, and a wait for what the test
   asserts on rather than a fixed delay.
-- `orchestrator-server.test.mjs` starts edge and the orchestrator (and the runner beside them)
-  per test, the suite's slowest part: one wiring test per area there, the cases themselves in
-  the module's own unit tests. Its `handOver()` starts the orchestrator's next copy, waiting
-  for the lease, before it stops the one acting. `edge-server.test.mjs` starts edge alone.
+- The `orchestrator-*.test.mjs` end-to-end files (runs, writes, restarts, triggers, modes,
+  dashboard, start) start edge and the orchestrator (and the runner beside them) per test
+  through `orchestrator-harness.mjs`'s `listen()`, the suite's slowest part: one wiring test
+  per area there, the cases themselves in the module's own unit tests. A file per area, so
+  `node --test` runs them side by side (#1071): a new test goes in its area's file. `listen()`'s
+  `handOver()` starts the orchestrator's next copy, waiting for the lease, before it stops the
+  one acting. `edge-server.test.mjs` starts edge alone.
 - Dashboard specs share `dashboard/src/testUtils.ts` (`mockApi`, `makeTask`, `makeState`) and
   `vitest.setup.ts` (the global stubs and cleanup).
 - Cover the decisions that matter: allowlist and config narrowing, mount path checks,

@@ -138,7 +138,7 @@ item as if from a comment (`trigger: "work"`, no comment, no sender, `reason: "c
 in its task's session through `tasks.accept()`. The `(head, base)` commits of each attempt are kept
 in the store's `conflicts`, so the same pair never starts a second run, even after a restart. Before
 the item is queued, the repo's policies are asked (`deny_fix`, `reason: "conflict"`, the review and
-fix input of `reviews.mjs` `readPullInput()`, through `policies.mjs` `denyKept()`, which keeps the
+fix input of `review-merge.mjs` `readPullInput()`, through `policies.mjs` `denyKept()`, which keeps the
 decision for the task's page). A refusal queues nothing and is kept as the pair's attempt: a "No
 rebase run" comment quotes its messages, and once posted they are kept with it (`said`), so a later
 pair refused for the same ones isn't said again (a base that keeps moving says it once). A refusal
@@ -241,7 +241,7 @@ The other pages poll the list without `backlog` and cost no read.
 (`POST /api/repos/<owner>/<repo>/work { action: "cancel", number, pr? }`, with the work area's
 checks of the repository and user, and the App's comment "Stopped from the dashboard by @user") end
 a run now. `admit()` takes the comment before the queue, so it never reaches the agent's inbox, and
-gives it 👍. `runs.mjs` `cancel()` writes a `cancelled` line (who, when) to the run's log and its
+gives it 👍. `run-end.mjs` `cancel()` writes a `cancelled` line (who, when) to the run's log and its
 saved state, stops its inbox, then `runner.kill()` (`docker stop -t 10`). The follow loop sees the
 sandbox exit and `finish()` ends the run as `cancelled` whatever the exit looked like: a "Stopped by
 @user" reply with the usual footer (a run that had `answered` posts that answer, then "Stopped by

@@ -88,7 +88,7 @@ or a phase: its `raw` entries take the last time said in it (an `at` line's, or 
 listener's own lines', which carry theirs: `meta`, `message`). Plain lines with no `at` line
 before their run (logs from before #719) get none. A page of `get_run_log` from the middle of a
 log reads again the lines before it from the agent's last one (`mcp.mjs` `linesBack()`), so it
-reads as the whole log does there. `dashboard/src/types.ts` `Entry` is the contract.
+reads as the whole log does there. `dashboard/src/types/log.ts` `Entry` is the contract.
 
 Each `entries` event has an `id:`, the byte offset of the last whole line it read (#923): a
 browser whose connection dropped (a phone in the background, a proxy's idle timeout, a

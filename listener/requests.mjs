@@ -53,7 +53,7 @@ export const ANSWERS = ["once", "chat", "deny"];
 
 // And a machine run's owner (#600): this call alone, the tool's calls for the rest of the run,
 // or denied.
-export const TOOL_ANSWERS = ["once", "run", "deny"];
+const TOOL_ANSWERS = ["once", "run", "deny"];
 
 const ID = /^[0-9a-f]{16}$/;
 // A tool's name at most: Claude Code's are short, an MCP server's `mcp__<server>__<tool>` longer.

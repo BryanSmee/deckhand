@@ -61,7 +61,10 @@ renewed while the run goes, bound to its run's network (or pod), and worthless o
 ends ([Run tokens](security/tokens.md#run-tokens)). Through the egress proxy it may:
 
 - **read** its repository through the [GitHub gateway](security/github.md#the-github-gateway),
-  which adds a read-only installation token to the call; never a token of its own;
+  which adds a read-only installation token to the call; never a token of its own. Its
+  [context repos](repo-config.md#context-repos), the other repositories it was given, it fetches
+  with git alone, each with a token for that repository only (none for a public one without
+  the App), and nothing else of theirs (their API, pages, raw files);
 - **write** to GitHub only what the policies allow it (`allow_github`), each write checked and
   given a token of its own with just that permission;
 - **push** its own branches (`issue-<n>-…`, its pull request's), never the default branch,
@@ -72,7 +75,8 @@ ends ([Run tokens](security/tokens.md#run-tokens)). Through the egress proxy it 
   ([Network](security/network.md#network)).
 
 It can't push to the default branch, merge or review a pull request, write files through the
-API, read another repository's code, reach a host path you didn't grant, or reach the
+API, read another repository's code (but the [context repos](repo-config.md#context-repos) its
+grants list and its policies give it), reach a host path you didn't grant, or reach the
 services, the Docker socket or another sandbox. It runs as uid 1000, without capabilities,
 with `no-new-privileges` and limits ([Hardening](security/mounts-and-engine.md#hardening)). A
 token stolen from it is refused from any other network. What the policies give each run is

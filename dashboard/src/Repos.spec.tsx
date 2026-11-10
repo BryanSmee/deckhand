@@ -77,6 +77,7 @@ const CONFIG: RepoConfig = {
       { host: "pypi.org", source: "operator", note: "grants/org/api.yaml" },
     ],
     mounts: [],
+    contextRepos: [],
     grant: {
       files: ["org/api.yaml"],
       grantFiles: [],
@@ -90,6 +91,7 @@ const CONFIG: RepoConfig = {
       allowAutoMerge: false,
       hosts: ["pypi.org"],
       cachedHosts: [],
+      contextRepos: [],
       mounts: [],
       allowProjects: [],
       limits: { cpus: "2", memory: "4g", pids: 2048 },

@@ -17,11 +17,11 @@ export const KINDS = ["host", "github", "engine", "mount"];
 
 // What a request may hold: its value, and its reason, which the orchestrator cuts further
 // before anyone sees it.
-export const VALUE_MAX = 256;
+const VALUE_MAX = 256;
 export const REASON_MAX = 2000;
 // How long one waits for its answer at most, past the orchestrator's own timeout
 // (CHAT_PERMISSION_TIMEOUT, at most an hour): what ends one the orchestrator never answered.
-export const REQUEST_TTL_MS = 2 * 60 * 60_000;
+const REQUEST_TTL_MS = 2 * 60 * 60_000;
 // The sandbox's long poll for an answer, and how often the store is read meanwhile.
 export const ANSWER_WAIT_MS = 25_000;
 const POLL_EVERY_MS = 500;

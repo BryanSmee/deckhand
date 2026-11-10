@@ -44,7 +44,7 @@ Both run modules of `listener/`, which has no entry point of its own any more.
   its store.
 - **The orchestrator** (`orchestrator/server.mjs`, image `deckhand-orchestrator`): the other modules
   this page names, but those the runner and github services run. It reads the verified deliveries
-  from edge's stream (`listener/http.mjs` `deliver()`), answers what edge passes on on its services
+  from edge's stream (`listener/http-deliveries.mjs` `deliver()`), answers what edge passes on on its services
   port (`listener/services-http.mjs`, `/edge/…`: the dashboard's API, `/status`, and `/mcp`'s tools,
   `listener/mcp.mjs`) and the proxy's questions on the egress policy's port
   (`egress-http.mjs`, 8082). It holds no secret, keeps the `data` volume (its state, its store: the

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { antigravity } from "../listener/agents/antigravity.mjs";
@@ -11,6 +11,8 @@ import {
   gitBlob,
   imageRef,
   imageTag,
+  SANDBOX_API,
+  SANDBOX_API_LABEL,
 } from "../listener/images.mjs";
 import { legacyRepoImage, repoImage } from "../listener/repo-config.mjs";
 import { createDockerImages } from "../listener/runner/images.mjs";
@@ -23,8 +25,10 @@ const config = testConfig({ ALLOWED_USERS: "a", CLAUDE_CODE_VERSION: "9.9.9" });
 const A = repoImage(config, "org/a");
 
 // Plays Docker: `images` are the tags that exist, `volumes` the volumes; every call is kept.
+// `labels`: the base image's (the current SANDBOX_API's by default).
 function fakeDocker({
   base = "sha256:base",
+  labels = { [SANDBOX_API_LABEL]: String(SANDBOX_API) },
   images = new Set(),
   volumes = new Set(),
   fail = {},
@@ -38,7 +42,8 @@ function fakeDocker({
     if (fail[command]) return { code: 1, out: "", err: fail[command] };
     if (command === "image" && sub === "inspect") {
       const name = args.at(-1);
-      if (name === config.image) return { code: base ? 0 : 1, out: base ?? "", err: "" };
+      const asked = args.includes("{{json .Config.Labels}}") ? JSON.stringify(labels) : base;
+      if (name === config.image) return { code: base ? 0 : 1, out: base ? asked : "", err: "" };
       return { code: images.has(name) ? 0 : 1, out: "", err: "" };
     }
     if (command === "image" && sub === "ls") {
@@ -108,6 +113,42 @@ test("a repo without a Dockerfile runs on the base image", async (t) => {
 test("a missing base image is a clear error", async (t) => {
   const { images } = setup(t, { base: null });
   await assert.rejects(images.imageFor({ repo: "org/a", ref: "main" }), /docker compose build/);
+});
+
+// #980: the base carries the services' contract (SANDBOX_API) in a label, which the Dockerfile
+// sets; a lower number, or none, starts nothing, with what to run.
+test("the sandbox Dockerfile's label is the services' SANDBOX_API", () => {
+  const dockerfile = readFileSync(join(import.meta.dirname, "..", "sandbox", "Dockerfile"), "utf8");
+  const label = /^LABEL deckhand\.sandbox-api="(\d+)"$/m.exec(dockerfile);
+  assert.equal(SANDBOX_API_LABEL, "deckhand.sandbox-api");
+  assert.equal(Number(label?.[1]), SANDBOX_API);
+});
+
+test("a base image older than the services is refused before the run starts", async (t) => {
+  const stale = [
+    {},
+    null,
+    { [SANDBOX_API_LABEL]: String(SANDBOX_API - 1) },
+    { [SANDBOX_API_LABEL]: "x" },
+  ];
+  for (const labels of stale) {
+    const { images, calls } = setup(t, { labels });
+    for (const dockerfile of [null, "Dockerfile"]) {
+      await assert.rejects(
+        images.imageFor({ repo: "org/a", ref: "main", dockerfile }),
+        /the sandbox image deckhand-sandbox is older than Deckhand's services \(its deckhand\.sandbox-api label is (missing|\d+), they need \d+\): run docker compose pull sandbox/,
+      );
+    }
+    assert.ok(!calls.some((c) => c.startsWith("build")));
+  }
+});
+
+test("a base image at or past the services' contract runs, checked once per image id", async (t) => {
+  const { images, calls } = setup(t, { labels: { [SANDBOX_API_LABEL]: String(SANDBOX_API + 1) } });
+  const ask = () => images.imageFor({ repo: "org/a", ref: "main", dockerfile: null });
+  assert.equal(await ask(), "deckhand-sandbox");
+  assert.equal(await ask(), "deckhand-sandbox");
+  assert.equal(calls.filter((c) => c.includes("Config.Labels")).length, 1);
 });
 
 test("a repo's Dockerfile is built once from its ref, then reused", async (t) => {

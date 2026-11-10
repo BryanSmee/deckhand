@@ -66,7 +66,7 @@ export const loginSeal = (key) => ({
 });
 
 // A login sealed with another models.key than this copy's: every copy needs the same one.
-export class KeyMismatch extends Error {}
+class KeyMismatch extends Error {}
 
 // The credentials' fingerprints' salt (http.mjs fingerprints()), from the same key: every copy
 // has it, and it outlives a restart. Not secret (the listener holds it), and nothing of the key.
@@ -87,7 +87,7 @@ export class LoginError extends Error {
 // The login `name` ("chatgpt", "antigravity") of `file` in `store`, sealed with `seal`
 // (loginSeal()'s). `parse(text)`: the file's login, or a LoginError naming it. `holder`: this
 // copy's name, for the refresh's lease. → { load, refresh }.
-export function sharedLogin({
+function sharedLogin({
   store,
   seal,
   name,

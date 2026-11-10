@@ -5,7 +5,7 @@
 
 // Last in what the agent reads, so the English around it doesn't win: what people read only.
 // The tokens the listener parses stay English, and a review's whole format, which
-// parseReview() (reviews.mjs) reads in English alone.
+// parseReview() (review-parse.mjs) reads in English alone.
 export function languageLine(language, mode) {
   const review =
     mode === "review"

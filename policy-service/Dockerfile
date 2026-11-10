@@ -7,6 +7,7 @@ FROM node:26-alpine
 # release's .sha256). A new version may bring builtins that read files or the network: check them
 # against engine.mjs's REMOVED before raising it (test/policies.test.mjs tries the known ones).
 ARG TARGETARCH
+# renovate: datasource=github-releases depName=open-policy-agent/opa extractVersion=^v(?<version>.+)$
 ARG OPA_VERSION=1.21.4
 RUN case "$TARGETARCH" in \
       amd64) sum=2ab571f367f293bb19523b76f92f1945bbf245003392c7f392903f95c2b9b630 ;; \

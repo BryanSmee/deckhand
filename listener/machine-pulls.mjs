@@ -21,7 +21,7 @@ const SHA = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
 const SLUG = /^[A-Za-z0-9](?:[A-Za-z0-9._-]{0,99})$/;
 
 // Whether `branch` is issue `number`'s own: `issue-<n>-<slug>`, as the sandbox names it.
-export function issueBranch(branch, number) {
+function issueBranch(branch, number) {
   const prefix = `issue-${number}-`;
   if (typeof branch !== "string" || !branch.startsWith(prefix)) return false;
   const slug = branch.slice(prefix.length);

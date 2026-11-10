@@ -211,7 +211,7 @@ export function createPulls({
       }
       if (opened.length) catchUp(opened);
     })()
-      // Nobody awaits it (http.mjs state()): a failure is logged, never thrown.
+      // Nobody awaits it (http-state.mjs state()): a failure is logged, never thrown.
       .catch((error) => log(`Pull requests: ${error.message ?? error}`))
       .finally(() => (fetching = null));
     return fetching;

@@ -4,7 +4,8 @@
 sandboxes in a namespace of their own, and optional components: `redis` (the stores, for
 copies on several nodes), `blobs` (blob storage for the logs and screenshots), `buildkit`
 (repositories' own images) and `engine` (a container engine for runs). `deploy/helm/deckhand/` is
-the same as a Helm chart, with values instead of patches. Each run's sandbox is a pod
+the same as a Helm chart, with values instead of patches, published with each release after 0.2.0
+as `oci://ghcr.io/bryansmee/charts/deckhand`. Each run's sandbox is a pod
 (`RUNNER=kubernetes`): runs spread over the cluster's nodes, and `MAX_PARALLEL` still caps how
 many run at once. [The guides](guides/install.md) have the rest (the GitHub App's permissions,
 the settings, the agents): these pages are what differs on a cluster.

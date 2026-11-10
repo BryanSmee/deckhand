@@ -3,9 +3,11 @@
 A release is a `v*` tag on a commit of `main`, pushed by hand. The release workflow
 (`.github/workflows/release-workflow.yml`) does the rest when the tag arrives: every image of its
 matrix for `linux/amd64` and `linux/arm64`, tagged `1.2.3`, `1.2` and `latest` (the images drop
-the tag's `v`), and the release itself, with the machine driver (`deckhand-machine.mjs`) and the `deckhand` command
-(`deckhand.mjs`, from `cli/`) attached, each with its `VERSION` the tag's. Compose's default `DECKHAND_VERSION` is `latest`: the tag is what
-a new install pulls.
+the tag's `v`), the Helm chart, `oci://ghcr.io/bryansmee/charts/deckhand`, its `version` and
+`appVersion` the tag's (`1.2.3`) whatever `Chart.yaml` says, and the release itself, with the
+machine driver (`deckhand-machine.mjs`) and the `deckhand` command (`deckhand.mjs`, from `cli/`)
+attached, each with its `VERSION` the tag's. Compose's default `DECKHAND_VERSION` is `latest`:
+the tag is what a new install pulls.
 
 1. **Ask Deckhand to prepare it**: open a `Release v0.x.0` issue in the release's milestone
    and comment `Deckhand /mode release`. This repository's
@@ -35,8 +37,11 @@ a new install pulls.
    git push origin v1.2.3
    ```
 
-4. **What it published**, once the Release run is done: every image at both architectures, and
-   `latest` on the same digest as the release.
+4. **What it published**, once the Release run is done: every image at both architectures,
+   `latest` on the same digest as the release, and the chart, pushed once every image is (a
+   failed image build publishes none: run the failed jobs again). A package's first version is
+   private: make the chart's package (`charts/deckhand`) public once, as the images', in its
+   settings on GitHub.
 
    ```sh
    for image in edge orchestrator broker github runner egress models policy sandbox engine engine-podman; do
@@ -44,6 +49,7 @@ a new install pulls.
        jq -r --arg i "$image" '[$i, .digest, ([.manifests[].platform | select(.os == "linux") | .architecture] | join(","))] | @tsv'
      docker buildx imagetools inspect "ghcr.io/bryansmee/deckhand-$image:latest" --format '{{json .Manifest}}' | jq -r .digest
    done
+   helm show chart oci://ghcr.io/bryansmee/charts/deckhand --version 1.2.3   # appVersion: 1.2.3
    gh release view v1.2.3 --json assets --jq '.assets[].name'   # deckhand-machine.mjs, deckhand.mjs
    ```
 

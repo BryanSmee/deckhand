@@ -19,9 +19,11 @@ repository by default, a repository's own `users` narrowing it
 [Security model](../security/webhooks-and-sign-in.md#access)): the controls they may not use aren't shown, a repository
 where they have no action not at all. **Settings › Access** (with `server:read`) shows each of
 `ALLOWED_USERS`' actions, server-wide and on each repository, with the files that gave or
-denied them. `/status` also answers calls
-from inside edge's container (`docker compose exec edge …`) without a session, but not
-those a reverse proxy forwarded.
+denied them. `/status` also answers
+`docker compose exec edge node edge/status.mjs` (or `kubectl exec`) without a session: it
+proves it runs inside edge's container with a token from edge's session key. Any other call
+needs a session, whatever a reverse proxy sends or leaves out
+([Security model](../security/webhooks-and-sign-in.md#the-dashboard)).
 
 Apps created by `/setup` before the dashboard had sign-in have no callback URL: on the App's
 page on GitHub (Settings → Developer settings → GitHub Apps → your App → General), add

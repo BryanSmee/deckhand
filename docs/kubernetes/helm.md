@@ -4,8 +4,12 @@ The chart, `deploy/helm/deckhand/`, renders the base's objects: with its default
 as `kustomize build deploy/kubernetes` (CI checks it, alone and with each component:
 `test/helm-chart.test.mjs`), so every Kubernetes page holds for it. Only the images' tag differs:
 the base's is `latest`, the chart's the release it comes with (its `appVersion`). Its values do what an
-overlay's patches do. Read the [requirements](../kubernetes.md#requirements) first. No chart
-repository is published yet: install it from a checkout of this repository at a release.
+overlay's patches do. Read the [requirements](../kubernetes.md#requirements) first. Each release
+after 0.2.0 publishes it next to its images, `oci://ghcr.io/bryansmee/charts/deckhand`, at the
+release's version (`1.2.3`, as the images are tagged), with no login: install it from there, or
+from a checkout of this repository at a release, the only way for 0.2.0 and earlier. A pull that
+asks for a login means the package isn't public yet (a new one starts private, until the release's
+publisher opens it): install from a checkout meanwhile.
 
 ## 1. Your values
 
@@ -14,7 +18,7 @@ Keep your values in a file of your own:
 ```yaml
 # values.yaml
 image:
-  tag: 1.2.3 # every service's image, and SANDBOX_IMAGE's; default: the checkout's release
+  tag: 1.2.3 # every service's image, and SANDBOX_IMAGE's; default: the chart's release
 apiServer:
   cidrs: [172.18.0.2/32] # the API server's addresses, kubernetes.md
 server:
@@ -47,8 +51,11 @@ what the others set.
 ## 2. Install the chart
 
 ```sh
-helm install deckhand deploy/helm/deckhand -f values.yaml
+helm install deckhand oci://ghcr.io/bryansmee/charts/deckhand --version 1.2.3 -f values.yaml
 ```
+
+From a checkout of this repository at a release, the same with its folder: `helm install
+deckhand deploy/helm/deckhand -f values.yaml`.
 
 The chart makes both namespaces itself, with their Pod Security labels, so its release goes in
 another one (your context's, `default`): not `--namespace deckhand --create-namespace`, which
@@ -62,7 +69,7 @@ and [finish the install](finish.md) with the Secrets, the GitHub App and the iso
 
 | Value                                       | Default                      | What it sets                                                                                                                                                                                                                                                                                             |
 | ------------------------------------------- | ---------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `image.repository`, `image.tag`             | `ghcr.io/bryansmee/deckhand` | every service's image, `<repository>-<service>:<tag>`; the tag is the chart's `appVersion` (the release it comes with, `0.1.0`) when empty                                                                                                                                                               |
+| `image.repository`, `image.tag`             | `ghcr.io/bryansmee/deckhand` | every service's image, `<repository>-<service>:<tag>`; the tag is the chart's `appVersion` (the release it comes with: the published chart's `--version`, or the checkout's) when empty                                                                                                                  |
 | `image.sandbox`                             | `<repository>-sandbox:<tag>` | `SANDBOX_IMAGE` ([Isolation](isolation.md#what-the-manifests-set-up-and-why)), for a mirror of yours                                                                                                                                                                                                     |
 | `namespaces`                                | `deckhand`, `-sandboxes`     | the services' namespace and the sandboxes' ([Namespaces](sandboxes.md#namespaces)), two different ones, and whether the chart makes them                                                                                                                                                                 |
 | `server.config`, `server.grants`            | the examples                 | `config.yaml` and the grants folder's files, by their path in it; `--set-file server.config=config.yaml` reads yours                                                                                                                                                                                     |
@@ -93,12 +100,13 @@ upgrade. A runner with an empty store refuses every call until its prefix's mark
 
 ## Updating
 
-To update, change `image.tag` and `helm upgrade deckhand deploy/helm/deckhand -f values.yaml`, from
-a checkout at the new release: the services update as with kustomize ([Updating](updating.md)). A
-change of `server` or `env` renames its ConfigMap, as kustomize's hash does, and the pods that read
-it restart. The old one stays, as `kubectl apply -k` leaves kustomize's: an old pod rescheduled
-while a bad config stalls the rollout still starts. They pile up, as kustomize's do; delete those no
-pod names.
+To update, change `image.tag` (or leave it empty: the chart's release) and upgrade to the new
+release's chart, `helm upgrade deckhand oci://ghcr.io/bryansmee/charts/deckhand --version 1.2.4
+-f values.yaml` (or `deploy/helm/deckhand` from a checkout at the new release): the services
+update as with kustomize ([Updating](updating.md)). A change of `server` or `env` renames its
+ConfigMap, as kustomize's hash does, and the pods that read it restart. The old one stays, as
+`kubectl apply -k` leaves kustomize's: an old pod rescheduled while a bad config stalls the
+rollout still starts. They pile up, as kustomize's do; delete those no pod names.
 
 ## Coming from kustomize, and uninstalling
 

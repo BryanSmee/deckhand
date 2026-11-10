@@ -53,6 +53,8 @@ case "$1" in
     n=${@: -1}
     [ -d "$c/$n" ] || exit 1
     follow() { tail -n +1 -f --pid="$(cat "$c/$n/pid")" -s 0.05 "$c/$n/out"; }
+    # A tail that fails is a failed `docker logs`, as Docker's would be, not the output's end.
+    set -o pipefail
     case "$*" in
       # Each line after when it was read, as Docker's RFC 3339 nanoseconds, and, as Docker
       # does, again before each 16384 bytes of a longer line (moby/moby#37681).
@@ -175,8 +177,13 @@ case "$1" in
   image)
     # Asked while the run is prepared, so a test can change things then.
     [ "$2" = inspect ] && [ -x "$dir/while-preparing" ] && "$dir/while-preparing"
-    # The base image exists; repo images don't, until built.
-    [ "$2" = inspect ] && case "$*" in *-repo-*) exit 1 ;; *) echo sha256:base ;; esac ;;
+    # The base image exists, with the label of sandbox/Dockerfile (images.mjs SANDBOX_API);
+    # repo images don't, until built.
+    [ "$2" = inspect ] && case "$*" in
+      *-repo-*) exit 1 ;;
+      *Config.Labels*) echo '{"deckhand.sandbox-api":"1"}' ;;
+      *) echo sha256:base ;;
+    esac ;;
   create|cp|start)
     echo "$*" >> "$dir/docker-calls" ;;
   build)
@@ -218,7 +225,7 @@ case "$1" in
     env > "$dir/run-env.part" && mv "$dir/run-env.part" "$dir/run-env"
     printf '%s\n' "$@" > "$dir/run-args.part" && mv "$dir/run-args.part" "$dir/run-args"
     # The services' names it calls (lib/services.mjs SANDBOX_URLS), through the egress proxy the
-    # test plays (DECKHAND_TEST_PROXY, orchestrator-server.test.mjs sandboxProxy()), in origin-form.
+    # test plays (DECKHAND_TEST_PROXY, orchestrator-harness.mjs sandboxProxy()), in origin-form.
     for var in DECKHAND_BROKER_URL ANTHROPIC_BASE_URL OPENAI_BASE_URL GOOGLE_GEMINI_BASE_URL \
       TASK_DIGEST DECKHAND_CA; do
       value=${!var-}

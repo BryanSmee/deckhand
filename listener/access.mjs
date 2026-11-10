@@ -45,9 +45,14 @@ function refusedMounts(refused, name) {
   return `${name} can't run here: host mounts requested by \`${CONFIG_FILE}\` are refused.\n\n${refused.map((r) => `- ${r}`).join("\n")}\n\nOnly paths under a root the operator grants this repository can be mounted.`;
 }
 
+// The repositories `context_repos` asks for that the grants don't list (grantCheck()'s `context`).
+function refusedContext(refused, name) {
+  return `${name} can't run here: context repos requested by \`${CONFIG_FILE}\` are refused.\n\n${refused.map((r) => `- ${r}`).join("\n")}\n\nThe operator can list them under \`context_repos\` in the repository's grants file (see Deckhand's docs/reference/server-folder.md#the-grants), or the repository can remove them from \`${CONFIG_FILE}\`.`;
+}
+
 // What the operator grants the repo, with its config's requests: the hosts its sandbox may
-// reach, its host mounts and limits. Refused mounts, and a Dockerfile or an engine
-// without their grant, stop the run, and the reply lists them. `task`: the run's (tasks.mjs),
+// reach, its host mounts and limits. Refused mounts and context repos, and a Dockerfile or an
+// engine without their grant, stop the run, and the reply lists them. `task`: the run's (tasks.mjs),
 // `agent` its agent, `note(text)` a line in its log.
 // `fs`: the file system the mounts are resolved on (grants.mjs resolveMounts()), for tests;
 // `granted(repo)`: what the operator's policies grant it (policies.mjs grants(), grantsBy());
@@ -77,6 +82,10 @@ export async function grantedAccess(
   }
   const { refused, notes } = check.mounts;
   if (refused.length) throw new RunError(refusedMounts(refused, agent.displayName));
+  if (check.context.length) {
+    log(`${repo}: ${CONFIG_FILE} asks for context repos its grant doesn't list`);
+    throw new RunError(refusedContext(check.context, agent.displayName));
+  }
   // Before they are logged: a mount the profile turned off isn't said as the run's.
   const mounts = !kept
     ? check.mounts.mounts

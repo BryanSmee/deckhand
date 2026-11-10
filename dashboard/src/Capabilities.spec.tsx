@@ -24,7 +24,7 @@ const CONFIG: RepoConfig = {
   errors: [],
   warnings: [],
   grantsError: null,
-  effective: { settings: [], hosts: [], mounts: [], grant: null },
+  effective: { settings: [], hosts: [], mounts: [], contextRepos: [], grant: null },
   policies: { files: [], errors: [], warnings: [] },
   capabilities: makeCapabilities(),
   readAt: Date.now(),
@@ -80,6 +80,10 @@ test("each mode's capabilities, the file that decided them, and every capability
     .getByText("pull", { selector: "li > span:first-child" })
     .closest("li")!;
   expect(pull.textContent).toContain("the policies alone");
+  // The context repos' capability, asked for by context_repos.
+  const context = within(catalogue).getByText("read:context").closest("li")!;
+  expect(context.textContent).toContain("other repositories its context_repos names");
+  expect(context.textContent).toContain("pull");
 });
 
 test("modes whose runs wouldn't start, and a repo's own mode with a warning", async () => {
