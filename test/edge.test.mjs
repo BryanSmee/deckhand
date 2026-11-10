@@ -16,6 +16,7 @@ import { createEdgeClient } from "../edge/client.mjs";
 import { createForwarder, USER_HEADER } from "../edge/forward.mjs";
 import { createEdgeHttp } from "../edge/http.mjs";
 import { createEdgeInternal, DELIVERIES } from "../edge/internal.mjs";
+import { localToken } from "../edge/local.mjs";
 import { fromDashboard, fromKey, postOf, tagger } from "../listener/discussions.mjs";
 import { createRedeliveries } from "../listener/redeliveries.mjs";
 import {
@@ -58,6 +59,7 @@ async function edgeCopy(
     stopping,
     waiting,
     auth = { handle: () => false, user: async () => null },
+    localToken,
   } = {},
 ) {
   writeFileSync(join(dir, "app.json"), JSON.stringify(CREDENTIALS));
@@ -75,6 +77,7 @@ async function edgeCopy(
     secrets: () => app.secrets(),
     stopping,
     waiting,
+    localToken,
     log: (line) => logs.push(line),
   });
   const { url } = await serve(t, http.handle);
@@ -459,7 +462,7 @@ test("the dashboard's API, passed on with the signed-in user; an orchestrator aw
   assert.equal((await fetch(`${down.url}/api/state`)).status, 503);
 });
 
-test("/status: local from loopback without a forwarding header; forwarded, the session decides", async (t) => {
+test("/status: local only with the token from edge's session key, whatever a proxy sends (#1019)", async (t) => {
   const asked = [];
   const orchestrator = {
     forward: async (req, res, { user, local }) => (asked.push([user, local]), res.end("{}")),
@@ -468,19 +471,34 @@ test("/status: local from loopback without a forwarding header; forwarded, the s
     handle: () => false,
     user: async (req) => (req.headers.cookie === "alice" ? "alice" : null),
   };
-  const { url } = await edgeCopy(t, { store: openStore("memory:"), orchestrator, auth });
-  assert.equal((await fetch(`${url}/status`)).status, 200);
-  // A reverse proxy on the host's network calls from loopback too, for anyone: not trusted.
-  for (const header of ["x-forwarded-for", "forwarded", "x-forwarded-host", "x-real-ip"]) {
-    const proxied = await fetch(`${url}/status`, { headers: { [header]: "203.0.113.9" } });
-    assert.equal(proxied.status, 401, header);
+  const token = localToken(Buffer.alloc(32, 7));
+  const { url } = await edgeCopy(t, {
+    store: openStore("memory:"),
+    orchestrator,
+    auth,
+    localToken: () => token,
+  });
+  // From loopback with no forwarding header, as a proxy that adds none: a session, as anyone.
+  assert.equal((await fetch(`${url}/status`)).status, 401);
+  assert.equal(
+    (await fetch(`${url}/status`, { headers: { "x-real-ip": "203.0.113.9" } })).status,
+    401,
+  );
+  for (const wrong of [localToken(Buffer.alloc(32, 8)), `${token}x`, "", token]) {
+    const headers = { authorization: wrong === token ? token : `Bearer ${wrong}` };
+    assert.equal((await fetch(`${url}/status`, { headers })).status, 401, wrong);
   }
+  const bearer = { authorization: `Bearer ${token}` };
+  assert.equal((await fetch(`${url}/status`, { headers: bearer })).status, 200);
   const signedIn = { "x-forwarded-for": "203.0.113.9", cookie: "alice" };
   assert.equal((await fetch(`${url}/status`, { headers: signedIn })).status, 200);
   assert.deepEqual(asked, [
     [null, true],
     ["alice", false],
   ]);
+  // No token (edge's default): every call needs a session.
+  const none = await edgeCopy(t, { store: openStore("memory:"), orchestrator, auth });
+  assert.equal((await fetch(`${none.url}/status`, { headers: bearer })).status, 401);
 });
 
 test("a live log passed on ends once its user signs out", async (t) => {

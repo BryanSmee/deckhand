@@ -141,6 +141,7 @@ export const chats = {
   "chats.capReadPulls": "Read pull requests",
   "chats.capReadDiscussions": "Read discussions",
   "chats.capReadActions": "Read CI results",
+  "chats.capReadContext": "Read the context repositories",
   "chats.network": "Network",
   "chats.noHosts": "The operator grants this repository no hosts beyond those every run needs.",
   "chats.internetOn": "With the open internet on, the sandbox reaches any public host.",

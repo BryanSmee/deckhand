@@ -11,6 +11,7 @@ allow_capabilities contains c if {
     "read:issues",
     "read:pulls",
     "read:actions",
+    "read:context",
   }
 }
 

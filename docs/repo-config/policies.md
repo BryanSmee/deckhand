@@ -119,9 +119,10 @@ decision of its layer. A policy decides from its input only. `time.now_ns()` wor
 What a run's sandbox gets (`pull`, `push`, `setup`, `docker`, `internet`, `read:issues`…: the
 [catalogue](../security/policies.md#capabilities)), decided as it starts by `allow_capabilities` (names) and
 `deny_capabilities` (`{"capability": …, "reason": …}`) on `repo` (`name`, `private`), `mode`,
-`custom_mode`, `issue`, `reason`, `fork`, `trigger` (as the run input's) and `command` (the
-comment's first line: `work`, `stop`…); used if its key (`setup`, `dockerfile`,
-`docker`) asks for it and the operator's [grant](../reference/server-folder.md#the-grants) gives it, and what it needs is used (a deny drops what needs it). Deckhand's `mode-<mode>.rego` give each built-in mode
+`custom_mode`, `issue`, `reason`, `fork`, `trigger` (as the run input's), `command` (the
+comment's first line: `work`, `stop`…) and `context_repos` (the repositories its
+[`context_repos`](../repo-config.md#context-repos) names, lower case, each once); used if its key
+(`setup`, `dockerfile`, `docker`, `context_repos`) asks for it and the operator's [grant](../reference/server-folder.md#the-grants) gives it, and what it needs is used (a deny drops what needs it). Deckhand's `mode-<mode>.rego` give each built-in mode
 its own; the repository's `modes:` work's at most, and only what its `.deckhand/policy/` allows too (nothing: refused). The repository's config page, Capabilities tab, shows for each mode what a run gets, the file that decided each capability and what stops it.
 The `read:*` are what the run's token reads on GitHub (`read:issues` every issue, `read:pulls`
 every pull request, `read:discussions`, `read:actions` CI): without `read:issues`, a run reads its
@@ -326,6 +327,8 @@ operator's layer, under the operator's files:
   so it never reaches the gateway), `mode-chat.rego` (the dashboard's chats: the code, its setup
   and its reads, no GitHub write and no push). The repository's own `modes:` get nothing until it allows
   them, then at most what work runs get.
+- **`context.rego`** refuses `read:context` to a run on a fork's pull request: every mode's file
+  but research's gives it ([Context repos](../repo-config.md#context-repos)).
 - **One file per feature that isn't a mode's**: `gh-checks.rego` allows `read_checks` in
   every mode, `gh-linked-branch.rego` [the linked branch](policy-inputs.md#the-linked-branch-input),
   `gh-reviewers.rego` the [reviewers](reviews.md#reviewers), and **`run.rego`** [where each mode
@@ -573,6 +576,8 @@ deny_github contains "only work runs assign people" if {
 }
 ```
 
+<!-- onboarding: skip: `/mode policy`, a dry run of the policies on a pull request, and the dashboard's Policies tab are in docs/repo-config/policies.md in Deckhand's source. -->
+
 ### A dry run and the dashboard
 
 **`/mode policy`**, commented on a pull request by an allowed user, evaluates the `merge`,
@@ -608,3 +613,5 @@ policies shows none. Each lists the built-in gates that passed before the polici
 no trusted file changed, the checks…), and the newest 3 keep the input the rules saw,
 redacted, cut to 8 KB (its changed files first, then the review's findings, then the checks;
 marked `truncated`).
+
+<!-- onboarding: end -->

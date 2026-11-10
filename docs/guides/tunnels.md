@@ -31,8 +31,7 @@ Whichever you pick:
   host (below), or a service of your `compose.yaml`'s in a `compose.override.yaml` (beside it,
   read by `docker compose` on its own) with `restart: unless-stopped`. Run it as a container of
   its own or on the host, never inside edge's network namespace (`network_mode: service:edge`):
-  edge takes a request from its own loopback, with no forwarding header, for a local one (its
-  health checks, `/status`).
+  it would reach the ports edge doesn't publish too, its metrics' among them.
 
 ## Why not a quick tunnel
 

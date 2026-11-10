@@ -2,13 +2,21 @@
 
 An issue nobody starts can wait for months. With `AUTO_PICKUP_SLOTS` above 0 (and below
 `MAX_PARALLEL`, which it comes out of), the orchestrator starts the open issues labelled
-`AUTO_PICKUP_LABEL` (`auto-pickup`) by itself, oldest created first across the repositories
-whose `.deckhand.yaml` says `auto_pickup: true` ([repo-config/issues.md](../repo-config/issues.md#auto-pickup)),
+`AUTO_PICKUP_LABEL` (`auto-pickup`) by itself, most severe first, then oldest created, across
+the repositories whose `.deckhand.yaml` says `auto_pickup: true` ([repo-config/issues.md](../repo-config/issues.md#auto-pickup)),
 in `work` mode, as many at once as there are slots. It looks every 5 minutes, a few seconds
 after the label is added (an `issues` delivery) or one of Deckhand's pull requests is closed or
 turned to a draft (a `pull_request` delivery), and as soon as a run ends or a queued
 auto-picked issue is cancelled.
 
+- **The order.** An issue's severity is its `severity: <x>` label (`critical`, `high`, `medium`
+  or `low`, as the bugs inbox and the reviews name them; matched whatever the case), the most
+  severe one when it has several. Issues without one come after `low`. Among equals, and
+  across repositories alike, the oldest created goes first: a `severity: critical` issue in
+  one repository starts before an older `severity: low` one in another. An issue skipped (see
+  below) lets the next one in that order through. The order isn't a setting: while more severe
+  issues keep coming, a low one waits, and the label is how you change that (take it off the
+  others, or add a severity).
 - **The slots.** Auto-picked runs never take more than `AUTO_PICKUP_SLOTS`. The other runs
   (comments, the dashboard, reviews) borrow those slots while no auto-picked issue waits: with
   `MAX_PARALLEL=3` and `AUTO_PICKUP_SLOTS=1`, three triggered runs may go at once. Once an

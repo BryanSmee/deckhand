@@ -62,6 +62,7 @@ function folder(t, files) {
 const NOTHING = {
   hosts: [],
   cachedHosts: [],
+  contextRepos: [],
   allowDockerfile: false,
   allowBranchDockerImages: false,
   allowDocker: false,
@@ -92,6 +93,7 @@ mounts:
   assert.deepEqual(grantOf(files, "org/repo"), {
     hosts: ["*.example.com", "pypi.org"],
     cachedHosts: [],
+    contextRepos: [],
     allowDockerfile: false,
     allowBranchDockerImages: false,
     allowDocker: false,
@@ -229,7 +231,7 @@ test("each repo file's errors, one list per file", () => {
   bad("mounts: [relative]\n", /plain absolute root/);
   bad("limits: { memory: lots }\n", /org\/repo\.yaml: limits\.memory: expected an amount/);
   bad("limits: { disk: 1 }\n", /limits\.disk: unknown/);
-  bad("network: host\n", /network: unknown \(hosts, cached_hosts, limits, mounts/);
+  bad("network: host\n", /network: unknown \(hosts, cached_hosts, context_repos, limits, mounts/);
   // Gone with a repo's own hosts: ignoring it would quietly take them away.
   bad("allow_repo_hosts: true\n", /allow_repo_hosts: gone, list the hosts .* under hosts here/);
   // Moved to the operator's policies (#498): what to write instead, with the repo's name.
