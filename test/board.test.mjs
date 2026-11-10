@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { loopStep, waitEdges } from "../listener/http.mjs";
+import { loopStep, waitEdges } from "../listener/http-state.mjs";
 import { board, isLive, runPlaces } from "../listener/board.mjs";
 
 const run = (key, startedAt, extra = {}) => ({

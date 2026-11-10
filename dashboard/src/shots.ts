@@ -1,7 +1,7 @@
 // The fake API the docs' screenshots are taken against (../screenshots.mjs): the specs' fixture
 // (fixture.json) for api/state, and what the pages shot read beside it. Fake data only, on
 // github.example.com: no real repository, user or host ever shows in the docs. Typed against
-// types.ts, so `npm run build` fails here when the contract changes, not the screenshots
+// types/, so `npm run build` fails here when the contract changes, not the screenshots
 // silently. Read by Node as it is (type stripping): type-only imports, nothing else of src/.
 import fixture from "./fixture.json" with { type: "json" };
 import type {

@@ -126,7 +126,7 @@ does the next copy for comments queued for a run still going.
 
 Webhooks no longer reach the orchestrator: edge takes them, and puts each verified delivery on
 the `deliveries` stream of its store before it answers `202`. The orchestrator reads that stream
-(`edge/client.mjs` `consume()`), handles each delivery (`listener/http.mjs` `deliver()`, which
+(`edge/client.mjs` `consume()`), handles each delivery (`listener/http-deliveries.mjs` `deliver()`, which
 resolves once what it admitted is done) and acknowledges it then; one handled whose
 acknowledgement was lost is taken once (`deliveries/handled/<guid>` in its store, an hour). So a
 delivery that arrives while the orchestrator restarts waits in the stream, and the next copy

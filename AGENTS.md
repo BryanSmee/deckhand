@@ -107,13 +107,14 @@ edge/         edge (#506), the only service the internet reaches: server.mjs (wi
 orchestrator/ the orchestrator (#506): server.mjs (wiring: its lease, then the queue and the runs'
               lives, from ../listener/'s modules); two copies, active/passive
 listener/     the modules edge and the orchestrator run (no entry point of its own): http.mjs (the
-              dashboard's API and the deliveries, the orchestrator's), tasks.mjs (queue),
-              runs.mjs (a run's start and follow; its output, end and replies in run-output.mjs,
-              run-end.mjs and run-replies.mjs, external runs in external-runs.mjs), restart.mjs,
-              reviews.mjs (the review loop, createReviews(); reading, posting, merging, its texts,
-              its state and its dry run in review-parse.mjs, review-post.mjs, review-merge.mjs,
-              review-texts.mjs, review-loop.mjs and review-dry-run.mjs, #1067), …
-              (docs/contributing/architecture.md), runner/ (Docker and
+              dashboard's API, the orchestrator's; its api/state in http-state.mjs, the reads
+              beside it in http-reads.mjs, the deliveries in http-deliveries.mjs), tasks.mjs
+              (queue), runs.mjs (a run's start and follow; its output, end and replies in
+              run-output.mjs, run-end.mjs and run-replies.mjs, external runs in
+              external-runs.mjs), restart.mjs, reviews.mjs (the review loop, createReviews();
+              reading, posting, merging, its texts, its state and its dry run in review-parse.mjs,
+              review-post.mjs, review-merge.mjs, review-texts.mjs, review-loop.mjs and
+              review-dry-run.mjs, #1067), … (docs/contributing/architecture.md), runner/ (Docker and
               Kubernetes backends), agents/ (each agent's specifics: install, env, hosts, session,
               normalize(); the credentials' names, credentials.mjs)
 github/       the github service (#502): the only one with the GitHub App's key; server.mjs
@@ -131,7 +132,9 @@ policy-service/ the policy service (#501): long-lived `opa` servers evaluating t
               metrics.mjs (its decisions, their time, the operator's policies' loads)
 policy/       Deckhand's default policies (*.rego), copied into the policy service's image
 dashboard/    the dashboard: Preact + Vite + TypeScript, built to dist/ in edge's image;
-              screenshots/ takes the docs' pictures (run.mjs, hero.html) against src/shots.ts
+              screenshots/ takes the docs' pictures (run.mjs, hero.html) against src/shots.ts;
+              src/types/: the contract with the API, a file per area (state, log, access, repos,
+              config, work, chats, server), index.ts re-exporting them
 sandbox/      base image: Dockerfile, entrypoint.sh, draft-pr.sh, pre-push, git credential
               helper and gh wrapper; agents/<name>.sh and agents/<name>/ (Claude Code's
               flags, installer, settings, hooks, progress.jq)
@@ -204,8 +207,9 @@ docs/         the docs, and the site built from them (VitePress, build-time only
 - **The dashboard is the exception** (`dashboard/`, issue #22): Preact, Vite and TypeScript,
   with hand-written CSS Modules, no UI or chart library. Its packages are build-time only: the
   image's build stage turns them into static files in `dashboard/dist/`, which edge
-  serves; the released image has no `node_modules`. `src/types.ts` is the contract with
-  `http.mjs` (`api/state`) and `runlog.mjs` (the log stream): change them together. Tests: Vitest and
+  serves; the released image has no `node_modules`. `src/types/` is the contract with
+  `http.mjs` (`api/state`: `state.ts`) and `runlog.mjs` (the log stream: `log.ts`), one file per
+  area of the API that `index.ts` re-exports: change them together. Tests: Vitest and
   Testing Library, named `*.spec.ts(x)`: Node runs `*.test.ts` files itself, and
   `node --test` must leave them alone.
 - **So is the docs site** (`docs/`, issue #982): VitePress, and Mermaid for the ` ```mermaid `
