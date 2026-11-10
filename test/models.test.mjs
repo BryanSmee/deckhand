@@ -16,7 +16,13 @@ import { drain } from "../lib/drain.mjs";
 import { redact } from "../lib/redact.mjs";
 import { networkCallers } from "../lib/service-token.mjs";
 import { openStore } from "../lib/store.mjs";
-import { keyFolder } from "../lib/tokens.mjs";
+import {
+  AGENT_AUDIENCE,
+  AGENT_TOKEN_TTL_MS,
+  keyFolder,
+  signToken,
+  TOKEN_VERSION,
+} from "../lib/tokens.mjs";
 import { EPOCH_HEADER } from "../lib/service-client.mjs";
 import { SANDBOX_URLS } from "../lib/services.mjs";
 import { createBrokerService } from "../listener/broker-service.mjs";
@@ -31,7 +37,7 @@ import {
   runnerOf,
   unreadableCredentials,
 } from "../models/server.mjs";
-import { RECORD_MS } from "../models/runs.mjs";
+import { createRuns, RECORD_MS } from "../models/runs.mjs";
 import { createProxy } from "../proxy/proxy.mjs";
 import { assertHealth, assertMode, listening, serve, tempDir, testKey } from "./helpers.mjs";
 
@@ -801,4 +807,53 @@ test("/ready: out of rotation until the broker answered this copy (#391)", async
   assert.equal(await ready(), 503);
   answered = true;
   assert.equal(await ready(), 200);
+});
+
+test("the broker's run record: a failed connection asked again, twice or a timeout a 503 (#1107)", async () => {
+  const key = testKey();
+  const token = signToken(
+    {
+      ver: TOKEN_VERSION,
+      jti: "run-1",
+      sandbox: "net-1",
+      agent: { provider: "google", credential: "AGY_AUTH_FILE" },
+    },
+    { ...key, audience: AGENT_AUDIENCE, ttlMs: AGENT_TOKEN_TTL_MS },
+  );
+  const req = { headers: { "x-deckhand-sandbox": "net-1" } };
+  const reset = () => Object.assign(new Error("socket hang up"), { code: "ECONNRESET" });
+  const refused = { status: 503, message: "the broker can't say whether this run still goes" };
+  // `answers`: what each call to the broker gets, an error or a record. → { runs, asked, logged }
+  function runsWith(answers) {
+    const seen = { asked: 0, logged: [] };
+    seen.runs = createRuns({
+      keys: new Map([[key.kid, key.publicKey]]),
+      record: async () => {
+        const answer = answers[seen.asked++] ?? { sandbox: "net-1" };
+        if (answer instanceof Error) throw answer;
+        return answer;
+      },
+      store: openStore("memory:"),
+      log: (line) => seen.logged.push(line),
+    });
+    return seen;
+  }
+
+  const once = runsWith([reset()]);
+  assert.equal((await once.runs.check(token, req)).run?.id, "run-1");
+  assert.equal(once.asked, 2);
+  assert.match(
+    once.logged.join("\n"),
+    /the broker, about run run-1 \(socket hang up\), asking again/,
+  );
+
+  // No record yet, and the connection fails twice: refused for now.
+  const twice = runsWith([reset(), reset()]);
+  assert.deepEqual(await twice.runs.check(token, req), refused);
+  assert.equal(twice.asked, 2);
+
+  // A broker that didn't answer in time (lib/broker-client.mjs: no `code`) isn't waited on again.
+  const slow = runsWith([new Error("the broker didn't answer GET /runs/run-1")]);
+  assert.deepEqual(await slow.runs.check(token, req), refused);
+  assert.equal(slow.asked, 1);
 });

@@ -53,6 +53,8 @@ case "$1" in
     n=${@: -1}
     [ -d "$c/$n" ] || exit 1
     follow() { tail -n +1 -f --pid="$(cat "$c/$n/pid")" -s 0.05 "$c/$n/out"; }
+    # A tail that fails is a failed `docker logs`, as Docker's would be, not the output's end.
+    set -o pipefail
     case "$*" in
       # Each line after when it was read, as Docker's RFC 3339 nanoseconds, and, as Docker
       # does, again before each 16384 bytes of a longer line (moby/moby#37681).

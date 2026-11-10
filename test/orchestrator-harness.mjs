@@ -885,6 +885,8 @@ export async function listen(t, files, extra = {}, { opa, appRefused = 0 } = {})
   let edge = null;
   let listener = null;
   let runner = null;
+  // The output of the copies a restart or a handover replaced, for a failed test's diagnostic.
+  const earlier = [];
   // None while the copy has exited: its port, from port 0, may be another process's already.
   const portOf = (copy, re) =>
     !copy || copy.child.exitCode !== null || copy.child.signalCode
@@ -988,6 +990,7 @@ export async function listen(t, files, extra = {}, { opa, appRefused = 0 } = {})
   let runnerSettings = null;
   const runnerOut = () => (runner?.own() ?? "") + modelsOut;
   const startRunner = (more = {}) => {
+    if (runner) earlier.push(`The runner before:\n${runner.own()}`);
     runner = start({ ...runnerSettings, ...more, PORT: "0" }, { script: "runner/server.mjs" });
     return runner.until(/Deckhand runner \(\w+\) on :\d+/);
   };
@@ -1005,6 +1008,12 @@ export async function listen(t, files, extra = {}, { opa, appRefused = 0 } = {})
   const edgeOut = () => edge.own();
   const others = () => edgeOut() + runnerOut();
   listener = start(listenerEnv(settings), { also: others });
+  // A failed test says what the services logged: CI keeps nothing else (#1107).
+  t.after(() => {
+    if (t.error) {
+      t.diagnostic(`The services' output:\n${[...earlier, listener.output()].join("\n")}`);
+    }
+  });
   t.after(() => {
     listener.child.kill("SIGKILL");
     edge.child.kill("SIGKILL");
@@ -1051,6 +1060,7 @@ export async function listen(t, files, extra = {}, { opa, appRefused = 0 } = {})
     const { child } = old;
     const exited = new Promise((resolve) => child.on("exit", resolve));
     const code = child.exitCode ?? (child.signalCode || (child.kill(signal), await exited));
+    earlier.push(`The orchestrator before its restart:\n${old.own()}`);
     listener = start(listenerEnv({ ...settings, ...more }), { also: others });
     await ports(listener);
     return { code, output: old.output() };
@@ -1079,6 +1089,7 @@ export async function listen(t, files, extra = {}, { opa, appRefused = 0 } = {})
     const took = Date.now() - killed;
     await ports(next);
     await exited;
+    earlier.push(`The orchestrator before the handover:\n${old.own()}`);
     return { output: old.output(), epoch: epochOf(old.own()), next: epochOf(next.own()), took };
   };
   // A service token the broker would sign `sub` for `aud`: the old copy's calls, after it.
