@@ -198,6 +198,7 @@ const COMPILE_CACHE = process.env.NODE_COMPILE_CACHE || join(import.meta.dirname
 // cover JSON). Killed after `t` (null: the caller kills `child` itself). `also()`: more output
 // output() and until() read, other processes' (what a run does is logged on every side).
 // until(text or RegExp) → the output once it has it, rejected if the service exits first;
+// waiting() → the patterns its until()s still wait for, which a test that hangs prints (#1109);
 // exited → { code, out } once it did, its output read to the end ("close", not "exit": the
 // line it logged before exiting too). NODE_COMPILE_CACHE: the orchestrator's end-to-end
 // tests alone start some 800 of them, each compiling the same modules otherwise.
@@ -216,8 +217,11 @@ export function startService(t, script, env, { also } = {}) {
   const exited = new Promise((resolve) =>
     child.on("close", (code) => ((gone = true), resolve({ code, out }))),
   );
+  const waits = new Set();
   const until = (pattern) =>
     new Promise((resolve, reject) => {
+      const wait = { pattern };
+      waits.add(wait);
       const found = () =>
         typeof pattern === "string" ? output().includes(pattern) : pattern.test(output());
       const check = () => found() && (stop(), resolve(output()));
@@ -226,6 +230,7 @@ export function startService(t, script, env, { also } = {}) {
       // 20 ms.
       const timer = also && setInterval(check, 20);
       const stop = () => {
+        waits.delete(wait);
         clearInterval(timer);
         child.stdout.off("data", check);
         child.stderr.off("data", check);
@@ -238,7 +243,8 @@ export function startService(t, script, env, { also } = {}) {
       // Asked once it had exited: no "close" to come (a no-op if it was found).
       if (gone) closed();
     });
-  return { child, output, own: () => out, until, exited };
+  const waiting = () => [...waits].map(({ pattern }) => String(pattern));
+  return { child, output, own: () => out, until, waiting, exited };
 }
 
 // Redis's keys matching `pattern`, given to `page` a page of them at a time.
