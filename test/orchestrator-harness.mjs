@@ -952,8 +952,6 @@ export async function listen(t, files, extra = {}, { opa, appRefused = 0 } = {})
     PORT: "0",
     POLICY_PORT: "0",
     SERVICES_PORT: "0",
-    // A copy killed leaves its lease for this long: the next one waits it out.
-    LEASE_SECONDS: "2",
     EDGE_URL: `http://127.0.0.1:${edgeUrlPort}`,
     // Where the fake sandbox reaches the services' names (fixtures/fake-docker.sh).
     DECKHAND_TEST_PROXY: `http://127.0.0.1:${standIn.port}`,
@@ -1039,12 +1037,18 @@ export async function listen(t, files, extra = {}, { opa, appRefused = 0 } = {})
       ...github.waiting().map((what) => `GitHub's request ${what}`),
       ...[...copies.orchestrator, edge, ...copies.runner].flatMap((copy) => copy.waiting()),
     ];
-    const outputs = {
-      ...Object.fromEntries(copies.orchestrator.map((c, i) => [`orchestrator #${i + 1}`, c.own()])),
-      edge: edge.own(),
-      ...Object.fromEntries(copies.runner.map((c, i) => [`runner #${i + 1}`, c.own()])),
-      models: modelsOut,
+    // Each copy's output, and how it ended if it did: a copy that lost its lease exits.
+    const named = (copy, name) => {
+      const { exitCode, signalCode } = copy.child;
+      const ended = exitCode !== null ? `exit ${exitCode}` : signalCode && `killed (${signalCode})`;
+      return [ended ? `${name}, ${ended}` : name, copy.own()];
     };
+    const outputs = Object.fromEntries([
+      ...copies.orchestrator.map((copy, i) => named(copy, `orchestrator #${i + 1}`)),
+      named(edge, "edge"),
+      ...copies.runner.map((copy, i) => named(copy, `runner #${i + 1}`)),
+      ["models", modelsOut],
+    ]);
     t.diagnostic(failed(t, dir, waits, outputs));
   });
   t.after(() => {
