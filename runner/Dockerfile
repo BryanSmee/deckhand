@@ -9,6 +9,7 @@ RUN apk add --no-cache docker-cli docker-cli-buildx tar
 # (listener/runner/kube-images.mjs). The client only, from BuildKit's release, pinned by version
 # and by the sha256 of each architecture's tarball (its release's digests).
 ARG TARGETARCH
+# renovate: datasource=github-releases depName=moby/buildkit extractVersion=^v(?<version>.+)$
 ARG BUILDKIT_VERSION=0.34.1
 RUN case "$TARGETARCH" in \
       amd64) sum=a59539daf547fe0958efe2d07e41c0a6944e1112a66d7e519ec1cf5b673ef15b ;; \

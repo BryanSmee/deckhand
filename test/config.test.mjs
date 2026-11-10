@@ -15,6 +15,7 @@ import {
   storeFolder,
   unwritableData,
   withCredentialFiles,
+  SETTINGS,
 } from "../listener/config.mjs";
 
 test("refuses to start without allowed users", () => {
@@ -635,7 +636,8 @@ test("agents: Claude Code by default; Codex with OPENAI_API_KEY, for work or lig
   assert.deepEqual(plain.agents, ["claude"]);
   assert.equal(plain.openaiCredential, null);
   assert.equal(plain.openaiUrl, "https://api.openai.com/v1");
-  assert.equal(plain.codexVersion, "0.162.1");
+  // The pinned default, whichever it is: Renovate bumps it (#1013).
+  assert.equal(plain.codexVersion, SETTINGS.CODEX_VERSION.default);
   assert.equal(plain.codexVolume, "deckhand-codex");
   assert.deepEqual(plain.codexModels, {});
 
