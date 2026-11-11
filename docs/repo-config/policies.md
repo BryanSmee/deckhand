@@ -165,8 +165,6 @@ first (again after a push to its default branch).
 | `server:read`       | Server-wide (`repo: null`): the server's setup and grants.    |
 | `server:sync`       | Server-wide: Sync.                                            |
 
-<!-- onboarding: skip: Where each action is asked, its prefixes, roles and the operator's bindings are in docs/repo-config/policies.md in Deckhand's source. -->
-
 **Where they are asked**: each dashboard route needs its action (the backlog, its counts in
 the repositories list and a discussion's thread `tasks:read`; starting, queueing or laying out work, the inbox, Analyze, a
 discussion, onboarding and a chat's creation and messages `runs:start:<mode>` for the mode they start (`chat` for a chat), wrapping a brainstorm up `runs:start:stop` (a grooming's `runs:start:grooming-stop` too); cancelling, rerunning,
@@ -269,8 +267,6 @@ or in a repository's `.deckhand/policy/`, for its own (`deny_access contains {"a
 "runs:start:work", "reason": "…"} if input.user.login != "release-bot"`). A repository's
 `allow_access` is ignored, a config check error, and its `.deckhand.yaml`'s `users` still
 narrows on its own.
-
-<!-- onboarding: end -->
 
 **What a repository may narrow**: only its own access, never give any. Its maintainers have two
 ways, both read from its default branch (so whoever may push there decides them):
@@ -411,8 +407,6 @@ reviewed, at the operator's cost. The config check warns of one that never names
 `author_type`, at the start and on every Policies tab: copy the rule above into it, or name
 `author_type` in a comment if bots' pull requests should be reviewed.
 
-<!-- onboarding: skip: `machines.rego` is in docs/repo-config/policies.md in Deckhand's source. -->
-
 #### machines.rego
 
 `machines.rego` refuses `deny_merge` for a pull request the App opened from a branch a user's
@@ -427,8 +421,6 @@ deny_merge contains msg if {
   msg := sprintf("its commits were pushed from %s's machine, not through Deckhand: a person merges it", [input.pr.external])
 }
 ```
-
-<!-- onboarding: end -->
 
 #### A run's own comments
 
@@ -576,8 +568,6 @@ deny_github contains "only work runs assign people" if {
 }
 ```
 
-<!-- onboarding: skip: `/mode policy`, a dry run of the policies on a pull request, and the dashboard's Policies tab are in docs/repo-config/policies.md in Deckhand's source. -->
-
 ### A dry run and the dashboard
 
 **`/mode policy`**, commented on a pull request by an allowed user, evaluates the `merge`,
@@ -613,5 +603,3 @@ policies shows none. Each lists the built-in gates that passed before the polici
 no trusted file changed, the checks…), and the newest 3 keep the input the rules saw,
 redacted, cut to 8 KB (its changed files first, then the review's findings, then the checks;
 marked `truncated`).
-
-<!-- onboarding: end -->

@@ -9,15 +9,22 @@ import { FRESH, INBOX, MODES, TALKS, talkOf } from "./modes.mjs";
 import { triggerWord } from "./onboarding.mjs";
 import { blockingSeverities } from "./review-parse.mjs";
 
-// The config's reference, its pages in reading order (the orchestrator's image copies them).
+// The config's reference the onboarding prompt carries, its pages in reading order (the
+// orchestrator's image copies them).
 export const CONFIG_PAGES = [
   "docs/repo-config.md",
   "docs/repo-config/modes.md",
-  "docs/repo-config/reviews.md",
   "docs/repo-config/issues.md",
-  "docs/repo-config/policies.md",
-  "docs/repo-config/policy-inputs.md",
 ];
+// The rest of it, which the prompt only names: what a first `.deckhand.yaml` rarely needs, read
+// in the sandbox's copy of Deckhand's source when the maintainer asks for it. Carried too, the
+// prompt was within bytes of what one environment string holds (#1132).
+export const SOURCE_PAGES = {
+  "docs/repo-config/reviews.md":
+    "reviews of pull requests, `review`, CI before them and auto-merge",
+  "docs/repo-config/policies.md": "policies in `.deckhand/policy/`, capabilities and access",
+  "docs/repo-config/policy-inputs.md": "the policies' inputs, field by field",
+};
 
 const instructions = (name) => readFileSync(new URL(`../prompts/${name}`, import.meta.url), "utf8");
 // Each built-in mode's instructions, by mode (MODES' `prompt`).
@@ -28,15 +35,18 @@ const modeInstructions = Object.fromEntries(
 );
 // The config's reference, in the image next to the prompts so the two can't drift apart. Its
 // tables without the padding prettier aligns their columns with, without what lies between an
-// "onboarding: skip: <pointer>" comment and the next "onboarding: end" (the policies' inputs
-// field by field, how a review's reply is read: the pointer to Deckhand's source instead), and
-// without the comments that tell which test checks a block: the
-// prompt goes to the sandbox in TASK_PROMPT, and one environment string holds 128 KiB at most
+// "onboarding: skip: <pointer>" comment and the next "onboarding: end" (how a grooming runs:
+// the pointer to Deckhand's source instead), and without the comments that tell which test
+// checks a block: the prompt goes to the sandbox in TASK_PROMPT, and one environment string holds 128 KiB at most
 // (Linux's MAX_ARG_STRLEN: over it, the sandbox doesn't start, E2BIG).
 const configReference = CONFIG_PAGES.map((page) =>
   onboardingReference(readFileSync(new URL(`../${page}`, import.meta.url), "utf8")).trimEnd(),
 ).join("\n\n");
 
+// The pages left to the source (SOURCE_PAGES), a line each.
+const sourcePages = Object.entries(SOURCE_PAGES)
+  .map(([page, what]) => `- \`${page}\`: ${what}`)
+  .join("\n");
 // A config reference page's `text` as the onboarding prompt has it (configReference).
 function onboardingReference(text) {
   return compactTables(text)
@@ -256,7 +266,14 @@ ${modeInstructions.onboarding}
 
 ## Reference: \`.deckhand.yaml\` (docs/repo-config.md and docs/repo-config/)
 
-${configReference}`;
+${configReference}
+
+## The rest of the reference, in Deckhand's source
+
+Read these in \`/usr/local/share/deckhand/src\` when the proposal needs what they cover (the
+reference's links to them lead there):
+
+${sourcePages}`;
 }
 
 // The run the trigger line starts on an onboarding issue: the agreed files, nothing else.

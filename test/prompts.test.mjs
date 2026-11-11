@@ -5,6 +5,7 @@ import { READ_PERMISSIONS } from "../listener/github-app.mjs";
 import { isApart, isFresh, kindOf } from "../listener/modes.mjs";
 import {
   CONFIG_PAGES,
+  SOURCE_PAGES,
   compactTables,
   firstMessage,
   handoffMessage,
@@ -300,23 +301,17 @@ test("prompts: work runs are told whether their pushes may change workflow files
 test("the onboarding prompt fits one environment string (TASK_PROMPT), its reference's tables compacted", () => {
   const text = promptFor(issue, { mode: "onboarding", settings, config, grant });
   // Linux's MAX_ARG_STRLEN, which counts the name and its `=`: past it, the sandbox doesn't
-  // start (E2BIG). Left room for a growing reference.
+  // start (E2BIG). Left room for a growing reference: half of it went to Deckhand's source,
+  // where the prompt names it (#1132).
   assert.ok(Buffer.byteLength(`TASK_PROMPT=${text}`) < 120 * 1024, String(text.length));
   assert.match(text, /## Reference: `\.deckhand\.yaml`/);
-  // The policies' inputs left out, pointed to; what comes after them kept.
-  assert.doesNotMatch(text, /### The (run|merge|GitHub) input/);
+  // How a grooming runs left out, pointed to; what comes after it kept.
+  assert.doesNotMatch(text, /It is a conversation like a brainstorm: the same agent/);
   assert.match(
     text,
-    /The policies' inputs, field by field, are in docs\/repo-config\/policy-inputs\.md/,
+    /How a grooming runs and what it may write are in docs\/repo-config\/modes\.md/,
   );
-  assert.match(text, /### The default policies/);
-  // How a review's reply is read, left out the same way, with its own pointer (#662).
-  assert.doesNotMatch(text, /How a review's items are read|A block that doesn't validate/);
-  assert.match(
-    text,
-    /How Deckhand reads a review's reply \([^)]*\) is in docs\/repo-config\/reviews\.md/,
-  );
-  assert.match(text, /- \*\*A plausibility bar for findings\.\*\*/);
+  assert.match(text, /### Research/);
   assert.doesNotMatch(text, /onboarding: (skip|end)/);
   assert.equal(
     compactTables(
@@ -326,17 +321,19 @@ test("the onboarding prompt fits one environment string (TASK_PROMPT), its refer
   );
 });
 
-test("the onboarding prompt reads every config reference page, in order, as the orchestrator's image has them", () => {
-  // Every page of docs/repo-config/ is in the list, the index first.
+test("the onboarding prompt reads the core config reference pages, in order, and names the rest in Deckhand's source", () => {
+  // Every page of docs/repo-config/ is carried or named, the index first.
   const folder = readdirSync(new URL("../docs/repo-config/", import.meta.url)).filter((f) =>
     f.endsWith(".md"),
   );
+  const sources = Object.keys(SOURCE_PAGES);
   assert.deepEqual(
-    [...CONFIG_PAGES].sort(),
+    [...CONFIG_PAGES, ...sources].sort(),
     ["docs/repo-config.md", ...folder.map((f) => `docs/repo-config/${f}`)].sort(),
   );
   assert.equal(CONFIG_PAGES[0], "docs/repo-config.md");
-  // The image copies each one where the prompt reads it: one left out stops the orchestrator.
+  // The image copies each one carried where the prompt reads it: one left out stops the
+  // orchestrator.
   const dockerfile = readFileSync(new URL("../orchestrator/Dockerfile", import.meta.url), "utf8");
   for (const page of CONFIG_PAGES) {
     const dir = page.slice(0, page.lastIndexOf("/") + 1);
@@ -346,9 +343,12 @@ test("the onboarding prompt reads every config reference page, in order, as the 
     );
     assert.ok(copied, page);
   }
+  // The sandbox's copy of the source has the ones named (docs/, sandbox/Dockerfile).
+  const sandbox = readFileSync(new URL("../sandbox/Dockerfile", import.meta.url), "utf8");
+  assert.match(sandbox, /^COPY docs\/ docs\/$/m);
   // Their titles in the prompt, in that order, and each page's text.
   const text = promptFor(issue, { mode: "onboarding", settings, config, grant });
-  const titles = CONFIG_PAGES.slice(0, -1).map((page) =>
+  const titles = CONFIG_PAGES.map((page) =>
     text.indexOf(
       readFileSync(new URL(`../${page}`, import.meta.url), "utf8").match(/^# .*$/m)[0] + "\n",
     ),
@@ -357,7 +357,18 @@ test("the onboarding prompt reads every config reference page, in order, as the 
     titles.every((at, i) => at > 0 && (i === 0 || at > titles[i - 1])),
     String(titles),
   );
-  assert.ok(text.indexOf("are in docs/repo-config/policy-inputs.md") > titles.at(-1));
+  // The others named after them, with where they are, none of their text.
+  assert.match(text, /in `\/usr\/local\/share\/deckhand\/src` when the proposal needs/);
+  for (const page of sources) {
+    assert.ok(text.indexOf(`- \`${page}\`: `) > titles.at(-1), page);
+    const title = readFileSync(new URL(`../${page}`, import.meta.url), "utf8").match(/^# .*$/m)[0];
+    assert.ok(!text.includes(title + "\n"), page);
+  }
+  // Their markers would be dead: only the pages carried have them.
+  for (const page of sources) {
+    const body = readFileSync(new URL(`../${page}`, import.meta.url), "utf8");
+    assert.doesNotMatch(body, /<!-- onboarding: (skip|end)/, page);
+  }
 });
 
 test("prompts: a work run is told the projects the operator grants, none: nothing", () => {

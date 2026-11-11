@@ -41,8 +41,6 @@ token only reads, and Deckhand posts the review.
   `max_allowed_severity` says** (the reviewer marked it on purpose), caps the rating at 8, and
   goes to the fix run.
 
-<!-- onboarding: skip: The lifecycle's graph is in docs/repo-config/reviews.md in Deckhand's source. -->
-
 With `review.on: ready`, `ci: wait`, `fix`, `ci_fix`, `merge` and `conflicts` all on, a pull
 request goes through these steps (dotted: the loops back). The dashboard's **Workflow** tab
 (Settings › Repositories › a repository) draws a repository's own, with its settings: the steps
@@ -78,10 +76,6 @@ flowchart LR
   merge -- conflicts --> rebase
   rebase -. rebased .-> ci
 ```
-
-<!-- onboarding: end -->
-
-<!-- onboarding: skip: How Deckhand reads a review's reply (its markdown, its `json deckhand-review` block) is in docs/repo-config/reviews.md in Deckhand's source. -->
 
 How a review's items are read. A comment's kind is read in bold, italics, backticks, brackets or
 parentheses, or bare before a separator (`blocking: …`). A blocking comment put under Must fix
@@ -121,8 +115,6 @@ any severity and above, fewer blocking comments or fewer follow-ups, or has noth
 at the place of one of the markdown's findings or blocking comments. Where both ask for
 changes, the block decides whether that verdict reads "comment" (on tolerated findings, or on
 follow-ups and notes alone), however unsure the markdown read alone would be.
-
-<!-- onboarding: end -->
 
 - **Claims and acceptance criteria first.** Before security, the review lists the
   acceptance criteria of the issue the pull request closes (and the decisions settled in
@@ -291,8 +283,6 @@ keys: any other, or a bad value, is an error.
 
 ### Choosing who reviews
 
-<!-- onboarding: skip: Choosing a review's agent, model and effort is in docs/repo-config/reviews.md in Deckhand's source. -->
-
 A review is already independent of the work it reads: a fresh run, in its own clone and
 session, that never sees the implementer's reasoning, only the diff and the thread. `agent`,
 `model` and `effort` choose who reads it, and so what it catches:
@@ -331,8 +321,6 @@ reviewed.
 
 The Codex trial ([How it does](../guides/codex.md#how-it-does)) tried Codex on work runs only:
 it kept no figures on Codex as a reviewer yet.
-
-<!-- onboarding: end -->
 
 ### Reviewers
 
