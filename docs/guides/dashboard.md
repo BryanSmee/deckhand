@@ -252,6 +252,14 @@ controlled experiments.
   the coverage.
   Totals can be partial; they are neither billed dollars nor a subscription's shared allowance.
   Older summaries and agents without supported usage events remain unknown.
+- **Uncached tokens / issue** leaves cache reads out: input, output and cache writes (Codex and
+  Antigravity report no cache writes, so theirs are input and output). In a long session, cache
+  reads are most of the recorded tokens, as the agent reads its whole context again on every
+  call, though they cost about a tenth of uncached input. **Run data by step** splits each
+  step's tokens into input, output, cache read and cache write. Each part counts only the runs
+  that report it (Claude all four; Antigravity no cache write; Codex its cached input when it
+  reports it), with that coverage beside it when it is short of **Runs with token data**. Runs
+  recorded before the parts were have their total alone.
 - **Needs input / runs** counts runs whose final recorded status is `needs-input`.
 - **Findings / reviewed PR** counts must-fix findings in retained review rounds within the
   period, including findings repeated in later rounds. PRs without recorded rounds are excluded

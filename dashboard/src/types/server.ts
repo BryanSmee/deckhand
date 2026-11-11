@@ -177,6 +177,7 @@ export interface Health {
 // GET /api/run-data (listener/http.mjs, listener/run-data.mjs). Runs started in [from, to),
 // current recorded PR outcomes; linked issue and PR runs count as one work item.
 export type RunDimension = "repo" | "agent" | "model" | "effort" | "user";
+export type TokenPart = "input" | "output" | "cacheRead" | "cacheWrite";
 export interface RunMetrics {
   runs: number;
   issues: number;
@@ -185,6 +186,9 @@ export interface RunMetrics {
   usageRuns: number;
   // Issues with at least one run with token data: tokens per issue is over these.
   usageIssues: number;
+  // The tokens by part, each over the runs (and issues) that report it; uncached: input,
+  // output and cache writes, over the runs that report input and output.
+  parts: Record<TokenPart | "uncached", { tokens: number; runs: number; issues: number }>;
   fixes: number;
   ciFixes: number;
   findings: number;

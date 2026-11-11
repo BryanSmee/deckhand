@@ -10,6 +10,13 @@ const metrics: RunMetrics = {
   tokens: 400,
   usageRuns: 2,
   usageIssues: 2,
+  parts: {
+    input: { tokens: 0, runs: 0, issues: 0 },
+    output: { tokens: 0, runs: 0, issues: 0 },
+    cacheRead: { tokens: 0, runs: 0, issues: 0 },
+    cacheWrite: { tokens: 0, runs: 0, issues: 0 },
+    uncached: { tokens: 0, runs: 0, issues: 0 },
+  },
   fixes: 1,
   ciFixes: 0,
   findings: 2,
@@ -102,4 +109,38 @@ test("a PR's step selector names its steps and shows that step's metrics", async
   expect(screen.getByRole("rowheader", { name: "Review fix" })).toBeTruthy();
   fireEvent.change(screen.getByLabelText("Step"), { target: { value: "review-fix" } });
   expect(screen.getByText("1 (1/1)")).toBeTruthy();
+});
+
+test("uncached tokens sit beside recorded ones, and the steps split them by part", async () => {
+  const split: RunMetrics = {
+    ...metrics,
+    tokens: 9000,
+    parts: {
+      input: { tokens: 300, runs: 2, issues: 2 },
+      output: { tokens: 600, runs: 2, issues: 2 },
+      cacheRead: { tokens: 8000, runs: 2, issues: 2 },
+      cacheWrite: { tokens: 100, runs: 1, issues: 1 },
+      uncached: { tokens: 1000, runs: 2, issues: 2 },
+    },
+  };
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({ ...data, total: split, steps: [{ step: "work", ...split }] }),
+          {
+            status: 200,
+          },
+        ),
+    ),
+  );
+  render(<RunDataPanel repo="acme/app" />);
+  const uncached = await screen.findByText("Uncached tokens / issue");
+  expect(uncached.nextElementSibling?.textContent).toBe("500");
+  expect(screen.getByRole("columnheader", { name: "Cache read" })).toBeTruthy();
+  const row = screen.getByRole("rowheader", { name: "Work" }).closest("tr")!;
+  const cells = [...row.querySelectorAll("td")].map((c) => c.textContent);
+  // Runs, recorded, input, output, cache read, cache write (fewer runs report it): coverage.
+  expect(cells.slice(0, 6)).toEqual(["3", "9,000", "300", "600", "8,000", "100 (1/2)"]);
 });

@@ -42,6 +42,11 @@ export const fr = {
   "runData.needsInput": "Demande de précisions / exécutions",
   "runData.runsPerIssue": "Exécutions / issue",
   "runData.tokensPerIssue": "Jetons enregistrés / issue",
+  "runData.uncachedPerIssue": "Jetons hors cache / issue",
+  "runData.input": "Entrée",
+  "runData.output": "Sortie",
+  "runData.cacheRead": "Lecture du cache",
+  "runData.cacheWrite": "Écriture du cache",
   "runData.findings": "Constats / PR relue",
   "runData.fixes": "Corrections / corrections CI",
   "runData.merged": "Fusionnées / PR",
@@ -54,7 +59,7 @@ export const fr = {
     "Compare les issues existantes, sans nouvelle exécution d’agent. Les issues diffèrent et l’historique conservé peut être incomplet.",
   "runData.method": "Comment lire ces nombres",
   "runData.caveat":
-    "Les exécutions sont sélectionnées par leur date de début et les résultats sont les derniers enregistrés. Une issue et sa PR liée comptent pour une seule issue. Plusieurs groupes peuvent partager les mêmes issues et constats de PR : leurs résultats ne s’additionnent pas. Les constats incluent ceux des relectures conservées dans la période, même répétés. Les jetons incluent les entrées en cache ; leur total est partiel lorsque la couverture est incomplète. Ce n’est ni une facture ni le quota d’un forfait. Les anciens enregistrements et les agents sans données d’usage restent inconnus. « Sans modification » signifie que la tête de la PR correspond au dernier push enregistré de l’agent ; des corrections peuvent précéder ce push.",
+    "Les exécutions sont sélectionnées par leur date de début et les résultats sont les derniers enregistrés. Une issue et sa PR liée comptent pour une seule issue. Plusieurs groupes peuvent partager les mêmes issues et constats de PR : leurs résultats ne s’additionnent pas. Les constats incluent ceux des relectures conservées dans la période, même répétés. Les jetons incluent les entrées en cache ; leur total est partiel lorsque la couverture est incomplète. Ce n’est ni une facture ni le quota d’un forfait. Les jetons enregistrés additionnent l’entrée, la sortie, les lectures et les écritures du cache : dans une longue session, les lectures du cache en font l’essentiel, l’agent relisant tout son contexte à chaque appel, bien qu’elles coûtent environ un dixième d’une entrée hors cache. Les jetons hors cache laissent de côté les lectures du cache (entrée, sortie et écritures du cache ; Codex et Antigravity n’indiquent pas d’écritures). Chaque partie ne compte que les exécutions qui l’indiquent ; quand certaines ne l’indiquent pas, sa couverture suit entre parenthèses (exécutions qui l’indiquent / exécutions avec des jetons connus). Les anciens enregistrements et les agents sans données d’usage restent inconnus. « Sans modification » signifie que la tête de la PR correspond au dernier push enregistré de l’agent ; des corrections peuvent précéder ce push.",
 
   // The language's own name, in its own language: Preferences › Language lists it so.
   "language.name": "Français",

@@ -315,8 +315,28 @@ describe("listener", options, () => {
     assert.deepEqual(
       recorded.map((r) => r.usage),
       [
-        { thread: "t1", base: 0, total: 90, tokens: 90 },
-        { thread: "t1", base: 90, total: 90, tokens: 0 },
+        {
+          thread: "t1",
+          base: 0,
+          baseParts: { input: 0, output: 0, cacheRead: 0 },
+          total: 90,
+          totalParts: { input: 40, output: 30, cacheRead: 20 },
+          tokens: 90,
+          input: 40,
+          output: 30,
+          cacheRead: 20,
+        },
+        {
+          thread: "t1",
+          base: 90,
+          baseParts: { input: 40, output: 30, cacheRead: 20 },
+          total: 90,
+          totalParts: { input: 40, output: 30, cacheRead: 20 },
+          tokens: 0,
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+        },
       ],
     );
   });
