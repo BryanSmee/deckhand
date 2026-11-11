@@ -556,7 +556,9 @@ function Save({
   allowed: boolean;
 }) {
   const [saving, setSaving] = useState(false);
-  const [saved, setSaved] = useState<SavedWorkflow | null>(null);
+  const [saved, setSaved] = useState<(SavedWorkflow & { name: string; text: string }) | null>(null);
+  // Saved as it is: a second click would open a second pull request for the same change.
+  const again = !!saved && saved.name === name && saved.text === text;
   const [error, setError] = useState<string | null>(null);
   useEffect(() => setError(null), [text, name]);
   async function save() {
@@ -564,7 +566,7 @@ function Save({
     const got = await postJson<SavedWorkflow>(url(repo, "/save"), { name, text, sha });
     setSaving(false);
     if (got.error) return setError(got.error);
-    setSaved(got);
+    setSaved({ ...got, name, text });
   }
   return (
     <section class={styles.section} aria-labelledby="editor-save">
@@ -575,7 +577,7 @@ function Save({
       <div class={styles.options}>
         <Button
           variant="primary"
-          disabled={!allowed || !changed || errors || !name || saving}
+          disabled={!allowed || !changed || errors || !name || saving || again}
           pending={saving}
           pendingLabel={t("editor.saving")}
           onClick={save}

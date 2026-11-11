@@ -15,6 +15,7 @@
 // None of it widens what a run may do: the editor only writes the file a person could, through
 // a pull request, and a workflow orders steps that each still ask the policies.
 import { createHash, randomUUID } from "node:crypto";
+import { keepLast } from "../lib/capped.mjs";
 import { readJsonBody, refuse, send } from "../lib/http.mjs";
 import { repoAllowed } from "./config.mjs";
 import { parseKey, pullEntry, sameRepo } from "./events.mjs";
@@ -42,6 +43,10 @@ const MAX_BODY = 4 * MAX_FILE_BYTES + 8192;
 // The past pull requests offered for a dry run, newest first.
 const MAX_PULLS = 30;
 const MAX_PICKS = 100;
+// How long a check or a dry run reuses what it read of a repo, and how many repos and blobs kept.
+const READ_MS = 60_000;
+const MAX_KEPT = 50;
+const MAX_BLOBS = 500;
 
 const sha256 = (text) => createHash("sha256").update(String(text)).digest("hex");
 const plain = (text) => String(text).replaceAll("`", "");
@@ -86,18 +91,33 @@ export function versionCounts(open, repo, current) {
 
 // `ctx`: the orchestrator's (server.mjs), once wired (http.mjs makes it at its first request):
 // its `github`, `config`, `repoSettings`, `permissions`, `reviews`, `decisions`, `publicUrl` and
-// `workflowInstances` (the engine's store map).
+// `workflowInstances` (the engine's store map); `now`, a clock (Date.now without).
 export function createWorkflowEditor(ctx) {
   const github = (...args) => ctx.github(...args);
   const json = (repo, path, expected) => getJson(github, repo, path, expected);
   const log = (text) => ctx.log?.(text);
 
-  // What GitHub says of `repo` (its default branch, its address) and its settings there.
-  async function repoOf(repo) {
+  const now = () => (ctx.now ?? Date.now)();
+  // What a check or a dry run reads of a repo, kept READ_MS: the dashboard checks after each
+  // pause in the typing, and the repo's runs share the installation's rate limit. "org/repo"
+  // (lower case) → readRepo()'s answer. GET and Save read afresh.
+  const kept = new Map();
+  // The blobs' texts by sha: a blob never changes.
+  const blobs = new Map();
+
+  // What GitHub says of `repo` (its default branch, its address), its settings there and its
+  // workflows' files: kept a while unless `fresh`.
+  async function readRepo(repo, { fresh = false } = {}) {
+    const key = repo.toLowerCase();
+    const known = kept.get(key);
+    if (!fresh && known && now() - known.at < READ_MS) return known;
     const info = await json(repo, `/repos/${repo}`);
     const base = info.default_branch || "main";
     const read = await ctx.repoSettings(repo, base);
-    return { info, base, settings: read.settings, configErrors: read.errors ?? [] };
+    const found = await files(repo, base);
+    const value = { at: now(), info, base, settings: read.settings, files: found };
+    keepLast(kept, key, value, MAX_KEPT);
+    return value;
   }
 
   // The workflows' files on `base`, each with its text and blob sha: [{ name, text, sha }].
@@ -108,9 +128,12 @@ export function createWorkflowEditor(ctx) {
     const found = listed.filter((e) => e.type === "file" && WORKFLOW_FILE.test(e.name));
     const out = [];
     for (const entry of found.slice(0, MAX_FILES)) {
-      const blob = await json(repo, `/repos/${repo}/git/blobs/${entry.sha}`);
-      const text = Buffer.from(blob.content ?? "", blob.encoding ?? "base64").toString();
-      out.push({ name: entry.name, text, sha: entry.sha });
+      if (!blobs.has(entry.sha)) {
+        const blob = await json(repo, `/repos/${repo}/git/blobs/${entry.sha}`);
+        const text = Buffer.from(blob.content ?? "", blob.encoding ?? "base64").toString();
+        keepLast(blobs, entry.sha, text, MAX_BLOBS);
+      }
+      out.push({ name: entry.name, text: blobs.get(entry.sha), sha: entry.sha });
     }
     return out;
   }
@@ -118,12 +141,12 @@ export function createWorkflowEditor(ctx) {
   // `text` parsed as file `name` of `repo`, the other files of `base` beside it, as the reader
   // would read them once it lands: { workflow, errors }, each error { line, message } of this
   // file (its triggers' with the others' too), or of another file (`file`).
-  async function check(repo, base, settings, name, text) {
+  async function check({ files: found, settings }, name, text) {
     const agents = ctx.config?.agents ?? null;
     const parsed = parseWorkflow(name, text, { agents });
     const errors = parsed.errors.map(({ file, line, message }) => ({ file, line, message }));
     if (parsed.workflow) {
-      const others = (await files(repo, base))
+      const others = found
         .filter((f) => f.name !== name)
         .map((f) => parseWorkflow(f.name, f.text, { agents }).workflow)
         .filter(Boolean);
@@ -154,8 +177,7 @@ export function createWorkflowEditor(ctx) {
   }
 
   async function list(req, res, user, repo) {
-    const { info, base, settings } = await repoOf(repo);
-    const found = await files(repo, base);
+    const { info, base, settings, files: found } = await readRepo(repo, { fresh: true });
     const agents = ctx.config?.agents ?? null;
     // The version each workflow runs at now: the file's text, or the one `review:` compiles to.
     const current = new Map();
@@ -212,8 +234,7 @@ export function createWorkflowEditor(ctx) {
 
   async function checked(req, res, user, repo) {
     const { name, text } = asked(await readJsonBody(req, MAX_BODY));
-    const { base, settings } = await repoOf(repo);
-    const { workflow, ...view } = await check(repo, base, settings, name, text);
+    const { workflow, ...view } = await check(await readRepo(repo), name, text);
     send(res, 200, view);
   }
 
@@ -223,7 +244,7 @@ export function createWorkflowEditor(ctx) {
     const number = Number(body?.pr);
     if (!Number.isInteger(number) || number < 1) refuse(400, "Pick a pull request.");
     const picks = Array.isArray(body?.picks) ? body.picks.slice(0, MAX_PICKS).map(String) : [];
-    const { base, settings } = await repoOf(repo);
+    const { settings } = await readRepo(repo);
     const parsed = parseWorkflow(name, text, { agents: ctx.config?.agents ?? null });
     if (!parsed.workflow) refuse(422, "The workflow has errors: fix them first.");
     const { workflow } = parsed;
@@ -260,8 +281,9 @@ export function createWorkflowEditor(ctx) {
   async function save(req, res, user, repo) {
     const body = await readJsonBody(req, MAX_BODY);
     const { name, text } = asked(body);
-    const { base, settings } = await repoOf(repo);
-    const { errors } = await check(repo, base, settings, name, text);
+    const read = await readRepo(repo, { fresh: true });
+    const { base } = read;
+    const { errors } = await check(read, name, text);
     if (errors.length) {
       refuse(422, `The workflow has errors: ${errors.map((e) => plain(errorText(e))).join("; ")}`);
     }
@@ -269,12 +291,17 @@ export function createWorkflowEditor(ctx) {
     const ref = encodeURIComponent(base);
     const existing = await json(repo, `/repos/${repo}/contents/${path}?ref=${ref}`, [404]);
     const was = typeof body?.sha === "string" && body.sha ? body.sha : null;
+    if (existing && !was) {
+      refuse(409, `${path} already exists on ${base}: open it, or pick another name.`);
+    }
     if ((existing?.sha ?? null) !== was) {
       refuse(409, `${path} changed on ${base} since it was opened: read it again first.`);
     }
     const head = await json(repo, `/repos/${repo}/git/ref/heads/${base}`);
     const stem = name.replace(/\.yaml$/, "").toLowerCase();
-    const branch = `deckhand-workflow-${stem}-${randomUUID().slice(0, 8)}`;
+    // A ref git takes whatever the file's name (`a..b.yaml` is one): letters, digits and dashes.
+    const slug = stem.replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "workflow";
+    const branch = `deckhand-workflow-${slug}-${randomUUID().slice(0, 8)}`;
     await write(repo, "POST", `/repos/${repo}/git/refs`, {
       ref: `refs/heads/${branch}`,
       sha: head.object.sha,
@@ -342,7 +369,7 @@ export function createWorkflowEditor(ctx) {
 // What the pull request's description says: who saved it and where it comes from.
 function saveBody(user, path, existing) {
   return [
-    `@${user} ${existing ? "edited" : "added"} \`${path}\` in Deckhand's dashboard (Settings › Repositories › Workflow), which opened this pull request.`,
+    `@${user} ${existing ? "edited" : "added"} \`${path}\` in Deckhand's dashboard (Settings › Repositories › a repository › Editor), which opened this pull request.`,
     "",
     "Like the rest of `.deckhand.yaml`'s config, the workflow applies once it is merged into the default branch. Open pull requests keep the version they started with; the new one applies to those that start after the merge.",
   ].join("\n");

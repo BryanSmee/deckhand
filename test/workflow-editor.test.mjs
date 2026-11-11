@@ -253,6 +253,7 @@ const json = (value, status = 200) =>
 // the save writes (`writes`). `changed`: the file's blob on main differs from the one edited.
 function fakeGithub({ files = { "review.yaml": REVIEW_FILE }, refuse = null } = {}) {
   const writes = [];
+  const reads = [];
   const shas = Object.fromEntries(Object.keys(files).map((name, i) => [name, `blob${i}`]));
   const github = async (repo, method, path, body) => {
     const url = path.split("?")[0];
@@ -294,13 +295,19 @@ function fakeGithub({ files = { "review.yaml": REVIEW_FILE }, refuse = null } = 
     if (url === "/users/alice") return json({ login: "alice", id: 1234 });
     return json({}, 404);
   };
-  return { github, writes };
+  return {
+    github: (...args) => (args[1] === "GET" && reads.push(args[2]), github(...args)),
+    writes,
+    reads,
+  };
 }
 
 async function editorSetup(t, { files, refuse, rules } = {}) {
   const fake = fakeGithub({ files, refuse });
   const admin = [...MEMBER, "repo:config:read", "repo:config:write"];
+  const clock = { at: 1_000_000 };
   const ctx = {
+    now: () => clock.at,
     config: testConfig({ allowedRepos: ["org/app"] }),
     github: fake.github,
     repoSettings: async () => ({
@@ -348,7 +355,7 @@ async function editorSetup(t, { files, refuse, rules } = {}) {
     });
     return { status: res.status, body: await res.json() };
   };
-  return { call, writes: fake.writes };
+  return { call, writes: fake.writes, reads: fake.reads, clock };
 }
 
 const BASE = "/api/repos/org/app/workflows";
@@ -487,7 +494,9 @@ test("POST save: refused without repo:config:write, from another site, with erro
   assert.equal(broken.status, 422);
   // The file changed on main since it was opened (or exists, for a new one).
   assert.equal((await call("POST", `${BASE}/save`, { ...asked, sha: "older" })).status, 409);
-  assert.equal((await call("POST", `${BASE}/save`, { ...asked, sha: null })).status, 409);
+  const exists = await call("POST", `${BASE}/save`, { ...asked, sha: null });
+  assert.equal(exists.status, 409);
+  assert.match(exists.body.error, /review\.yaml already exists on main/);
   assert.deepEqual(writes, []);
   // A new file: no sha. GitHub refusing the pull request: a 502 saying so.
   const added = await call("POST", `${BASE}/save`, {
@@ -509,4 +518,43 @@ test("POST save: GitHub's refusal said", async (t) => {
   });
   assert.equal(said.status, 502);
   assert.match(said.body.error, /GitHub refused it \(422: Nope\)/);
+});
+
+test("POST check: what it reads of GitHub is kept a minute, a blob for good; GET reads afresh", async (t) => {
+  const { call, reads, clock } = await editorSetup(t);
+  const listing = (path) => path.startsWith("/repos/org/app/contents/.deckhand/workflows?");
+  const asked = { name: "other.yaml", text: "on: conflict\nsteps:\n  - run: rebase\n" };
+  await call("POST", `${BASE}/check`, asked);
+  const first = reads.length;
+  assert.equal(reads.filter(listing).length, 1);
+  assert.equal(reads.filter((p) => p.includes("/git/blobs/")).length, 1);
+  // Typing on: nothing read again.
+  await call("POST", `${BASE}/check`, { ...asked, text: `${asked.text}# more\n` });
+  await call("POST", `${BASE}/dry-run`, { ...asked, pr: 7, text: REVIEW_FILE });
+  assert.deepEqual(
+    reads
+      .slice(first)
+      .filter((p) => listing(p) || p.includes("/git/blobs/") || p === "/repos/org/app"),
+    [],
+  );
+  // A minute later the repo and its listing are read again, the unchanged blob not.
+  clock.at += 61_000;
+  await call("POST", `${BASE}/check`, asked);
+  assert.equal(reads.filter(listing).length, 2);
+  assert.equal(reads.filter((p) => p.includes("/git/blobs/")).length, 1);
+  // The tab's GET lists afresh.
+  await call("GET", BASE);
+  assert.equal(reads.filter(listing).length, 3);
+});
+
+test("POST save: a file name git can't take as a branch's still gives one it can", async (t) => {
+  const { call, writes } = await editorSetup(t);
+  const saved = await call("POST", `${BASE}/save`, {
+    name: "A..b_c.yaml",
+    text: "on: conflict\nsteps:\n  - run: rebase\n",
+    sha: null,
+  });
+  assert.equal(saved.status, 200);
+  assert.match(saved.body.branch, /^deckhand-workflow-a-b-c-[0-9a-f]{8}$/);
+  assert.equal(writes[0].body.ref, `refs/heads/${saved.body.branch}`);
 });

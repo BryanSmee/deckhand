@@ -124,6 +124,10 @@ test("Save opens a pull request once the text changed, and says where", async ()
     text: edited,
     sha: WORKFLOW_FILES.files[0].sha,
   });
+  // Saved as it is: no second pull request for the same change; an edit can be saved again.
+  expect(save).toHaveProperty("disabled", true);
+  fireEvent.input(text(), { target: { value: `${edited}# more\n` } });
+  await waitFor(() => expect(save).toHaveProperty("disabled", false));
 });
 
 test("without repo:config:write, the dry run still works but Save says what it needs", async () => {
