@@ -36,6 +36,8 @@ export const reviewedFixesOf = (entry) => entry?.reviewedFixes ?? (entry?.rerevi
 // never ran (cancelled, refused). `entry.deciding`: the listener is deciding about the loop's
 // step right now (createReviews() entry()): it is there too.
 // `round`: the fix runs started so far (0 for the first review), of `rounds` the repo allows;
+// `ciFixes`: the CI fix runs started so far, of `ciRounds` (`review.ci_fix` when the last one
+// started; 0 when not known), both absent before the first;
 // `history`: each review's { round, at, head, counts, blocking, followUps, comments: { blocking,
 // notes }, comment?, commentId?, manual? } (recordRound()), oldest first;
 // `manual`: true when no loop ran, only maintainers' reviews (the dashboard's "Reviews").
@@ -56,6 +58,7 @@ export function reviewLoop(entry, step = null, { settling = null } = {}) {
   const at = {
     round: looping ? fixes : (last?.round ?? fixes),
     rounds,
+    ...(entry?.ciFixes && { ciFixes: entry.ciFixes, ciRounds: entry.ciRounds ?? 0 }),
     history,
     ...(manual && { manual }),
   };
@@ -95,6 +98,22 @@ export function loopState(entry, last, queued = null) {
 // reviewLoop()'s states between two of the loop's runs: the task is in review (board.mjs), and
 // an auto-picked one keeps its reserved slot (tasks.mjs loopGoing()).
 export const LOOPING = ["reviewing", "fixing", "checks", "ci", "ci-fix", "rebasing"];
+
+// Every state reviewLoop() gives (the dashboard's LoopState): each has its node in the
+// lifecycle's graph (review-graph.mjs STATE_NODES).
+export const LOOP_STATES = [
+  "reviewing",
+  "fixing",
+  "checks",
+  "ci",
+  "ci-fix",
+  "rebasing",
+  "ci-failed",
+  "clean",
+  "rounds-out",
+  "fixed",
+  "stopped",
+];
 
 // The reasons of the loop's own runs, and a conflict run's, whose end the loop goes on from
 // (rebased(); reviewLoop() counts it only on a pull request the loop reviewed).

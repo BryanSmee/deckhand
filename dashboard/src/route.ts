@@ -7,7 +7,8 @@
 //   #/org/repo/board                     a repo's board: its work queue, and what waits for what
 //   #/settings/repositories              the repositories the App is installed on
 //   #/settings/repositories/org/repo     with one's config open
-//   #/settings/repositories/org/repo/policies   its Policies tab (/capabilities: Capabilities)
+//   #/settings/repositories/org/repo/policies   its Policies tab (/capabilities: Capabilities,
+//                                        /workflow: Workflow)
 //   #/settings/preferences, #/settings/server, #/settings/access   Settings' other tabs
 //   #/chats                              the user's chats, on every repo (Chats.tsx)
 //   #/chats/<id>                         with one's conversation open
@@ -22,7 +23,7 @@ export type Page = "tasks" | "board" | "settings" | "chats";
 // Settings' tabs besides Repositories (its first, and the one with no `section`).
 export type Section = "preferences" | "clients" | "server" | "access";
 // A repository's settings' tabs besides Config (its first, and the one with no `configTab`).
-export type ConfigTab = "policies" | "capabilities" | "run-data";
+export type ConfigTab = "policies" | "capabilities" | "workflow" | "run-data";
 
 export interface Route {
   repo: string | null; // null: All
@@ -52,7 +53,7 @@ export function parseRoute(hash: string): Route {
   const [path, query = ""] = h.slice(1).split("?", 2);
   // Settings: Repositories (#/settings alone too), Preferences, MCP clients, Server or Access.
   const repos =
-    /^(?:settings\/repositories|repositories)(?:\/([\w.-]+\/[\w.-]+)(?:\/(policies|capabilities|run-data))?)?$/.exec(
+    /^(?:settings\/repositories|repositories)(?:\/([\w.-]+\/[\w.-]+)(?:\/(policies|capabilities|workflow|run-data))?)?$/.exec(
       path,
     );
   if (repos) {

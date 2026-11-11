@@ -1312,3 +1312,56 @@ test("access: the list keeps the repos with an action, the config needs repo:con
   assert.match(onboard.body.error, /`runs:start:onboarding`/);
   assert.deepEqual(started, []);
 });
+
+test("a repo's config: its pull request lifecycle, each step asked of the policies on a sample (#899)", async () => {
+  const files = { "org/app": "review:\n  on: ready\n  fix: 2\n  merge: true\n" };
+  const asked = [];
+  const policies = {
+    describe: async () => ({
+      files: [],
+      errors: [],
+      warnings: [],
+      policies: { operator: new Map([["allow.rego", "allow_fix := true\n"]]), repo: new Map() },
+    }),
+    evaluated: async (decision, repo, texts, input) => {
+      asked.push({ decision, repo, input: await input() });
+      if (decision === "review") {
+        const layers = [{ layer: "operator", allow: false, denies: [], allowFiles: [] }];
+        return { messages: ["no rule allows it"], layers };
+      }
+      return {
+        messages: [],
+        layers: [{ layer: "operator", allow: true, denies: [], allowFiles: ["allow.rego"] }],
+      };
+    },
+  };
+  const { api } = apiSetup({ first: [info("org/app")], configured: ["org/app"], files, policies });
+  const { workflow } = (await call(api, "GET", "/api/repos/org/app/config")).body;
+  assert.equal(workflow.sample, true);
+  const state = Object.fromEntries(workflow.nodes.map((n) => [n.id, n.state]));
+  // No CI step, no conflict watcher; the merge without the operator's auto_merge grant.
+  assert.deepEqual(state, {
+    ready: "on",
+    ci: "off",
+    "ci-fix": "off",
+    review: "refused",
+    fix: "on",
+    merge: "refused",
+    rebase: "off",
+    done: "on",
+  });
+  const review = workflow.nodes.find((n) => n.id === "review");
+  assert.deepEqual(review.reasons, [{ message: "no rule allows it", layer: "operator" }]);
+  assert.match(workflow.nodes.find((n) => n.id === "merge").reasons[0].message, /auto_merge/);
+  // Each decision on the sample's input, the fix's with its round of the repo's rounds.
+  const fix = asked.find((a) => a.input.reason === "review");
+  assert.equal(fix.decision, "fix");
+  // The sample's log lines say so.
+  assert.equal(fix.repo, "org/app (sample)");
+  assert.deepEqual([fix.input.round, fix.input.rounds], [1, 2]);
+  // Without a policy engine: the settings and grants alone, no sample.
+  const none = apiSetup({ first: [info("org/app")], configured: ["org/app"], files });
+  const bare = (await call(none.api, "GET", "/api/repos/org/app/config")).body.workflow;
+  assert.equal(bare.sample, false);
+  assert.equal(bare.nodes.find((n) => n.id === "review").state, "on");
+});

@@ -15,6 +15,7 @@ import { repos } from "./fr-repos";
 import { request } from "./fr-request";
 import { review } from "./fr-review";
 import { ui } from "./fr-ui";
+import { workflow } from "./fr-workflow";
 
 export const fr = {
   "runData.title": "Données des exécutions",
@@ -332,4 +333,5 @@ export const fr = {
   ...detail,
   ...log,
   ...review,
+  ...workflow,
 } satisfies Catalog;

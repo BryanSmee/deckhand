@@ -1,4 +1,5 @@
 import type { ConfigProblem, ContextRow, Grant, HostRow, MountRow, SettingRow } from "./config";
+import type { Workflow } from "./workflow";
 
 // configured: its default branch has .deckhand.yaml; invalid: it has, but no run starts (the
 // file has errors, or asks for what the operator's grants refuse); onboarding: its onboarding
@@ -84,6 +85,9 @@ export interface RepoConfig {
   policies: Policies;
   // What each mode's runs get (listener/capabilities.mjs, repos.mjs capabilityView()).
   capabilities: Capabilities;
+  // Its pull request lifecycle (listener/review-graph.mjs, repos.mjs workflowView()); absent
+  // from listeners before #899.
+  workflow?: Workflow;
   readAt: number;
 }
 
