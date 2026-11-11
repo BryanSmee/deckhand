@@ -49,8 +49,16 @@ const blocks = (severity, tolerance) =>
 export function recordedHistory(entry, decisions = []) {
   const events = [];
   const rounds = (entry?.rounds ?? []).filter((r) => !r.manual).sort((a, b) => a.at - b.at);
+  // A refused fix counts only as the review loop's (`reason: "review"` in the input it kept): a
+  // CI fix and a rebase are `fix` decisions too, and an input dropped past MAX_INPUTS says neither.
   const denied = (decision, after = 0) =>
-    decisions.find((d) => d.decision === decision && d.denied && (d.at ?? 0) >= after);
+    decisions.find(
+      (d) =>
+        d.decision === decision &&
+        d.denied &&
+        (d.at ?? 0) >= after &&
+        (decision !== "fix" || d.input?.reason === "review"),
+    );
   if (!rounds.length && denied("review")) {
     events.push({ run: "review", outcome: "refused", at: denied("review").at });
   }
@@ -107,7 +115,9 @@ export async function whatIf({
   let merged = false;
   let stopped = false;
 
-  const files = async () => (read.files ? await read.files() : []);
+  // Read once per dry run: the pull request's files don't change meanwhile.
+  let listed = null;
+  const files = () => (listed ??= Promise.resolve(read.files ? read.files() : []));
   const io = () => ({
     facts: factsOf({
       files,

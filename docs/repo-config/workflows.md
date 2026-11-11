@@ -273,7 +273,8 @@ The dashboard's **Editor** tab (Settings › Repositories › a repository) edit
 a checkout:
 
 - **The text beside its graph**, checked as you type by the orchestrator's own parser, with the
-  repository's other workflow files beside it (two triggers for one event are caught there too)
+  repository's other workflow files beside it, as Deckhand reads them (two triggers for one
+  event, and an error in another file, which stops every workflow there, are said too)
   and the operator's agents: each error with its line, the graph drawing the steps, a condition's
   two branches and a `repeat`'s loop. A click on a step moves the text to its line.
 - **A dry run**: pick a past pull request whose review loop Deckhand ran (its record is kept 90

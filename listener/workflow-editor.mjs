@@ -14,7 +14,7 @@
 //
 // None of it widens what a run may do: the editor only writes the file a person could, through
 // a pull request, and a workflow orders steps that each still ask the policies.
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { keepLast } from "../lib/capped.mjs";
 import { readJsonBody, refuse, send } from "../lib/http.mjs";
 import { repoAllowed } from "./config.mjs";
@@ -29,7 +29,6 @@ import {
   conditionText,
   errorText,
   MAX_FILE_BYTES,
-  MAX_FILES,
   parseWorkflow,
   reviewWorkflow,
   WORKFLOW_DIR,
@@ -43,12 +42,10 @@ const MAX_BODY = 4 * MAX_FILE_BYTES + 8192;
 // The past pull requests offered for a dry run, newest first.
 const MAX_PULLS = 30;
 const MAX_PICKS = 100;
-// How long a check or a dry run reuses what it read of a repo, and how many repos and blobs kept.
+// How long a check or a dry run reuses what it read of a repo, and how many repos are kept.
 const READ_MS = 60_000;
 const MAX_KEPT = 50;
-const MAX_BLOBS = 500;
 
-const sha256 = (text) => createHash("sha256").update(String(text)).digest("hex");
 const plain = (text) => String(text).replaceAll("`", "");
 
 // A parsed step (workflow-format.mjs) as the dashboard draws it: its kind, its line (its id in
@@ -90,7 +87,8 @@ export function versionCounts(open, repo, current) {
 }
 
 // `ctx`: the orchestrator's (server.mjs), once wired (http.mjs makes it at its first request):
-// its `github`, `config`, `repoSettings`, `permissions`, `reviews`, `decisions`, `publicUrl` and
+// its `github`, `config`, `repoSettings`, `permissions`, `workflows` (workflows.mjs's reader),
+// `reviews`, `decisions`, `publicUrl` and
 // `workflowInstances` (the engine's store map); `now`, a clock (Date.now without).
 export function createWorkflowEditor(ctx) {
   const github = (...args) => ctx.github(...args);
@@ -98,60 +96,44 @@ export function createWorkflowEditor(ctx) {
   const log = (text) => ctx.log?.(text);
 
   const now = () => (ctx.now ?? Date.now)();
-  // What a check or a dry run reads of a repo, kept READ_MS: the dashboard checks after each
-  // pause in the typing, and the repo's runs share the installation's rate limit. "org/repo"
-  // (lower case) → readRepo()'s answer. GET and Save read afresh.
+  // What a check or a dry run reads of a repo beside its workflows, kept READ_MS: the dashboard
+  // checks after each pause in the typing, and the repo's runs share the installation's rate
+  // limit. "org/repo" (lower case) → { at, info, base, settings }. GET and Save read afresh.
   const kept = new Map();
-  // The blobs' texts by sha: a blob never changes.
-  const blobs = new Map();
 
-  // What GitHub says of `repo` (its default branch, its address), its settings there and its
-  // workflows' files: kept a while unless `fresh`.
+  // What GitHub says of `repo` (its default branch, its address), its settings there, and its
+  // workflows' files as the reader has them (workflows.mjs files(): its listing kept until the
+  // default branch moves, the blobs by sha), so a check reads what runs. `fresh`: all read anew.
   async function readRepo(repo, { fresh = false } = {}) {
     const key = repo.toLowerCase();
-    const known = kept.get(key);
-    if (!fresh && known && now() - known.at < READ_MS) return known;
-    const info = await json(repo, `/repos/${repo}`);
-    const base = info.default_branch || "main";
-    const read = await ctx.repoSettings(repo, base);
-    const found = await files(repo, base);
-    const value = { at: now(), info, base, settings: read.settings, files: found };
-    keepLast(kept, key, value, MAX_KEPT);
-    return value;
-  }
-
-  // The workflows' files on `base`, each with its text and blob sha: [{ name, text, sha }].
-  async function files(repo, base) {
-    const path = `/repos/${repo}/contents/${WORKFLOW_DIR}?ref=${encodeURIComponent(base)}`;
-    const listed = await json(repo, path, [404]);
-    if (!Array.isArray(listed)) return [];
-    const found = listed.filter((e) => e.type === "file" && WORKFLOW_FILE.test(e.name));
-    const out = [];
-    for (const entry of found.slice(0, MAX_FILES)) {
-      if (!blobs.has(entry.sha)) {
-        const blob = await json(repo, `/repos/${repo}/git/blobs/${entry.sha}`);
-        const text = Buffer.from(blob.content ?? "", blob.encoding ?? "base64").toString();
-        keepLast(blobs, entry.sha, text, MAX_BLOBS);
-      }
-      out.push({ name: entry.name, text: blobs.get(entry.sha), sha: entry.sha });
+    let known = kept.get(key);
+    if (fresh || !known || now() - known.at >= READ_MS) {
+      const info = await json(repo, `/repos/${repo}`);
+      const base = info.default_branch || "main";
+      const read = await ctx.repoSettings(repo, base);
+      known = { at: now(), info, base, settings: read.settings };
+      keepLast(kept, key, known, MAX_KEPT);
     }
-    return out;
+    const found = await ctx.workflows.files(repo, known.base, { cached: !fresh });
+    return { ...known, files: found.files, folderErrors: found.errors };
   }
 
   // `text` parsed as file `name` of `repo`, the other files of `base` beside it, as the reader
   // would read them once it lands: { workflow, errors }, each error { line, message } of this
   // file (its triggers' with the others' too), or of another file (`file`).
-  async function check({ files: found, settings }, name, text) {
+  // The other files' errors are said too (with their `file`): one stops every workflow there.
+  async function check({ files: found, folderErrors = [], settings }, name, text) {
     const agents = ctx.config?.agents ?? null;
     const parsed = parseWorkflow(name, text, { agents });
     const errors = parsed.errors.map(({ file, line, message }) => ({ file, line, message }));
-    if (parsed.workflow) {
-      const others = found
-        .filter((f) => f.name !== name)
-        .map((f) => parseWorkflow(f.name, f.text, { agents }).workflow)
-        .filter(Boolean);
-      errors.push(...checkTriggers([...others, parsed.workflow], settings));
+    const others = [];
+    for (const f of found.filter((f) => f.name !== name)) {
+      const { workflow, errors: wrong } = ctx.workflows.parse(f);
+      errors.push(...wrong);
+      if (workflow) others.push(workflow);
     }
+    errors.push(...folderErrors);
+    if (parsed.workflow) errors.push(...checkTriggers([...others, parsed.workflow], settings));
     const own = `${WORKFLOW_DIR}/${name}`;
     return {
       workflow: errors.length ? null : parsed.workflow,
@@ -178,12 +160,11 @@ export function createWorkflowEditor(ctx) {
 
   async function list(req, res, user, repo) {
     const { info, base, settings, files: found } = await readRepo(repo, { fresh: true });
-    const agents = ctx.config?.agents ?? null;
     // The version each workflow runs at now: the file's text, or the one `review:` compiles to.
     const current = new Map();
     for (const f of found) {
-      const parsed = parseWorkflow(f.name, f.text, { agents }).workflow;
-      for (const event of parsed?.on ?? []) current.set(`${parsed.file}:${event}`, sha256(f.text));
+      const parsed = ctx.workflows.parse(f).workflow;
+      for (const event of parsed?.on ?? []) current.set(`${parsed.file}:${event}`, parsed.version);
     }
     const builtIn = {};
     for (const event of [READY, "conflict"]) {

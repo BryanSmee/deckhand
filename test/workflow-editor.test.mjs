@@ -11,6 +11,7 @@ import {
   reviewWorkflow,
 } from "../listener/workflow-format.mjs";
 import { recordedHistory, whatIf } from "../listener/workflow-what-if.mjs";
+import { createWorkflows } from "../listener/workflows.mjs";
 import { MEMBER, permissionsOf, serve, testConfig } from "./helpers.mjs";
 
 const parsed = (text, name = "review.yaml") => {
@@ -64,10 +65,10 @@ test("recordedHistory: the loop's reviews, its fix runs, the CI stop, the merge 
   assert.deepEqual(recordedHistory({}, [{ decision: "review", denied: true, at: 1 }]), [
     { run: "review", outcome: "refused", at: 1 },
   ]);
-  const stopped = recordedHistory(
-    { rounds: [{ round: 0, at: 5, counts: { medium: 2 }, blocking: 2 }], ciStopped: { at: 9 } },
-    [{ decision: "fix", denied: true, at: 6 }],
-  );
+  const blocked = { rounds: [{ round: 0, at: 5, counts: { medium: 2 }, blocking: 2 }] };
+  const stopped = recordedHistory({ ...blocked, ciStopped: { at: 9 } }, [
+    { decision: "fix", denied: true, at: 6, input: { reason: "review" } },
+  ]);
   assert.deepEqual(
     stopped.map(({ run, outcome }) => [run, outcome]),
     [
@@ -76,6 +77,14 @@ test("recordedHistory: the loop's reviews, its fix runs, the CI stop, the merge 
       ["ci", "failed"],
     ],
   );
+  // A refused CI fix or rebase (`fix` decisions too), or one whose input is gone: not the loop's.
+  for (const input of [{ reason: "ci" }, { reason: "conflict" }, undefined]) {
+    const said = recordedHistory(blocked, [{ decision: "fix", denied: true, at: 6, input }]);
+    assert.deepEqual(
+      said.map((e) => e.run),
+      ["review"],
+    );
+  }
   // A fix run whose end isn't recorded; an unreviewed one (`fix: true` alone) pushed.
   const going = { fixes: 1, rounds: [{ round: 0, at: 5, counts: { high: 1 }, blocking: 1 }] };
   assert.equal(recordedHistory(going).at(-1).outcome, null);
@@ -310,6 +319,7 @@ async function editorSetup(t, { files, refuse, rules } = {}) {
     now: () => clock.at,
     config: testConfig({ allowedRepos: ["org/app"] }),
     github: fake.github,
+    workflows: createWorkflows({ github: fake.github, config: testConfig(), now: () => clock.at }),
     repoSettings: async () => ({
       settings: { review: { maxAllowedSeverity: "low" } },
       errors: [],
@@ -520,7 +530,7 @@ test("POST save: GitHub's refusal said", async (t) => {
   assert.match(said.body.error, /GitHub refused it \(422: Nope\)/);
 });
 
-test("POST check: what it reads of GitHub is kept a minute, a blob for good; GET reads afresh", async (t) => {
+test("POST check: the repo kept a minute, its workflows as the reader keeps them; GET reads afresh", async (t) => {
   const { call, reads, clock } = await editorSetup(t);
   const listing = (path) => path.startsWith("/repos/org/app/contents/.deckhand/workflows?");
   const asked = { name: "other.yaml", text: "on: conflict\nsteps:\n  - run: rebase\n" };
@@ -537,14 +547,16 @@ test("POST check: what it reads of GitHub is kept a minute, a blob for good; GET
       .filter((p) => listing(p) || p.includes("/git/blobs/") || p === "/repos/org/app"),
     [],
   );
-  // A minute later the repo and its listing are read again, the unchanged blob not.
+  // A minute later the repo is read again; the listing is the reader's, kept until the default
+  // branch moves (or 10 minutes), and the unchanged blob is never read again.
   clock.at += 61_000;
   await call("POST", `${BASE}/check`, asked);
-  assert.equal(reads.filter(listing).length, 2);
-  assert.equal(reads.filter((p) => p.includes("/git/blobs/")).length, 1);
+  assert.equal(reads.filter((p) => p === "/repos/org/app").length, 2);
+  assert.equal(reads.filter(listing).length, 1);
   // The tab's GET lists afresh.
   await call("GET", BASE);
-  assert.equal(reads.filter(listing).length, 3);
+  assert.equal(reads.filter(listing).length, 2);
+  assert.equal(reads.filter((p) => p.includes("/git/blobs/")).length, 1);
 });
 
 test("POST save: a file name git can't take as a branch's still gives one it can", async (t) => {
@@ -557,4 +569,41 @@ test("POST save: a file name git can't take as a branch's still gives one it can
   assert.equal(saved.status, 200);
   assert.match(saved.body.branch, /^deckhand-workflow-a-b-c-[0-9a-f]{8}$/);
   assert.equal(writes[0].body.ref, `refs/heads/${saved.body.branch}`);
+});
+
+test("POST check: the other files' errors, and too many files, said with their file", async (t) => {
+  const broken = { "review.yaml": REVIEW_FILE, "old.yaml": "on: nope\nsteps:\n  - run: rebase\n" };
+  const { call } = await editorSetup(t, { files: broken });
+  const asked = { name: "review.yaml", text: REVIEW_FILE };
+  const { body } = await call("POST", `${BASE}/check`, asked);
+  assert.deepEqual(
+    body.errors.map((e) => [e.file, e.line]),
+    [[".deckhand/workflows/old.yaml", 1]],
+  );
+  assert.match(body.errors[0].message, /unknown event nope/);
+  // Over 20 files: none runs, as the reader says.
+  const many = Object.fromEntries(
+    Array.from({ length: 21 }, (_, i) => [`w${i}.yaml`, "on: conflict\nsteps:\n  - run: rebase\n"]),
+  );
+  const crowded = await editorSetup(t, { files: many });
+  const said = await crowded.call("POST", `${BASE}/check`, { name: "w0.yaml", text: REVIEW_FILE });
+  assert.deepEqual(said.body.errors, [
+    { file: ".deckhand/workflows", line: null, message: "over 20 workflows" },
+  ]);
+});
+
+test("whatIf: the pull request's files read once per dry run", async () => {
+  let reads = 0;
+  const workflow = parsed(`on: ready
+steps:
+  - if: paths("a/**")
+    run: review
+  - if: paths("a/**")
+    run: fix
+  - if: paths("b/**")
+    run: merge
+`);
+  const read = { files: () => (reads++, ["a/x"]) };
+  await whatIf({ workflow, read, picks: ["high", "pushed"] });
+  assert.equal(reads, 1);
 });
