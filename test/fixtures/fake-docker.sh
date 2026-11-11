@@ -192,6 +192,15 @@ case "$1" in
     cp "${@: -1}/docker/Dockerfile" "$dir/built-dockerfile" ;;
   info)
     echo '{"runc":{}}' ;;
+  compose)
+    # cli/deckhand.mjs's calls (cli.test.mjs): logged with the release compose would run, the
+    # shell's DECKHAND_VERSION before .env's as compose has it; a pull that fails when the test
+    # leaves pull-fails.
+    [ "$2" = version ] && { echo "Docker Compose version v2.40.0"; exit; }
+    pinned=${DECKHAND_VERSION:-$(sed -n 's/^DECKHAND_VERSION=//p' .env)}
+    echo "$* ($pinned)" >> "$dir/docker-calls"
+    [ "$2" = pull ] && [ -e "$dir/pull-fails" ] && exit 1
+    exit 0 ;;
   run)
     case "$*" in *--entrypoint*) echo "$*" >> "$dir/docker-calls"; exit 0 ;; esac
     # A run's container engine: its arguments, one per line, and nothing runs.

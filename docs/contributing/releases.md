@@ -5,8 +5,9 @@ A release is a `v*` tag on a commit of `main`, pushed by hand. The release workf
 matrix for `linux/amd64` and `linux/arm64`, tagged `1.2.3`, `1.2` and `latest` (the images drop
 the tag's `v`), the Helm chart, `oci://ghcr.io/bryansmee/charts/deckhand`, its `version` and
 `appVersion` the tag's (`1.2.3`) whatever `Chart.yaml` says, and the release itself, with the
-machine driver (`deckhand-machine.mjs`, its `VERSION` the tag's) attached. Compose's default
-`DECKHAND_VERSION` is `latest`: the tag is what a new install pulls.
+machine driver (`deckhand-machine.mjs`) and the `deckhand` command (`deckhand.mjs`, from `cli/`)
+attached, each with its `VERSION` the tag's. Compose's default `DECKHAND_VERSION` is `latest`:
+the tag is what a new install pulls.
 
 1. **Ask Deckhand to prepare it**: open a `Release v0.x.0` issue in the release's milestone
    and comment `Deckhand /mode release`. This repository's
@@ -49,7 +50,7 @@ machine driver (`deckhand-machine.mjs`, its `VERSION` the tag's) attached. Compo
      docker buildx imagetools inspect "ghcr.io/bryansmee/deckhand-$image:latest" --format '{{json .Manifest}}' | jq -r .digest
    done
    helm show chart oci://ghcr.io/bryansmee/charts/deckhand --version 1.2.3   # appVersion: 1.2.3
-   gh release view v1.2.3 --json assets --jq '.assets[].name'   # deckhand-machine.mjs
+   gh release view v1.2.3 --json assets --jq '.assets[].name'   # deckhand-machine.mjs, deckhand.mjs
    ```
 
 5. **The notes**: the workflow made the release with GitHub's generated notes; replace them with
