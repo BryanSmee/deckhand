@@ -851,9 +851,8 @@ Object.assign(ctx, {
 });
 Object.assign(ctx, createStatus(ctx), createTasks(ctx), createRuns(ctx), createRestart(ctx));
 // The repos' workflows (`.deckhand/workflows/` on their default branch), listed until it moves.
-ctx.workflows = createWorkflows({ github });
-// Open pull requests of opted-in repos that conflict with their base get a rebase run, or what
-// the repo's workflow on `conflict` says.
+ctx.workflows = createWorkflows({ github, config });
+// Opted-in repos' pull requests in conflict with their base: a rebase run, or their workflow.
 ctx.conflicts = createConflicts({
   attempts: maps.maps.conflicts,
   workflows: ctx.workflows,
@@ -906,6 +905,8 @@ ctx.grantOf = async (repo) => {
 };
 ctx.reviews = createReviews({
   reviewed: maps.maps.reviews,
+  workflows: ctx.workflows,
+  instances: maps.maps.workflows,
   config,
   repoSettings,
   accept: (item) => ctx.accept(item),
@@ -922,9 +923,8 @@ ctx.reviews = createReviews({
   externalOf: pulls.externalOf,
   metrics: counted,
   grantOf: ctx.grantOf,
-  // The dashboard's "merged by Deckhand", at once; and, merged into the default branch, the
-  // repo's other pull requests asked soon whether they still merge (the watcher's, and the
-  // dashboard's in every repo): no delivery comes first.
+  // The dashboard's "merged by Deckhand", at once; merged into the default branch, the repo's
+  // other pull requests asked soon whether they still merge: no delivery comes first.
   merged: (repo, pr) => {
     const { key, pr: entry } = pullEntry(repo, pr);
     pulls.record(key, { ...entry, autoMerged: true });
@@ -989,13 +989,13 @@ ctx.repoApi = createRepoApi({
   policies,
   permissions,
   granted: grantsBy(policies),
+  workflows: ctx.workflows,
   // The Overview's repository cards: no GitHub read per repo when they show.
   backlogs: (repos, user) => ctx.workApi.counts(repos, user),
   log,
 });
 
-// Run analyses (the dashboard's Analyze): digests of a repo's past runs, without the secrets
-// their logs must never carry.
+// Run analyses (the dashboard's Analyze): digests of past runs, without their logs' secrets.
 ctx.analysis = createAnalysis({
   // Never a chat's: its owner's alone (chats.mjs).
   runs: () => ctx.runs.filter((r) => !r.chat),

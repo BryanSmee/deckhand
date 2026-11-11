@@ -22,6 +22,14 @@ export const workflow = {
   "workflow.unreadable": "Impossible de lire le workflow : {error}",
   "workflow.show": "Workflow",
   "workflow.current": "En cours",
+  "workflow.source.title": "Quand une pull request passe prête",
+  "workflow.source.compiled":
+    "Le workflow que le bloc review de ce dépôt donne : Deckhand exécute ces étapes dans cet ordre. Un workflow propre au dépôt sur ready, dans .deckhand/workflows/, le remplacerait.",
+  "workflow.source.own":
+    "Le workflow propre à ce dépôt fait avancer ses pull requests, à la place de la boucle intégrée dessinée plus haut :",
+  "workflow.source.none":
+    "Aucun workflow ne s’exécute quand une pull request passe prête : review.on n’est pas ready, et aucun fichier de .deckhand/workflows/ ne s’exécute sur ready.",
+  "workflow.source.errors": "Aucun des workflows de ce dépôt ne s’exécute : ils ont des erreurs.",
   "workflow.node.ready": "Prête pour revue",
   "workflow.node.ci": "Attente de la CI",
   "workflow.node.ci-fix": "Correction CI",

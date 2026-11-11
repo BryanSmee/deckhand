@@ -242,6 +242,26 @@ export const WORKFLOW: Workflow = {
     { from: "fix", to: "done", when: ["nothing-pushed"], back: false },
     { from: "merge", to: "done", when: ["merged"], back: false },
   ],
+  source: {
+    file: null,
+    url: null,
+    text: `# Deckhand's built-in review loop, compiled from the repository's \`review:\` block.
+on: ready
+vars:
+  fixes: counter
+steps:
+  - run: ci # review.ci: wait, ci_wait: 30, ci_fix: 2
+  - run: review
+  - repeat:
+      - run: fix # ends the loop when no fix run starts
+        count: fixes
+      - run: ci # review.ci: wait, ci_wait: 30, ci_fix: 2
+      - run: review
+    max: fixes 3 # review.fix
+  - run: merge # review.merge, with the operator's auto_merge grant
+`,
+    errors: [],
+  },
 };
 
 export const CONFIG: RepoConfig = {

@@ -18,6 +18,15 @@ export const workflow = {
   "workflow.unreadable": "Couldn't read the workflow: {error}",
   "workflow.show": "Workflow",
   "workflow.current": "Here now",
+  // The workflow on `ready` its pull requests run.
+  "workflow.source.title": "When a pull request turns ready",
+  "workflow.source.compiled":
+    "The workflow this repository's review block compiles to: Deckhand runs these steps in this order. A workflow of its own on ready, in .deckhand/workflows/, would replace it.",
+  "workflow.source.own":
+    "This repository's own workflow runs its pull requests, in place of the built-in loop drawn above:",
+  "workflow.source.none":
+    "No workflow runs when a pull request turns ready: review.on isn't ready, and no file of .deckhand/workflows/ runs on ready.",
+  "workflow.source.errors": "None of this repository's workflows runs: they have errors.",
   // The steps.
   "workflow.node.ready": "Ready for review",
   "workflow.node.ci": "Wait for CI",

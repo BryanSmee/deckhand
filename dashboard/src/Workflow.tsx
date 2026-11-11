@@ -18,6 +18,7 @@ import type {
   WorkflowNode,
   WorkflowNodeId,
   WorkflowReason,
+  WorkflowSource,
   WorkflowState,
 } from "./types";
 import { Fold } from "./ui/Fold";
@@ -269,7 +270,42 @@ export function WorkflowTab({ config }: { config: RepoConfig }) {
       <p class={styles.intro}>{t("workflow.intro")}</p>
       <p class={styles.muted}>{t(workflow.sample ? "workflow.sample" : "workflow.noPolicies")}</p>
       <WorkflowGraph workflow={workflow} />
+      {workflow.source !== undefined && <SourceView source={workflow.source} />}
     </div>
+  );
+}
+
+// The workflow on `ready` its pull requests run (#1041): the repository's own file, linked (the
+// graph above draws the built-in loop it replaces), or the one its `review:` block compiles to.
+function SourceView({ source }: { source: WorkflowSource | null }) {
+  return (
+    <section class={styles.compiled} aria-labelledby="workflow-source">
+      <h2 id="workflow-source">{t("workflow.source.title")}</h2>
+      {!source ? (
+        <p class={styles.muted}>{t("workflow.source.none")}</p>
+      ) : source.errors.length > 0 ? (
+        <div role="alert">
+          <p class={styles.muted}>{t("workflow.source.errors")}</p>
+          <ul class={styles.reasons}>
+            {source.errors.map((e) => (
+              <li key={e}>{e}</li>
+            ))}
+          </ul>
+        </div>
+      ) : source.file ? (
+        <p class={styles.muted}>
+          {t("workflow.source.own")}{" "}
+          <a href={source.url ?? undefined} target="_blank" rel="noreferrer">
+            <code>{source.file}</code>
+          </a>
+        </p>
+      ) : (
+        <>
+          <p class={styles.muted}>{t("workflow.source.compiled")}</p>
+          <pre class={styles.yaml}>{source.text}</pre>
+        </>
+      )}
+    </section>
   );
 }
 

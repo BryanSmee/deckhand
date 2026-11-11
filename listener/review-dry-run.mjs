@@ -1,8 +1,13 @@
-// A policy dry run on a pull request (`/mode policy`, reviews.mjs dryRun()): the reply listing
-// each decision (dryRunText()), and the inputs it evaluates (githubSamples(), pushSample(),
+// A policy dry run on a pull request (`/mode policy`, dryRun()): the reply listing each
+// decision (dryRunText()), and the inputs it evaluates (githubSamples(), pushSample(),
 // runSamples()).
-import { prId } from "./events.mjs";
+import { linkedIssue, prId, taskKey } from "./events.mjs";
 import { pushInput } from "./git-gateway.mjs";
+import { getJson, paginate } from "./github.mjs";
+import { DECISIONS, INPUT_VERSION, OPERATOR_ONLY } from "./policies.mjs";
+import { fixesOf } from "./review-loop.mjs";
+import { actionsRuns, mergeInput } from "./review-merge.mjs";
+import { ownReady, requestInput, reviewersFor, runFields } from "./reviewers.mjs";
 import { readOf, runInput } from "./run-policy.mjs";
 import { quote, short } from "./review-texts.mjs";
 
@@ -200,3 +205,145 @@ export function runSamples(repo, pr, issue = null, sender = null, now = Date.now
 
 // How much of the input a dry run's reply shows: GitHub takes 65536 characters a comment.
 const DRY_RUN_INPUT = 50_000;
+
+// `/mode policy` on pull request `number` (task-modes.mjs): every rule evaluated on its input
+// now → { text, denials }: the reply (dryRunText()) and how many messages the rules denied
+// with. Nothing is reviewed, fixed, merged or kept as a decision: a maintainer debugging a
+// rule doesn't wait for a ready event.
+export async function dryRun(
+  { policies, github, config, repoSettings, entryOf, limitOf, runOf, externalOf, now },
+  { repo, base, number, by = null },
+) {
+  if (!policies) return { text: dryRunText({ number, files: [] }), denials: 0 };
+  const described = await policies.describe(repo, base);
+  // What decide() evaluates: a file the operator's replaces isn't.
+  const files = described.files.filter((f) => f.active);
+  const errors = described.errors.map((e) => e.text);
+  const texts = described.policies;
+  if (!files.length) return { text: dryRunText({ number, files }), denials: 0 };
+  const pr = await getJson(github, repo, `/repos/${repo}/pulls/${number}`);
+  const info = await getJson(github, repo, `/repos/${repo}`);
+  const prFiles = await paginate(
+    (path) => github(repo, "GET", path),
+    `/repos/${repo}/pulls/${number}/files`,
+  );
+  const issue = linkedIssue(pr, repo, config.bot);
+  const found = issue
+    ? {
+        number: issue,
+        ...(await getJson(github, repo, `/repos/${repo}/issues/${issue}`, [404, 410])),
+      }
+    : null;
+  const sha = pr.head?.sha;
+  const runs = sha ? (await actionsRuns(github, repo, sha)).runs : [];
+  const entry = entryOf(repo, number);
+  const fixes = fixesOf(entry);
+  const { settings } = await repoSettings(repo, base);
+  // The merge's input is the fullest: review and fix get the same without `checks`, and
+  // with their own `decision`; fix with the round it would be.
+  const input = mergeInput({
+    info,
+    pr,
+    files: prFiles,
+    issue: found,
+    review: null,
+    fixes,
+    runs,
+    bot: config.bot,
+    external: externalOf(repo, number),
+    now,
+  });
+  const results = [];
+  // `decision` on the input `build()` gives → { messages, layers }.
+  const ask = async (decision, build) => {
+    const { messages, layers } = await policies.evaluated(decision, repo, texts, build);
+    return { decision, messages, layers };
+  };
+  for (const decision of DECISIONS) {
+    // A repository's grants are no decision on a pull request: its config page says them.
+    if (OPERATOR_ONLY.has(decision)) continue;
+    // No run to start: a comment on this pull request asking for one, by whoever asked.
+    if (decision === "run") {
+      for (const sample of runSamples(repo, pr, found, by, now, settings)) {
+        const said = await ask(decision, () => sample.input);
+        const input = { version: INPUT_VERSION, ...sample.input };
+        results.push({ ...said, sample: sample.what, input });
+      }
+      continue;
+    }
+    // No write to decide on: a comment on this pull request, by a run whose own it is and
+    // by a brainstorm elsewhere.
+    if (decision === "github") {
+      for (const sample of githubSamples(repo, pr, settings?.modes)) {
+        const said = await ask(decision, () => sample.input);
+        const input = { version: INPUT_VERSION, ...sample.input };
+        results.push({ ...said, sample: sample.what, input });
+      }
+      continue;
+    }
+    // No branch to link either: one for the issue the pull request closes, by its work run.
+    if (decision === "link_branch") {
+      const sample = linkSample(repo, pr, found);
+      const said = await ask(decision, () => sample.input);
+      const input = { version: INPUT_VERSION, ...sample.input };
+      results.push({ ...said, sample: sample.what, input });
+      continue;
+    }
+    // No push either: one of its branch, by the work run of the issue it closes.
+    if (decision === "push") {
+      const sample = pushSample(repo, pr, found, info.default_branch ?? null);
+      const said = await ask(decision, () => sample.input);
+      const input = { version: INPUT_VERSION, ...sample.input };
+      results.push({ ...said, sample: sample.what, input });
+      continue;
+    }
+    // As the listener would ask when it turns ready, about the run that opened it.
+    if (decision === "request_review") {
+      const task = taskKey(repo, issue ?? prId(number));
+      const reviewers = reviewersFor(config, settings, pr);
+      const own = requestInput({
+        info,
+        pr,
+        files: prFiles,
+        issue: found,
+        reviewers,
+        when: "ready",
+        run: runFields(runOf(task, pr)),
+        bot: config.bot,
+        external: externalOf(repo, number),
+        now,
+      });
+      const said = await ask(decision, () => own);
+      // An "allowed" the listener would never act on: it requests nobody here.
+      const nobody = !reviewers.length
+        ? "`review.request` names no allowed user"
+        : !ownReady(config, repo, pr)
+          ? "not Deckhand's own ready pull request"
+          : null;
+      results.push({ ...said, ...(nobody && { nobody }) });
+      continue;
+    }
+    const own = { ...input, decision };
+    if (decision !== "merge") delete own.checks;
+    if (decision === "fix") {
+      Object.assign(own, {
+        ci: false,
+        reason: "review",
+        round: fixes + 1,
+        rounds: limitOf(settings, entry),
+      });
+    }
+    results.push(await ask(decision, () => own));
+  }
+  const text = dryRunText({
+    number,
+    sha,
+    files,
+    errors,
+    results,
+    input: { version: INPUT_VERSION, ...input },
+  });
+  // A sample write's denial is no decision on this pull request.
+  const decided = results.filter((r) => !r.sample);
+  return { text, denials: decided.reduce((n, r) => n + r.messages.length, 0) };
+}

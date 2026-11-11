@@ -70,10 +70,23 @@ export interface WorkflowEdge {
   back: boolean;
 }
 
+// The workflow on `ready` the review loop runs (listener/repos.mjs sourceView(), #1041): the
+// repository's own file (`file`, linked at `url`), or the one its `review:` block compiles to
+// (`text`); `errors`: its workflows', none of which runs then.
+export interface WorkflowSource {
+  file: string | null;
+  url: string | null;
+  text: string | null;
+  errors: string[];
+}
+
 export interface Workflow {
   nodes: WorkflowNode[];
   edges: WorkflowEdge[];
   // The policies were asked, on a sample pull request (Deckhand's own, CI passed, its review
   // clean): their states say what they said of it.
   sample: boolean;
+  // The workflow its pull requests run once ready: null when none does (`review.on` isn't
+  // `ready`); absent from an older orchestrator.
+  source?: WorkflowSource | null;
 }

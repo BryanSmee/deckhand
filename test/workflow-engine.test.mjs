@@ -303,3 +303,82 @@ test("two spellings' instances merge: counters by max, flags by OR, ids either h
   assert.deepEqual(engine.keys(), ["org/repo#30"]);
   assert.deepEqual(engine.instance("org/repo#30", "conflict").vars.counters, { n: 3, m: 1 });
 });
+
+// The review loop's shape (workflow-format.mjs reviewWorkflow()): review, then fix and review
+// again in a loop, then the merge.
+const LOOP = workflow(`on: ready
+vars:
+  fixes: counter
+steps:
+  - run: review
+  - repeat:
+      - run: fix
+        count: fixes
+      - run: review
+    max: fixes 2
+  - run: merge
+`);
+const ready = (id) => ({ name: "ready", id, pr: 5, head: "h1" });
+
+test("a step that breaks ends the loop it is in, the steps after the loop going on", async () => {
+  const { engine, acted, io } = engineOn(new Map(), { outcomes: ["wait", "break", "done"] });
+  assert.equal(await engine.trigger(KEY, LOOP, ready("a"), io()), "waiting");
+  // The review's end: the fix starts nothing, so no second review, and the merge.
+  assert.equal(await engine.resume(KEY, "ready", io()), "done");
+  assert.deepEqual(acted, ["review", "fix", "merge"]);
+  assert.deepEqual(engine.instance(KEY, "ready").vars.counters, {});
+  // Outside any loop, it goes on as a refused step.
+  const flat = workflow("on: conflict\nsteps:\n  - run: rebase\n  - comment: after\n");
+  const run = engineOn(new Map(), { outcomes: ["break"] });
+  assert.equal(await run.engine.trigger(KEY, flat, event("a"), run.io()), "done");
+  assert.deepEqual(run.acted, ["rebase", "after"]);
+});
+
+test("a step that stops ends the event's steps, handled", async () => {
+  const { engine, acted, io } = engineOn(new Map(), { outcomes: ["stop"] });
+  assert.equal(await engine.trigger(KEY, TWO_STEPS, event("a"), io()), "done");
+  assert.deepEqual(acted, ["rebase"]);
+  assert.equal(await engine.trigger(KEY, TWO_STEPS, event("a"), io()), "handled");
+});
+
+test("a loop at its max says so, for what the built-in code said then", async () => {
+  const bounded = [];
+  const { engine, acted, io } = engineOn(new Map(), { outcomes: [..."wwwww"].map(() => "wait") });
+  const told = () => ({ ...io(), bounded: (op) => bounded.push(op.var) });
+  await engine.trigger(KEY, LOOP, ready("a"), told());
+  for (let i = 0; i < 5; i++) await engine.resume(KEY, "ready", told());
+  // Review, fix, review, fix, review: two rounds, then the merge.
+  assert.deepEqual(acted, ["review", "fix", "review", "fix", "review", "merge"]);
+  assert.deepEqual(bounded, ["fixes"]);
+});
+
+test("a run's end where no instance waits: placed at its step, its loop taken as gone round", async () => {
+  const instances = new Map();
+  const { engine, acted, io } = engineOn(instances, { outcomes: ["wait"] });
+  // A review in the loop before the update: placed at the loop's review, nothing counted.
+  const loopReview = (ops) =>
+    ops.findLastIndex((op) => op.op === "act" && op.step.run === "review");
+  assert.equal(engine.place(KEY, LOOP, { name: "ready", pr: 5, head: "h2" }, loopReview), true);
+  assert.equal(engine.waitingStep(KEY, "ready").run, "review");
+  assert.equal(await engine.resume(KEY, "ready", io()), "waiting");
+  // Back to the loop's head: its counter, 0, under its max: the fix.
+  assert.deepEqual(acted, ["fix"]);
+  assert.deepEqual(engine.instance(KEY, "ready").vars.counters, { fixes: 1 });
+  // No such step: not placed.
+  assert.equal(
+    engine.place(KEY, LOOP, { name: "ready", pr: 5 }, () => -1),
+    false,
+  );
+  // Its run ended without the workflow going on: the event is over, the next starts afresh.
+  engine.end(KEY, "ready");
+  assert.equal(engine.waiting(KEY, "ready"), false);
+  assert.equal(engine.instance(KEY, "ready").current, null);
+});
+
+test("severity: none, a review without findings, below low", async () => {
+  const none = facts({ severity: () => "none" });
+  const check = (text) => holds(parseCondition(text), { counters: {}, flags: {} }, none);
+  assert.equal(await check("severity <= low"), true);
+  assert.equal(await check("severity == none"), true);
+  assert.equal(await check("severity > none"), false);
+});
