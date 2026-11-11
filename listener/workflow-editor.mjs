@@ -233,7 +233,7 @@ export function createWorkflowEditor(ctx) {
     // On `ready`, the review loop's history; a conflict's isn't kept beyond its last attempt.
     const entry = ctx.reviews?.entry(repo, number) ?? null;
     const decisions = (ctx.decisions?.get(pullEntry(repo, pr).key) ?? []).filter(
-      (d) => d.pr === undefined || d.pr === number || d.pr?.number === number,
+      (d) => d.pr === number,
     );
     const history = event === READY ? recordedHistory(entry, decisions) : [];
     const result = await whatIf({

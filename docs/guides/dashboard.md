@@ -231,6 +231,17 @@ instead of the sample's. Anyone signed in with `repo:config:read` on
 that repository sees it, grants included. Its **Refresh** reads it again (at most every 5 seconds); changing it is a commit on
 the default branch.
 
+Its **Editor** tab edits the repository's [workflows](../repo-config/workflows.md#the-editor): a
+file of `.deckhand/workflows/` beside a graph of its steps, both checked as you type with the
+orchestrator's own parser (the errors with their line, a click away); a **dry run** that replays
+a past pull request's recorded review loop through the edited text, up to the first step that
+pull request never took, then lets you pick each outcome from there; how many open pull requests
+run the version on the default branch (they keep it until they close); and **Open a pull
+request**, which has the App commit the file to a new branch and open a pull request saying who
+saved it. Reading, checking and dry runs need `repo:config:read`, saving `repo:config:write`.
+
+![The Editor tab: the workflow's YAML beside its graph, and a dry run that diverged at the second review](../images/dashboard-workflow-editor-desktop-light.png)
+
 ## Run data
 
 In **Settings → Repositories → a repository → Run data**, compare retained runs by

@@ -19,11 +19,7 @@ export interface Can {
 }
 
 export type RepoAction =
-  | "tasks:read"
-  | "logs:read"
-  | "runs:manage"
-  | "repo:config:read"
-  | "repo:config:write";
+  "tasks:read" | "logs:read" | "runs:manage" | "repo:config:read" | "repo:config:write";
 export type ServerAction = "server:read" | "server:sync";
 
 // A mode's pattern (a name, or a prefix ending in `*`) covering `mode`.

@@ -12,7 +12,7 @@ import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createServer } from "vite";
-import { LIVE_RUN, LIVE_TASK, LOG, ROUTES, STATE } from "../src/shots.ts";
+import { LIVE_RUN, LIVE_TASK, LOG, POSTS, ROUTES, STATE } from "../src/shots.ts";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const root = join(here, "..");
@@ -45,7 +45,22 @@ const PAGES = [
     ready: "narrowed from ALLOWED_USERS",
   },
   { name: "new-request", hash: "#/", act: newIdea },
+  {
+    name: "workflow-editor",
+    hash: "#/settings/repositories/acme/app/editor",
+    ready: "Repeat, at most 3 rounds of fixes",
+    act: dryRun,
+  },
 ];
+
+// The workflow editor's dry run on a past pull request, its first answer shown.
+async function dryRun(page) {
+  await page.getByRole("combobox", { name: "Pull request" }).selectOption("212");
+  await page.getByRole("button", { name: "Replay it" }).click();
+  await page.getByText("What does Auto-merge (line 18) end with?").waitFor();
+  // Back to the top: the text and its graph, the dry run's path marked on it.
+  await page.getByText("Edit a workflow of").evaluate((e) => e.scrollIntoView({ block: "end" }));
+}
 
 // New request › Idea, on acme/app, with an idea written in.
 async function newIdea(page) {
@@ -60,8 +75,8 @@ async function newIdea(page) {
     .fill("Stop a repository's runs for the day once they have used the minutes its config gives.");
 }
 
-// The API's answers: a GET of ROUTES as JSON, the live run's log as one event of its stream,
-// anything else a 404 (what a page shot doesn't read).
+// The API's answers: a GET of ROUTES as JSON, a POST of POSTS, the live run's log as one event of
+// its stream, anything else a 404 (what a page shot doesn't read).
 async function fakeApi(page) {
   await page.route("**/api/**", (route) => {
     const path = new URL(route.request().url()).pathname.replace(/^.*?\/api\//, "");
@@ -71,6 +86,9 @@ async function fakeApi(page) {
     }
     if (route.request().method() === "GET" && Object.hasOwn(ROUTES, path)) {
       return route.fulfill({ json: ROUTES[path] });
+    }
+    if (route.request().method() === "POST" && Object.hasOwn(POSTS, path)) {
+      return route.fulfill({ json: POSTS[path] });
     }
     return route.fulfill({ status: 404, json: {} });
   });

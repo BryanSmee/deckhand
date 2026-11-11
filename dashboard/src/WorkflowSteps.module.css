@@ -1,0 +1,234 @@
+/* A workflow file's steps (WorkflowSteps.tsx): a column of cards joined by a line, a condition's
+   two branches side by side, a loop a dashed box; a dry run's path in the run colour, the step
+   where it diverged and the one waiting for a pick outlined in orange. */
+.graph {
+  overflow-x: auto;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+  background: var(--surface);
+}
+
+.stale {
+  opacity: 0.55;
+}
+
+.flow {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* Each step below the one before, a line between them. */
+.item {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.item + .item {
+  padding-top: 18px;
+}
+
+.item + .item::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 50%;
+  height: 18px;
+  border-left: 1.5px solid var(--text-3);
+}
+
+.event,
+.end,
+.skip {
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  color: var(--text-2);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+}
+
+.skip {
+  border-style: dashed;
+  background: none;
+}
+
+.node {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  min-width: 168px;
+  max-width: 260px;
+  padding: 7px 11px;
+  border: 1.5px solid var(--text-3);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.node:hover {
+  border-color: var(--text-2);
+}
+
+.node:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.comment {
+  border-style: dashed;
+}
+
+.name {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  width: 100%;
+  font-weight: 600;
+  font-size: 13px;
+}
+
+.line {
+  margin-left: auto;
+  color: var(--text-3);
+  font-weight: 400;
+  font-size: 11px;
+  font-family: var(--mono);
+}
+
+.detail {
+  max-width: 100%;
+  overflow: hidden;
+  color: var(--text-2);
+  font-size: 11.5px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+/* A dry run took it. */
+.taken {
+  border-color: var(--run-solid);
+}
+
+/* Where it left what the pull request did, and where it waits for a pick. */
+.diverged,
+.asked {
+  box-shadow:
+    0 0 0 2px var(--surface),
+    0 0 0 4px var(--input-solid);
+}
+
+.flag {
+  color: var(--input);
+  font-size: 11.5px;
+  font-weight: 600;
+}
+
+.outcomes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 2px;
+}
+
+.outcome {
+  padding: 0 6px;
+  border-radius: 999px;
+  font-size: 11px;
+  line-height: 17px;
+  background: var(--run-bg);
+  color: var(--run);
+}
+
+/* Picked by the user: past the divergence. */
+.picked {
+  background: var(--input-bg);
+  color: var(--input);
+}
+
+.decision,
+.loop {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.loop {
+  gap: 10px;
+}
+
+/* A condition, a line down to its branches' bar: they split there and join again below. */
+.condition {
+  position: relative;
+  margin-bottom: 14px;
+  padding: 4px 10px;
+  border: 1.5px solid var(--text-3);
+  border-radius: 6px;
+  background: var(--surface);
+  font-size: 12px;
+  max-width: 100%;
+}
+
+.condition::after {
+  content: "";
+  position: absolute;
+  top: 100%;
+  left: 50%;
+  height: 14px;
+  border-left: 1.5px solid var(--text-3);
+}
+
+.condition code {
+  font-family: var(--mono);
+  font-variant-ligatures: none;
+  font-size: 11.5px;
+  overflow-wrap: anywhere;
+}
+
+.branches {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
+.branch {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px 12px;
+  border-top: 1.5px solid var(--text-3);
+  border-bottom: 1.5px solid var(--text-3);
+}
+
+.branchLabel {
+  color: var(--text-2);
+  font-size: 11.5px;
+  font-weight: 600;
+}
+
+.loop {
+  padding: 10px 14px 8px;
+  border: 1.5px dashed var(--text-3);
+  border-radius: var(--radius-card);
+}
+
+.loopHead,
+.loopBack {
+  color: var(--text-2);
+  font-size: 11.5px;
+}
+
+.loopHead {
+  font-weight: 600;
+}

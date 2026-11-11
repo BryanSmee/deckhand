@@ -6,6 +6,7 @@ import { board } from "./fr-board";
 import { chats } from "./fr-chats";
 import { config } from "./fr-config";
 import { detail } from "./fr-detail";
+import { editor } from "./fr-editor";
 import { inbox } from "./fr-inbox";
 import { log } from "./fr-log";
 import { overview } from "./fr-overview";
@@ -339,4 +340,5 @@ export const fr = {
   ...log,
   ...review,
   ...workflow,
+  ...editor,
 } satisfies Catalog;
