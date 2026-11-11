@@ -809,7 +809,7 @@ test("/ready: out of rotation until the broker answered this copy (#391)", async
   assert.equal(await ready(), 200);
 });
 
-test("the broker's run record: a failed connection asked again, twice or a timeout a 503 (#1107)", async () => {
+test("the broker's run record: asked once, its failure a 503 unless a recent answer stands (#1107, #1124)", async () => {
   const key = testKey();
   const token = signToken(
     {
@@ -824,7 +824,7 @@ test("the broker's run record: a failed connection asked again, twice or a timeo
   const reset = () => Object.assign(new Error("socket hang up"), { code: "ECONNRESET" });
   const refused = { status: 503, message: "the broker can't say whether this run still goes" };
   // `answers`: what each call to the broker gets, an error or a record. → { runs, asked, logged }
-  function runsWith(answers) {
+  function runsWith(answers, now = Date.now) {
     const seen = { asked: 0, logged: [] };
     seen.runs = createRuns({
       keys: new Map([[key.kid, key.publicKey]]),
@@ -834,26 +834,30 @@ test("the broker's run record: a failed connection asked again, twice or a timeo
         return answer;
       },
       store: openStore("memory:"),
+      now,
       log: (line) => seen.logged.push(line),
     });
     return seen;
   }
 
-  const once = runsWith([reset()]);
-  assert.equal((await once.runs.check(token, req)).run?.id, "run-1");
-  assert.equal(once.asked, 2);
-  assert.match(
-    once.logged.join("\n"),
-    /the broker, about run run-1 \(socket hang up\), asking again/,
-  );
+  // A reset connection, refused or a timeout: asked once (the broker client resends on a reused
+  // connection the broker closed, lib/broker-client.mjs), refused for now with no record yet.
+  for (const error of [
+    reset(),
+    Object.assign(new Error("connect ECONNREFUSED"), { code: "ECONNREFUSED" }),
+    new Error("the broker didn't answer GET /runs/run-1"),
+  ]) {
+    const failed = runsWith([error]);
+    assert.deepEqual(await failed.runs.check(token, req), refused);
+    assert.equal(failed.asked, 1);
+    assert.match(failed.logged.join("\n"), /the broker, about run run-1/);
+  }
 
-  // No record yet, and the connection fails twice: refused for now.
-  const twice = runsWith([reset(), reset()]);
-  assert.deepEqual(await twice.runs.check(token, req), refused);
-  assert.equal(twice.asked, 2);
-
-  // A broker that didn't answer in time (lib/broker-client.mjs: no `code`) isn't waited on again.
-  const slow = runsWith([new Error("the broker didn't answer GET /runs/run-1")]);
-  assert.deepEqual(await slow.runs.check(token, req), refused);
-  assert.equal(slow.asked, 1);
+  // Its last answer stands while the broker fails, for RECORD_STALE_MS.
+  let at = Date.now();
+  const stale = runsWith([{ sandbox: "net-1" }, reset()], () => at);
+  assert.equal((await stale.runs.check(token, req)).run?.id, "run-1");
+  at += RECORD_MS;
+  assert.equal((await stale.runs.check(token, req)).run?.id, "run-1");
+  assert.equal(stale.asked, 2);
 });
