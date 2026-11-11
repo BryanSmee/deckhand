@@ -7,7 +7,8 @@ import { useContext } from "preact/hooks";
 import type { Access, RepoAccess } from "./types";
 
 export interface Can {
-  // An action on `repo`: "tasks:read", "logs:read", "runs:manage", "repo:config:read".
+  // An action on `repo`: "tasks:read", "logs:read", "runs:manage", "repo:config:read",
+  // "repo:config:write".
   repo: (repo: string | null | undefined, action: RepoAction) => boolean;
   // A run started in `mode` on `repo` (`runs:start:<mode>`).
   start: (repo: string | null | undefined, mode: string) => boolean;
@@ -17,7 +18,12 @@ export interface Can {
   anywhere: (mode: string) => boolean;
 }
 
-export type RepoAction = "tasks:read" | "logs:read" | "runs:manage" | "repo:config:read";
+export type RepoAction =
+  | "tasks:read"
+  | "logs:read"
+  | "runs:manage"
+  | "repo:config:read"
+  | "repo:config:write";
 export type ServerAction = "server:read" | "server:sync";
 
 // A mode's pattern (a name, or a prefix ending in `*`) covering `mode`.

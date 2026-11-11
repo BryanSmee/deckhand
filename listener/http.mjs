@@ -17,6 +17,7 @@ import { refusal } from "./permissions.mjs";
 import { createState, TASKS } from "./http-state.mjs";
 import { createReads } from "./http-reads.mjs";
 import { createDeliveries } from "./http-deliveries.mjs";
+import { createWorkflowEditor } from "./workflow-editor.mjs";
 
 // The dashboard's Sync asks GitHub at most this often: each one lists the App's deliveries.
 const SYNC_MS = 30_000;
@@ -324,6 +325,9 @@ export function createHttp(ctx) {
       if (ctx.workApi.handle(req, res, user)) return;
       if (ctx.discussionApi?.handle(req, res, user)) return;
       if (ctx.repoApi.handle(req, res, user)) return;
+      // The Workflow tab's editor (#1042), made once the orchestrator is wired.
+      ctx.workflowEditor ??= createWorkflowEditor(ctx);
+      if (ctx.workflowEditor.handle(req, res, user)) return;
     }
     if (req.method === "GET") return serveDashboard(req, res, user);
     res.statusCode = 404;

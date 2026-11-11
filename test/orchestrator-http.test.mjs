@@ -210,7 +210,7 @@ test("access (#732): api/state's actions name the boards' repos; Settings › Ac
     "org/board": { actions: ["tasks:read"], starts: [], startsDenied: [] },
     // Its Onboard and Config are offered.
     "org/new": {
-      actions: ["tasks:read", "logs:read", "runs:manage", "repo:config:read"],
+      actions: ["tasks:read", "logs:read", "runs:manage", "repo:config:read", "repo:config:write"],
       starts: ["*"],
       startsDenied: [],
     },

@@ -71,7 +71,7 @@ test("repoActions and serverActions: access()'s answer as the dashboard reads it
       ),
     ),
     {
-      actions: ["tasks:read", "logs:read", "runs:manage"],
+      actions: ["tasks:read", "logs:read", "runs:manage", "repo:config:write"],
       starts: ["*"],
       startsDenied: ["work"],
     },
@@ -80,6 +80,7 @@ test("repoActions and serverActions: access()'s answer as the dashboard reads it
     "tasks:read",
     "logs:read",
     "repo:config:read",
+    "repo:config:write",
   ]);
   assert.deepEqual(repoActions(answer(["*"], [{ action: "runs:*" }])).startsDenied, ["*"]);
   // Nothing, or a failure: nothing.

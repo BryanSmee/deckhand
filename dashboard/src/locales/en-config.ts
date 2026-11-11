@@ -197,6 +197,7 @@ export const config = {
   "config.actionStart": "starts runs in {mode}",
   "config.actionStartPrefix": "starts runs in the modes starting with {prefix}",
   "config.actionConfigRead": "reads its config and onboards it",
+  "config.actionConfigWrite": "saves its workflows, as pull requests",
   "config.actionServerRead": "reads Settings › Server and Access, the health and the plans",
   "config.actionServerSync": "syncs with GitHub",
   "config.actionServerAll": "every server-wide action",

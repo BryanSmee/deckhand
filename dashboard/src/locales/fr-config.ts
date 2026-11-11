@@ -206,6 +206,7 @@ export const config = {
   "config.actionStart": "lance des exécutions en mode {mode}",
   "config.actionStartPrefix": "lance des exécutions dans les modes commençant par {prefix}",
   "config.actionConfigRead": "lit sa config et fait son onboarding",
+  "config.actionConfigWrite": "enregistre ses workflows, en pull requests",
   "config.actionServerRead": "lit Paramètres › Serveur et Accès, la santé et les forfaits",
   "config.actionServerSync": "synchronise avec GitHub",
   "config.actionServerAll": "toutes les actions sur le serveur",

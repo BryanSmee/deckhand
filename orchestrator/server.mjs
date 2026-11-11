@@ -784,6 +784,7 @@ Object.assign(ctx, {
   repoSettings,
   policies,
   permissions,
+  workflowInstances: maps.maps.workflows, // the engine's, for the editor's versions (#1042)
   ...repoReads,
   repoFile,
   titles,
@@ -874,9 +875,6 @@ ctx.conflicts = createConflicts({
   metrics: counted,
   log,
 });
-// Pull requests that turn ready in opted-in repos get a review run (`review.on`), a review
-// that requests changes a fix loop (`review.fix`), and with the operator's
-// `auto_merge` grant, a clean review the merge (`review.merge`).
 // Each task's last policy decisions and dry run, for its page (decisions.mjs).
 ctx.decisions = createDecisions({
   decisions: maps.maps.decisions,
@@ -903,6 +901,8 @@ ctx.grantOf = async (repo) => {
     return null;
   }
 };
+// Pull requests that turn ready in opted-in repos get a review run (`review.on`), a review that
+// requests changes a fix loop (`review.fix`), with `auto_merge` a clean one the merge.
 ctx.reviews = createReviews({
   reviewed: maps.maps.reviews,
   workflows: ctx.workflows,
