@@ -19,6 +19,7 @@ import { repos } from "./en-repos";
 import { request } from "./en-request";
 import { review } from "./en-review";
 import { ui } from "./en-ui";
+import { workflow } from "./en-workflow";
 
 export const en = {
   "runData.intro":
@@ -330,4 +331,5 @@ export const en = {
   ...detail,
   ...log,
   ...review,
+  ...workflow,
 } as const;

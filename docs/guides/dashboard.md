@@ -221,7 +221,13 @@ what its runs get (each value from the repository, from the operator, or refused
 (each yes-or-no grant by name, `dockerfile`, `docker`…, with the policy files that have
 `allow_grant` rules) and the files of the grants folder it comes from (or the file to fix, when
 it has errors), its Capabilities tab (for each mode, what a run gets, the file that decided each
-capability and what stops it), and the raw file. Anyone signed in with `repo:config:read` on
+capability and what stops it), its Workflow tab (the pull request lifecycle its `review` and
+`conflicts` settings give, drawn as a graph: the steps they turn off in grey, those the operator's
+grants or the policies refuse on a sample pull request in solid orange, those a rule may refuse
+outlined in orange, each with why; see [Reviews](../repo-config/reviews.md#reviews)), and the raw
+file. A task whose pull request Deckhand reviews shows its fix and CI fix rounds, and the same
+graph under **Workflow**, its pull request's step highlighted and its real policy decisions
+instead of the sample's. Anyone signed in with `repo:config:read` on
 that repository sees it, grants included. Its **Refresh** reads it again (at most every 5 seconds); changing it is a commit on
 the default branch.
 

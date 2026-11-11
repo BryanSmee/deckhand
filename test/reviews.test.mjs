@@ -2336,8 +2336,8 @@ test("review.ci: a failure starts a CI fix run, not a review, with the runs and 
     "**CI failed** on sha-1 (`review.ci`): [`Tests`](https://github.com/org/repo/actions/runs/7) (failure). Starting a CI fix run (1 of 2) instead of a review.",
   ]);
   // Counted before it was queued, apart from the review's fix runs.
-  assert.deepEqual([s.entry().ciFixes, s.entry().fixes, s.entry().next], [1, undefined, "ci-fix"]);
-  assert.equal(reviewLoop(s.entry(), "ci-fix").loop, "ci-fix");
+  assert.deepEqual([s.entry().ciFixes, s.entry().ciRounds, s.entry().next], [1, 2, "ci-fix"]);
+  assert.deepEqual([reviewLoop(s.entry(), "ci-fix").loop, s.entry().fixes], ["ci-fix", undefined]);
   // Its push goes back to waiting for CI, then the review.
   s.gh.head = "sha-2";
   s.gh.runs = [GOING];

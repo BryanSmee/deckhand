@@ -379,6 +379,10 @@ export interface ReviewLoop {
   // allows (0 without it, or not known yet).
   round: number;
   rounds: number;
+  // The CI fix runs started so far, of `ciRounds` (`review.ci_fix` when the last one started; 0
+  // before any). Absent from listeners before #899.
+  ciFixes?: number;
+  ciRounds?: number;
   // Each review, oldest first.
   history: ReviewRound[];
   // No loop ran: only maintainers' reviews (`/mode review`, the task page's Review), shown as

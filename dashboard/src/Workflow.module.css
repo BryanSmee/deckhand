@@ -1,0 +1,249 @@
+/* The pull request lifecycle's graph (Workflow.tsx): steps as cards on a fixed grid, the
+   arrows under them, loops dotted; a step's state is its border and fill (orange: refused
+   solid, may be refused outlined; off: grey and dashed), its word under its name. */
+.tab {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 20px 24px 32px;
+  max-width: 1120px;
+}
+
+.intro {
+  margin: 0;
+}
+
+.muted {
+  margin: 0;
+  color: var(--text-2);
+  font-size: 12.5px;
+}
+
+.figure {
+  margin: 8px 0 0;
+}
+
+/* Wider than a phone: it scrolls sideways rather than shrinking its words. */
+.scroll {
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+  background: var(--surface);
+}
+
+.plane {
+  position: relative;
+}
+
+.arrows {
+  position: absolute;
+  top: 0;
+  left: 0;
+  overflow: visible;
+}
+
+.arrow {
+  fill: none;
+  stroke: var(--text-3);
+  stroke-width: 1.5px;
+  stroke-linejoin: round;
+}
+
+/* A loop back to an earlier step. */
+.back {
+  stroke-dasharray: 5 4;
+}
+
+.head {
+  fill: var(--text-3);
+}
+
+.when {
+  fill: var(--text-2);
+  font-size: 11px;
+  paint-order: stroke;
+  stroke: var(--surface);
+  stroke-width: 4px;
+  stroke-linejoin: round;
+}
+
+.nodes {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.node {
+  position: absolute;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 1px;
+  padding: 6px 10px;
+  border: 1.5px solid var(--border-strong);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  overflow: hidden;
+}
+
+.name {
+  font-weight: 600;
+  font-size: 13px;
+  line-height: 17px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.detail,
+.state {
+  font-size: 11.5px;
+  line-height: 15px;
+  color: var(--text-2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.state {
+  font-weight: 600;
+}
+
+.hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+}
+
+.on {
+  border-color: var(--text-3);
+}
+
+.off {
+  border-style: dashed;
+  border-color: var(--idle-solid);
+  background: var(--surface);
+  color: var(--text-3);
+}
+
+.off .detail {
+  color: var(--text-3);
+}
+
+/* Solid orange: it won't run. */
+.refused {
+  border-color: var(--input-solid);
+  background: var(--input-solid);
+  /* Dark on orange in both themes: white on it is too faint. */
+  color: #1d1405;
+}
+
+.refused .detail,
+.refused .state {
+  color: inherit;
+}
+
+/* Outlined orange: it may not. */
+.depends {
+  border-color: var(--input-solid);
+  border-width: 2px;
+}
+
+.depends .state {
+  color: var(--input);
+}
+
+/* The step a task's pull request is at. */
+.current {
+  box-shadow:
+    0 0 0 2px var(--surface),
+    0 0 0 4px var(--run-solid);
+}
+
+.current .state {
+  color: var(--run);
+}
+
+.refused.current .state {
+  color: inherit;
+}
+
+.legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 16px;
+  margin-top: 10px;
+  color: var(--text-2);
+  font-size: 12px;
+}
+
+.key {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.swatch {
+  flex: none;
+  display: inline-block;
+  width: 14px;
+  height: 10px;
+  border: 1.5px solid var(--text-3);
+  border-radius: 3px;
+  background: var(--surface-2);
+}
+
+.swatch.off {
+  border-style: dashed;
+  border-color: var(--idle-solid);
+  background: var(--surface);
+}
+
+.swatch.refused {
+  border-color: var(--input-solid);
+  background: var(--input-solid);
+}
+
+.swatch.depends {
+  border-color: var(--input-solid);
+}
+
+.swatch.current {
+  border-color: var(--run-solid);
+}
+
+.notes ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.notes > ul {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.notes > ul > li {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 12.5px;
+}
+
+.source {
+  color: var(--text-2);
+}
+
+.reasons {
+  margin-top: 2px !important;
+  color: var(--text-2);
+  overflow-wrap: anywhere;
+}
+
+.fold {
+  margin-top: 4px;
+}

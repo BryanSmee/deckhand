@@ -1,12 +1,12 @@
 // One repository's config (docs/design/dashboard-redesign.md › Pages › Settings › A repository's
 // config): where it was read, Read again and Edit on GitHub, its tabs (Config, Policies:
-// PolicyConfig.tsx, Capabilities: Capabilities.tsx); then what stops or worries its runs (each
-// error with its key, its fix and a link to its line, the warnings, the auto-merge risk), or,
-// when all is fine, a green banner and the facts at a glance, with the details folded but for
-// what the repo sets. Then what its runs get, each value tagged with its source and filtered by
-// it, the hosts, mounts, context repos, the operator's grant (ConfigAccess.tsx) and the raw
-// .deckhand.yaml, its bad lines marked. Read from GitHub when it opens and on Read again;
-// changing it is a commit on the default branch.
+// PolicyConfig.tsx, Capabilities: Capabilities.tsx, Workflow: Workflow.tsx); then what stops or
+// worries its runs (each error with its key, its fix and a link to its line, the warnings, the
+// auto-merge risk), or, when all is fine, a green banner and the facts at a glance, with the
+// details folded but for what the repo sets. Then what its runs get, each value tagged with its
+// source and filtered by it, the hosts, mounts, context repos, the operator's grant
+// (ConfigAccess.tsx) and the raw .deckhand.yaml, its bad lines marked. Read from GitHub when it
+// opens and on Read again; changing it is a commit on the default branch.
 import type { ComponentChildren } from "preact";
 import { useEffect, useState } from "preact/hooks";
 import { useRepoConfig } from "./api";
@@ -37,6 +37,7 @@ import { Count } from "./ui/Count";
 import { Alert, Check, ChevronRight, External, Sync, Warning } from "./ui/icons";
 import { StatusBadge } from "./ui/Status";
 import tabs from "./ui/Tabs.module.css";
+import { WorkflowTab } from "./Workflow";
 import styles from "./ConfigPanel.module.css";
 
 // What stops its runs, each with the key it is about, how to fix it and its line in the file.
@@ -133,6 +134,7 @@ const TABS: { id: ConfigTab | undefined; label: Plain }[] = [
   { id: undefined, label: "config.tabConfig" },
   { id: "policies", label: "config.tabPolicies" },
   { id: "capabilities", label: "config.tabCapabilities" },
+  { id: "workflow", label: "config.tabWorkflow" },
   { id: "run-data", label: "runData.title" },
 ];
 
@@ -147,6 +149,8 @@ export function ConfigPanel({ repo, tab, row, onRow, onBack, now }: Props) {
   const trouble = config ? (policyTrouble(config.policies) ?? capabilityTrouble(config)) : null;
   // The modes whose runs wouldn't start (capabilities that don't hold).
   const stopped = config?.capabilities.modes.filter((m) => m.errors.length).length ?? 0;
+  // The lifecycle's steps that won't run though the settings turn them on.
+  const refused = config?.workflow?.nodes.filter((n) => n.state === "refused").length ?? 0;
   return (
     <div class={styles.panel}>
       <header class={styles.head}>
@@ -231,6 +235,12 @@ export function ConfigPanel({ repo, tab, row, onRow, onBack, now }: Props) {
                   <Count n={stopped} class={styles.errCount} />
                 </>
               )}
+              {it.id === "workflow" && refused > 0 && (
+                <>
+                  {" "}
+                  <Count n={refused} class={styles.errCount} />
+                </>
+              )}
             </a>
           ))}
         </nav>
@@ -251,6 +261,8 @@ export function ConfigPanel({ repo, tab, row, onRow, onBack, now }: Props) {
           <PolicyConfig config={config} />
         ) : tab === "capabilities" ? (
           <Capabilities config={config} />
+        ) : tab === "workflow" ? (
+          <WorkflowTab config={config} />
         ) : (
           <Body config={config} opened={opened} toggle={toggle} setOpened={setOpened} />
         ))
