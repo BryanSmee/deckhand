@@ -56,6 +56,7 @@ export type WorkflowCondition =
   | "blocking"
   | "clean"
   | "rounds-out"
+  | "no-fix"
   | "fixed"
   | "merged"
   | "conflict"

@@ -49,7 +49,7 @@ test("lifecycleGraph: every step on, its loops going back", () => {
     "ci-fix>done:nothing-pushed",
     "review>fix:blocking",
     "review>merge:clean",
-    "review>done:rounds-out",
+    "review>done:rounds-out+no-fix",
     "fix>ci:pushed back",
     "fix>done:nothing-pushed",
     "merge>done:merged",
@@ -83,7 +83,7 @@ test("lifecycleGraph: the settings turn steps off, the edges going around them",
   assert.deepEqual(edges(once), [
     "ready>review:ready",
     "review>fix:blocking",
-    "review>done:clean+rounds-out",
+    "review>done:clean+rounds-out+no-fix",
     "fix>done:fixed",
   ]);
   // More rounds: its push is reviewed again, straight (no CI step).
@@ -144,8 +144,10 @@ test("lifecycleGraph: the merge refused without the operator's grant, or when it
   assert.ok(edges(lifecycleGraph(once, { grant: null })).includes("fix>done:fixed"));
   assert.ok(edges(lifecycleGraph(once, granted)).includes("fix>review:pushed back"));
   // No merge mode: a clean review ends there too, beside the refused merge.
-  assert.ok(edges(lifecycleGraph(once, { grant: {} })).includes("review>done:clean+rounds-out"));
-  assert.ok(edges(lifecycleGraph(once, granted)).includes("review>done:rounds-out"));
+  assert.ok(
+    edges(lifecycleGraph(once, { grant: {} })).includes("review>done:clean+rounds-out+no-fix"),
+  );
+  assert.ok(edges(lifecycleGraph(once, granted)).includes("review>done:rounds-out+no-fix"));
 });
 
 test("lifecycleGraph: the policies' states on the sample, a step off staying off", () => {
@@ -223,7 +225,7 @@ test("lifecycleMermaid: the steps turned off left out, the loops dotted", () => 
       "  done([Done])",
       "  ready -- ready --> review",
       "  review -- blocking --> fix",
-      "  review -- nothing blocking or rounds out --> done",
+      "  review -- nothing blocking or rounds out or no fix run --> done",
       "  fix -. pushed .-> review",
       "  fix -- nothing pushed --> done",
     ].join("\n"),

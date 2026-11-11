@@ -34,6 +34,14 @@ test("each step says its state and numbers; the refused and may-be-refused ones 
   // Every arrow has its words.
   expect(screen.getAllByText("nothing pushed")).toHaveLength(2);
   expect(screen.getByText("CI failed")).toBeTruthy();
+  // The arrows, for screen readers.
+  const arrows = within(
+    screen.getByRole("list", { name: "What moves a pull request between the steps" }),
+  );
+  expect(arrows.getByText("Review → Fix: blocking")).toBeTruthy();
+  expect(
+    arrows.getByText("Review → Done: nothing blocking / rounds out / no fix run"),
+  ).toBeTruthy();
 });
 
 test("the Workflow tab says the policies were asked about a sample, or weren't", () => {

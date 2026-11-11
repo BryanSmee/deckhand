@@ -4,7 +4,8 @@
 // Each step in its state: on; off (grey, dashed: the settings turn it off); refused (solid
 // orange: a missing grant, or the policies refused it); may be refused (an orange outline: a
 // rule may refuse another pull request). The words go with the colour, and the reasons are
-// listed under the graph, for screen readers and phones, which have no hover.
+// listed under the graph, for screen readers and phones, which have no hover; the arrows, for
+// screen readers, in a list of their own.
 import { useEffect, useRef, useState } from "preact/hooks";
 import { usePolled } from "./api";
 import { t } from "./i18n";
@@ -53,6 +54,7 @@ const CONDITIONS: Record<WorkflowCondition, Plain> = {
   blocking: "workflow.when.blocking",
   clean: "workflow.when.clean",
   "rounds-out": "workflow.when.rounds-out",
+  "no-fix": "workflow.when.no-fix",
   fixed: "workflow.when.fixed",
   merged: "workflow.when.merged",
   conflict: "workflow.when.conflict",
@@ -199,6 +201,18 @@ export function WorkflowGraph({ workflow, current = null, real }: GraphProps) {
               );
             })}
           </ol>
+          {/* The arrows are drawn for the eye: their words, for screen readers. */}
+          <ul class={styles.hidden} aria-label={t("workflow.edges")}>
+            {layout.edges.map((e) => (
+              <li key={`${e.from}-${e.to}`}>
+                {t("workflow.edge", {
+                  from: nodeName(e.from),
+                  to: nodeName(e.to),
+                  when: e.when.map((w) => named(CONDITIONS, w)).join(" / "),
+                })}
+              </li>
+            ))}
+          </ul>
         </div>
       </div>
       <figcaption class={styles.legend} aria-label={t("workflow.legend")}>

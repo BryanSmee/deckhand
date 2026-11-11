@@ -68,6 +68,7 @@ const CONDITIONS = {
   blocking: "blocking",
   clean: "nothing blocking",
   "rounds-out": "rounds out",
+  "no-fix": "no fix run",
   fixed: "fixed",
   merged: "merged or refused",
   conflict: "conflicts",
@@ -173,8 +174,11 @@ export function lifecycleGraph(settings, { grant, isPrivate = null, decisions = 
   } else edge("ci", "review", "ci-over");
   if (fix) edge("review", "fix", "blocking");
   if (merge) edge("review", "merge", "clean");
-  // Without merge mode (no grant), a clean review ends there.
-  edge("review", "done", ...(merging ? [] : ["clean"]), fix ? "rounds-out" : "blocking");
+  // Without merge mode (no grant), a clean review ends there. A blocking one starts no fix run
+  // on a pull request that isn't Deckhand's own, one waiting for input or stopped, or when
+  // `deny_fix` refuses it (reviews.mjs fixRound()): it ends there too.
+  const blocked = fix ? ["rounds-out", "no-fix"] : ["blocking"];
+  edge("review", "done", ...(merging ? [] : ["clean"]), ...blocked);
   if (fix && again) {
     edge("fix", entry, "pushed");
     edge("fix", "done", "nothing-pushed");
