@@ -44,7 +44,9 @@ networks, see [Security model](../security.md)), and the base sandbox image runs
 [your tunnel](tunnels.md), at it.
 
 To build the images from this checkout instead: `docker compose up -d --build`. Updating is
-`docker compose pull` and `docker compose up -d` again ([Updating](updating.md)).
+`docker compose pull` and `docker compose up -d` again, or the `deckhand` command once your
+release includes it, which pins the release and pulls the sandbox image too
+([Updating](updating.md)).
 
 ## A plan or an API key
 

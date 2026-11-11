@@ -174,7 +174,7 @@ jobs:
       - name: node --check
         run: |
           node --check edge/server.mjs orchestrator/server.mjs runner/server.mjs broker/server.mjs github/server.mjs models/server.mjs
-          node --check policy-service/service.mjs machine/deckhand-machine.mjs sandbox/deckhand-inbox sandbox/deckhand-files sandbox/deckhand-tagged sandbox/deckhand-permissions
+          node --check policy-service/service.mjs machine/deckhand-machine.mjs cli/deckhand.mjs sandbox/deckhand-inbox sandbox/deckhand-files sandbox/deckhand-tagged sandbox/deckhand-permissions
           # deploy/kubernetes's one script, by a glob: the workflow gate refuses its name.
           for f in deploy/kubernetes/*.mjs; do node --check "$f"; done
           node --check deploy/kubernetes-e2e/fakes.mjs

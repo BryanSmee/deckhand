@@ -15,6 +15,8 @@ Those marked `.env` are compose's own, read from `.env`. What each service holds
   The release compose runs (`1.2.3`, `1.2`), or `edge` to follow `main`: see [Updating](../../guides/updating.md).
 - **`DECKHAND_REGISTRY`** · `.env` only (compose's) · default: `ghcr.io/bryansmee`\
   Where compose pulls the images from.
+- **`DECKHAND_REPOSITORY`** · `.env` or the shell (the `deckhand` command's) · default: `BryanSmee/deckhand`\
+  Where `deckhand up` and `deckhand update` read the releases, `compose.yaml` and the upgrade notes: a fork's, with its `DECKHAND_REGISTRY` (see [Updating](../../guides/updating.md)).
 - **`PORT`** · `.env` only (compose's) · default: `8080`\
   The host port compose publishes edge on.
 - **`DECKHAND_VERSION`** (in the image) · environment only · default: set when the image is built\
