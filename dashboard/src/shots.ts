@@ -15,6 +15,8 @@ import type {
   ServiceName,
   SettingRow,
   State,
+  Workflow,
+  WorkflowNode,
 } from "./types";
 
 const FIXTURE = fixture as State;
@@ -177,6 +179,65 @@ const mode = (name: string, used: string[]): Capabilities["modes"][number] => ({
   warnings: [],
 });
 
+// The lifecycle of a repo with every step but the conflict watcher on: its merge refused
+// without the operator's auto_merge grant, its review left to Deckhand's review.rego.
+const node = (
+  id: WorkflowNode["id"],
+  rank: number,
+  lane: number,
+  settings: WorkflowNode["settings"] = {},
+  more: Partial<WorkflowNode> = {},
+): WorkflowNode => ({ id, rank, lane, state: "on", key: "review", settings, reasons: [], ...more });
+
+export const WORKFLOW: Workflow = {
+  sample: true,
+  nodes: [
+    node("ready", 0, 0, {}, { key: "review.on" }),
+    node("ci", 1, 0, { minutes: 30 }, { key: "review.ci" }),
+    node("ci-fix", 1, 1, { rounds: 2 }, { key: "review.ci_fix", decision: "fix" }),
+    node(
+      "review",
+      2,
+      0,
+      { severity: "medium" },
+      {
+        decision: "review",
+        state: "depends",
+        reasons: [{ layer: "operator", file: "review.rego", rule: "deny_review" }],
+      },
+    ),
+    node("fix", 2, 1, { rounds: 3 }, { key: "review.fix", decision: "fix" }),
+    node(
+      "merge",
+      3,
+      0,
+      { method: "squash", minutes: 30 },
+      {
+        key: "review.merge",
+        decision: "merge",
+        grant: "auto_merge",
+        state: "refused",
+        reasons: [{ message: "review.merge: not granted (auto_merge), nothing is merged" }],
+      },
+    ),
+    node("rebase", 3, 1, { minutes: null }, { key: "conflicts", state: "off", decision: "fix" }),
+    node("done", 4, 0),
+  ],
+  edges: [
+    { from: "ready", to: "ci", when: ["ready"], back: false },
+    { from: "ci", to: "review", when: ["passed"], back: false },
+    { from: "ci", to: "ci-fix", when: ["failed"], back: false },
+    { from: "ci-fix", to: "ci", when: ["pushed"], back: true },
+    { from: "ci-fix", to: "done", when: ["nothing-pushed"], back: false },
+    { from: "review", to: "fix", when: ["blocking"], back: false },
+    { from: "review", to: "merge", when: ["clean"], back: false },
+    { from: "review", to: "done", when: ["rounds-out"], back: false },
+    { from: "fix", to: "ci", when: ["pushed"], back: true },
+    { from: "fix", to: "done", when: ["nothing-pushed"], back: false },
+    { from: "merge", to: "done", when: ["merged"], back: false },
+  ],
+};
+
 export const CONFIG: RepoConfig = {
   repo: repo("acme/app"),
   base: "main",
@@ -238,6 +299,7 @@ export const CONFIG: RepoConfig = {
     ],
     error: null,
   },
+  workflow: WORKFLOW,
   readAt: NOW - MIN,
 };
 

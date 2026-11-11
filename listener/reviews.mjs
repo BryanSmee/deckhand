@@ -1766,7 +1766,7 @@ export function createReviews({
     // Before queuing: whatever happens next, never this round twice (in the store first,
     // counted()).
     const before = reviewed.get(key);
-    decided({ ciFixes: round, ciFixedAt: now(), next: "ci-fix", nextAt: now() });
+    decided({ ciFixes: round, ciRounds: rounds, ciFixedAt: now(), next: "ci-fix", nextAt: now() });
     if (!(await counted(key, before, task))) {
       return waitForTask(`#${issue} has a run going or queued`);
     }

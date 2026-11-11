@@ -9,6 +9,45 @@ The built-in review reads a pull request and posts **one GitHub review**, in thr
 then a rating out of 10 and a verdict. It never pushes, edits code or creates issues: its
 token only reads, and Deckhand posts the review.
 
+<!-- onboarding: skip: The lifecycle's graph is in docs/repo-config/reviews.md in Deckhand's source. -->
+
+With `review.on: ready`, `ci: wait`, `fix`, `ci_fix`, `merge` and `conflicts` all on, a pull
+request goes through these steps (dotted: the loops back). The dashboard's **Workflow** tab
+(Settings › Repositories › a repository) draws a repository's own, with its settings: the steps
+they turn off in grey, those the operator's grants or the policies refuse in solid orange, and
+those a rule may refuse on some pull requests outlined in orange. The policies are asked about a
+sample pull request there (Deckhand's own, its CI passed, its review clean); a task's page uses
+its pull request's real decisions instead, and highlights the step it is at.
+
+<!-- lifecycle: generated from listener/review-graph.mjs lifecycleMermaid(), held equal by test/review-graph.test.mjs -->
+
+```mermaid
+flowchart LR
+  ready([Ready for review])
+  ci[Wait for CI]
+  ci_fix[CI fix]
+  review[Review]
+  fix[Fix]
+  merge[Auto-merge]
+  rebase[Rebase]
+  done([Done])
+  ready -- ready --> ci
+  ci -- CI passed --> review
+  ci -- CI failed --> ci_fix
+  ci_fix -. pushed .-> ci
+  ci_fix -- nothing pushed --> done
+  review -- blocking --> fix
+  review -- nothing blocking --> merge
+  review -- rounds out --> done
+  fix -. pushed .-> ci
+  fix -- nothing pushed --> done
+  merge -- merged or refused --> done
+  merge -- conflicts --> rebase
+  rebase -. rebased .-> ci
+```
+
+<!-- onboarding: end -->
+
 - **Must fix**: what is wrong in this pull request (an acceptance criterion not met, a claim
   the code contradicts, a security hole, a bug the change introduces, a missing test for a
   decision it makes), grouped by severity (`critical`, `high`, `medium`, `low`), each with its
@@ -251,7 +290,7 @@ keys: any other, or a bad value, is an error.
 
 ### Choosing who reviews
 
-<!-- onboarding: skip: Choosing a review's agent, model and effort (another agent, a stronger model, and what a weaker reviewer costs) is in docs/repo-config/reviews.md in Deckhand's source. -->
+<!-- onboarding: skip: Choosing a review's agent, model and effort is in docs/repo-config/reviews.md in Deckhand's source. -->
 
 A review is already independent of the work it reads: a fresh run, in its own clone and
 session, that never sees the implementer's reasoning, only the diff and the thread. `agent`,

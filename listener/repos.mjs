@@ -7,7 +7,8 @@
 //                                         configured repo with its backlog count as last
 //                                         read (work.mjs counts())
 //   POST /api/repos/refresh               the list, read again from GitHub
-//   GET  /api/repos/<owner>/<repo>/config its config: raw, errors, what runs get (repo-view.mjs)
+//   GET  /api/repos/<owner>/<repo>/config its config: raw, errors, what runs get (repo-view.mjs),
+//                                         its pull request lifecycle (review-graph.mjs)
 //   POST /api/repos/<owner>/<repo>/refresh the same, from the dashboard's Refresh (rate limited)
 //   POST /api/repos/<owner>/<repo>/onboard opens its onboarding issue (onboarding.mjs)
 //
@@ -36,6 +37,7 @@ import {
 } from "./repo-config.mjs";
 import { sameRepo } from "./events.mjs";
 import { effectiveView } from "./repo-view.mjs";
+import { lifecycleGraph, NODES, sampleDecisions } from "./review-graph.mjs";
 import { paginate } from "./github.mjs";
 import { send } from "../lib/http.mjs";
 import { mapLimited } from "../lib/pool.mjs";
@@ -594,6 +596,9 @@ export function createRepoApi({
     const { lineOf, itemLine, mountLine, locate } = fileLines(file?.text ?? "");
     const effective = effectiveView(config, info.full_name, settings, grant, fs);
     const branch = base.split("/").map(encodeURIComponent).join("/");
+    // Read once for the Policies tab and the Workflow's sample (its errors are each one's).
+    const described = policies?.describe(info.full_name, base) ?? null;
+    described?.catch(() => {});
     send(res, 200, {
       repo: row,
       base,
@@ -617,8 +622,9 @@ export function createRepoApi({
           line: itemLine("context_repos", isEntry(c)),
         })),
       },
-      policies: await policyView(info, base, settings),
+      policies: await policyView(info, base, settings, described),
       capabilities: await capabilityView(info, base, settings, grant),
+      workflow: await workflowView(info, base, settings, grant, described),
       readAt: row.readAt,
     });
   }
@@ -626,11 +632,12 @@ export function createRepoApi({
   // The policies that apply on `repo`'s default branch `base`, read now, as the panel shows
   // them: { files, errors, warnings } (policies.mjs describe()), each file with its text. Only
   // this endpoint sends it, never api/state.
-  async function policyView(info, base, settings) {
+  // `described`: describe()'s answer, on its way.
+  async function policyView(info, base, settings, described) {
     if (!policies) return { files: [], errors: [], warnings: [] };
     const repo = info.full_name;
     try {
-      const { files, errors, warnings: said } = await policies.describe(repo, base);
+      const { files, errors, warnings: said } = await described;
       // The capability names its rules give that nobody knows, as the config check says them.
       const names =
         errors.length || !policies.capabilityRules
@@ -699,6 +706,25 @@ export function createRepoApi({
         error: "the capabilities can't be decided (see the orchestrator's logs)",
       };
     }
+  }
+
+  // The pull request lifecycle on `info`'s repo (review-graph.mjs lifecycleGraph()), its steps
+  // asked of the policies on `base` with a sample pull request: { nodes, edges, sample }, `sample`
+  // whether the policies were asked. Only this endpoint sends it, never api/state.
+  async function workflowView(info, base, settings, grant, described) {
+    const isPrivate = typeof info.private === "boolean" ? info.private : null;
+    let decisions = null;
+    if (policies) {
+      const repo = info.full_name;
+      const bot = config.bot ?? null;
+      const sample = { repo, base, described, isPrivate, settings, bot, now };
+      decisions = await sampleDecisions(policies, sample).catch((error) => {
+        log(`Repositories: ${repo}'s workflow: ${error.message ?? error}`);
+        const reasons = [{ message: "the policies can't be read (see the orchestrator's logs)" }];
+        return Object.fromEntries(NODES.map((n) => [n.id, { state: "refused", reasons }]));
+      });
+    }
+    return { ...lifecycleGraph(settings, { grant, isPrivate, decisions }), sample: !!decisions };
   }
 
   // Handles /api/repos*; false for any other path.

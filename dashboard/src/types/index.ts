@@ -4,7 +4,7 @@
 // their config (repos.ts: listener/repos.mjs; config.ts: the config page's rows), the graph's
 // work area and answers (work.ts: listener/work.mjs, answers.mjs), the chats (chats.ts), and the
 // server and the smaller endpoints (server.ts: lanes, sync, health, machines, MCP clients, run
-// data).
+// data), and a repository's pull request lifecycle (workflow.ts: listener/review-graph.mjs).
 export * from "./access";
 export * from "./chats";
 export * from "./config";
@@ -13,3 +13,4 @@ export * from "./repos";
 export * from "./server";
 export * from "./state";
 export * from "./work";
+export * from "./workflow";

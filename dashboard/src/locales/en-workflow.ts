@@ -1,0 +1,64 @@
+// English texts of the pull request lifecycle's graph (Workflow.tsx): a repository's Workflow
+// tab and a task's loop. Spread into the English catalog (en.ts).
+export const workflow = {
+  "config.tabWorkflow": "Workflow",
+  "workflow.intro":
+    "What Deckhand does with a pull request here, from the review: its steps and what moves a pull request between them, with this repository's review and conflicts settings.",
+  "workflow.sample":
+    "Steps marked refused or may be refused say what the policies decide on a sample pull request: Deckhand's own, its CI passed and its review clean. A real one may get another answer.",
+  "workflow.noPolicies": "No policy was asked: the steps say what the settings and grants allow.",
+  "workflow.graph": "The pull request lifecycle",
+  "workflow.legend": "Legend",
+  "workflow.notes": "Why steps don't run",
+  "workflow.real": "From this pull request's last decision",
+  "workflow.fromSample": "On the sample",
+  "workflow.read": "Reading the workflow from GitHub",
+  "workflow.unreadable": "Couldn't read the workflow: {error}",
+  "workflow.show": "Workflow",
+  "workflow.current": "Here now",
+  // The steps.
+  "workflow.node.ready": "Ready for review",
+  "workflow.node.ci": "Wait for CI",
+  "workflow.node.ci-fix": "CI fix",
+  "workflow.node.review": "Review",
+  "workflow.node.fix": "Fix",
+  "workflow.node.merge": "Auto-merge",
+  "workflow.node.rebase": "Rebase",
+  "workflow.node.done": "Done",
+  // Their states.
+  "workflow.state.on": "On",
+  "workflow.state.off": "Off",
+  "workflow.state.refused": "Refused",
+  "workflow.state.depends": "May be refused",
+  "workflow.offKey": "Off: {key}",
+  // Their numbers.
+  "workflow.rounds": { one: "{count} round", other: "{count} rounds" },
+  "workflow.minutes": "{minutes} min",
+  "workflow.severity": "Tolerates {severity}",
+  "workflow.method": "{method}",
+  "workflow.every": "Every {minutes} min",
+  // Why: a grant's problem or a policy's message, and the rules that may refuse.
+  "workflow.byLayer.operator": "operator: {message}",
+  "workflow.byLayer.repo": "repository: {message}",
+  "workflow.rule": "{rule} in {file} ({layer})",
+  "workflow.layer.operator": "operator",
+  "workflow.layer.repo": "repository",
+  // What moves a pull request on.
+  "workflow.when.ready": "ready",
+  "workflow.when.passed": "CI passed",
+  "workflow.when.ci-over": "CI over",
+  "workflow.when.failed": "CI failed",
+  "workflow.when.pushed": "pushed",
+  "workflow.when.nothing-pushed": "nothing pushed",
+  "workflow.when.blocking": "blocking",
+  "workflow.when.clean": "nothing blocking",
+  "workflow.when.rounds-out": "rounds out",
+  "workflow.when.fixed": "fixed",
+  "workflow.when.merged": "merged or refused",
+  "workflow.when.conflict": "conflicts",
+  "workflow.when.rebased": "rebased",
+  // A task's counters.
+  "workflow.fixRound": "Fix round {round}/{rounds}",
+  "workflow.ciFixRound": "CI fix {round}/{rounds}",
+  "workflow.ciFixes": { one: "{count} CI fix", other: "{count} CI fixes" },
+} as const;

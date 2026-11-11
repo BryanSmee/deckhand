@@ -53,6 +53,9 @@ test("settings: the repositories, and one's config", () => {
   const capabilities = { ...config, configTab: "capabilities" as const };
   expect(formatRoute(capabilities)).toBe("#/settings/repositories/org/app/capabilities");
   expect(parseRoute("#/settings/repositories/org/app/capabilities")).toEqual(capabilities);
+  const workflow = { ...config, configTab: "workflow" as const };
+  expect(formatRoute(workflow)).toBe("#/settings/repositories/org/app/workflow");
+  expect(parseRoute("#/settings/repositories/org/app/workflow")).toEqual(workflow);
   // A tab without a repository: the list.
   expect(formatRoute({ ...list, configTab: "policies" })).toBe("#/settings/repositories");
 });

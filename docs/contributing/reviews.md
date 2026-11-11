@@ -131,3 +131,16 @@ ready, until the loop ends: then a ready row whose loop ended blocking says what
 findings left after 3 fix rounds"), and the task's page lists each round's counts, marking those
 whose blocking count didn't go down. The orchestrator's behaviour doesn't change: the loop still
 runs all its rounds.
+
+`review-graph.mjs` describes the same lifecycle as a graph for the dashboard (#899), without
+running it: `lifecycleGraph()` gives its steps (`NODES`, on a fixed grid) and the edges between
+them from the repo's `review:` and `conflicts:` settings, each step `on`, `off`, `refused` (the
+`auto_merge` grant missing, or the policies refusing it) or `depends` (a deny rule, or an allow
+rule that isn't unconditional, may refuse another pull request). `repos.mjs` sends it in
+`api/repos/<repo>/config`'s `workflow`, its policies asked by `sampleDecisions()` about a sample
+pull request (`sampleInputs()`, built as the real decisions' inputs are); the task page reads it
+when its Workflow fold opens and puts the pull request's recorded decisions over the sample's.
+`STATE_NODES` places each of `reviewLoop()`'s states (`LOOP_STATES`), and the dashboard's
+`LoopState` is held to that list; `lifecycleMermaid()` writes the block in
+`docs/repo-config/reviews.md`, which `test/review-graph.test.mjs` holds equal to it. Changing the
+lifecycle in `reviews.mjs` means changing its graph there too.

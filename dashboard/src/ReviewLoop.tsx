@@ -2,7 +2,8 @@
 // marks a ready row gets when the loop left blocking findings or a commit was pushed after its
 // last review, and the Detail page's rounds: the last review's counts and its trend, every
 // review's on hover, those that didn't lower the blocking ones marked, and once the loop is
-// over, what the task page offers to do next (Review, Fix).
+// over, what the task page offers to do next (Review, Fix); its counters, and the lifecycle's
+// graph with the pull request's step (Workflow.tsx).
 import type { ComponentChildren } from "preact";
 import { useEffect, useId, useRef, useState } from "preact/hooks";
 import {
@@ -17,6 +18,7 @@ import { t, tx } from "./i18n";
 import type { Plain } from "./locales";
 import type { Task } from "./types";
 import * as Icon from "./ui/icons";
+import { TaskWorkflow } from "./Workflow";
 import { usePopup } from "./ui/popup";
 import styles from "./ReviewLoop.module.css";
 
@@ -75,6 +77,20 @@ const MANUAL_ENDS: Record<string, Plain> = {
   stopped: "reviewLoop.blocking",
 };
 
+// "Fix round 1/3 · CI fix 1/2": the loop's counters, those the repo allows or that ran.
+export function loopCounters(r: NonNullable<Task["review"]>): string {
+  const ciFixes = r.ciFixes ?? 0;
+  const ciRounds = r.ciRounds ?? 0;
+  return [
+    r.rounds > 0 && t("workflow.fixRound", { round: r.round, rounds: r.rounds }),
+    ciRounds > 0
+      ? t("workflow.ciFixRound", { round: ciFixes, rounds: ciRounds })
+      : ciFixes > 0 && t("workflow.ciFixes", { count: ciFixes }),
+  ]
+    .filter(Boolean)
+    .join(" · ");
+}
+
 // "Review loop · Fix rounds ran out", then "Last review: 2 high ↓" (LastReview);
 // "Reviews · Nothing blocking" when no loop ran, only maintainers' reviews. "⚠ Outdated:
 // reviewed abc1234, head is now def5678" beside the last review once a commit was pushed
@@ -88,11 +104,13 @@ export function ReviewRounds({ task, actions }: { task: Task; actions?: Componen
   const key = (r.manual && MANUAL_ENDS[r.loop]) || ENDS[r.loop];
   const end = key ? t(key) : r.loop;
   const outdated = reviewOutdated(task);
+  const counters = r.manual ? "" : loopCounters(r);
   return (
     <section class={styles.rounds} aria-label={name}>
       <h3>
         {name} <span class={styles.state}>· {end}</span>
       </h3>
+      {counters && <span class={styles.counters}>{counters}</span>}
       <FindingsLeft task={task} />
       {r.history.length > 0 && (
         <div class={styles.lastRow}>
@@ -118,6 +136,7 @@ export function ReviewRounds({ task, actions }: { task: Task; actions?: Componen
         </div>
       )}
       {actions && <div class={styles.actions}>{actions}</div>}
+      <TaskWorkflow task={task} />
     </section>
   );
 }
