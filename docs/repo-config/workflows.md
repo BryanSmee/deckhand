@@ -297,7 +297,10 @@ a checkout:
   `deckhand-workflow-<name>-<id>`, from the default branch's head, its commit's trailer
   co-authored by you, and opens a pull request saying you saved it. It lands like any other
   change: reviewed, then merged into the default branch, which is the only place workflows are
-  read from. A text with errors isn't saved, nor one over a file that changed on the default
-  branch since you opened it. Saving needs the `repo:config:write` action
+  read from. A text with errors of its own (its trigger clashing with another file's included)
+  isn't saved, nor one over a file that changed on the default branch since you opened it;
+  another file's errors are listed, but don't stop it, so two broken files can each be fixed. When
+  GitHub refuses the commit or the pull request, the branch is deleted (or its name said, when it
+  can't be). Saving needs the `repo:config:write` action
   ([Access](policies.md#access)); reading the files, checking them and dry runs
   `repo:config:read`.

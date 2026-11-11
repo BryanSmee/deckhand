@@ -22,6 +22,11 @@ export const editor = {
     one: "{count} error: none of the repository's workflows would run.",
     other: "{count} errors: none of the repository's workflows would run.",
   },
+  "editor.othersBroken": {
+    one: "Another file has an error: until it is fixed on the default branch, none of the repository's workflows runs. This one can still be saved.",
+    other:
+      "Other files have {count} errors: until they are fixed on the default branch, none of the repository's workflows runs. This one can still be saved.",
+  },
   // How many pull requests run it now.
   "editor.versions.none": "No open pull request runs this workflow now.",
   "editor.versions.file": {

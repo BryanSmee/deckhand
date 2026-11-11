@@ -268,7 +268,8 @@ function fakeGithub({ files = { "review.yaml": REVIEW_FILE }, refuse = null } = 
     const url = path.split("?")[0];
     if (method !== "GET") {
       writes.push({ method, path, body });
-      if (refuse && url.endsWith(refuse)) return json({ message: "Nope" }, 422);
+      if ([refuse].flat().some((r) => r && url.includes(r))) return json({ message: "Nope" }, 422);
+      if (method === "DELETE") return new Response(null, { status: 204 });
       if (url.endsWith("/git/refs")) return json({ ref: body.ref }, 201);
       if (url.includes("/contents/")) return json({ content: {} }, 201);
       if (url.endsWith("/pulls")) {
@@ -519,15 +520,48 @@ test("POST save: refused without repo:config:write, from another site, with erro
   assert.match(writes[1].body.message, /^Add /);
 });
 
-test("POST save: GitHub's refusal said", async (t) => {
-  const { call } = await editorSetup(t, { refuse: "/pulls" });
-  const said = await call("POST", `${BASE}/save`, {
+test("POST save: GitHub's refusal said, the branch it made deleted (or named when it stays)", async (t) => {
+  const asked = { name: "review.yaml", text: REVIEW_FILE, sha: "blob0" };
+  const { call, writes } = await editorSetup(t, { refuse: "/pulls" });
+  const said = await call("POST", `${BASE}/save`, asked);
+  assert.equal(said.status, 502);
+  assert.match(said.body.error, /^GitHub refused it \(422: Nope\)\.$/);
+  const branch = writes[0].body.ref.replace("refs/heads/", "");
+  assert.deepEqual(writes.at(-1), {
+    method: "DELETE",
+    path: `/repos/org/app/git/refs/heads/${branch}`,
+    body: undefined,
+  });
+  // The commit refused and the branch kept: its name said, for a person to delete.
+  const kept = await editorSetup(t, { refuse: ["/contents/", "/git/refs/heads/deckhand-"] });
+  const left = await kept.call("POST", `${BASE}/save`, asked);
+  assert.equal(left.status, 502);
+  assert.match(left.body.error, /Its branch deckhand-workflow-review-[0-9a-f]{8} is left/);
+  assert.equal(kept.writes.filter((w) => w.path.endsWith("/pulls")).length, 0);
+});
+
+test("POST save: another file's errors don't stop this one's fix; its own trigger clash does", async (t) => {
+  const broken = {
+    "review.yaml": "on: ready\nsteps:\n  - run: deploy\n",
+    "old.yaml": "on: nope\n",
+  };
+  const { call, writes } = await editorSetup(t, { files: broken });
+  const fixed = await call("POST", `${BASE}/save`, {
     name: "review.yaml",
     text: REVIEW_FILE,
     sha: "blob0",
   });
-  assert.equal(said.status, 502);
-  assert.match(said.body.error, /GitHub refused it \(422: Nope\)/);
+  assert.equal(fixed.status, 200);
+  assert.equal(writes.filter((w) => w.path.endsWith("/pulls")).length, 1);
+  // A second workflow on `ready` beside a sound review.yaml: refused.
+  const sound = await editorSetup(t);
+  const clash = await sound.call("POST", `${BASE}/save`, {
+    name: "second.yaml",
+    text: REVIEW_FILE,
+    sha: null,
+  });
+  assert.equal(clash.status, 422);
+  assert.match(clash.body.error, /two triggers for ready/);
 });
 
 test("POST check: the repo kept a minute, its workflows as the reader keeps them; GET reads afresh", async (t) => {

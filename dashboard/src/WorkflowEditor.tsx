@@ -148,7 +148,10 @@ export function WorkflowEditor({ repo, now }: { repo: string; now: number }) {
 
   const file = files.files.find((f) => f.name === open) ?? null;
   const original = file?.text ?? null;
-  const errors = checked?.errors ?? [];
+  // This file's errors stop it; the other files' are said, but don't keep this one from being
+  // saved (both broken at once would otherwise lock each other).
+  const errors = (checked?.errors ?? []).filter((e) => !e.file);
+  const others = (checked?.errors ?? []).filter((e) => e.file);
   const marks = dry.result
     ? marksOf(dry.result.trail, dry.result.diverged?.line ?? null, dry.result.ask?.line ?? null)
     : null;
@@ -194,7 +197,7 @@ export function WorkflowEditor({ repo, now }: { repo: string; now: number }) {
             {file ? file.file : t("editor.newTitle")}
           </h2>
           <Yaml text={text} errors={errors} onText={setText} area={area} />
-          <Problems errors={errors} pending={!checked} onLine={toLine} />
+          <Problems errors={errors} others={others} pending={!checked} onLine={toLine} />
         </section>
         <section class={styles.pane} aria-labelledby="editor-graph">
           <h2 id="editor-graph" class={styles.title}>
@@ -281,42 +284,67 @@ function Yaml({
 
 function Problems({
   errors,
+  others,
   pending,
   onLine,
 }: {
   errors: WorkflowError[];
+  others: WorkflowError[];
   pending: boolean;
   onLine: (line: number) => void;
 }) {
   if (pending) return <p class={styles.muted}>{t("editor.checking")}</p>;
+  const elsewhere = others.length > 0 && (
+    <div role="status" class={styles.others}>
+      <p>{t("editor.othersBroken", { count: others.length })}</p>
+      <ErrorList errors={others} onLine={onLine} />
+    </div>
+  );
   if (!errors.length) {
     return (
-      <p class={styles.valid} role="status">
-        {t("editor.valid")}
-      </p>
+      elsewhere || (
+        <p class={styles.valid} role="status">
+          {t("editor.valid")}
+        </p>
+      )
     );
   }
   return (
-    <div role="alert" class={styles.errors}>
-      <p>{t("editor.errors", { count: errors.length })}</p>
-      <ul>
-        {errors.map((e, i) => (
-          <li key={i}>
-            {e.line && !e.file ? (
-              <button type="button" class={styles.lineLink} onClick={() => onLine(e.line!)}>
-                {t("editor.line", { line: e.line })}
-              </button>
-            ) : e.file ? (
-              <code>
-                {e.file}
-                {e.line ? `:${e.line}` : ""}
-              </code>
-            ) : null}{" "}
-            {e.message}
-          </li>
-        ))}
-      </ul>
-    </div>
+    <>
+      <div role="alert" class={styles.errors}>
+        <p>{t("editor.errors", { count: errors.length })}</p>
+        <ErrorList errors={errors} onLine={onLine} />
+      </div>
+      {elsewhere}
+    </>
+  );
+}
+
+function ErrorList({
+  errors,
+  onLine,
+}: {
+  errors: WorkflowError[];
+  onLine: (line: number) => void;
+}) {
+  return (
+    <ul>
+      {errors.map((e, i) => (
+        <li key={i}>
+          {e.line && !e.file ? (
+            <button type="button" class={styles.lineLink} onClick={() => onLine(e.line!)}>
+              {t("editor.line", { line: e.line })}
+            </button>
+          ) : e.file ? (
+            <code>
+              {e.file}
+              {e.line ? `:${e.line}` : ""}
+            </code>
+          ) : null}{" "}
+          {e.message}
+        </li>
+      ))}
+    </ul>
   );
 }
 

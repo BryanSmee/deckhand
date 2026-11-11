@@ -16,7 +16,7 @@
 // a pull request, and a workflow orders steps that each still ask the policies.
 import { randomUUID } from "node:crypto";
 import { keepLast } from "../lib/capped.mjs";
-import { readJsonBody, refuse, send } from "../lib/http.mjs";
+import { readJsonBody, Refused, refuse, send } from "../lib/http.mjs";
 import { repoAllowed } from "./config.mjs";
 import { parseKey, pullEntry, sameRepo } from "./events.mjs";
 import { getJson } from "./github.mjs";
@@ -136,7 +136,7 @@ export function createWorkflowEditor(ctx) {
     if (parsed.workflow) errors.push(...checkTriggers([...others, parsed.workflow], settings));
     const own = `${WORKFLOW_DIR}/${name}`;
     return {
-      workflow: errors.length ? null : parsed.workflow,
+      workflow: errors.some((e) => e.file === own) ? null : parsed.workflow,
       steps: parsed.workflow ? parsed.workflow.steps.map(stepView) : null,
       on: parsed.workflow?.on ?? [],
       errors: errors.map((e) => ({
@@ -264,9 +264,11 @@ export function createWorkflowEditor(ctx) {
     const { name, text } = asked(body);
     const read = await readRepo(repo, { fresh: true });
     const { base } = read;
-    const { errors } = await check(read, name, text);
-    if (errors.length) {
-      refuse(422, `The workflow has errors: ${errors.map((e) => plain(errorText(e))).join("; ")}`);
+    // Its own errors only (its trigger clashes too): another file's must not keep this one from
+    // being fixed, when both are broken at once.
+    const own = (await check(read, name, text)).errors.filter((e) => !e.file);
+    if (own.length) {
+      refuse(422, `The workflow has errors: ${own.map((e) => plain(errorText(e))).join("; ")}`);
     }
     const path = `${WORKFLOW_DIR}/${name}`;
     const ref = encodeURIComponent(base);
@@ -278,7 +280,8 @@ export function createWorkflowEditor(ctx) {
     if ((existing?.sha ?? null) !== was) {
       refuse(409, `${path} changed on ${base} since it was opened: read it again first.`);
     }
-    const head = await json(repo, `/repos/${repo}/git/ref/heads/${base}`);
+    const branchPath = base.split("/").map(encodeURIComponent).join("/");
+    const head = await json(repo, `/repos/${repo}/git/ref/heads/${branchPath}`);
     const stem = name.replace(/\.yaml$/, "").toLowerCase();
     // A ref git takes whatever the file's name (`a..b.yaml` is one): letters, digits and dashes.
     const slug = stem.replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "workflow";
@@ -289,20 +292,35 @@ export function createWorkflowEditor(ctx) {
     });
     const verb = existing ? "Edit" : "Add";
     const by = await coAuthor(repo, user);
-    await write(repo, "PUT", `/repos/${repo}/contents/${path}`, {
-      message: `${verb} ${path} from Deckhand's dashboard\n\nSaved by @${user}.${by ? `\n\n${by}` : ""}`,
-      content: Buffer.from(text).toString("base64"),
-      branch,
-      ...(existing && { sha: existing.sha }),
-    });
-    const pull = await write(repo, "POST", `/repos/${repo}/pulls`, {
-      title: `${verb} the ${stem} workflow`,
-      head: branch,
-      base,
-      body: saveBody(user, path, existing),
-    });
+    // A later step refused: the branch goes, so a retry leaves nothing behind (or says its name).
+    const cleanUp = async (error) => {
+      const gone = await github(repo, "DELETE", `/repos/${repo}/git/refs/heads/${branch}`).catch(
+        () => null,
+      );
+      if (!gone?.ok) {
+        log(`Workflows: ${repo}: branch ${branch} left behind: ${gone?.status ?? "no answer"}`);
+      }
+      if (gone?.ok || !(error instanceof Refused)) throw error;
+      refuse(error.status, `${error.message} Its branch ${branch} is left: delete it on GitHub.`);
+    };
+    const pull = await commitAndOpen().catch(cleanUp);
     log(`Workflows: ${repo}: ${user} saved ${path}, pull request #${pull.number}`);
     send(res, 200, { number: pull.number, url: pull.html_url, branch });
+
+    async function commitAndOpen() {
+      await write(repo, "PUT", `/repos/${repo}/contents/${path}`, {
+        message: `${verb} ${path} from Deckhand's dashboard\n\nSaved by @${user}.${by ? `\n\n${by}` : ""}`,
+        content: Buffer.from(text).toString("base64"),
+        branch,
+        ...(existing && { sha: existing.sha }),
+      });
+      return write(repo, "POST", `/repos/${repo}/pulls`, {
+        title: `${verb} the ${stem} workflow`,
+        head: branch,
+        base,
+        body: saveBody(user, path, existing),
+      });
+    }
   }
 
   // A write as the App, its answer's body; GitHub's refusal a 502 that says it.

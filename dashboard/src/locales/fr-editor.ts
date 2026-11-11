@@ -25,6 +25,11 @@ export const editor = {
     one: "{count} erreur : aucun workflow du dépôt ne s’exécuterait.",
     other: "{count} erreurs : aucun workflow du dépôt ne s’exécuterait.",
   },
+  "editor.othersBroken": {
+    one: "Un autre fichier a une erreur : tant qu’elle n’est pas corrigée sur la branche par défaut, aucun workflow du dépôt ne s’exécute. Celui-ci peut quand même être enregistré.",
+    other:
+      "D’autres fichiers ont {count} erreurs : tant qu’elles ne sont pas corrigées sur la branche par défaut, aucun workflow du dépôt ne s’exécute. Celui-ci peut quand même être enregistré.",
+  },
   "editor.versions.none": "Aucune pull request ouverte n’exécute ce workflow en ce moment.",
   "editor.versions.file": {
     one: "{count} pull request ouverte exécute la version de la branche par défaut : une fois une modification fusionnée, elle la garde jusqu’à sa fermeture.",

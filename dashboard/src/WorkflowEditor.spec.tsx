@@ -160,3 +160,26 @@ test("a new file starts from Deckhand's own loop, or a starter, under a name it 
   expect(text().value).toContain("max: fixes 2");
   expect(screen.getByRole("heading", { name: "New workflow" })).toBeTruthy();
 });
+
+test("another file's errors are said, and don't keep this one from being saved", async () => {
+  const check: WorkflowCheck = {
+    ...WORKFLOW_CHECK,
+    errors: [{ file: ".deckhand/workflows/old.yaml", line: 1, message: "on: unknown event nope" }],
+  };
+  setup({ check });
+  const said = await screen.findByText(/Another file has an error/);
+  expect(said.closest("[role=status]")!.textContent).toContain(".deckhand/workflows/old.yaml:1");
+  expect(screen.queryByRole("alert")).toBeNull();
+  fireEvent.input(text(), { target: { value: `${WORKFLOW_FILES.files[0].text}# more\n` } });
+  await waitFor(() =>
+    expect(screen.getByRole("button", { name: "Open a pull request" })).toHaveProperty(
+      "disabled",
+      false,
+    ),
+  );
+  // The dry run, too, needs only this file to parse.
+  fireEvent.change(screen.getByRole("combobox", { name: "Pull request" }), {
+    target: { value: "212" },
+  });
+  expect(screen.getByRole("button", { name: "Replay it" })).toHaveProperty("disabled", false);
+});

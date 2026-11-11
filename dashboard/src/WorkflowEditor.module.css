@@ -140,7 +140,18 @@
   font-weight: 600;
 }
 
-.errors ul {
+.others {
+  color: var(--input);
+  font-size: 12.5px;
+}
+
+.others p {
+  margin: 0 0 4px;
+  font-weight: 600;
+}
+
+.errors ul,
+.others ul {
   margin: 0;
   padding-left: 18px;
 }
