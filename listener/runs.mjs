@@ -8,6 +8,7 @@ import { agentFor } from "./agents/index.mjs";
 import { authOf, resolveEntry } from "./agents/select.mjs";
 import { commentsText, taskKey } from "./events.mjs";
 import { brainstormDefaults, customMode, entryRun, isApart, isFresh } from "./modes.mjs";
+import { stepSettings } from "./modes.mjs";
 import { TALKS, WRAP_UPS } from "./modes.mjs";
 import { createPreparation } from "./preparation.mjs";
 import { openingMessages, promptFor } from "./prompts.mjs";
@@ -292,9 +293,12 @@ export function createRuns(ctx) {
     const { key, mode, light, record, logFile } = task.live;
     await makeRoom(task);
     // Fresh from the default branch: a config merged since the comment applies.
-    const { settings, errors, warnings } = await ctx.repoSettings(task.repo, task.base);
-    task.settings = settings;
+    const read = await ctx.repoSettings(task.repo, task.base);
+    const { errors, warnings } = read;
+    task.settings = read.settings;
     task.settingsAt = Date.now();
+    // The review loop's step may name its run's agent, model and effort (stepSettings()).
+    const settings = stepSettings(read.settings, mode, items);
     const own = customMode(settings, mode);
     const previous = ctx.runs.find(
       (r) => r !== record && r.key === key && !!r.light === light && r.status !== "running",

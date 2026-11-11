@@ -132,8 +132,12 @@ test("unknown events, steps, keys and vars are refused", () => {
     /line 1: `on`: unknown event `push`/,
   );
   assert.match(
+    errors("on: conflict\nsteps:\n  - run: deploy\n")[0],
+    /line 3: `run`: unknown step `deploy`/,
+  );
+  assert.match(
     errors("on: conflict\nsteps:\n  - run: merge\n")[0],
-    /line 3: `run`: unknown step `merge`/,
+    /line 3: `run: merge` doesn't run on `conflict`/,
   );
   assert.match(
     errors("on: conflict\nname: x\nsteps:\n  - run: rebase\n")[0],
@@ -185,10 +189,11 @@ test("the built-in review loop counts as a trigger on `ready`", () => {
   assert.deepEqual(checkTriggers([ready], { review: { on: "ready" } }).map(errorText), [
     "`.deckhand/workflows/r.yaml` line 1: two triggers for `ready`: this workflow and the built-in review loop (`review.on: ready`)",
   ]);
-  // Without it, still no workflow runs on `ready` until the review loop is on the engine.
+  // Without it, the workflow is the one on `ready`; it needs the `review` block's settings.
+  assert.deepEqual(checkTriggers([ready], { review: { on: "manual" } }), []);
   assert.match(
-    errorText(checkTriggers([ready], { review: { on: "manual" } })[0]),
-    /`ready`: no workflow runs on it yet/,
+    errorText(checkTriggers([ready], { review: null })[0]),
+    /`ready` needs the repository's `review:` block/,
   );
 });
 
@@ -200,6 +205,7 @@ test("the built-in conflicts workflow is a file of the format, one rebase step",
     ["built-in", null, ["conflict"], [{ line: 4, run: "rebase" }]],
   );
   assert.equal(builtInWorkflow("ready"), null);
+  assert.equal(builtInWorkflow("ready", { review: { on: "manual" } }), null);
 });
 
 test("a file too large or too deep is refused", () => {

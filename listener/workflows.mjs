@@ -21,8 +21,9 @@ const LISTING_MS = 10 * 60_000;
 const MAX_REPOS = 1000;
 const MAX_PARSED = 500;
 
-// `github(repo, method, path, body, expected)`: the App's calls.
-export function createWorkflows({ github, now = Date.now }) {
+// `github(repo, method, path, body, expected)`: the App's calls; `config`: the operator's, whose
+// agents a step's `agent` must be one of (unchecked without).
+export function createWorkflows({ github, config = null, now = Date.now }) {
   // "org/repo" (lower case) → { ref, at, listed }: the folder as last listed on that ref.
   const listings = new Map();
   // A file's parse by its blob sha and name: { workflow, errors }.
@@ -63,7 +64,8 @@ export function createWorkflows({ github, now = Date.now }) {
       if (!parsed.has(id)) {
         const blob = await getJson(github, repo, `/repos/${repo}/git/blobs/${entry.sha}`);
         const text = Buffer.from(blob.content ?? "", blob.encoding ?? "base64").toString();
-        keepLast(parsed, id, parseWorkflow(entry.name, text), MAX_PARSED);
+        const agents = config?.agents ?? null;
+        keepLast(parsed, id, parseWorkflow(entry.name, text, { agents }), MAX_PARSED);
       }
       const { workflow, errors: found } = parsed.get(id);
       errors.push(...found);
@@ -74,14 +76,15 @@ export function createWorkflows({ github, now = Date.now }) {
   }
 
   // The workflow that runs `event` in `repo` (its default branch `ref`): its own, else the
-  // built-in one, else null. → { workflow, errors }: with errors, no workflow runs.
+  // built-in one (on `ready`, the one `settings`' `review:` compiles to), else null.
+  // → { workflow, errors }: with errors, no workflow runs.
   async function forEvent(repo, ref, settings, event) {
     const { workflows, errors } = await read(repo, ref, settings);
     if (errors.length) {
       return { workflow: null, errors: errors.map(errorText) };
     }
     const own = workflows.find((w) => w.on.includes(event));
-    return { workflow: own ?? builtInWorkflow(event), errors: [] };
+    return { workflow: own ?? builtInWorkflow(event, settings), errors: [] };
   }
 
   // `repo`'s default branch moved, or the repo left the App's reach: listed again next time.
