@@ -207,7 +207,14 @@ export function createRunReplies(ctx, { agentOf, hidden, reviewTolerance, onboar
   async function configCheck(task) {
     if (!onboardingWork(task)) return null;
     try {
-      return await branchConfigReport(ctx.github, config, task.repo, task.number, ctx.policies);
+      return await branchConfigReport(
+        ctx.github,
+        config,
+        task.repo,
+        task.number,
+        ctx.policies,
+        ctx.workflows,
+      );
     } catch (error) {
       log(`${taskKey(task.repo, task.id)}: checking the branch's config: ${error.stack ?? error}`);
       return `⚠️ The listener couldn't check the branch's \`${CONFIG_FILE}\`: ${error.message}`;

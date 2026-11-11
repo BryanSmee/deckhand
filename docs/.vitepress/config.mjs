@@ -181,6 +181,7 @@ export default defineConfig({
               { text: "Issues", link: "/repo-config/issues" },
               { text: "Policies", link: "/repo-config/policies" },
               { text: "Policy inputs", link: "/repo-config/policy-inputs" },
+              { text: "Workflows", link: "/repo-config/workflows" },
             ],
           },
           {

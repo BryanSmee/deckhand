@@ -12,6 +12,12 @@
 // Before a run starts, the repo's policies are asked (`deny_fix`, `reason: "conflict"`): a
 // refusal starts nothing, says why on the pull request (once for the same reasons: a base
 // that keeps moving doesn't repeat it), and keeps the pair as an attempt.
+//
+// What a conflict found does is a workflow's (#1040, workflow-engine.mjs): the repo's own on
+// `conflict` (`.deckhand/workflows/`, workflows.mjs), else Deckhand's built-in one, a single
+// `run: rebase`. The pair is the event's id: the engine never handles one twice either, and
+// keeps each pull request's instance (its vars, its step, its version of the workflow) in the
+// store. A rebase run waits for its end (ended()) before the workflow's next step.
 import { repoAllowed } from "./config.mjs";
 import { waitsForInput } from "./comments.mjs";
 import { headInRepo, mergeConflict, parseKey } from "./events.mjs";
@@ -20,6 +26,12 @@ import { denyKept, passed } from "./policies.mjs";
 import { fixInput, readPullInput } from "./review-merge.mjs";
 import { policyWhy } from "./review-texts.mjs";
 import { respellMap } from "./spelling.mjs";
+import { createEngine, facts } from "./workflow-engine.mjs";
+import { builtInWorkflow } from "./workflow-format.mjs";
+import { pullFacts } from "./workflows.mjs";
+
+// The event the watcher's workflows run on (workflow-format.mjs EVENTS).
+const EVENT = "conflict";
 
 // The results of checkPull() a pass counts: the dashboard's Sync says them.
 const COUNTED = ["started", "pending"];
@@ -57,9 +69,13 @@ export function noRebaseText(why, base) {
 // `fixes(repo, number)`: the pull request's fix runs so far (reviews.mjs); `looping(repo,
 // number)`: its review loop is between two steps (reviews.mjs looping()), no rebase run then;
 // `reply(repo, number, text)`: a comment with the App's token. `attempts`: the Map the last
-// attempts are kept in (storeMap()'s), "org/repo#12" → { pr, head, base, at }.
+// attempts are kept in (storeMap()'s), "org/repo#12" → { pr, head, base, at }. `workflows`: the
+// repos' workflows (workflows.mjs createWorkflows()), the built-in one alone without;
+// `instances`: the Map the engine keeps its instances in (storeMap()'s too).
 export function createConflicts({
   attempts = new Map(),
+  workflows = null,
+  instances = new Map(),
   config,
   pulls,
   github,
@@ -86,6 +102,16 @@ export function createConflicts({
   let waiting = null;
 
   const json = (repo, url, expected) => getJson(github, repo, url, expected);
+  const engine = createEngine({ instances, maxRounds: config.maxFixRounds, log, now });
+
+  // The workflow that runs a conflict in `repo` → it, or throws when the repo's workflows have
+  // errors: nothing runs then, and the pass says why (as for GitHub's errors).
+  async function workflowOf(repo, base, settings) {
+    if (!workflows) return builtInWorkflow(EVENT);
+    const { workflow, errors } = await workflows.forEvent(repo, base, settings, EVENT);
+    if (errors.length) throw new Error(`its workflows have errors: ${errors.join("; ")}`);
+    return workflow;
+  }
 
   // One pass over the repos that are due. Overlapping ticks share the pass under way. Resolves
   // to how many rebase runs it started, how many pull requests GitHub hadn't computed yet, and
@@ -190,11 +216,12 @@ export function createConflicts({
     const { settings, errors } = await repoSettings(repo, base);
     if (errors.length || !settings.conflicts) return;
     due.set(id, now() + settings.conflicts.checkMinutes * 60_000);
+    const workflow = await workflowOf(repo, base, settings);
     let pending = false;
     for (const { key, pr } of tasks) {
       let result;
       try {
-        result = await checkPull(repo, key, pr.number, { base, settings });
+        result = await checkPull(repo, key, pr.number, { base, settings, workflow });
       } catch (error) {
         metrics?.conflictCheck("error");
         throw error;
@@ -207,12 +234,13 @@ export function createConflicts({
     if (pending) due.set(id, 0);
   }
 
-  // Starts a rebase run for the pull request if it conflicts. → "started"; "pending" when GitHub
-  // doesn't know yet; "clean" when it merges; "refused" by the policies; "skipped" for the rest
-  // (a run going, its review loop deciding a step or waiting for CI, its task stopped, closed,
-  // its input awaited, this head and base tried already). Skipped before its attempt is kept:
-  // the next check tries again.
-  async function checkPull(repo, key, number, { base, settings }) {
+  // Runs the repo's workflow on the pull request if it conflicts (the built-in one starts a
+  // rebase run). → "started"; "pending" when GitHub doesn't know yet; "clean" when it merges;
+  // "refused" by the policies; "skipped" for the rest (a run going, its review loop deciding a
+  // step or waiting for CI, its task stopped, closed, its input awaited, this head and base
+  // tried already, a workflow that ran no rebase). Skipped before its attempt is kept (a
+  // rebase step that took nothing): the next check tries again, from that step.
+  async function checkPull(repo, key, number, { base, settings, workflow }) {
     if (busy(key) || looping(repo, number) || stopped(key)) return "skipped";
     const pr = await json(repo, `/repos/${repo}/pulls/${number}`, [404]);
     if (!pr || pr.state !== "open" || !headInRepo(pr, repo)) return "skipped";
@@ -230,21 +258,87 @@ export function createConflicts({
     if (!baseSha) return "skipped";
     const pair = { pr: number, head: pr.head.sha, base: baseSha };
     const last = attempts.get(key);
-    // The refusal last said on the pull request (`said`, kept once its comment was posted): the
-    // same refusal again isn't said again.
-    const said = last?.pr === number ? last.said : undefined;
     if (last && last.pr === pair.pr && last.head === pair.head && last.base === pair.base) {
       return "skipped";
     }
+    const found = { repo, key, number, base, settings, pr, issue, pair, result: null };
+    const event = { name: EVENT, id: `${number}:${pair.head}:${pair.base}`, pr: number };
+    const outcome = await engine.trigger(
+      key,
+      workflow,
+      { ...event, head: pair.head },
+      steps(found),
+    );
+    if (outcome === "skipped") return "skipped";
+    // A workflow that ran no rebase (or an event the engine had handled): the pair is kept all
+    // the same, so it isn't asked again.
+    if (!found.result) attempts.set(key, { ...pair, at: now() });
+    return found.result ?? "skipped";
+  }
+
+  // What the engine runs for a conflict `found` ({ repo, key, number, base, settings, pr,
+  // issue, pair, result }): its steps' actions, and the facts its conditions read.
+  function steps(found) {
+    return {
+      facts: facts(pullFacts(github, found.repo, found.pr)),
+      act: (step, view) => (step.run === "rebase" ? rebase(found, view) : say(found, step.comment)),
+    };
+  }
+
+  // A `comment` step: said on the pull request. One that fails is logged, not tried again.
+  async function say({ repo, key, number }, text) {
+    try {
+      await reply(repo, number, text);
+    } catch (error) {
+      log(`${key}: a workflow's comment: ${error.message ?? error}`);
+    }
+    return "done";
+  }
+
+  // A `run: rebase` step: the policies asked (`deny_fix`), then the rebase run queued, or the
+  // refusal said. → "wait" (queued: the workflow goes on at its end), "refused", or "skipped"
+  // (taken nothing: the same pair asks again). `found.result`: what checkPull() returns.
+  async function rebase(found, { interrupted = false } = {}) {
+    const { repo, key, number, base, settings, pr, issue } = found;
+    let { pair } = found;
+    // A rebase after a step that waited (ended()): the pull request must conflict still, at a
+    // pair not tried yet. GitHub not knowing yet (just after the push) takes nothing: the next
+    // conflict found starts the workflow again.
+    if (!pair) {
+      const { conflict } = mergeConflict(pr);
+      if (conflict === undefined) return "skipped";
+      if (conflict !== true) return "refused";
+      const baseSha = await baseHead(repo, pr.base.ref);
+      if (!baseSha) return "refused";
+      pair = { pr: number, head: pr.head.sha, base: baseSha };
+      const last = attempts.get(key);
+      if (last && last.pr === pair.pr && last.head === pair.head && last.base === pair.base) {
+        return "refused";
+      }
+    }
+    const last = attempts.get(key);
+    // Asked again after a handover cut this step off: the pair kept, its run was queued then.
+    const kept = last && last.pr === pair.pr && last.head === pair.head && last.base === pair.base;
+    if (interrupted && kept) {
+      found.result = "skipped";
+      return "wait";
+    }
+    // The refusal last said on the pull request (`said`, kept once its comment was posted): the
+    // same refusal again isn't said again.
+    const said = last?.pr === number ? last.said : undefined;
     const { messages: denied, unread } = await deny(repo, key, pr, issue, base);
     // Refused because GitHub couldn't be read (the policies, the pull request's files): nothing
     // starts, and the pair isn't kept, so the next check asks again, as for any GitHub error.
     if (unread) throw new Error(`#${number}: ${policyWhy("deny_fix", denied)}`);
     // Checked again: a comment, or the loop's next step, may have come during the calls above.
-    if (busy(key) || looping(repo, number) || stopped(key)) return "skipped";
+    if (busy(key) || looping(repo, number) || stopped(key)) {
+      found.result = "skipped";
+      return "skipped";
+    }
     const repeated = denied.length > 0 && JSON.stringify(said) === JSON.stringify(denied);
     attempts.set(key, { ...pair, at: now(), ...(repeated && { said }) });
     if (denied.length) {
+      found.result = "refused";
       const why = policyWhy("deny_fix", denied);
       log(`${key}: pull request #${number} conflicts with ${pr.base.ref}, no rebase run, ${why}`);
       if (repeated) return "refused";
@@ -257,6 +351,7 @@ export function createConflicts({
       return "refused";
     }
     log(`${key}: pull request #${number} conflicts with ${pr.base.ref}, starting a rebase run`);
+    const target = parseKey(key);
     await accept({
       repo,
       id: target.id,
@@ -276,7 +371,32 @@ export function createConflicts({
       // The head it rebases, for the review loop at its end (reviews.mjs rebased()).
       rebaseFrom: pr.head.sha,
     });
-    return "started";
+    found.result = "started";
+    return "wait";
+  }
+
+  // A conflict run of task `key` is over (run-end.mjs cleanUp(); `number` its pull request,
+  // `base` the repo's default branch): its workflow's next steps, if it waited for it. Resolves
+  // to the engine's outcome; "idle" when nothing waited. Never throws: logged.
+  async function ended({ key, repo, number, base }) {
+    try {
+      if (!engine.waiting(key, EVENT)) return "idle";
+      const pr = await json(repo, `/repos/${repo}/pulls/${number}`, [404]);
+      if (!pr || pr.state !== "open") {
+        engine.forget(key, number);
+        return "idle";
+      }
+      const { settings, errors } = await repoSettings(repo, base);
+      // The watcher off in the repo now: its next conflict starts the workflow again.
+      if (errors.length || !settings.conflicts) return "idle";
+      const target = parseKey(key);
+      const issue = target?.kind === "issue" ? target.number : null;
+      const found = { repo, key, number, base, settings, pr, issue, pair: null, result: null };
+      return await engine.resume(key, EVENT, steps(found), pr.head?.sha ?? null);
+    } catch (error) {
+      log(`${key}: the conflicts workflow after its rebase run: ${error.message ?? error}`);
+      return "error";
+    }
   }
 
   // Why the policies refuse a conflict run on `pr` (`deny_fix`, `reason: "conflict"`):
@@ -347,10 +467,20 @@ export function createConflicts({
     soon,
     start,
     stop,
-    keys: () => [...attempts.keys()],
+    ended,
+    // Pull request `number` of task `key` is closed: its workflow's instance goes.
+    closed: (key, number) => engine.forget(key, number),
+    // Its workflow's instance (workflow-engine.mjs), or null.
+    instance: (key) => engine.instance(key, EVENT),
+    keys: () => [...new Set([...attempts.keys(), ...engine.keys()])],
     // Rekeyed with spelled() (restart.mjs unifySpellings()), so an attempt is found again
     // under the key pulls.mjs now has. Both spellings: the later attempt, or without times
     // (saved before they were), the old spelling's: the watcher ran under it, not the rest.
-    respell: (spelled) => respellMap(attempts, spelled, undefined, later),
+    // The workflows' instances too, their vars merged.
+    respell: (spelled) => {
+      const moved = respellMap(attempts, spelled, undefined, later);
+      engine.respell(spelled);
+      return moved;
+    },
   };
 }

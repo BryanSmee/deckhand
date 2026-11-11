@@ -80,6 +80,8 @@ It is off without the key, and each conflict found is a run, so a bill.
   read (the policies, the pull request's files): then nothing starts and nothing is kept, and
   the next check asks again. Without a policy that defines
   `deny_fix` (Deckhand's defaults don't), conflict runs start as before.
+- What a conflict found does is a [workflow](workflows.md)'s: Deckhand's built-in one is the
+  rebase run above, and a repository's own `.deckhand/workflows/` file on `conflict` replaces it.
 - The operator's `CONFLICT_CHECK_MINUTES` (default 5) is the shortest interval: a smaller
   `check_minutes` gets that one (with a warning in the run logs), and `0` turns conflict
   checks off for every repository. `check_minutes` must be a whole number above 0; any

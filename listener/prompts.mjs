@@ -24,6 +24,7 @@ export const SOURCE_PAGES = {
     "reviews of pull requests, `review`, CI before them and auto-merge",
   "docs/repo-config/policies.md": "policies in `.deckhand/policy/`, capabilities and access",
   "docs/repo-config/policy-inputs.md": "the policies' inputs, field by field",
+  "docs/repo-config/workflows.md": "workflows in `.deckhand/workflows/`, what follows a conflict",
 };
 
 const instructions = (name) => readFileSync(new URL(`../prompts/${name}`, import.meta.url), "utf8");
