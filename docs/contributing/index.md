@@ -18,6 +18,8 @@ to agents.
   they follow; [inside each service](each-service.md); [upgrades without downtime](upgrades.md).
 - [Cutting a release](releases.md): the tag, what it publishes, the chart's `appVersion` and the
   notes.
+- [Webhook pull mode: the spike](../design/webhook-pull-mode.md): how GitHub treats an App whose
+  webhook URL can't be reached, and what pull mode takes from it.
 
 ## The dashboard
 

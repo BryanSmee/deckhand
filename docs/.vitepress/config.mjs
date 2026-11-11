@@ -238,6 +238,7 @@ export default defineConfig({
           { text: "Cutting a release", link: "/contributing/releases" },
           { text: "The dashboard's languages", link: "/contributing/dashboard-languages" },
           { text: "Dashboard redesign", link: "/design/dashboard-redesign" },
+          { text: "Webhook pull mode: the spike", link: "/design/webhook-pull-mode" },
           { text: "Checking a cluster end to end", link: "/contributing/kubernetes-e2e" },
         ],
       },
