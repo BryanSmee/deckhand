@@ -9,9 +9,13 @@ const stepOf = (r) => r.reason || r.taskMode || "work";
 // A run's tokens by part, beside its total: each part is summed over the runs that report it.
 export const PARTS = ["input", "output", "cacheRead", "cacheWrite"];
 // Input, output and cache writes, the parts not read again from the cache. An agent that has
-// no cache write (Codex, Antigravity) counts its input and output alone.
-const uncached = (u) =>
-  valid(u?.input) && valid(u?.output) ? u.input + u.output + (u.cacheWrite ?? 0) : undefined;
+// no cache write (Codex, Antigravity) counts its input and output alone; Claude's needs its own.
+const uncached = (r) => {
+  const u = r.usage;
+  const writes = !r.agent || r.agent === "claude";
+  if (!valid(u?.input) || !valid(u?.output) || (writes && !valid(u.cacheWrite))) return undefined;
+  return u.input + u.output + (u.cacheWrite ?? 0);
+};
 
 export function runData({ runs, pull = () => null, reviewed = () => null, filters = {} }) {
   const all = runs.filter((r) => !r.owner && ["issue", "pr"].includes(parseKey(r.key)?.kind));
@@ -75,7 +79,7 @@ export function runData({ runs, pull = () => null, reviewed = () => null, filter
         out.tokens += r.usage.tokens;
         out.usageRuns++;
         usageIssues.add(identity(r));
-        const parts = { ...r.usage, uncached: uncached(r.usage) };
+        const parts = { ...r.usage, uncached: uncached(r) };
         for (const p of Object.keys(out.parts)) {
           if (!valid(parts[p])) continue;
           out.parts[p].tokens += parts[p];
@@ -193,7 +197,8 @@ export function recordUsage(record, line, sessionTotal = () => FRESH) {
         output: u.output_tokens,
         cacheRead: cached ? u.cached_input_tokens : undefined,
       });
-      const baseParts = record.usage?.baseParts ?? FRESH.parts;
+      // A thread started before an update that added the parts saved no base for them: unknown.
+      const baseParts = record.usage?.baseParts ?? (record.usage?.thread ? {} : FRESH.parts);
       const added = {};
       for (const [p, n] of Object.entries(totalParts))
         if (valid(baseParts[p])) added[p] = Math.max(0, n - baseParts[p]);

@@ -311,6 +311,19 @@ test("Codex's parts split its cached input out, each from the thread's base for 
     PARTS.filter((p) => p in resumed.usage),
     [],
   );
+  // A resumed run the next orchestrator picks up after the update, its base saved without parts.
+  const pickedUp = {
+    id: "f",
+    key: "org/app#1",
+    agent: "codex",
+    usage: { thread: "t1", base: 90, total: 90, tokens: 0 },
+  };
+  for (const line of [started, turn(150, 100, 40)]) recordUsage(pickedUp, line);
+  assert.equal(pickedUp.usage.tokens, 100);
+  assert.deepEqual(
+    PARTS.filter((p) => p in pickedUp.usage),
+    [],
+  );
 });
 
 test("each part sums over the runs reporting it; uncached is input, output and cache writes", () => {
@@ -319,14 +332,16 @@ test("each part sums over the runs reporting it; uncached is input, output and c
       run("a", { usage: { tokens: 38, input: 5, output: 10, cacheRead: 20, cacheWrite: 3 } }),
       run("b", { key: "org/app#2", usage: { tokens: 100, input: 30, output: 20, cacheRead: 50 } }),
       run("c", { key: "org/app#3", usage: { tokens: 400 } }),
+      // A Claude run whose cache writes are unknown has no uncached figure, rather than a low one.
+      run("e", { key: "org/app#5", agent: "claude", usage: { tokens: 9, input: 4, output: 5 } }),
       run("d", { key: "org/app#4" }),
     ],
   });
-  assert.equal(data.total.tokens, 538);
-  assert.equal(data.total.usageIssues, 3);
+  assert.equal(data.total.tokens, 547);
+  assert.equal(data.total.usageIssues, 4);
   assert.deepEqual(data.total.parts, {
-    input: { tokens: 35, runs: 2, issues: 2 },
-    output: { tokens: 30, runs: 2, issues: 2 },
+    input: { tokens: 39, runs: 3, issues: 3 },
+    output: { tokens: 35, runs: 3, issues: 3 },
     cacheRead: { tokens: 70, runs: 2, issues: 2 },
     cacheWrite: { tokens: 3, runs: 1, issues: 1 },
     uncached: { tokens: 68, runs: 2, issues: 2 },
