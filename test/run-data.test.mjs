@@ -217,6 +217,20 @@ test("a value spelled in two cases is one filter option", () => {
   assert.equal(runData({ runs, filters: { user: "Alice" } }).total.runs, 2);
 });
 
+test("a value spelled in two cases is one group, shown as the first spelling", () => {
+  const runs = [
+    run("a", { user: "BryanSmee", repo: "Org/App" }),
+    run("b", { key: "org/app#2", user: "bryansmee" }),
+    run("c", { key: "org/app#3", user: "BRYANSMEE" }),
+  ];
+  const { groups } = runData({ runs });
+  assert.equal(groups.length, 1);
+  assert.equal(groups[0].dimensions.user, "BryanSmee");
+  assert.equal(groups[0].dimensions.repo, "Org/App");
+  assert.equal(groups[0].runs, 3);
+  assert.equal(groups[0].issues, 3);
+});
+
 test("tokens per issue leave out the issues without token data rather than count them as 0", () => {
   const data = runData({
     runs: [
