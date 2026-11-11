@@ -18,6 +18,7 @@ on: conflict
 vars:
   rebases: counter
   warned: flag
+  handed_over: flag
 steps:
   - if: label("hold") or paths("migrations/**")
     then:
@@ -29,7 +30,9 @@ steps:
         run: rebase
         count: rebases
         else:
-          - comment: Three rebase runs already, over to a maintainer.
+          - if: not handed_over
+            comment: Three rebase runs already, over to a maintainer.
+            set: handed_over
   - if: changed("migrations/**", since warned)
     comment: The rebase touched the migrations, have a look.
 ```
@@ -66,12 +69,12 @@ steps:
 
 Each step is one of:
 
-| Step                         | What                                                                                                                                                                          |
-| ---------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `run: rebase`                | the conflict run (on `conflict` only): `deny_fix` asked, then a work run that rebases the pull request, or the "No rebase run" comment. The next step waits for the run's end |
-| `comment: <text>`            | a comment on the pull request, as Deckhand's App                                                                                                                              |
-| `if: <condition>` + `then:`  | the steps under `then` when the condition holds, else those under `else` (optional)                                                                                           |
-| `repeat:` + `max: <var> <n>` | the steps under `repeat` again, at most `n` rounds of counter `<var>`                                                                                                         |
+| Step                         | What                                                                                                                                                                                              |
+| ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `run: rebase`                | the conflict run (on `conflict` only): `deny_fix` asked, then a work run that rebases the pull request, or the "No rebase run" comment. The next step waits for the run's end                     |
+| `comment: <text>`            | a comment on the pull request, as Deckhand's App (its own reply, like a refusal note: no policy asks about it). Each new event posts it again: a flag (`if: not told`, `set: told`) posts it once |
+| `if: <condition>` + `then:`  | the steps under `then` when the condition holds, else those under `else` (optional)                                                                                                               |
+| `repeat:` + `max: <var> <n>` | the steps under `repeat` again, at most `n` rounds of counter `<var>`                                                                                                                             |
 
 A `run` or `comment` step may also have an `if:` (and an `else:` list), `count: <counter>` (one
 more when the step acts) and `set: <flag>` (set when it acts). A rebase the policies refuse
@@ -126,5 +129,10 @@ built-in review loop has it (`review.on: ready`). No workflow runs on `ready` ye
 - **Each event runs once**: a conflict is the pull request's (head, base) pair, and the same
   pair, from a redelivered webhook or the next check, starts nothing twice. A new pair runs the
   steps again from the top, the vars kept.
-- **A step is marked before it acts**: one an orchestrator stopped in the middle of counts as
-  done, never acted twice. A run step's next step waits for that run's end.
+- **A step is marked before it acts**: a comment an orchestrator stopped in the middle of counts
+  as posted, never posted twice. A rebase step cut off is asked again by the next orchestrator,
+  which starts the run unless its pair was tried already (it was queued then): either way, its
+  run's end goes on with the next step, which waits for it.
+- **A rebase step after a run's end** needs the pull request still in conflict, at a pair not
+  tried yet. While GitHub is still computing whether it merges, the step takes nothing and the
+  workflow stops there: the next conflict found starts it again.

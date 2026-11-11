@@ -27,8 +27,9 @@ const pull = (fields = {}) => ({
 const blob = (text) => ({ content: Buffer.from(text).toString("base64"), encoding: "base64" });
 
 // The watcher with fake GitHub, its workflows read from `files` (name → text) on main, its
-// attempts and instances in `maps` (a handover: the next one on maps.again()).
-async function setup(maps, { files = {}, again = false } = {}) {
+// attempts and instances in `maps` (a handover: the next one on maps.again()). `policies`: its
+// policies' engine (none without); `hang`: accept() queues the item, then never returns.
+async function setup(maps, { files = {}, again = false, policies = null, hang = false } = {}) {
   let time = 1_800_000_000_000;
   const w = {
     pr: pull(),
@@ -75,7 +76,11 @@ async function setup(maps, { files = {}, again = false } = {}) {
     github,
     repoSettings: async () => settings,
     busy: () => false,
-    accept: async (item) => w.accepted.push(item),
+    accept: async (item) => {
+      w.accepted.push(item);
+      if (hang) await new Promise(() => {});
+    },
+    policies,
     reply: async (repo, number, text) => w.replies.push(text),
     log: (line) => w.logged.push(line),
     now: () => time,
@@ -179,4 +184,62 @@ test("a repo whose workflows have errors gets no conflict run, and the pass says
   w.workflows.forget("org/repo");
   w.advance(10 * MIN);
   assert.equal((await w.conflicts.tick()).started, 1);
+});
+
+// A watcher cut off in the middle of its rebase step (`cut`: setup()'s options for it), and
+// the next one on the same store.
+async function handedOver(cut) {
+  const maps = mapStore();
+  const first = await setup(maps, { files: { "conflicts.yaml": OWN }, ...cut });
+  first.conflicts.tick().catch(() => {});
+  for (let i = 0; i < 20; i++) await new Promise((resolve) => setImmediate(resolve));
+  const next = await setup(maps, { files: { "conflicts.yaml": OWN }, again: true });
+  return { first, next };
+}
+
+const after = { key: "org/repo#30", repo: "org/repo", number: 31, base: "main" };
+
+test("a handover during the policies' answer: the next orchestrator starts the rebase run", async () => {
+  const hanging = { decide: () => new Promise(() => {}) };
+  const { first, next } = await handedOver({ policies: hanging });
+  assert.deepEqual([first.accepted, [...first.attempts.keys()]], [[], []]);
+  assert.equal((await next.conflicts.tick()).started, 1);
+  assert.equal(next.accepted.length, 1);
+  assert.equal(next.conflicts.instance("org/repo#30").vars.counters.rebases, 1);
+  // Its end goes on with the workflow, once.
+  assert.equal(await next.conflicts.ended(after), "done");
+  assert.deepEqual(next.replies, ["Check the migrations after the rebase."]);
+});
+
+test("a handover after the run was queued: no second run, and its end goes on", async () => {
+  const { first, next } = await handedOver({ hang: true });
+  assert.equal(first.accepted.length, 1);
+  await next.conflicts.tick();
+  assert.equal(next.accepted.length, 0);
+  assert.equal(await next.conflicts.ended(after), "done");
+  assert.deepEqual(next.replies, ["Check the migrations after the rebase."]);
+  assert.equal(next.conflicts.instance("org/repo#30").vars.counters.rebases, 1);
+  assert.equal(await next.conflicts.ended(after), "idle");
+});
+
+test("a rebase after a run's end while GitHub computes mergeable takes nothing", async () => {
+  const twice = `on: conflict
+vars:
+  n: counter
+steps:
+  - repeat:
+      - run: rebase
+        count: n
+    max: n 2
+  - comment: done
+`;
+  const w = await setup(mapStore(), { files: { "conflicts.yaml": twice } });
+  await w.conflicts.tick();
+  w.pr = pull({
+    mergeable: null,
+    mergeable_state: "unknown",
+    head: { sha: "head-2", repo: { full_name: "org/repo" } },
+  });
+  assert.equal(await w.conflicts.ended(after), "skipped");
+  assert.deepEqual([w.accepted.length, w.replies], [1, []]);
 });

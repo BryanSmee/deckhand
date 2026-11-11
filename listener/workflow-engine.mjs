@@ -4,12 +4,15 @@
 //
 // - An event has an id (the conflict watcher's: its pull request, head and base): an id handled
 //   already does nothing, so a redelivered webhook or a check repeated starts nothing twice. A
-//   new id starts the steps again from the top, the vars kept; an older event still waiting
-//   (its run going) is left.
+//   new id starts the steps again from the top, the vars kept, and drops what an older one
+//   waited for: the caller triggers no event while the task has a run going (conflicts.mjs
+//   checks busy() first).
 // - An instance keeps the workflow as it started with it: a pull request stays on that version
 //   whatever its default branch says later. A new pull request on the task starts afresh.
-// - A step that acts (a run, a comment) is marked started before it acts: one a handover or a
-//   crash interrupted is taken as done, never acted twice. A run waits for its end (resume()).
+// - A step that acts (a run, a comment) is marked started before it acts. A comment a handover
+//   or a crash interrupted is taken as done, never posted twice. A run step is asked again on
+//   the same event (`interrupted`: the step's own record says whether its run was queued), and
+//   its run's end goes on from it all the same (resume()). A run waits for its end.
 // - Vars: counters only go up, flags are only set (with the head they were set at); two copies
 //   of one instance (two spellings of a repo) merge by max and OR.
 // - Loops are bounded twice: by their `max` (at most MAX_FIX_ROUNDS) and by their counter, an
@@ -176,6 +179,13 @@ export function createEngine({
     at: now(),
   });
 
+  // Whether `inst` waits for a run's end: its run step's, or one interrupted before it said so.
+  function waitsOn(inst) {
+    if (inst.waiting !== null && inst.waiting !== undefined) return true;
+    if (inst.started === null || inst.started === undefined) return false;
+    return !!compile(inst.workflow.steps)[inst.started]?.step?.run;
+  }
+
   // What a step that acted changes: its counter, its flag (at the event's head).
   function took(inst, step) {
     if (step.count) inst.vars.counters[step.count] = (inst.vars.counters[step.count] ?? 0) + 1;
@@ -207,8 +217,13 @@ export function createEngine({
   // pull request's head now. → as trigger(), or "idle" when nothing waited.
   async function resume(key, event, io, head = null) {
     const inst = load(key, event);
-    if (!inst || inst.waiting === null) return "idle";
-    inst.waiting = null;
+    if (!inst || !waitsOn(inst)) return "idle";
+    // A run step interrupted after its run was queued: that run's end is the step's.
+    if (inst.waiting === null) {
+      took(inst, compile(inst.workflow.steps)[inst.started].step);
+      inst.pc = inst.started;
+    }
+    Object.assign(inst, { waiting: null, started: null });
     inst.pc += 1;
     if (head && inst.current) inst.current.head = head;
     return drive(key, inst, io);
@@ -252,16 +267,12 @@ export function createEngine({
 
   // One action: null when the program goes on, else what drive() returns.
   async function act(key, inst, step, io) {
-    // Started by an orchestrator that stopped before it ended: taken, not acted again. A run
-    // waits for its end as if it had started here.
-    if (inst.started === inst.pc) {
+    // Started by an orchestrator that stopped before it ended. A comment: taken, not posted
+    // again. A run: asked again, told so, as it may have stopped before or after queuing it.
+    const interrupted = inst.started === inst.pc;
+    if (interrupted && !step.run) {
       inst.started = null;
       took(inst, step);
-      if (step.run) {
-        inst.waiting = inst.pc;
-        save(key, inst);
-        return "waiting";
-      }
       inst.pc += 1;
       save(key, inst);
       return null;
@@ -270,7 +281,7 @@ export function createEngine({
     save(key, inst);
     let outcome;
     try {
-      outcome = await io.act(step, { key, vars: inst.vars, workflow: inst.workflow });
+      outcome = await io.act(step, { key, vars: inst.vars, workflow: inst.workflow, interrupted });
     } catch (error) {
       inst.started = null;
       save(key, inst);
@@ -298,7 +309,7 @@ export function createEngine({
   // Task `key`'s instance on `event` waits for its run's end.
   const waiting = (key, event) => {
     const inst = instances.get(key)?.[event];
-    return !!inst && inst.waiting !== null && inst.waiting !== undefined;
+    return !!inst && waitsOn(inst);
   };
 
   // Pull request `pr` of task `key` is closed: its instances go.

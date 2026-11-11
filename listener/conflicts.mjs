@@ -281,7 +281,7 @@ export function createConflicts({
   function steps(found) {
     return {
       facts: facts(pullFacts(github, found.repo, found.pr)),
-      act: (step) => (step.run === "rebase" ? rebase(found) : say(found, step.comment)),
+      act: (step, view) => (step.run === "rebase" ? rebase(found, view) : say(found, step.comment)),
     };
   }
 
@@ -298,13 +298,16 @@ export function createConflicts({
   // A `run: rebase` step: the policies asked (`deny_fix`), then the rebase run queued, or the
   // refusal said. → "wait" (queued: the workflow goes on at its end), "refused", or "skipped"
   // (taken nothing: the same pair asks again). `found.result`: what checkPull() returns.
-  async function rebase(found) {
+  async function rebase(found, { interrupted = false } = {}) {
     const { repo, key, number, base, settings, pr, issue } = found;
     let { pair } = found;
     // A rebase after a step that waited (ended()): the pull request must conflict still, at a
-    // pair not tried yet.
+    // pair not tried yet. GitHub not knowing yet (just after the push) takes nothing: the next
+    // conflict found starts the workflow again.
     if (!pair) {
-      if (mergeConflict(pr).conflict !== true) return "refused";
+      const { conflict } = mergeConflict(pr);
+      if (conflict === undefined) return "skipped";
+      if (conflict !== true) return "refused";
       const baseSha = await baseHead(repo, pr.base.ref);
       if (!baseSha) return "refused";
       pair = { pr: number, head: pr.head.sha, base: baseSha };
@@ -314,6 +317,12 @@ export function createConflicts({
       }
     }
     const last = attempts.get(key);
+    // Asked again after a handover cut this step off: the pair kept, its run was queued then.
+    const kept = last && last.pr === pair.pr && last.head === pair.head && last.base === pair.base;
+    if (interrupted && kept) {
+      found.result = "skipped";
+      return "wait";
+    }
     // The refusal last said on the pull request (`said`, kept once its comment was posted): the
     // same refusal again isn't said again.
     const said = last?.pr === number ? last.said : undefined;

@@ -82,24 +82,49 @@ test("an instance survives a handover: the next engine goes on from the store", 
   assert.deepEqual(third.acted, []);
 });
 
-test("an action a handover interrupted is taken as done, never acted twice", async () => {
-  // An orchestrator that stops in the middle of its rebase step: marked started, never ended.
-  const interrupted = async (maps) => {
-    const first = createEngine({ instances: await maps.map("workflows") });
-    first
-      .trigger(KEY, TWO_STEPS, event("a"), { facts: facts(), act: () => new Promise(() => {}) })
-      .catch(() => {});
-    await new Promise((resolve) => setImmediate(resolve));
-    return engineOn(await maps.again("workflows"));
-  };
-  // The same event again: its run is taken as queued, waited for, counted once.
-  let next = await interrupted(mapStore());
-  assert.equal(await next.engine.trigger(KEY, TWO_STEPS, event("a"), next.io()), "waiting");
+// An orchestrator that stops in the middle of `flow`'s first step: marked started, never ended.
+// → the next one's engine (engineOn()) on the same store.
+async function interrupted(maps, flow = TWO_STEPS) {
+  const first = createEngine({ instances: await maps.map("workflows") });
+  first
+    .trigger(KEY, flow, event("a"), { facts: facts(), act: () => new Promise(() => {}) })
+    .catch(() => {});
+  await new Promise((resolve) => setImmediate(resolve));
+  return engineOn(await maps.again("workflows"));
+}
+
+test("a run step a handover cut off is asked again on its event, told so", async () => {
+  const next = await interrupted(mapStore());
+  const told = [];
+  const io = next.io();
+  const act = io.act;
+  io.act = (step, view) => (told.push(view.interrupted), act(step, view));
+  // Cut off before its run was queued, say: the step queues it now, counted once.
+  assert.equal(await next.engine.trigger(KEY, TWO_STEPS, event("a"), io), "waiting");
+  assert.deepEqual([next.acted, told], [["rebase"], [true]]);
+  assert.equal(await next.engine.resume(KEY, "conflict", next.io()), "done");
+  assert.deepEqual(next.acted, ["rebase", "rebased"]);
+  assert.deepEqual(next.engine.instance(KEY, "conflict").vars.counters, { rebases: 1 });
+});
+
+test("a run step cut off after its run was queued goes on at that run's end", async () => {
+  const next = await interrupted(mapStore());
+  assert.equal(next.engine.waiting(KEY, "conflict"), true);
   assert.equal(await next.engine.resume(KEY, "conflict", next.io()), "done");
   assert.deepEqual(next.acted, ["rebased"]);
   assert.deepEqual(next.engine.instance(KEY, "conflict").vars.counters, { rebases: 1 });
-  // A new event: the one left behind is counted, then the new one runs.
-  next = await interrupted(mapStore());
+});
+
+test("a comment a handover cut off is taken as posted, never posted twice", async () => {
+  const flow = workflow("on: conflict\nsteps:\n  - comment: first\n  - comment: second\n");
+  const next = await interrupted(mapStore(), flow);
+  assert.equal(next.engine.waiting(KEY, "conflict"), false);
+  assert.equal(await next.engine.trigger(KEY, flow, event("a"), next.io()), "done");
+  assert.deepEqual(next.acted, ["second"]);
+});
+
+test("a new event counts the step an older one left cut off, then runs", async () => {
+  const next = await interrupted(mapStore());
   assert.equal(await next.engine.trigger(KEY, TWO_STEPS, event("b"), next.io()), "waiting");
   assert.deepEqual(next.acted, ["rebase"]);
   assert.deepEqual(next.engine.instance(KEY, "conflict").vars.counters, { rebases: 2 });
