@@ -102,9 +102,21 @@ export interface Run {
   lastPushHead?: string | null;
   // Last triggering author; null for automatic runs, absent in older history.
   user?: string | null;
-  // Tokens the run used (listener/run-data.mjs recordUsage()); a Codex run's also has its
-  // thread, the thread's running total and the total it resumed from.
-  usage?: { tokens?: number; thread?: string; total?: number; base?: number };
+  // Tokens the run used (listener/run-data.mjs recordUsage()), and their parts the agent
+  // reported; a Codex run's also has its thread, the thread's running totals and the ones it
+  // resumed from.
+  usage?: {
+    tokens?: number;
+    input?: number;
+    output?: number;
+    cacheRead?: number;
+    cacheWrite?: number;
+    thread?: string;
+    total?: number;
+    base?: number;
+    totalParts?: { input?: number; output?: number; cacheRead?: number };
+    baseParts?: { input?: number; output?: number; cacheRead?: number };
+  };
   // How its sandbox exited, once the runner said (listener/run-events.mjs). Sent, not shown.
   exitCode?: number | null;
 }
