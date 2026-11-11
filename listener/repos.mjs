@@ -721,7 +721,9 @@ export function createRepoApi({
       decisions = await sampleDecisions(policies, sample).catch((error) => {
         log(`Repositories: ${repo}'s workflow: ${error.message ?? error}`);
         const reasons = [{ message: "the policies can't be read (see the orchestrator's logs)" }];
-        return Object.fromEntries(NODES.map((n) => [n.id, { state: "refused", reasons }]));
+        // Only the steps a policy gates; a task's real decision replaces it (no `grant`).
+        const gated = NODES.filter((n) => n.decision);
+        return Object.fromEntries(gated.map((n) => [n.id, { state: "refused", reasons }]));
       });
     }
     return { ...lifecycleGraph(settings, { grant, isPrivate, decisions }), sample: !!decisions };

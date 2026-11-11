@@ -18,7 +18,7 @@ export const NODE_W = 128;
 export const NODE_H = 64;
 const COL = 230; // a column's width: a step and the gap after it, its arrows' words in it
 const ROW = 104; // a row's height
-const TOP = 36; // room for the arrows over the top
+const TOP = 52; // room for the arrows over the top, two levels
 const PAD = 12;
 const BELOW = 18; // between two arrows under the grid
 
@@ -49,6 +49,17 @@ export function layoutWorkflow({ nodes, edges }: Workflow): Layout {
   // The gap before column `rank`, halfway between it and the one before.
   const gap = (rank: number) => PAD + rank * COL - (COL - NODE_W) / 2;
   let under = 0;
+  // The arrows over the top, the shortest nearest the steps, so they don't cross.
+  const over = edges
+    .filter((e) => {
+      const a = at.get(e.from);
+      const b = at.get(e.to);
+      return a && b && b.rank > a.rank + 1 && a.lane === b.lane && a.lane === 0;
+    })
+    .sort((x, y) => span(x) - span(y));
+  function span(e: WorkflowEdge) {
+    return at.get(e.to)!.rank - at.get(e.from)!.rank;
+  }
   const out: PlacedEdge[] = [];
   for (const e of edges) {
     const a = at.get(e.from);
@@ -70,7 +81,7 @@ export function layoutWorkflow({ nodes, edges }: Workflow): Layout {
       label = { x: (a.x + NODE_W + b.x) / 2, y: midY(a) - 6, anchor: "middle" };
     } else if (b.rank > a.rank && a.lane === b.lane && a.lane === 0) {
       // Over the steps it skips.
-      const y = TOP - 16;
+      const y = TOP - 16 - over.indexOf(e) * 16;
       d = `M${midX(a) + 20},${a.y} V${y} H${midX(b) - 20} V${b.y}`;
       label = { x: (midX(a) + midX(b)) / 2, y: y - 4, anchor: "middle" };
     } else if (b.rank > a.rank && b.lane > a.lane) {
@@ -121,8 +132,8 @@ export const STATE_NODES: Record<LoopState, WorkflowNodeId> = {
 export const nodeOf = (loop: string): WorkflowNodeId | null =>
   (STATE_NODES as Record<string, WorkflowNodeId>)[loop] ?? null;
 
-// Which step a fix decision was about, from its input's `reason` (only the newest 3 keep their
-// input): a fix run's, a CI fix run's or a conflict run's.
+// Which step a fix decision was about, from its input's `reason`: a fix run's, a CI fix run's
+// or a conflict run's. Only the newest 3 keep their input: one without says no step.
 const FIX_NODES: Record<string, WorkflowNodeId> = {
   review: "fix",
   ci: "ci-fix",
@@ -148,7 +159,7 @@ export function withDecisions(
         : d.decision === "merge"
           ? "merge"
           : d.decision === "fix"
-            ? (FIX_NODES[String(reason ?? "review")] ?? null)
+            ? (FIX_NODES[String(reason)] ?? null)
             : null;
     if (id && !last.has(id)) last.set(id, d);
   }
@@ -156,7 +167,7 @@ export function withDecisions(
   const nodes = workflow.nodes.map((n) => {
     const d = last.get(n.id);
     // A step the settings turn off, or the grant refuses, stays so: no decision changes that.
-    if (!d || n.state === "off" || (n.state === "refused" && !n.reasons.some((r) => r.layer))) {
+    if (!d || n.state === "off" || n.reasons.some((r) => r.grant)) {
       return n;
     }
     real.add(n.id);

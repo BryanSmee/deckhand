@@ -78,6 +78,8 @@ test("withDecisions: a pull request's last real decision over the sample's, a gr
         ],
       }),
       decision({ decision: "merge", rule: "allow_merge" }),
+      // A fix decision whose input wasn't kept: which step it was about isn't known.
+      decision({ denied: true, messages: ["an older CI fix's"] }),
       // Another pull request's.
       decision({ pr: 3, denied: true, messages: ["not this one"] }),
     ],
@@ -123,6 +125,9 @@ test("layoutWorkflow: every arrow placed, the loops' going back under or beside 
   expect(at("ci", "ci-fix").d).not.toBe(at("ci-fix", "ci").d);
   // Over the top past the merge.
   expect(at("review", "done").d).toMatch(/^M\d+,\d+ V\d+ H\d+ V\d+$/);
+  // Two over the top: the shorter one nearer the steps, so they don't cross.
+  const top = (from: string) => Number(/ V(\d+) /.exec(at(from, "done").d)![1]);
+  expect(top("review")).toBeGreaterThan(top("ci"));
   // A fix's push back to the CI step: under the grid, then up the gap before it.
   const back = at("fix", "ci").d;
   const under = Number(/V(\d+)/.exec(back)![1]);

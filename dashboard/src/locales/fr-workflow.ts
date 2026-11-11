@@ -47,6 +47,8 @@ export const workflow = {
   "workflow.when.passed": "CI passée",
   "workflow.when.ci-over": "CI terminée",
   "workflow.when.failed": "CI en échec",
+  "workflow.when.no-ci-fix": "sans correction CI",
+  "workflow.when.ci-stopped": "correction CI refusée",
   "workflow.when.pushed": "poussée",
   "workflow.when.nothing-pushed": "rien poussé",
   "workflow.when.blocking": "bloquante",

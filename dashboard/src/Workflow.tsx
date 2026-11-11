@@ -46,6 +46,8 @@ const CONDITIONS: Record<WorkflowCondition, Plain> = {
   passed: "workflow.when.passed",
   "ci-over": "workflow.when.ci-over",
   failed: "workflow.when.failed",
+  "no-ci-fix": "workflow.when.no-ci-fix",
+  "ci-stopped": "workflow.when.ci-stopped",
   pushed: "workflow.when.pushed",
   "nothing-pushed": "workflow.when.nothing-pushed",
   blocking: "workflow.when.blocking",
@@ -145,8 +147,18 @@ export function WorkflowGraph({ workflow, current = null, real }: GraphProps) {
                   class={`${styles.arrow} ${e.back ? styles.back : ""}`}
                   marker-end="url(#workflow-head)"
                 />
-                <text class={styles.when} x={e.label.x} y={e.label.y} text-anchor={e.label.anchor}>
-                  {e.when.map((w) => named(CONDITIONS, w)).join(" / ")}
+                {/* One line a condition, the last on the label's line, the others above. */}
+                <text
+                  class={styles.when}
+                  x={e.label.x}
+                  y={e.label.y - (e.when.length - 1) * 13}
+                  text-anchor={e.label.anchor}
+                >
+                  {e.when.map((w, i) => (
+                    <tspan key={w} x={e.label.x} dy={i ? 13 : 0}>
+                      {named(CONDITIONS, w)}
+                    </tspan>
+                  ))}
                 </text>
               </g>
             ))}

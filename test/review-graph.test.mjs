@@ -42,8 +42,9 @@ test("lifecycleGraph: every step on, its loops going back", () => {
   assert.ok(graph.nodes.every((n) => n.state === "on"));
   assert.deepEqual(edges(graph), [
     "ready>ci:ready",
-    "ci>review:passed",
+    "ci>review:passed+no-ci-fix",
     "ci>ci-fix:failed",
+    "ci>done:ci-stopped",
     "ci-fix>ci:pushed back",
     "ci-fix>done:nothing-pushed",
     "review>fix:blocking",
@@ -112,10 +113,14 @@ test("lifecycleGraph: the merge refused without the operator's grant, or when it
   assert.equal(merge.state, "refused");
   assert.equal(merge.grant, "auto_merge");
   assert.match(merge.reasons[0].message, /auto_merge/);
+  // Marked as the grant's: no policy decision on a task replaces it.
+  assert.equal(merge.reasons[0].grant, "auto_merge");
   // The edges still say where it would go.
   assert.ok(edges(missing).includes("review>merge:clean"));
   const unread = lifecycleGraph(settings, { grant: null }).nodes.find((n) => n.id === "merge");
-  assert.deepEqual(unread.reasons, [{ message: "the operator's grants can't be read" }]);
+  assert.deepEqual(unread.reasons, [
+    { message: "the operator's grants can't be read", grant: "auto_merge" },
+  ]);
   // A public repository needs auto_merge_public.
   const pub = lifecycleGraph(settings, { grant: { allowAutoMerge: true }, isPrivate: false });
   assert.equal(states(pub).merge, "refused");
@@ -151,6 +156,16 @@ test("every state reviewLoop() gives and every step of the loop has its node", (
   for (const state of LOOP_STATES) assert.ok(ids.has(STATE_NODES[state]), state);
   assert.deepEqual(Object.keys(STATE_NODES).sort(), [...LOOP_STATES].sort());
   for (const step of LOOP_STEPS) assert.ok(ids.has(STEP_NODES[step]), step);
+  // The dashboard's STATE_NODES (workflowLayout.ts) places each state as this one does.
+  const layout = readFileSync(
+    new URL("../dashboard/src/workflowLayout.ts", import.meta.url),
+    "utf8",
+  );
+  const map = /export const STATE_NODES[^{]*\{([^}]+)\}/.exec(layout)[1];
+  const theirs = Object.fromEntries(
+    [...map.matchAll(/"?([a-z-]+)"?: "([a-z-]+)"/g)].map((m) => [m[1], m[2]]),
+  );
+  assert.deepEqual(theirs, STATE_NODES);
   // The dashboard's LoopState is the same list (its STATE_NODES is typed from it).
   const types = readFileSync(new URL("../dashboard/src/types/state.ts", import.meta.url), "utf8");
   const union = /export type LoopState =([^;]+);/.exec(types)[1];

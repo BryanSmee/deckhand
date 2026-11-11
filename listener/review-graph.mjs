@@ -61,6 +61,8 @@ const CONDITIONS = {
   passed: "CI passed",
   "ci-over": "CI over",
   failed: "CI failed",
+  "no-ci-fix": "no CI fix",
+  "ci-stopped": "CI fix refused",
   pushed: "pushed",
   "nothing-pushed": "nothing pushed",
   blocking: "blocking",
@@ -80,7 +82,8 @@ const CONDITIONS = {
 // Each node: { id, rank, lane, state, key, settings, decision?, grant?, reasons[] }. `state`:
 //   on        the settings, the grant and the policies let it run
 //   off       the settings turn it off (`key`, the setting that would turn it on)
-//   refused   the grant is missing or the policies refused the sample (`reasons`)
+//   refused   the grant is missing (`reasons` with that `grant`) or the policies refused the
+//             sample (`reasons`)
 //   depends   allowed on the sample, but a deny rule, or an allow rule that isn't
 //             unconditional, may refuse another pull request (`reasons`: the files)
 // `settings`: the step's own numbers (rounds, minutes, severity, method). Each edge: { from,
@@ -131,7 +134,11 @@ export function lifecycleGraph(settings, { grant, isPrivate = null, decisions = 
     if (!enabled) return { ...node, state: "off", reasons: [] };
     const missing = needs ? grantProblems(grant, settings, isPrivate) : [];
     if (missing.length) {
-      return { ...node, state: "refused", reasons: missing.map((message) => ({ message })) };
+      return {
+        ...node,
+        state: "refused",
+        reasons: missing.map((message) => ({ message, grant: needs })),
+      };
     }
     const said = decisions?.[id];
     if (!said) return { ...node, state: "on", reasons: [] };
@@ -151,8 +158,12 @@ export function lifecycleGraph(settings, { grant, isPrivate = null, decisions = 
   const entry = ci ? "ci" : "review";
   edge("ready", entry, "ready");
   if (ciFix) {
-    edge("ci", "review", "passed");
+    // CI failed and no CI fix run: its rounds ran out or the pull request isn't Deckhand's own,
+    // reviewed anyway; or the policies refused it, a task busy or waiting for input: stopped
+    // (reviews.mjs ciFailed()).
+    edge("ci", "review", "passed", "no-ci-fix");
     edge("ci", "ci-fix", "failed");
+    edge("ci", "done", "ci-stopped");
     edge("ci-fix", "ci", "pushed");
     edge("ci-fix", "done", "nothing-pushed");
   } else edge("ci", "review", "ci-over");

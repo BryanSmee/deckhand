@@ -3,9 +3,9 @@
 // PolicyConfig.tsx, Capabilities: Capabilities.tsx, Workflow: Workflow.tsx); then what stops or
 // worries its runs (each error with its key, its fix and a link to its line, the warnings, the
 // auto-merge risk), or, when all is fine, a green banner and the facts at a glance, with the
-// details folded but for what the repo sets. Then what its runs get, each value tagged with its source and filtered by
-// it, the hosts, mounts, context repos, the operator's grant (ConfigAccess.tsx) and the raw
-// .deckhand.yaml, its bad lines marked. Read from GitHub when it opens and on Read again;
+// details folded but for what the repo sets. Then what its runs get, each value tagged with its
+// source and filtered by it, the hosts, mounts, context repos, the operator's grant
+// (ConfigAccess.tsx) and the raw .deckhand.yaml, its bad lines marked. Read from GitHub when it opens and on Read again;
 // changing it is a commit on the default branch.
 import type { ComponentChildren } from "preact";
 import { useEffect, useState } from "preact/hooks";

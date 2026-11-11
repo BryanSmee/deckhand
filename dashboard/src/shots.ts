@@ -217,7 +217,12 @@ export const WORKFLOW: Workflow = {
         decision: "merge",
         grant: "auto_merge",
         state: "refused",
-        reasons: [{ message: "review.merge: not granted (auto_merge), nothing is merged" }],
+        reasons: [
+          {
+            message: "review.merge: not granted (auto_merge), nothing is merged",
+            grant: "auto_merge",
+          },
+        ],
       },
     ),
     node("rebase", 3, 1, { minutes: null }, { key: "conflicts", state: "off", decision: "fix" }),
@@ -225,8 +230,9 @@ export const WORKFLOW: Workflow = {
   ],
   edges: [
     { from: "ready", to: "ci", when: ["ready"], back: false },
-    { from: "ci", to: "review", when: ["passed"], back: false },
+    { from: "ci", to: "review", when: ["passed", "no-ci-fix"], back: false },
     { from: "ci", to: "ci-fix", when: ["failed"], back: false },
+    { from: "ci", to: "done", when: ["ci-stopped"], back: false },
     { from: "ci-fix", to: "ci", when: ["pushed"], back: true },
     { from: "ci-fix", to: "done", when: ["nothing-pushed"], back: false },
     { from: "review", to: "fix", when: ["blocking"], back: false },

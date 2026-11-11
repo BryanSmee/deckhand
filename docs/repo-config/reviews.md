@@ -32,8 +32,9 @@ flowchart LR
   rebase[Rebase]
   done([Done])
   ready -- ready --> ci
-  ci -- CI passed --> review
+  ci -- CI passed or no CI fix --> review
   ci -- CI failed --> ci_fix
+  ci -- CI fix refused --> done
   ci_fix -. pushed .-> ci
   ci_fix -- nothing pushed --> done
   review -- blocking --> fix

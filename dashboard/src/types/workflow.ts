@@ -15,6 +15,8 @@ export interface WorkflowReason {
   message?: string;
   // The layer that said it, when the policies did.
   layer?: "operator" | "repo";
+  // The operator's grant that is missing (refused whatever the policies say).
+  grant?: string;
   // For depends: the file and the rule in it that may refuse.
   file?: string;
   rule?: string;
@@ -47,6 +49,8 @@ export type WorkflowCondition =
   | "passed"
   | "ci-over"
   | "failed"
+  | "no-ci-fix"
+  | "ci-stopped"
   | "pushed"
   | "nothing-pushed"
   | "blocking"

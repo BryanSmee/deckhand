@@ -48,6 +48,8 @@ export const workflow = {
   "workflow.when.passed": "CI passed",
   "workflow.when.ci-over": "CI over",
   "workflow.when.failed": "CI failed",
+  "workflow.when.no-ci-fix": "no CI fix",
+  "workflow.when.ci-stopped": "CI fix refused",
   "workflow.when.pushed": "pushed",
   "workflow.when.nothing-pushed": "nothing pushed",
   "workflow.when.blocking": "blocking",
