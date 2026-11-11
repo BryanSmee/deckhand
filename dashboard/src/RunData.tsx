@@ -2,7 +2,7 @@ import { useEffect, useState } from "preact/hooks";
 import { getJson } from "./api";
 import { runKindName } from "./format";
 import { locale, t } from "./i18n";
-import type { RunData, RunDimension, RunMetrics } from "./types";
+import type { RunData, RunDimension, RunMetrics, TokenPart } from "./types";
 import { Field } from "./ui/Field";
 import { Button } from "./ui/Button";
 import styles from "./RunData.module.css";
@@ -17,6 +17,13 @@ const stepName = (step: string) =>
     "review-fix": t("runName.reviewFix"),
     "ci-fix": t("runName.ciFix"),
   })[step] ?? runKindName(step);
+const parts: TokenPart[] = ["input", "output", "cacheRead", "cacheWrite"];
+// A part's sum, with its coverage when fewer runs report it than report a total.
+const part = (m: RunMetrics, p: TokenPart) => {
+  const { tokens, runs } = m.parts[p];
+  if (!runs) return "—";
+  return runs < m.usageRuns ? `${number(tokens)} (${runs}/${m.usageRuns})` : number(tokens);
+};
 const rate = (n: number, d: number) => `${n}/${d}${d ? ` (${number((n / d) * 100)}%)` : ""}`;
 
 export function RunDataPanel({ repo, task }: { repo: string; task?: string }) {
@@ -122,6 +129,9 @@ export function RunDataPanel({ repo, task }: { repo: string; task?: string }) {
                       <th>{t("runData.step")}</th>
                       <th>{t("runData.runs")}</th>
                       <th>{t("runData.tokens")}</th>
+                      {parts.map((p) => (
+                        <th key={p}>{t(`runData.${p}`)}</th>
+                      ))}
                       <th>{t("runData.coverage")}</th>
                       <th>{t("runData.needsInput")}</th>
                     </tr>
@@ -132,6 +142,9 @@ export function RunDataPanel({ repo, task }: { repo: string; task?: string }) {
                         <th scope="row">{stepName(s.step)}</th>
                         <td>{s.runs}</td>
                         <td>{s.usageRuns ? number(s.tokens) : "—"}</td>
+                        {parts.map((p) => (
+                          <td key={p}>{part(s, p)}</td>
+                        ))}
                         <td>
                           {s.usageRuns}/{s.runs}
                         </td>
@@ -168,6 +181,7 @@ function Metrics({ metrics: m }: { metrics: RunMetrics }) {
   const rows = [
     [t("runData.runsPerIssue"), `${ratio(m.runs, m.issues)} (${m.runs}/${m.issues})`],
     [t("runData.tokensPerIssue"), ratio(m.tokens, m.usageIssues)],
+    [t("runData.uncachedPerIssue"), ratio(m.parts.uncached.tokens, m.parts.uncached.issues)],
     [t("runData.coverage"), `${m.usageRuns}/${m.runs}`],
     [t("runData.needsInput"), rate(m.needsInput, m.runs)],
     [

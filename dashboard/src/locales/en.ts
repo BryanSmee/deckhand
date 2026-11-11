@@ -48,6 +48,11 @@ export const en = {
   "runData.needsInput": "Needs input / runs",
   "runData.runsPerIssue": "Runs / issue",
   "runData.tokensPerIssue": "Recorded tokens / issue",
+  "runData.uncachedPerIssue": "Uncached tokens / issue",
+  "runData.input": "Input",
+  "runData.output": "Output",
+  "runData.cacheRead": "Cache read",
+  "runData.cacheWrite": "Cache write",
   "runData.findings": "Findings / reviewed PR",
   "runData.fixes": "Fix / CI-fix runs",
   "runData.merged": "Merged / PRs",
@@ -57,7 +62,7 @@ export const en = {
   "runData.unknownMerge": "Merged, last push unknown",
   "runData.closed": "Closed without merging",
   "runData.caveat":
-    "Across different issues, not a controlled comparison. Runs are selected by start time; outcomes are the latest recorded. Linked issue and PR runs count as one issue. Groups can share issues and PR findings, so their outcomes are not additive. Findings count retained review findings in the period, including repeat findings. Tokens include cached input, are partial when coverage is incomplete, and are not a bill or a plan allowance. Older records and agents that do not report usage remain unknown. Unchanged means the PR head matches the last recorded agent push; fix runs may precede that push.",
+    "Across different issues, not a controlled comparison. Runs are selected by start time; outcomes are the latest recorded. Linked issue and PR runs count as one issue. Groups can share issues and PR findings, so their outcomes are not additive. Findings count retained review findings in the period, including repeat findings. Tokens include cached input, are partial when coverage is incomplete, and are not a bill or a plan allowance. Recorded tokens add input, output, cache reads and cache writes: in a long session, cache reads are most of them, as the agent reads its whole context again on every call, though they cost about a tenth of uncached input. Uncached tokens leave cache reads out (input, output and cache writes; Codex and Antigravity report no cache writes). Each part counts only the runs that report it, shown as runs/runs with token data when some don't. Older records and agents that do not report usage remain unknown. Unchanged means the PR head matches the last recorded agent push; fix runs may precede that push.",
 
   // The language's own name, in its own language: Preferences › Language lists it so.
   "language.name": "English",

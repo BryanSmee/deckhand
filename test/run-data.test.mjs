@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { runData, recordUsage, sessionTotals } from "../listener/run-data.mjs";
+import { PARTS, runData, recordUsage, sessionTotals } from "../listener/run-data.mjs";
 const run = (id, extra = {}) => ({
   id,
   key: "org/app#1",
@@ -41,6 +41,13 @@ test("linked issue and PR runs share one outcome, with strict and broad success 
     tokens: 100,
     usageRuns: 1,
     usageIssues: 1,
+    parts: {
+      input: { tokens: 0, runs: 0, issues: 0 },
+      output: { tokens: 0, runs: 0, issues: 0 },
+      cacheRead: { tokens: 0, runs: 0, issues: 0 },
+      cacheWrite: { tokens: 0, runs: 0, issues: 0 },
+      uncached: { tokens: 0, runs: 0, issues: 0 },
+    },
     fixes: 1,
     ciFixes: 1,
     findings: 3,
@@ -153,7 +160,8 @@ test("Antigravity counts the result total once, including cached input, not ever
   const record = { agent: "antigravity" };
   const log = readFileSync(new URL("./fixtures/antigravity-work.jsonl", import.meta.url), "utf8");
   for (const line of log.split("\n")) recordUsage(record, line);
-  assert.deepEqual(record.usage, { tokens: 52904 });
+  // No cache write reported: unknown, not 0.
+  assert.deepEqual(record.usage, { tokens: 52904, input: 19543, output: 662, cacheRead: 32699 });
 });
 
 test("issue-backed modes count; discussions and private chats do not", () => {
@@ -245,4 +253,83 @@ test("tokens per issue leave out the issues without token data rather than count
   assert.equal(data.total.usageIssues, 1);
   assert.equal(data.total.tokens, 400);
   assert.equal(data.total.usageRuns, 2);
+});
+
+test("a Claude run records its parts beside the total; one a result left out stays unknown", () => {
+  const result = (usage) => JSON.stringify({ type: "result", usage });
+  const claude = { agent: "claude" };
+  recordUsage(
+    claude,
+    result({
+      input_tokens: 5,
+      output_tokens: 10,
+      cache_read_input_tokens: 20,
+      cache_creation_input_tokens: 3,
+    }),
+  );
+  recordUsage(claude, result({ input_tokens: 1, output_tokens: 2, cache_read_input_tokens: 4 }));
+  assert.deepEqual(claude.usage, { tokens: 45, input: 6, output: 12, cacheRead: 24 });
+});
+
+test("Codex's parts split its cached input out, each from the thread's base for that part", () => {
+  const turn = (input, cached, output) =>
+    JSON.stringify({
+      type: "turn.completed",
+      usage: { input_tokens: input, cached_input_tokens: cached, output_tokens: output },
+    });
+  const started = JSON.stringify({ type: "thread.started", thread_id: "t1" });
+  const runs = [];
+  const play = (id, lines) => {
+    const record = { id, key: "org/app#1", agent: "codex" };
+    runs.unshift(record);
+    for (const line of lines) recordUsage(record, line, sessionTotals(runs, record));
+    return record;
+  };
+  const first = play("a", [started, turn(800, 600, 200)]);
+  assert.deepEqual(
+    [first.usage.tokens, first.usage.input, first.usage.cacheRead, first.usage.output],
+    [1000, 200, 600, 200],
+  );
+  const second = play("b", [started, turn(1300, 1000, 400)]);
+  assert.deepEqual(
+    [second.usage.tokens, second.usage.input, second.usage.cacheRead, second.usage.output],
+    [700, 100, 400, 200],
+  );
+  // A turn without its cached input can't split its input: both parts are unknown again.
+  play("c", [started, turn(1500, 1100, 500)]);
+  const unsplit = play("d", [started, turn(1600, undefined, 600)]);
+  assert.deepEqual(
+    [unsplit.usage.tokens, unsplit.usage.input, unsplit.usage.cacheRead, unsplit.usage.output],
+    [200, undefined, undefined, 100],
+  );
+  // A run resuming one recorded before the parts were: its total is right, its parts unknown.
+  runs.length = 0;
+  runs.push({ id: "old", key: "org/app#1", usage: { thread: "t1", total: 1000, tokens: 1000 } });
+  const resumed = play("e", [started, turn(1300, 1000, 400)]);
+  assert.deepEqual(resumed.usage.tokens, 700);
+  assert.deepEqual(
+    PARTS.filter((p) => p in resumed.usage),
+    [],
+  );
+});
+
+test("each part sums over the runs reporting it; uncached is input, output and cache writes", () => {
+  const data = runData({
+    runs: [
+      run("a", { usage: { tokens: 38, input: 5, output: 10, cacheRead: 20, cacheWrite: 3 } }),
+      run("b", { key: "org/app#2", usage: { tokens: 100, input: 30, output: 20, cacheRead: 50 } }),
+      run("c", { key: "org/app#3", usage: { tokens: 400 } }),
+      run("d", { key: "org/app#4" }),
+    ],
+  });
+  assert.equal(data.total.tokens, 538);
+  assert.equal(data.total.usageIssues, 3);
+  assert.deepEqual(data.total.parts, {
+    input: { tokens: 35, runs: 2, issues: 2 },
+    output: { tokens: 30, runs: 2, issues: 2 },
+    cacheRead: { tokens: 70, runs: 2, issues: 2 },
+    cacheWrite: { tokens: 3, runs: 1, issues: 1 },
+    uncached: { tokens: 68, runs: 2, issues: 2 },
+  });
+  assert.deepEqual(data.steps[0].parts, data.total.parts);
 });

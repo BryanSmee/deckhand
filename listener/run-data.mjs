@@ -6,6 +6,12 @@ import { parseKey } from "./events.mjs";
 export const DIMENSIONS = ["repo", "agent", "model", "effort", "user"];
 const value = (r, key) => (key === "user" ? (r.user ?? "unknown") : (r[key] ?? "unknown"));
 const stepOf = (r) => r.reason || r.taskMode || "work";
+// A run's tokens by part, beside its total: each part is summed over the runs that report it.
+export const PARTS = ["input", "output", "cacheRead", "cacheWrite"];
+// Input, output and cache writes, the parts not read again from the cache. An agent that has
+// no cache write (Codex, Antigravity) counts its input and output alone.
+const uncached = (u) =>
+  valid(u?.input) && valid(u?.output) ? u.input + u.output + (u.cacheWrite ?? 0) : undefined;
 
 export function runData({ runs, pull = () => null, reviewed = () => null, filters = {} }) {
   const all = runs.filter((r) => !r.owner && ["issue", "pr"].includes(parseKey(r.key)?.kind));
@@ -45,6 +51,10 @@ export function runData({ runs, pull = () => null, reviewed = () => null, filter
       usageRuns: 0,
       // Issues with token data: tokens per issue is over these, absent usage being unknown.
       usageIssues: 0,
+      // Each part over the runs (and issues) that report it, older runs reporting none.
+      parts: Object.fromEntries(
+        [...PARTS, "uncached"].map((p) => [p, { tokens: 0, runs: 0, issues: 0 }]),
+      ),
       fixes: 0,
       ciFixes: 0,
       findings: 0,
@@ -58,17 +68,26 @@ export function runData({ runs, pull = () => null, reviewed = () => null, filter
       closed: 0,
     };
     const usageIssues = new Set();
+    const partIssues = Object.fromEntries(Object.keys(out.parts).map((p) => [p, new Set()]));
     for (const r of list) {
       if (r.status === "needs-input") out.needsInput++;
       if (Number.isFinite(r.usage?.tokens)) {
         out.tokens += r.usage.tokens;
         out.usageRuns++;
         usageIssues.add(identity(r));
+        const parts = { ...r.usage, uncached: uncached(r.usage) };
+        for (const p of Object.keys(out.parts)) {
+          if (!valid(parts[p])) continue;
+          out.parts[p].tokens += parts[p];
+          out.parts[p].runs++;
+          partIssues[p].add(identity(r));
+        }
       }
       if (r.reason === "review-fix") out.fixes++;
       if (r.reason === "ci-fix") out.ciFixes++;
     }
     out.usageIssues = usageIssues.size;
+    for (const p of Object.keys(out.parts)) out.parts[p].issues = partIssues[p].size;
     for (const [key, r] of issues) {
       const pr = pullsByIssue.get(key);
       if (!pr) continue;
@@ -132,10 +151,12 @@ export function runData({ runs, pull = () => null, reviewed = () => null, filter
 }
 
 // Turn totals already printed by the agent. Cached input is included once; these are token
-// counts, not dollars or estimates of a subscription's shared allowance. Codex reports its
-// thread's running total, carried over when a run resumes it: a run counts what it added to the
-// total its thread had when it started, `sessionTotal(thread)` (the last one an earlier run saved).
-export function recordUsage(record, line, sessionTotal = () => 0) {
+// counts, not dollars or estimates of a subscription's shared allowance. Beside the total, its
+// parts (PARTS): one the agent doesn't report stays absent, unknown rather than 0. Codex reports
+// its thread's running total, carried over when a run resumes it: a run counts what it added to
+// the totals its thread had when it started, `sessionTotal(thread)` (`{ total, parts }`, the last
+// ones an earlier run saved).
+export function recordUsage(record, line, sessionTotal = () => FRESH) {
   // Most lines (tool output, messages) carry neither: no second parse for them.
   if (!line.includes('"usage"') && !line.includes('"thread.started"')) return;
   let e;
@@ -145,7 +166,7 @@ export function recordUsage(record, line, sessionTotal = () => 0) {
     return;
   }
   if (!e || typeof e !== "object") return;
-  let tokens;
+  let turn;
   if (record.agent === "codex") {
     // Read again after a restart, its start keeps the base it had.
     if (
@@ -153,14 +174,32 @@ export function recordUsage(record, line, sessionTotal = () => 0) {
       typeof e.thread_id === "string" &&
       record.usage?.thread !== e.thread_id
     ) {
-      const base = sessionTotal(e.thread_id);
-      record.usage = { thread: e.thread_id, base: valid(base) ? base : 0 };
+      const { total, parts } = sessionTotal(e.thread_id) ?? {};
+      record.usage = {
+        thread: e.thread_id,
+        base: valid(total) ? total : 0,
+        // An earlier run recorded before the parts were has none: this run's are unknown.
+        baseParts: known(parts ?? {}),
+      };
     }
     const u = e.usage;
     if (e.type === "turn.completed" && valid(u?.input_tokens) && valid(u?.output_tokens)) {
       const total = u.input_tokens + u.output_tokens;
       const base = record.usage?.base ?? 0;
-      record.usage = { ...record.usage, total, tokens: Math.max(0, total - base) };
+      // Codex's input includes its cached input: the uncached part is the rest.
+      const cached = valid(u.cached_input_tokens) && u.cached_input_tokens <= u.input_tokens;
+      const totalParts = known({
+        input: cached ? u.input_tokens - u.cached_input_tokens : undefined,
+        output: u.output_tokens,
+        cacheRead: cached ? u.cached_input_tokens : undefined,
+      });
+      const baseParts = record.usage?.baseParts ?? FRESH.parts;
+      const added = {};
+      for (const [p, n] of Object.entries(totalParts))
+        if (valid(baseParts[p])) added[p] = Math.max(0, n - baseParts[p]);
+      // A part the last turn didn't report is unknown again, whatever an earlier one said.
+      const { input, output, cacheRead, ...kept } = record.usage ?? {};
+      record.usage = { ...kept, total, totalParts, tokens: Math.max(0, total - base), ...added };
     }
     return;
   }
@@ -171,11 +210,12 @@ export function recordUsage(record, line, sessionTotal = () => 0) {
       valid(u?.output_tokens) &&
       [u.cache_read_input_tokens, u.cache_creation_input_tokens].every((n) => n == null || valid(n))
     ) {
-      tokens =
-        u.input_tokens +
-        u.output_tokens +
-        (u.cache_read_input_tokens ?? 0) +
-        (u.cache_creation_input_tokens ?? 0);
+      turn = {
+        input: u.input_tokens,
+        output: u.output_tokens,
+        cacheRead: u.cache_read_input_tokens,
+        cacheWrite: u.cache_creation_input_tokens,
+      };
     }
   }
   if (record.agent === "antigravity" && e.event === "result") {
@@ -185,20 +225,35 @@ export function recordUsage(record, line, sessionTotal = () => 0) {
       valid(u?.output_tokens) &&
       (u.cache_read_tokens == null || valid(u.cache_read_tokens))
     ) {
-      tokens = u.input_tokens + u.output_tokens + (u.cache_read_tokens ?? 0);
+      turn = { input: u.input_tokens, output: u.output_tokens, cacheRead: u.cache_read_tokens };
     }
   }
-  if (valid(tokens)) record.usage = { tokens: (record.usage?.tokens ?? 0) + tokens };
+  if (!turn) return;
+  const tokens = PARTS.reduce((sum, p) => sum + (turn[p] ?? 0), 0);
+  if (!valid(tokens)) return;
+  // A part stays known while every result so far reported it.
+  const first = !record.usage;
+  const parts = {};
+  for (const p of PARTS)
+    if (valid(turn[p]) && (first || valid(record.usage[p])))
+      parts[p] = (record.usage?.[p] ?? 0) + turn[p];
+  record.usage = { tokens: (record.usage?.tokens ?? 0) + tokens, ...parts };
 }
+// A thread no earlier run saved: nothing to take off.
+const FRESH = { total: 0, parts: { input: 0, output: 0, cacheRead: 0 } };
+const known = (parts) => Object.fromEntries(Object.entries(parts).filter(([, n]) => valid(n)));
 const valid = (n) => Number.isSafeInteger(n) && n >= 0;
 
-// recordUsage()'s `sessionTotal` for a run: the total the task's latest other run on that thread
-// saved. `runs`: newest first, as ctx.runs is.
-export const sessionTotals = (runs, record) => (thread) =>
-  runs.find(
+// recordUsage()'s `sessionTotal` for a run: the totals the task's latest other run on that thread
+// saved, none before it. `runs`: newest first, as ctx.runs is.
+export const sessionTotals = (runs, record) => (thread) => {
+  const usage = runs.find(
     (r) =>
       r.id !== record.id &&
       r.key === record.key &&
       r.usage?.thread === thread &&
       valid(r.usage.total),
-  )?.usage.total ?? 0;
+  )?.usage;
+  if (!usage) return FRESH;
+  return { total: usage.total, parts: usage.totalParts ?? {} };
+};
