@@ -49,7 +49,8 @@ export const readVersion = (text) => readSetting(text, "DECKHAND_VERSION");
 // mentioning it left as it is), or one added at the end. The rest kept byte for byte.
 export function withVersion(text, version) {
   const line = `DECKHAND_VERSION=${version}`;
-  const setting = /^\s*(?:export\s+)?DECKHAND_VERSION\s*=.*$/gm;
+  // Within the line: \s would reach across a blank line before it, `.` take a CRLF's \r.
+  const setting = /^[ \t]*(?:export[ \t]+)?DECKHAND_VERSION[ \t]*=[^\r\n]*/gm;
   if (setting.test(text)) return text.replace(setting, line);
   const sep = !text || text.endsWith("\n") ? "" : "\n";
   return `${text}${sep}${line}\n`;

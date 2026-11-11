@@ -31,6 +31,15 @@ test(".env: the pin read as compose reads it, and written keeping the rest", () 
     ),
     "A=1\n# DECKHAND_VERSION=latest: a comment\nDECKHAND_VERSION=0.2.0\nB=2\n",
   );
+  // A blank line before it and a CRLF file's line ends kept.
+  assert.equal(
+    withVersion("A=1\n\nDECKHAND_VERSION=latest\nB=2\n", "0.2.0"),
+    "A=1\n\nDECKHAND_VERSION=0.2.0\nB=2\n",
+  );
+  assert.equal(
+    withVersion("A=1\r\n  export DECKHAND_VERSION = latest\r\nB=2\r\n", "0.2.0"),
+    "A=1\r\nDECKHAND_VERSION=0.2.0\r\nB=2\r\n",
+  );
   assert.equal(withVersion("A=1", "0.2.0"), "A=1\nDECKHAND_VERSION=0.2.0\n");
   assert.equal(withVersion("", "edge"), "DECKHAND_VERSION=edge\n");
 });
