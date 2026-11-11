@@ -2016,7 +2016,7 @@ export function createReviews({
         ...(fixes && { fixes }),
         ...(fixedAt && { fixedAt }),
         ...(reviewedFixes && { reviewedFixes }),
-        ...(ciFixes && { ciFixes }),
+        ...(ciFixes && { ciFixes, ciRounds: Math.max(a.ciRounds ?? 0, b.ciRounds ?? 0) }),
         ...(grantedTo && { grantedTo }),
         ...(hasFollowUps && { hasFollowUps }),
         ...(reviewComments.length && { reviewComments }),

@@ -1356,7 +1356,8 @@ test("a repo's config: its pull request lifecycle, each step asked of the polici
   // Each decision on the sample's input, the fix's with its round of the repo's rounds.
   const fix = asked.find((a) => a.input.reason === "review");
   assert.equal(fix.decision, "fix");
-  assert.equal(fix.repo, "org/app");
+  // The sample's log lines say so.
+  assert.equal(fix.repo, "org/app (sample)");
   assert.deepEqual([fix.input.round, fix.input.rounds], [1, 2]);
   // Without a policy engine: the settings and grants alone, no sample.
   const none = apiSetup({ first: [info("org/app")], configured: ["org/app"], files });

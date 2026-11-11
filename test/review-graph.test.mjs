@@ -126,6 +126,11 @@ test("lifecycleGraph: the merge refused without the operator's grant, or when it
   assert.equal(states(pub).merge, "refused");
   const granted = { grant: { allowAutoMerge: true }, isPrivate: true };
   assert.equal(states(lifecycleGraph(settings, granted)).merge, "on");
+  // One fix run, and no merge mode without the grant: nothing reviews its push (reviewFix()).
+  const once = review({ merge: true, fix: true, fixRounds: 1 });
+  assert.ok(edges(lifecycleGraph(once, { grant: {} })).includes("fix>done:fixed"));
+  assert.ok(edges(lifecycleGraph(once, { grant: null })).includes("fix>done:fixed"));
+  assert.ok(edges(lifecycleGraph(once, granted)).includes("fix>review:pushed back"));
 });
 
 test("lifecycleGraph: the policies' states on the sample, a step off staying off", () => {

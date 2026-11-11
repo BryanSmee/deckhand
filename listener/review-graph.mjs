@@ -97,9 +97,12 @@ export function lifecycleGraph(settings, { grant, isPrivate = null, decisions = 
   const ciFix = ci && fix && review.ciFix > 0;
   const merge = ready && !!review?.merge;
   const conflicts = !!settings?.conflicts;
-  // What a fix run's push goes back to: a review, in auto-merge mode or with more than one
-  // round (reviews.mjs fixed()); `fix: true` without `merge` stops at its fix run.
-  const again = merge || (review?.fixRounds ?? 0) > 1;
+  // What a fix run's push goes back to: a review, in auto-merge mode (`merge` and the
+  // operator's grant, reviews.mjs mergeMode(), which doesn't look at the visibility) or with
+  // more than one round (reviewFix()); `fix: true` without them stops at its fix run.
+  const merging =
+    merge && (grant === undefined || (!!grant && !autoMergeProblems(grant, settings).length));
+  const again = merging || (review?.fixRounds ?? 0) > 1;
   const on = {
     ready: [ready, "review.on"],
     ci: [ci, "review.ci"],
@@ -298,9 +301,11 @@ export async function sampleDecisions(policies, { repo, base, described = null, 
   const texts = described.policies;
   const out = {};
   for (const { id, decision } of NODES.filter((n) => n.decision)) {
+    // evaluated() names the repo only in its log lines: those say it was a sample, not a
+    // decision on a pull request.
     const { messages, layers = [] } = await policies.evaluated(
       decision,
-      repo,
+      `${repo} (sample)`,
       texts,
       () => inputs[id],
     );
