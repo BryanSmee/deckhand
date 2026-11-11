@@ -180,7 +180,8 @@ function reviewMode(settings) {
 // stepRun()): a review's as its `review` block's, a fix run's as the work runs' defaults. A
 // `/model` or `/effort` of the task's still goes over them, as over the repo's.
 export function stepSettings(settings, mode, items = []) {
-  const step = items.findLast((i) => i.workflowStep)?.workflowStep;
+  // The run's own item's: a comment batched after it is the repo's run, not the step's.
+  const step = items.at(-1)?.workflowStep;
   if (!step || !settings) return settings;
   const { agent, model, effort, instructions } = step;
   const own = Object.fromEntries(

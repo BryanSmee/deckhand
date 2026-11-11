@@ -7,6 +7,7 @@ import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import { stepSettings } from "../listener/modes.mjs";
 import { parseRepoConfig } from "../listener/repo-config.mjs";
+import { trustedFile } from "../listener/review-merge.mjs";
 import { parseReview } from "../listener/review-parse.mjs";
 import { reviewEvent } from "../listener/review-post.mjs";
 import { impliedSettings, stepOf } from "../listener/review-workflow.mjs";
@@ -264,6 +265,11 @@ test("stepSettings: a step's agent, model, effort and instructions for its run a
   assert.deepEqual([work.effort, work.agent], ["high", settings.agent]);
   // Without a step, or in another mode: the repo's.
   assert.equal(stepSettings(settings, "review", [{}]), settings);
+  // A maintainer's comment batched after the step's item: the run is theirs, on the repo's.
+  assert.equal(
+    stepSettings(settings, "work", [{ workflowStep: { effort: "high" } }, {}]),
+    settings,
+  );
   assert.equal(stepSettings(settings, "brainstorm", items), settings);
 });
 
@@ -291,4 +297,13 @@ test("a CI step right after another: decided after the decision that reached it,
   await until(() => s.accepted.length === 1, { what: "the review after both CI steps" });
   assert.deepEqual(s.replies, ["CI over."]);
   assert.deepEqual(steps(s.accepted), [["review", null]]);
+});
+
+test("a review step's instructions are trusted: a pull request changing them waits for a human", () => {
+  const { settings } = parseRepoConfig("review: true\n", config);
+  const flow = SECURITY.replace(".deckhand/security-review.md", "docs/security-review.md");
+  const own = impliedSettings(settings, parseWorkflow("review.yaml", flow).workflow);
+  assert.equal(trustedFile(own, "docs/security-review.md"), true);
+  assert.equal(trustedFile(own, "docs/other.md"), false);
+  assert.equal(trustedFile(settings, "docs/security-review.md"), false);
 });

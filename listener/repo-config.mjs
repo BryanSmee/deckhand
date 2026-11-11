@@ -216,7 +216,7 @@ function modelKey(value, { key, field, settings, fail }) {
 
 // One of the agents the operator configured (config.agents), or null with `fail` called:
 // a repo picks among them, it can't add one.
-function agentName(value, key, config, fail) {
+export function agentName(value, key, config, fail) {
   const name = typeof value === "string" ? value.trim().toLowerCase() : "";
   if (config.agents.includes(name)) return name;
   const known = Object.hasOwn(AGENTS, name);

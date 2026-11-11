@@ -11,7 +11,7 @@
 import { createHash } from "node:crypto";
 import { isMap, parseYaml, YamlError } from "../lib/yaml.mjs";
 import { EFFORTS, MODEL_NAME } from "./events.mjs";
-import { repoPath } from "./repo-config.mjs";
+import { agentName, repoPath } from "./repo-config.mjs";
 import { SEVERITIES } from "./severities.mjs";
 
 // Where a repo's workflows are, on its default branch, and what a file's name is.
@@ -321,11 +321,12 @@ function stepOptions(item, step, kind, at, { lineOf, fail, agents }) {
       const takes = Object.entries(STEP_OPTIONS).filter(([, keys]) => keys.includes(key));
       bad(`goes on a ${takes.map(([run]) => `\`run: ${run}\``).join(" or ")} step`);
     } else if (key === "agent") {
-      const name = typeof value === "string" ? value.trim().toLowerCase() : "";
-      if (!/^[a-z][a-z0-9-]*$/.test(name)) bad("expected an agent's name");
-      else if (agents && !agents.includes(name)) {
-        bad(`the operator hasn't configured \`${name}\` (configured: ${agents.join(", ")})`);
-      } else step.agent = name;
+      // Among the operator's, as the `review` block's and the modes' (repo-config.mjs).
+      const name = agents
+        ? agentName(value, key, { agents }, (_, what) => bad(what))
+        : typeof value === "string" && value.trim().toLowerCase();
+      if (!agents && !/^[a-z][a-z0-9-]*$/.test(name || "")) bad("expected an agent's name");
+      else if (name) step.agent = name;
     } else if (key === "model") {
       if (typeof value === "string" && MODEL_NAME.test(value)) step.model = value;
       else

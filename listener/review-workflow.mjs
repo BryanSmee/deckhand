@@ -46,6 +46,9 @@ export function impliedSettings(settings, workflow) {
       fixRounds: rounds,
       merge: has("merge"),
       ci: has("ci") ? "wait" : false,
+      // Its steps' instructions, trusted as `review.instructions` is: a pull request that
+      // changes one waits for a human (review-merge.mjs trustedFile()).
+      stepInstructions: steps.map((s) => s.instructions).filter(Boolean),
     },
   };
 }

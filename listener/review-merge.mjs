@@ -22,13 +22,15 @@ export function mergeBlockers(review, allowed = "low") {
 // run widen its own config, so such a pull request always waits for a human. → whether `path`
 // (a changed file's, repo-relative) is one: the config and `.deckhand/`, `.github/`, any
 // CODEOWNERS, and the files the config names (instructions, Dockerfile, the review
-// instructions, the modes' instructions).
+// instructions, the modes' instructions, the review workflow's steps' instructions).
 export function trustedFile(settings, path) {
   const named = new Set(
     [
       settings?.instructions,
       settings?.dockerfile,
       settings?.review?.instructions,
+      // A repo's own workflow's review steps' (review-workflow.mjs impliedSettings()).
+      ...(settings?.review?.stepInstructions ?? []),
       ...Object.values(settings?.modes ?? {}).map((m) => m?.instructions),
     ]
       .filter((p) => typeof p === "string" && p)

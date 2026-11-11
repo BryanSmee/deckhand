@@ -280,10 +280,10 @@ test("a run's options: only on review and fix, checked, the agent among the oper
     /expected a path in the repository/,
   );
   assert.match(errors(step("review", "model: 'a b'"))[0], /`model`: expected a model tier/);
-  const agents = parseWorkflow("w.yaml", step("review", "agent: gemini"), { agents: ["claude"] });
+  const agents = parseWorkflow("w.yaml", step("review", "agent: codex"), { agents: ["claude"] });
   assert.match(
     errorText(agents.errors[0]),
-    /the operator hasn't configured `gemini` \(configured: claude\)/,
+    /the operator hasn't configured codex \(configured: claude\)/,
   );
   assert.match(
     errors("on: ready\nsteps:\n  - run: rebase\n")[0],

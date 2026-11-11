@@ -52,7 +52,8 @@ steps:
 - **Fail closed**: an error in any file, and none of the repository's workflows runs, Deckhand's
   own on `ready` and `conflict` neither: no review starts by itself there (the orchestrator's
   logs say why), and the conflict watcher starts nothing (its logs and the dashboard's Sync say
-  why). Pull requests already in the review loop finish it. The onboarding pull request's check
+  why). Pull requests already in Deckhand's own review loop finish it; those in a
+  repository's own workflow stop where they are. The onboarding pull request's check
   and the dashboard's Workflow tab list the errors with their file and line.
 - **Without a workflow of its own on `conflict`**, `conflicts.check_minutes` runs Deckhand's
   built-in one:
@@ -100,8 +101,9 @@ The steps `run:` names, by event:
 
 Each step but `merge` waits for its run's end (`ci`: its wait) before the next one. A `review`
 or `fix` step may name its run's `agent` (one the operator runs), `model` and `effort`, and a
-`review` its `instructions` (a file of the repository, as `review.instructions`), over the
-`review` block's and the repository's own:
+`review` its `instructions` (a file of the repository, trusted as `review.instructions` is: a
+pull request that changes it is never auto-merged), over the `review` block's and the
+repository's own:
 
 ```yaml
 - run: review
