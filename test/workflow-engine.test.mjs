@@ -163,6 +163,26 @@ test("a pull request stays on the workflow version it started with", async () =>
   assert.equal(engine.instance(KEY, "conflict"), null);
 });
 
+test("a sweep keeps the instances of open pull requests alone", async () => {
+  const instances = new Map();
+  const { engine, io } = engineOn(instances);
+  await engine.trigger(KEY, TWO_STEPS, event("a"), io());
+  await engine.trigger("org/repo#40", TWO_STEPS, event("b", 41), io());
+  await engine.trigger("org/repo#50", TWO_STEPS, event("c", 51), io());
+  // #30's pull request open still, #40's replaced by #42, #50 without one.
+  assert.equal(
+    engine.sweep(
+      new Map([
+        [KEY, 31],
+        ["org/repo#40", 42],
+      ]),
+    ),
+    2,
+  );
+  assert.deepEqual(engine.keys(), [KEY]);
+  assert.equal(engine.sweep(new Map([[KEY, 31]])), 0);
+});
+
 test("conditions pick the branch, flags are set once with their head", async () => {
   const flow = workflow(`on: conflict
 vars:

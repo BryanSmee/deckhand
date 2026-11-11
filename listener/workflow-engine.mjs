@@ -322,6 +322,22 @@ export function createEngine({
     else instances.delete(key);
   }
 
+  // The instances whose pull request isn't their task's open one any more (`open`: task key →
+  // its open pull request's number) go: the `closed` delivery lost, or the task's pull request
+  // replaced without one. → how many.
+  function sweep(open) {
+    let dropped = 0;
+    for (const key of [...instances.keys()]) {
+      const prs = new Set(Object.values(instances.get(key) ?? {}).map((inst) => inst.pr));
+      for (const pr of prs) {
+        if (open.get(key) === pr) continue;
+        forget(key, pr);
+        dropped += 1;
+      }
+    }
+    return dropped;
+  }
+
   // Rekeyed with spelled() (restart.mjs unifySpellings()): two spellings' instances merged.
   function respell(spelled) {
     respellMap(instances, spelled, undefined, (a, b) => {
@@ -338,6 +354,7 @@ export function createEngine({
     resume,
     waiting,
     forget,
+    sweep,
     respell,
     instance: (key, event) => instances.get(key)?.[event] ?? null,
     keys: () => [...instances.keys()],

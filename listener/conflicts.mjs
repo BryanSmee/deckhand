@@ -17,7 +17,9 @@
 // `conflict` (`.deckhand/workflows/`, workflows.mjs), else Deckhand's built-in one, a single
 // `run: rebase`. The pair is the event's id: the engine never handles one twice either, and
 // keeps each pull request's instance (its vars, its step, its version of the workflow) in the
-// store. A rebase run waits for its end (ended()) before the workflow's next step.
+// store. A rebase run waits for its end (ended()) before the workflow's next step. An instance
+// goes with its pull request's `closed` delivery (closed()), or without it, when a check reads
+// the pull request closed or a pass finds it no longer its task's open one (pass()).
 import { repoAllowed } from "./config.mjs";
 import { waitsForInput } from "./comments.mjs";
 import { headInRepo, mergeConflict, parseKey } from "./events.mjs";
@@ -183,7 +185,13 @@ export function createConflicts({
   async function pass(all, checked) {
     const counts = { started: 0, pending: 0, errors: [] };
     const byRepo = new Map();
-    for (const [key, pr] of pulls.open()) {
+    const open = pulls.open();
+    // The instances of pull requests closed without their `closed` delivery reaching us, or
+    // replaced on their task: closed() never comes for them.
+    const swept = engine.sweep(new Map(open.map(([key, pr]) => [key, pr.number])));
+    if (swept)
+      log(`Conflicts: ${swept} workflow instance(s) of pull requests no longer open dropped`);
+    for (const [key, pr] of open) {
       const target = parseKey(key);
       if (!target || target.kind === "discussion") continue;
       // Fail closed, as for webhooks: the operator may have narrowed ALLOWED_REPOS since.
@@ -243,7 +251,12 @@ export function createConflicts({
   async function checkPull(repo, key, number, { base, settings, workflow }) {
     if (busy(key) || looping(repo, number) || stopped(key)) return "skipped";
     const pr = await json(repo, `/repos/${repo}/pulls/${number}`, [404]);
-    if (!pr || pr.state !== "open" || !headInRepo(pr, repo)) return "skipped";
+    if (!pr || pr.state !== "open") {
+      // Closed (or gone) without its delivery: its instance with it.
+      engine.forget(key, number);
+      return "skipped";
+    }
+    if (!headInRepo(pr, repo)) return "skipped";
     // What it found, for the dashboard (pulls.mjs): read here anyway.
     pulls.sawMerge?.(key, pr);
     // The dashboard's rule (events.mjs mergeConflict()): not computed yet, pending; conflicts
