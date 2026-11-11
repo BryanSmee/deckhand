@@ -114,7 +114,8 @@ listener/     the modules edge and the orchestrator run (no entry point of its o
               external-runs.mjs), restart.mjs, reviews.mjs (the review loop, createReviews();
               reading, posting, merging, its texts, its state and its dry run in review-parse.mjs,
               review-post.mjs, review-merge.mjs, review-texts.mjs, review-loop.mjs and
-              review-dry-run.mjs, #1067), … (docs/contributing/architecture.md), runner/ (Docker and
+              review-dry-run.mjs, #1067; its order a workflow on `ready`, review-workflow.mjs,
+              #1041), … (docs/contributing/architecture.md), runner/ (Docker and
               Kubernetes backends), agents/ (each agent's specifics: install, env, hosts, session,
               normalize(); the credentials' names, credentials.mjs)
 github/       the github service (#502): the only one with the GitHub App's key; server.mjs
@@ -228,12 +229,6 @@ docs/         the docs, and the site built from them (VitePress, build-time only
   limit only tightens: split the file (a module of its own for the part you touch). A file that
   really can't be split gets a ceiling in `test/file-sizes.json` that says why
   (`"path": { "lines": 900, "why": "#<issue>" }`), which the review weighs; never one just to make room.
-- **No new `review:` key until the workflow engine exists** (#1035): the pull request
-  lifecycle grows through that block, and each key makes it harder to follow and the engine
-  (#1040) harder to reach with parity. New lifecycle behaviour waits for the engine, as a step
-  or a condition, or goes through the policies; bug fixes and changes to existing keys go on as
-  usual. `test/repo-config.test.mjs` holds `REVIEW_KEYS` to its list. The rule is lifted when
-  the review loop runs on the engine (#1041).
 - **Renovate proposes the dependency bumps** (`renovate.json`, Mend's hosted app, #1013): weekly
   pull requests labelled `dependencies`, grouped (each of valkey's and BuildKit's images with the
   Helm values; node across every Dockerfile, its major never: the `node:26-*` tags float, so its

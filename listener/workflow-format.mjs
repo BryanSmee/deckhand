@@ -555,7 +555,7 @@ export function builtInWorkflow(event, settings = null) {
     if (errors.length) throw new Error(errors.map(errorText).join("; "));
     // A few shapes per repo's settings: kept, not grown.
     if (builtIns.size >= 100) builtIns.delete(builtIns.keys().next().value);
-    builtIns.set(text, { ...workflow, name: "built-in", file: null, text });
+    builtIns.set(text, { ...workflow, name: "built-in", file: null });
   }
   return builtIns.get(text);
 }

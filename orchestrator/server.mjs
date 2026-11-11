@@ -989,13 +989,13 @@ ctx.repoApi = createRepoApi({
   policies,
   permissions,
   granted: grantsBy(policies),
+  workflows: ctx.workflows,
   // The Overview's repository cards: no GitHub read per repo when they show.
   backlogs: (repos, user) => ctx.workApi.counts(repos, user),
   log,
 });
 
-// Run analyses (the dashboard's Analyze): digests of a repo's past runs, without the secrets
-// their logs must never carry.
+// Run analyses (the dashboard's Analyze): digests of past runs, without their logs' secrets.
 ctx.analysis = createAnalysis({
   // Never a chat's: its owner's alone (chats.mjs).
   runs: () => ctx.runs.filter((r) => !r.chat),

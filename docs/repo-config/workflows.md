@@ -6,11 +6,15 @@ Not GitHub Actions' workflows (`.github/workflows/`, [Workflow files](../repo-co
 
 ## What a workflow is
 
-Deckhand's pull request lifecycle is built-in code that `.deckhand.yaml` switches on and off. A
-workflow file says instead which steps follow an event, under which conditions, and what to count
-along the way. This version runs one event, `conflict`: what happens when the
-[conflict watcher](issues.md#conflicts) finds one of Deckhand's pull requests in conflict with
-its base. The review loop moves onto workflows in a later version.
+Deckhand's pull request lifecycle runs on workflows: each says which steps follow an event,
+under which conditions, and what to count along the way. Two events have one:
+
+- `ready`, a pull request that turned ready for review: the [review loop](reviews.md#reviews)
+  (CI, review, fix runs, merge). `.deckhand.yaml`'s `review:` block compiles to Deckhand's own
+  workflow on it (see [The review loop](#the-review-loop)); a file of the repository's replaces
+  it.
+- `conflict`, the [conflict watcher](issues.md#conflicts) finding one of Deckhand's pull requests
+  in conflict with its base.
 
 ```yaml
 # .deckhand/workflows/conflicts.yaml (read from the default branch)
@@ -61,39 +65,63 @@ steps:
 
 ## Format
 
-| Key     | What                                                                                                         |
-| ------- | ------------------------------------------------------------------------------------------------------------ |
-| `on`    | the event, or a list of them: `conflict`. One workflow per event in a repository (see [Triggers](#triggers)) |
-| `vars`  | the workflow's state, each name `counter` or `flag` (see [Vars](#vars))                                      |
-| `steps` | the steps, in order                                                                                          |
+| Key     | What                                                                                                                  |
+| ------- | --------------------------------------------------------------------------------------------------------------------- |
+| `on`    | the event, or a list of them: `ready`, `conflict`. One workflow per event in a repository (see [Triggers](#triggers)) |
+| `vars`  | the workflow's state, each name `counter` or `flag` (see [Vars](#vars))                                               |
+| `steps` | the steps, in order                                                                                                   |
 
 Each step is one of:
 
 | Step                         | What                                                                                                                                                                                              |
 | ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `run: rebase`                | the conflict run (on `conflict` only): `deny_fix` asked, then a work run that rebases the pull request, or the "No rebase run" comment. The next step waits for the run's end                     |
+| `run: <step>`                | one of the event's steps (below)                                                                                                                                                                  |
 | `comment: <text>`            | a comment on the pull request, as Deckhand's App (its own reply, like a refusal note: no policy asks about it). Each new event posts it again: a flag (`if: not told`, `set: told`) posts it once |
 | `if: <condition>` + `then:`  | the steps under `then` when the condition holds, else those under `else` (optional)                                                                                                               |
 | `repeat:` + `max: <var> <n>` | the steps under `repeat` again, at most `n` rounds of counter `<var>`                                                                                                                             |
 
 A `run` or `comment` step may also have an `if:` (and an `else:` list), `count: <counter>` (one
-more when the step acts) and `set: <flag>` (set when it acts). A rebase the policies refuse
-counts nothing and sets nothing; the steps after it go on.
+more when the step acts) and `set: <flag>` (set when it acts). A step the policies refuse counts
+nothing and sets nothing; the steps after it go on.
+
+The steps `run:` names, by event:
+
+| Event      | Step         | What                                                                                                                                                                                                                                                                           |
+| ---------- | ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `ready`    | `ci`         | [the CI step](reviews.md#ci-before-the-review): the head commit's GitHub Actions runs waited for (`review.ci_wait`), a CI fix run when they fail (`review.ci_fix`, with a `run: fix` step in the workflow). Ends when CI passed, has no run, ran out of time or of CI fix runs |
+| `ready`    | `review`     | a review run (`deny_review` asked when the pull request turned ready, and after each fix run)                                                                                                                                                                                  |
+| `ready`    | `fix`        | a fix run of the last review's findings, when it requests changes (`deny_fix` asked, a round left, no run going, nobody's input awaited). **No fix run started ends the `repeat` it is in.** Its run's end goes on only when it pushed and `deny_review` allows reviewing it   |
+| `ready`    | `merge`      | [the auto-merge](reviews.md#auto-merge) of the last review, decided: its gates, `allow_merge` and the operator's `auto_merge` grant, or the comment saying why not. Without the grant, the `rounds-out` comment instead. Doesn't wait: the steps after it go on                |
+| `ready`    | `rounds-out` | not a `run`: `comment: rounds-out` posts Deckhand's own comment saying the last review still requests changes after the fix runs, once per pull request (nothing when it doesn't, or no fix run ran)                                                                           |
+| `conflict` | `rebase`     | the conflict run: `deny_fix` asked, then a work run that rebases the pull request, or the "No rebase run" comment                                                                                                                                                              |
+
+Each step but `merge` waits for its run's end (`ci`: its wait) before the next one. A `review`
+or `fix` step may name its run's `agent` (one the operator runs), `model` and `effort`, and a
+`review` its `instructions` (a file of the repository, as `review.instructions`), over the
+`review` block's and the repository's own:
+
+```yaml
+- run: review
+  agent: codex
+  model: best
+  effort: high
+  instructions: .deckhand/security-review.md
+```
 
 ### Conditions
 
 A fixed vocabulary, checked when the file is read: anything else is an error naming the file and
 the line. Combine them with `and`, `or`, `not` and parentheses.
 
-| Condition                          | Holds when                                                                                                                                                            |
-| ---------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `severity <= medium`               | the last review's most severe finding compares so (`low` < `medium` < `high` < `critical`; `==`, `!=`, `<`, `<=`, `>`, `>=`). None on `conflict`: no comparison holds |
-| `ci == passed`                     | the head commit's CI is `passed`, `failed`, `running` or `none` (`==`, `!=`)                                                                                          |
-| `paths("glob", …)`                 | a file the pull request changes matches one of the globs (`*` within a folder, `**` across them)                                                                      |
-| `label("name", …)`                 | the pull request has one of the labels (any case)                                                                                                                     |
-| `changed("glob", …, since <flag>)` | as `paths()`, but only the files changed since the head the flag was set at; all of them while it isn't set                                                           |
-| `rebases < 3`                      | a counter compared with a whole number                                                                                                                                |
-| `warned`                           | a flag is set                                                                                                                                                         |
+| Condition                          | Holds when                                                                                                                                                                                                                     |
+| ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `severity <= medium`               | the last review's most severe finding compares so (`none` < `low` < `medium` < `high` < `critical`, `none` a review without findings; `==`, `!=`, `<`, `<=`, `>`, `>=`). Without a review (on `conflict`), no comparison holds |
+| `ci == passed`                     | the head commit's CI is `passed`, `failed`, `running` or `none` (`==`, `!=`)                                                                                                                                                   |
+| `paths("glob", …)`                 | a file the pull request changes matches one of the globs (`*` within a folder, `**` across them)                                                                                                                               |
+| `label("name", …)`                 | the pull request has one of the labels (any case)                                                                                                                                                                              |
+| `changed("glob", …, since <flag>)` | as `paths()`, but only the files changed since the head the flag was set at; all of them while it isn't set                                                                                                                    |
+| `rebases < 3`                      | a counter compared with a whole number                                                                                                                                                                                         |
+| `warned`                           | a flag is set                                                                                                                                                                                                                  |
 
 Quote a condition that holds `: ` (`if: 'changed("a/**", since: done)'`); `since done` needs
 none. What a condition reads of GitHub (the files, CI) is read only when one asks.
@@ -110,14 +138,107 @@ none. What a condition reads of GitHub (the files, CI) is read only when one ask
 
 Every loop is bounded: `repeat` needs `max: <counter> <rounds>`, and a step inside it must
 `count` that counter, else the file is refused as an unbounded loop. At run time, a loop also
-stops at the operator's `MAX_FIX_ROUNDS`, whatever its `max`, and after a round that counted
-nothing (its counting step's `if` didn't hold).
+stops at the operator's `MAX_FIX_ROUNDS`, whatever its `max`, after a round that counted
+nothing (its counting step's `if` didn't hold), and at a `fix` step that started no fix run.
 
 ### Triggers
 
 One workflow per event, checked when the files are read, on their `on` alone: two workflows on
 the same event are refused, whatever their conditions, and so is a workflow on `ready` while the
-built-in review loop has it (`review.on: ready`). No workflow runs on `ready` yet: it waits for the review loop to move onto them.
+`review` block has it (`review.on: ready`) or without a `review` block (its steps read its
+settings).
+
+## The review loop
+
+`review.on: ready` compiles the `review` block to Deckhand's own workflow on `ready`: the steps
+the review loop always ran, in the same order. The dashboard's **Workflow** tab (Settings ›
+Repositories › a repository) shows it under the graph. With `ci: wait`, `fix: 3` and `merge: true`:
+
+```yaml
+# Deckhand's built-in review loop, compiled from the repository's `review:` block.
+on: ready
+vars:
+  fixes: counter
+steps:
+  - run: ci # review.ci: wait, ci_wait: 30, ci_fix: 1
+  - run: review
+  - repeat:
+      - run: fix # ends the loop when no fix run starts
+        count: fixes
+      - run: ci # review.ci: wait, ci_wait: 30, ci_fix: 1
+      - run: review
+    max: fixes 3 # review.fix
+  - run: merge # review.merge, with the operator's auto_merge grant
+```
+
+Without `ci: wait`, no `ci` steps; without `merge`, `comment: rounds-out` in place of the merge;
+with `fix: true` alone (one fix run, no merge), `- run: fix` after the review and nothing
+reviewing its push, as before.
+
+**A workflow of the repository's on `ready`** replaces it. Keep the `review` block, without
+`on: ready` (`review: true`, or its keys without `on`): its settings still apply
+(`max_allowed_severity`, `ci_wait`, `ci_fix`, `merge_method`, `merge_wait`, `follow_ups`, the
+reviews' `agent`, `model`, `effort` and `instructions`), and the workflow's steps stand for the
+rest: a `run: fix` step for `fix` (its loop's `max` for the rounds), `run: merge` for `merge`
+(the operator's `auto_merge` grant still needed), `run: ci` for `ci: wait`. Every step asks the
+policies as the built-in loop does: the file orders the steps, never widens what a run may do.
+
+Two reviewers: the loop's, then a second opinion on another agent once nothing blocks, before
+the merge:
+
+```yaml
+# .deckhand/workflows/review.yaml
+on: ready
+vars:
+  fixes: counter
+steps:
+  - run: ci
+  - run: review
+  - repeat:
+      - run: fix
+        count: fixes
+      - run: ci
+      - run: review
+    max: fixes 3
+  - if: severity <= low
+    then:
+      - run: review
+        agent: codex
+        model: best
+      - run: merge # reads the last review: the second one's
+```
+
+A security review when the pull request changes the policies, once per change (again only
+when a later push changes them since):
+
+```yaml
+# .deckhand/workflows/review.yaml
+on: ready
+vars:
+  fixes: counter
+  security: flag
+steps:
+  - run: review
+  - if: 'changed("policy/**", since: security)'
+    run: review
+    instructions: .deckhand/security-review.md
+    set: security
+  - repeat:
+      - run: fix
+        count: fixes
+      - run: review
+    max: fixes 2
+  - run: merge
+```
+
+- **The fix and merge steps read the last review**: the one that just ended, or the App's last
+  review read back from GitHub when another step came between.
+- **A fix a maintainer asks for** (the dashboard's Fix) is one round outside the workflow: its
+  push is reviewed (after the `ci` step, with `review.ci: wait`), and the workflow goes on from
+  that review.
+- **A pull request ready again**, rebased by the conflict watcher, or ready after a CI step that
+  reviewed nothing, runs the workflow again from its first step, its vars kept (its fix runs
+  counted).
 
 ## How it runs
 
@@ -128,7 +249,11 @@ built-in review loop has it (`review.on: ready`). No workflow runs on `ready` ye
   that start after it.
 - **Each event runs once**: a conflict is the pull request's (head, base) pair, and the same
   pair, from a redelivered webhook or the next check, starts nothing twice. A new pair runs the
-  steps again from the top, the vars kept.
+  steps again from the top, the vars kept. On `ready`, a head reviewed already starts nothing
+  (as before), and each run's end goes on from the step that started it.
+- **A pull request already in the review loop when it moved onto workflows** (an update of
+  Deckhand) goes on in Deckhand's own workflow from the step its run or its CI wait is at, its
+  fix runs counted as before.
 - **A step is marked before it acts**: a comment an orchestrator stopped in the middle of counts
   as posted, never posted twice. A rebase step cut off is asked again by the next orchestrator,
   which starts the run unless its pair was tried already (it was queued then): either way, its

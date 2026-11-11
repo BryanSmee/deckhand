@@ -470,6 +470,7 @@ function apiSetup({
   policies,
   backlogs,
   permissions,
+  workflows,
   ...opts
 } = {}) {
   const s = setup({ grants, granted, fs, ...opts });
@@ -480,6 +481,7 @@ function apiSetup({
     policies,
     backlogs,
     permissions,
+    workflows,
     app,
     grants: grantsOf(grants, s.config),
     granted,
@@ -1364,4 +1366,42 @@ test("a repo's config: its pull request lifecycle, each step asked of the polici
   const bare = (await call(none.api, "GET", "/api/repos/org/app/config")).body.workflow;
   assert.equal(bare.sample, false);
   assert.equal(bare.nodes.find((n) => n.id === "review").state, "on");
+});
+
+test("a repo's config: the workflow on `ready` its pull requests run, compiled or its own (#1041)", async () => {
+  const files = { "org/app": "review:\n  on: ready\n  fix: 2\n" };
+  const built = apiSetup({ first: [info("org/app")], configured: ["org/app"], files });
+  const { source } = (await call(built.api, "GET", "/api/repos/org/app/config")).body.workflow;
+  assert.deepEqual([source.file, source.errors], [null, []]);
+  assert.match(source.text, /^on: ready$/m);
+  assert.match(source.text, /^ {4}max: fixes 2 # review\.fix$/m);
+  // The repo's own: its file, linked; its workflows' errors, said.
+  const own = { file: ".deckhand/workflows/review.yaml", on: ["ready"] };
+  let read = { workflows: [own], errors: [] };
+  const workflows = { read: async () => read };
+  const mine = { review: "review: true\n" };
+  const theirs = apiSetup({
+    first: [info("org/app")],
+    configured: ["org/app"],
+    workflows,
+    files: { "org/app": mine.review },
+  });
+  const answer = async () =>
+    (await call(theirs.api, "GET", "/api/repos/org/app/config")).body.workflow.source;
+  assert.deepEqual(await answer(), {
+    file: own.file,
+    url: `https://github.com/org/app/blob/main/${own.file}`,
+    text: null,
+    errors: [],
+  });
+  read = {
+    workflows: [],
+    errors: [{ file: own.file, line: 3, message: "`run`: unknown step `x`" }],
+  };
+  assert.deepEqual((await answer()).errors, [
+    ".deckhand/workflows/review.yaml line 3: run: unknown step x",
+  ]);
+  // `review: true` alone: `/mode review` only, nothing runs on `ready`.
+  read = { workflows: [], errors: [] };
+  assert.equal(await answer(), null);
 });
