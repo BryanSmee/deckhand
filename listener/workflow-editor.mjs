@@ -20,6 +20,8 @@ import { readJsonBody, Refused, refuse, send } from "../lib/http.mjs";
 import { repoAllowed } from "./config.mjs";
 import { parseKey, pullEntry, sameRepo } from "./events.mjs";
 import { getJson } from "./github.mjs";
+import { parseYaml } from "../lib/yaml.mjs";
+import { CONFIG_FILE, parseRepoConfig } from "./repo-config.mjs";
 import { READY } from "./review-workflow.mjs";
 import { apiRoute } from "./web.mjs";
 import {
@@ -119,9 +121,11 @@ export function createWorkflowEditor(ctx) {
   }
 
   // `text` parsed as file `name` of `repo`, the other files of `base` beside it, as the reader
-  // would read them once it lands: { workflow, errors }, each error { line, message } of this
-  // file (its triggers' with the others' too), or of another file (`file`).
+  // would read them once it lands: { steps, on, errors, replaces }, each error { line, message }
+  // of this file (its triggers' with the others' too), or of another file (`file`).
   // The other files' errors are said too (with their `file`): one stops every workflow there.
+  // `replaces`: a workflow on `ready` in a repo whose `review.on: ready` runs the built-in loop,
+  // which saving turns off in the same pull request (offReady()): no clash then.
   async function check({ files: found, folderErrors = [], settings }, name, text) {
     const agents = ctx.config?.agents ?? null;
     const parsed = parseWorkflow(name, text, { agents });
@@ -133,10 +137,14 @@ export function createWorkflowEditor(ctx) {
       if (workflow) others.push(workflow);
     }
     errors.push(...folderErrors);
-    if (parsed.workflow) errors.push(...checkTriggers([...others, parsed.workflow], settings));
+    const replaces = !!parsed.workflow?.on.includes(READY) && settings?.review?.on === READY;
+    const after = replaces
+      ? { ...settings, review: { ...settings.review, on: "manual" } }
+      : settings;
+    if (parsed.workflow) errors.push(...checkTriggers([...others, parsed.workflow], after));
     const own = `${WORKFLOW_DIR}/${name}`;
     return {
-      workflow: errors.some((e) => e.file === own) ? null : parsed.workflow,
+      replaces,
       steps: parsed.workflow ? parsed.workflow.steps.map(stepView) : null,
       on: parsed.workflow?.on ?? [],
       errors: errors.map((e) => ({
@@ -215,7 +223,7 @@ export function createWorkflowEditor(ctx) {
 
   async function checked(req, res, user, repo) {
     const { name, text } = asked(await readJsonBody(req, MAX_BODY));
-    const { workflow, ...view } = await check(await readRepo(repo), name, text);
+    const view = await check(await readRepo(repo), name, text);
     send(res, 200, view);
   }
 
@@ -266,10 +274,14 @@ export function createWorkflowEditor(ctx) {
     const { base } = read;
     // Its own errors only (its trigger clashes too): another file's must not keep this one from
     // being fixed, when both are broken at once.
-    const own = (await check(read, name, text)).errors.filter((e) => !e.file);
+    const checked = await check(read, name, text);
+    const own = checked.errors.filter((e) => !e.file);
     if (own.length) {
       refuse(422, `The workflow has errors: ${own.map((e) => plain(errorText(e))).join("; ")}`);
     }
+    // Replacing the built-in loop: `.deckhand.yaml`'s `review.on: ready` goes in the same pull
+    // request, so neither lands without the other.
+    const config = checked.replaces ? await offReady(repo, base) : null;
     const path = `${WORKFLOW_DIR}/${name}`;
     const ref = encodeURIComponent(base);
     const existing = await json(repo, `/repos/${repo}/contents/${path}?ref=${ref}`, [404]);
@@ -314,13 +326,38 @@ export function createWorkflowEditor(ctx) {
         branch,
         ...(existing && { sha: existing.sha }),
       });
+      if (config) {
+        await write(repo, "PUT", `/repos/${repo}/contents/${CONFIG_FILE}`, {
+          message: `Turn review.on: ready off: ${path} replaces the built-in loop\n\nSaved by @${user}.${by ? `\n\n${by}` : ""}`,
+          content: Buffer.from(config.text).toString("base64"),
+          branch,
+          sha: config.sha,
+        });
+      }
       return write(repo, "POST", `/repos/${repo}/pulls`, {
         title: `${verb} the ${stem} workflow`,
         head: branch,
         base,
-        body: saveBody(user, path, existing),
+        body: saveBody(user, path, existing, !!config),
       });
     }
+  }
+
+  // `.deckhand.yaml` on `base` with `review.on: ready` turned to `manual`, the rest as it is →
+  // { text, sha }; refused (422) when it can't be done safely (the key's line holds more than it,
+  // or the result doesn't read as the same config with the loop off), saying what to do.
+  async function offReady(repo, base) {
+    const ref = encodeURIComponent(base);
+    const file = await json(repo, `/repos/${repo}/contents/${CONFIG_FILE}?ref=${ref}`);
+    const text = Buffer.from(file.content ?? "", file.encoding ?? "base64").toString();
+    const edited = withoutReadyTrigger(text, ctx.config);
+    if (edited === null) {
+      refuse(
+        422,
+        `This workflow on ready replaces the built-in review loop: remove \`on: ready\` from \`review:\` in ${CONFIG_FILE} in the same pull request (it couldn't be changed here).`,
+      );
+    }
+    return { text: edited, sha: file.sha };
   }
 
   // A write as the App, its answer's body; GitHub's refusal a 502 that says it.
@@ -365,11 +402,43 @@ export function createWorkflowEditor(ctx) {
   return { handle };
 }
 
+// `.deckhand.yaml`'s text with `review.on: ready` made `manual` on its own line, the rest as it is,
+// or null when that can't be done safely: the key isn't on a line of its own (`on: ready` in a
+// flow mapping with other keys is), or the result doesn't parse to the same config, the built-in
+// loop off. `config`: the operator's, for parseRepoConfig().
+export function withoutReadyTrigger(text, config) {
+  const where = new Map();
+  try {
+    parseYaml(text, where);
+  } catch {
+    return null;
+  }
+  const line = where.get("review.on");
+  if (!line) return null;
+  const lines = text.split("\n");
+  const before = lines[line - 1];
+  const after = before.replace(/^(\s*on:\s*)(["']?)ready\2(\s*(#.*)?)$/, "$1$2manual$2$3");
+  if (after === before) return null;
+  lines[line - 1] = after;
+  const edited = lines.join("\n");
+  const was = parseRepoConfig(text, config);
+  const now = parseRepoConfig(edited, config);
+  if (now.errors.length || now.settings.review?.on !== "manual") return null;
+  const same = { ...was.settings, review: { ...was.settings.review, on: "manual" } };
+  return JSON.stringify(now.settings) === JSON.stringify(same) ? edited : null;
+}
+
 // What the pull request's description says: who saved it and where it comes from.
-function saveBody(user, path, existing) {
+function saveBody(user, path, existing, replaced = false) {
   return [
     `@${user} ${existing ? "edited" : "added"} \`${path}\` in Deckhand's dashboard (Settings › Repositories › a repository › Editor), which opened this pull request.`,
     "",
+    ...(replaced
+      ? [
+          "It runs on `ready` in place of Deckhand's built-in review loop, so `review.on: ready` is turned off in `.deckhand.yaml` in this same pull request. The rest of the `review:` block still applies (tolerance, waits, merge method, follow-ups, the reviews' agent).",
+          "",
+        ]
+      : []),
     "Like the rest of `.deckhand.yaml`'s config, the workflow applies once it is merged into the default branch. Open pull requests keep the version they started with; the new one applies to those that start after the merge.",
   ].join("\n");
 }

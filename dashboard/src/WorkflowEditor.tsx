@@ -216,7 +216,8 @@ export function WorkflowEditor({ repo, now }: { repo: string; now: number }) {
           )}
         </section>
       </div>
-      <DryRunPanel files={files} dry={dry} ready={!errors.length && !!checked?.steps} now={now} />
+      {/* The dry run needs only a text that parses: a trigger clash doesn't change its path. */}
+      <DryRunPanel files={files} dry={dry} ready={!!checked?.steps} now={now} />
       <Save
         repo={repo}
         name={name}
@@ -224,6 +225,7 @@ export function WorkflowEditor({ repo, now }: { repo: string; now: number }) {
         sha={file?.sha ?? null}
         changed={text !== original || !file}
         errors={errors.length > 0 || !checked}
+        replaces={!!checked?.replaces && !errors.length}
         allowed={can.repo(repo, "repo:config:write")}
       />
     </div>
@@ -573,6 +575,7 @@ function Save({
   sha,
   changed,
   errors,
+  replaces,
   allowed,
 }: {
   repo: string;
@@ -581,6 +584,8 @@ function Save({
   sha: string | null;
   changed: boolean;
   errors: boolean;
+  // It replaces the built-in loop: `review.on: ready` goes off in the same pull request.
+  replaces: boolean;
   allowed: boolean;
 }) {
   const [saving, setSaving] = useState(false);
@@ -602,6 +607,14 @@ function Save({
         {t("editor.saveTitle")}
       </h2>
       <p class={styles.muted}>{t("editor.saveHelp")}</p>
+      {replaces && (
+        <p class={styles.muted} role="status">
+          {tx("editor.replaces", {
+            key: <code>review.on: ready</code>,
+            file: <code>.deckhand.yaml</code>,
+          })}
+        </p>
+      )}
       <div class={styles.options}>
         <Button
           variant="primary"

@@ -183,3 +183,26 @@ test("another file's errors are said, and don't keep this one from being saved",
   });
   expect(screen.getByRole("button", { name: "Replay it" })).toHaveProperty("disabled", false);
 });
+
+test("a workflow replacing the built-in loop says so; the dry run needs only a text that parses", async () => {
+  const api = setup({ check: { ...WORKFLOW_CHECK, replaces: true } });
+  await screen.findByText(/replaces Deckhand's built-in review loop/);
+  expect(screen.getByText(/replaces Deckhand's built-in review loop/).textContent).toContain(
+    "review.on: ready",
+  );
+  // A trigger clash of its own blocks the save, not the dry run.
+  api.routes[`POST ${BASE}/check`] = () => ({
+    ...WORKFLOW_CHECK,
+    errors: [{ file: null, line: 1, message: "two triggers for ready: …" }],
+  });
+  fireEvent.input(text(), { target: { value: `${WORKFLOW_FILES.files[0].text}# more\n` } });
+  await screen.findByRole("alert");
+  fireEvent.change(screen.getByRole("combobox", { name: "Pull request" }), {
+    target: { value: "212" },
+  });
+  expect(screen.getByRole("button", { name: "Replay it" })).toHaveProperty("disabled", false);
+  expect(screen.getByRole("button", { name: "Open a pull request" })).toHaveProperty(
+    "disabled",
+    true,
+  );
+});

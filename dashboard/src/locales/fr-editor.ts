@@ -115,6 +115,8 @@ export const editor = {
     "L’App de Deckhand commite le fichier sur une nouvelle branche et ouvre une pull request qui dit que vous l’avez enregistré. Le workflow s’applique une fois cette pull request fusionnée dans la branche par défaut.",
   "editor.save": "Ouvrir une pull request",
   "editor.saving": "Ouverture…",
+  "editor.replaces":
+    "Ce workflow sur ready remplace la boucle de revue intégrée de Deckhand : la pull request désactive aussi {key} dans {file}. Le reste du bloc review s’applique toujours.",
   "editor.saveDenied": "Enregistrer demande l’action {permission} sur ce dépôt.",
   "editor.saveErrors": "Corrigez ses erreurs pour l’enregistrer.",
   "editor.saved": "Pull request {pr} ouverte : fusionnez-la pour appliquer le workflow.",

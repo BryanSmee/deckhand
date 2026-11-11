@@ -299,7 +299,11 @@ a checkout:
   change: reviewed, then merged into the default branch, which is the only place workflows are
   read from. A text with errors of its own (its trigger clashing with another file's included)
   isn't saved, nor one over a file that changed on the default branch since you opened it;
-  another file's errors are listed, but don't stop it, so two broken files can each be fixed. When
+  another file's errors are listed, but don't stop it, so two broken files can each be fixed. A
+  workflow on `ready` in a repository whose `review.on: ready` runs the built-in loop replaces
+  that loop: the same pull request turns `on: ready` in `.deckhand.yaml` to `on: manual`, the
+  rest of its `review:` block kept (when the key shares its line with others, in a flow mapping,
+  saving says to change it by hand). When
   GitHub refuses the commit or the pull request, the branch is deleted (or its name said, when it
   can't be). Saving needs the `repo:config:write` action
   ([Access](policies.md#access)); reading the files, checking them and dry runs

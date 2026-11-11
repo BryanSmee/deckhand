@@ -115,6 +115,8 @@ export const editor = {
     "Deckhand's App commits the file to a new branch and opens a pull request saying you saved it. The workflow applies once that pull request is merged into the default branch.",
   "editor.save": "Open a pull request",
   "editor.saving": "Opening…",
+  "editor.replaces":
+    "This workflow on ready replaces Deckhand's built-in review loop: the pull request also turns {key} off in {file}. The rest of the review block still applies.",
   "editor.saveDenied": "Saving needs the {permission} action on this repository.",
   "editor.saveErrors": "Fix its errors to save it.",
   "editor.saved": "Pull request {pr} opened: merge it to apply the workflow.",

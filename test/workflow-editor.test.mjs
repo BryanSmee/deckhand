@@ -3,7 +3,12 @@
 // as a pull request the App opens.
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { createWorkflowEditor, stepView, versionCounts } from "../listener/workflow-editor.mjs";
+import {
+  createWorkflowEditor,
+  stepView,
+  versionCounts,
+  withoutReadyTrigger,
+} from "../listener/workflow-editor.mjs";
 import {
   conditionText,
   parseCondition,
@@ -12,6 +17,7 @@ import {
 } from "../listener/workflow-format.mjs";
 import { recordedHistory, whatIf } from "../listener/workflow-what-if.mjs";
 import { createWorkflows } from "../listener/workflows.mjs";
+import { parseRepoConfig } from "../listener/repo-config.mjs";
 import { MEMBER, permissionsOf, serve, testConfig } from "./helpers.mjs";
 
 const parsed = (text, name = "review.yaml") => {
@@ -260,7 +266,11 @@ const json = (value, status = 200) =>
 
 // A fake GitHub for org/app: its default branch, one workflow file, pull request #7, and what
 // the save writes (`writes`). `changed`: the file's blob on main differs from the one edited.
-function fakeGithub({ files = { "review.yaml": REVIEW_FILE }, refuse = null } = {}) {
+function fakeGithub({
+  files = { "review.yaml": REVIEW_FILE },
+  refuse = null,
+  deckhand = null,
+} = {}) {
   const writes = [];
   const reads = [];
   const shas = Object.fromEntries(Object.keys(files).map((name, i) => [name, `blob${i}`]));
@@ -290,6 +300,9 @@ function fakeGithub({ files = { "review.yaml": REVIEW_FILE }, refuse = null } = 
     if (file) return files[file[1]] ? json({ sha: shas[file[1]] }) : json({}, 404);
     const b = /^\/repos\/org\/app\/git\/blobs\/blob(\d+)$/.exec(url);
     if (b) return json(blob(Object.values(files)[Number(b[1])]));
+    if (url === "/repos/org/app/contents/.deckhand.yaml" && deckhand !== null) {
+      return json({ sha: "cfg0", ...blob(deckhand) });
+    }
     if (url === "/repos/org/app/git/ref/heads/main") return json({ object: { sha: "c0ffee" } });
     if (url === "/repos/org/app/pulls/7") {
       return json({
@@ -312,8 +325,8 @@ function fakeGithub({ files = { "review.yaml": REVIEW_FILE }, refuse = null } = 
   };
 }
 
-async function editorSetup(t, { files, refuse, rules } = {}) {
-  const fake = fakeGithub({ files, refuse });
+async function editorSetup(t, { files, refuse, rules, deckhand = null } = {}) {
+  const fake = fakeGithub({ files, refuse, deckhand });
   const admin = [...MEMBER, "repo:config:read", "repo:config:write"];
   const clock = { at: 1_000_000 };
   const ctx = {
@@ -321,10 +334,11 @@ async function editorSetup(t, { files, refuse, rules } = {}) {
     config: testConfig({ allowedRepos: ["org/app"] }),
     github: fake.github,
     workflows: createWorkflows({ github: fake.github, config: testConfig(), now: () => clock.at }),
-    repoSettings: async () => ({
-      settings: { review: { maxAllowedSeverity: "low" } },
-      errors: [],
-    }),
+    // The repo's .deckhand.yaml (`deckhand`) as parsed, else a review block without a trigger.
+    repoSettings: async () =>
+      deckhand === null
+        ? { settings: { review: { maxAllowedSeverity: "low" } }, errors: [] }
+        : parseRepoConfig(deckhand, testConfig()),
     permissions: permissionsOf(
       rules ?? {
         alice: { "org/app": admin },
@@ -640,4 +654,74 @@ steps:
   const read = { files: () => (reads++, ["a/x"]) };
   await whatIf({ workflow, read, picks: ["high", "pushed"] });
   assert.equal(reads, 1);
+});
+
+const ON_READY =
+  "agent: claude\nreview:\n  on: ready # the built-in loop\n  fix: 2\n  merge: true\n";
+
+test("withoutReadyTrigger: review.on: ready made manual on its line, else null", () => {
+  const config = testConfig();
+  assert.equal(
+    withoutReadyTrigger(ON_READY, config),
+    ON_READY.replace("on: ready #", "on: manual #"),
+  );
+  assert.equal(
+    withoutReadyTrigger("review:\n  on: 'ready'\n", config),
+    "review:\n  on: 'manual'\n",
+  );
+  // In a flow mapping beside other keys, not a trigger, or a file that doesn't parse: by hand.
+  assert.equal(withoutReadyTrigger("review: { on: ready, fix: 2 }\n", config), null);
+  assert.equal(withoutReadyTrigger("review: true\n", config), null);
+  assert.equal(withoutReadyTrigger("review: [\n", config), null);
+});
+
+test("the built-in loop on ready: a workflow on ready replaces it, its review.on turned off in the same pull request", async (t) => {
+  const { call, writes } = await editorSetup(t, { files: {}, deckhand: ON_READY });
+  const asked = { name: "review.yaml", text: REVIEW_FILE };
+  // Not a clash: the check says it replaces the loop.
+  const checked = await call("POST", `${BASE}/check`, asked);
+  assert.deepEqual(checked.body.errors, []);
+  assert.equal(checked.body.replaces, true);
+  // The dry run works on the pull requests the built-in loop reviewed.
+  const dry = await call("POST", `${BASE}/dry-run`, { ...asked, pr: 7 });
+  assert.equal(dry.status, 200);
+  assert.equal(dry.body.trail[0].source, "recorded");
+  const saved = await call("POST", `${BASE}/save`, { ...asked, sha: null });
+  assert.equal(saved.status, 200);
+  assert.deepEqual(
+    writes.map((w) => `${w.method} ${w.path}`),
+    [
+      "POST /repos/org/app/git/refs",
+      "PUT /repos/org/app/contents/.deckhand/workflows/review.yaml",
+      "PUT /repos/org/app/contents/.deckhand.yaml",
+      "POST /repos/org/app/pulls",
+    ],
+  );
+  const config = writes[2].body;
+  assert.equal(config.sha, "cfg0");
+  assert.equal(config.branch, saved.body.branch);
+  assert.equal(
+    Buffer.from(config.content, "base64").toString(),
+    ON_READY.replace("on: ready #", "on: manual #"),
+  );
+  assert.match(writes[3].body.body, /review\.on: ready` is turned off/);
+  // A workflow on `conflict` there changes nothing of it.
+  const other = await call("POST", `${BASE}/check`, {
+    name: "conflicts.yaml",
+    text: "on: conflict\nsteps:\n  - run: rebase\n",
+  });
+  assert.equal(other.body.replaces, false);
+});
+
+test("the built-in loop on ready, its trigger in a flow mapping: refused, saying what to do", async (t) => {
+  const flow = "review: { on: ready, fix: 2 }\n";
+  const { call, writes } = await editorSetup(t, { files: {}, deckhand: flow });
+  const said = await call("POST", `${BASE}/save`, {
+    name: "review.yaml",
+    text: REVIEW_FILE,
+    sha: null,
+  });
+  assert.equal(said.status, 422);
+  assert.match(said.body.error, /remove `on: ready` from `review:` in \.deckhand\.yaml/);
+  assert.deepEqual(writes, []);
 });

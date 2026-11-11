@@ -72,6 +72,9 @@ export interface WorkflowCheck {
   steps: WorkflowStep[] | null;
   on: string[];
   errors: WorkflowError[];
+  // A workflow on `ready` where `review.on: ready` runs the built-in loop: saving turns that off
+  // in .deckhand.yaml, in the same pull request, rather than clash with it.
+  replaces?: boolean;
 }
 
 // A step the dry run took: recorded (as the pull request did), assumed (CI that went on isn't
