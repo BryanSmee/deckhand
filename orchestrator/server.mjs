@@ -38,6 +38,7 @@ import { createChats } from "../listener/chats.mjs";
 import { createRequests } from "../listener/requests.mjs";
 import { createComments } from "../listener/comments.mjs";
 import { createConflicts, intoDefaultBranch } from "../listener/conflicts.mjs";
+import { createWorkflows } from "../listener/workflows.mjs";
 import {
   brokerServiceUrl,
   ConfigError,
@@ -117,7 +118,8 @@ import { createSync } from "../listener/sync.mjs";
 import { busyTask, createTasks } from "../listener/tasks.mjs";
 import { createAutoPickup } from "../listener/auto-pickup.mjs";
 import { createLanes, fetchParent } from "../listener/lanes.mjs";
-import { createOrder, ranked } from "../listener/order.mjs";
+import { createOrder } from "../listener/order.mjs";
+import { MAPS } from "../listener/orchestrator-maps.mjs";
 import { createTitles } from "../listener/titles.mjs";
 import { createWaits } from "../listener/waits.mjs";
 import { createWorkApi } from "../listener/work.mjs";
@@ -261,33 +263,8 @@ const shotsDir = join(config.dataDir, "shots");
 // runs' summaries. Its two copies share it. The operator's secrets are refused in it
 // (lib/store.mjs), once `ctx` can say them. The runs' summaries, thousands, are a file each with
 // the file backend: out of the state file every lease renewal writes. So is each item of its maps
-// (below, MAPS): a title changed writes its own file, not the whole state again (#691).
+// (MAPS, orchestrator-maps.mjs): a title changed writes its own file, not the whole state (#691).
 let storeSecrets = () => [];
-// The orchestrator's maps that hold data alone, in its store (below), with their options.
-const MAPS = {
-  titles: {},
-  closed: {},
-  pulls: {},
-  marks: {},
-  dismissed: {},
-  order: { moved: ranked, replace: true },
-  onboarding: {},
-  lanes: {},
-  modes: {},
-  conflicts: {},
-  "dry-runs": {},
-  requested: {},
-  waits: {},
-  inputs: {},
-  reviews: {},
-  brainstorms: {},
-  decisions: {},
-  picks: {},
-  machines: {},
-  routes: {},
-  admissions: {},
-  stopped: {},
-};
 const store = openStore(storeUrl, {
   password: env.REDIS_PASSWORD,
   secrets: () => storeSecrets(),
@@ -873,9 +850,14 @@ Object.assign(ctx, {
   stopped: createStopped({ stopped: maps.maps.stopped }),
 });
 Object.assign(ctx, createStatus(ctx), createTasks(ctx), createRuns(ctx), createRestart(ctx));
-// Open pull requests of opted-in repos that conflict with their base get a rebase run.
+// The repos' workflows (`.deckhand/workflows/` on their default branch), listed until it moves.
+ctx.workflows = createWorkflows({ github });
+// Open pull requests of opted-in repos that conflict with their base get a rebase run, or what
+// the repo's workflow on `conflict` says.
 ctx.conflicts = createConflicts({
   attempts: maps.maps.conflicts,
+  workflows: ctx.workflows,
+  instances: maps.maps.workflows,
   config,
   pulls,
   github,

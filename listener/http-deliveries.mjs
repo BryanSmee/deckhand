@@ -152,6 +152,7 @@ export function createDeliveries(ctx) {
     // dashboard's pr.conflict in every repo: pulls.mjs baseMoved()).
     if (refreshFor(event, payload, ctx.repoList.refresh) && payload.repository?.full_name) {
       ctx.policies?.forget(payload.repository.full_name);
+      ctx.workflows?.forget(payload.repository.full_name);
       ctx.pulls.baseMoved?.(payload.repository.full_name);
       ctx.conflicts?.soon(payload.repository.full_name)?.catch((error) => {
         log(`Conflicts: ${error.stack ?? error}`);
@@ -159,7 +160,10 @@ export function createDeliveries(ctx) {
     }
     // A repository out of the App's reach, deleted, transferred or made private: what the
     // policies kept of it goes now rather than when it expires (repos.mjs forgottenFor()).
-    for (const repo of forgottenFor(event, payload)) ctx.policies?.forget(repo);
+    for (const repo of forgottenFor(event, payload)) {
+      ctx.policies?.forget(repo);
+      ctx.workflows?.forget(repo);
+    }
     // Only the repository list's: nothing runs on a push, nor on a repository's own change.
     if (event === "push" || event === "repository") return work;
     if (event === "installation" || event === "installation_repositories") {
@@ -187,6 +191,8 @@ export function createDeliveries(ctx) {
         endPicks(ctx.picks, ctx.runs, [closed.key, pr?.key].filter(Boolean));
         // Its route to a machine, if it had one (claims.mjs forget()).
         ctx.claims?.forget(closed.key);
+        // Its pull request's workflow instance (conflicts.mjs, workflow-engine.mjs).
+        if (pr) ctx.conflicts?.closed?.(pr.key, pr.pr.number);
         // Its stop, and the comments held behind its stopped run (tasks.mjs forgetStopped()):
         // merged, the issue's task too, as its questions.
         for (const key of [closed.key, closed.state === "done" && pr?.key].filter(Boolean)) {

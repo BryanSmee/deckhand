@@ -381,6 +381,13 @@ export function createRunEnd(
           from: rebaseRun.rebaseFrom ?? null,
         })
         .catch((error) => log(`${key}: after the rebase run: ${error.stack ?? error}`));
+      // Its workflow's next steps, if it waited for the run (conflicts.mjs ended()).
+      ctx.conflicts?.ended({
+        key,
+        repo: task.repo,
+        number: rebaseRun.replyTo,
+        base: task.base,
+      });
     }
     // Any run's end: a CI fix run may have waited for the issue's task to be free (reviews.mjs
     // runEnded()).

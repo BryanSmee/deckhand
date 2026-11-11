@@ -501,6 +501,8 @@ of their own in [`repo-config/`](repo-config/):
   access, the default policies, and their dry run on the dashboard.
 - [Policy inputs](repo-config/policy-inputs.md): each decision's `input`, field by field, for
   writing a rule.
+- [Workflows](repo-config/workflows.md): a repository's `.deckhand/workflows/`, what follows a
+  conflict written as steps, conditions and counters.
 
 What a repository's config narrows is the operator's: their [server settings](reference/settings.md)
 and [grants folder](reference/server-folder.md). The comments that start and steer runs are in

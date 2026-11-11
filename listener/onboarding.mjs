@@ -8,6 +8,7 @@ import { issueItem, linkedIssue, headInRepo } from "./events.mjs";
 import { capabilityNameWarnings } from "./capabilities.mjs";
 import { POLICY_DIR } from "./policies.mjs";
 import { CONFIG_FILE, parseRepoConfig, readRepoFile } from "./repo-config.mjs";
+import { errorText } from "./workflow-format.mjs";
 
 export const ONBOARDING_LABEL = "deckhand-onboarding";
 const ONBOARDING_TITLE = "Set up Deckhand for this repository";
@@ -189,9 +190,16 @@ async function issuePullRequest(request, repo, number) {
 
 // What the onboarding pull request's config says, for the reply: its errors and warnings
 // from parseRepoConfig(), the files it names that the branch doesn't have, and its policies'
-// compile errors (`policies`: policies.mjs createPolicies()). Null when the issue has no open
-// pull request.
-export async function branchConfigReport(request, config, repo, number, policies = null) {
+// compile errors (`policies`: policies.mjs createPolicies()), and its workflows' errors
+// (`workflows`: workflows.mjs createWorkflows()). Null when the issue has no open pull request.
+export async function branchConfigReport(
+  request,
+  config,
+  repo,
+  number,
+  policies = null,
+  workflows = null,
+) {
   const pr = await issuePullRequest(request, repo, number);
   if (!pr) return null;
   const branch = pr.head.ref;
@@ -228,6 +236,11 @@ export async function branchConfigReport(request, config, repo, number, policies
       });
       warnings.push(...names.map((w) => `\`${POLICY_DIR}/\`: ${w}`));
     }
+  }
+  if (workflows) {
+    const checked = await workflows.read(repo, branch, settings, { cached: false });
+    errors.push(...checked.errors.map(errorText));
+    warnings.push(...checked.warnings);
   }
   if (!errors.length && !warnings.length) return `✅ ${where} checked: no errors or warnings.`;
   const lines = [...errors.map((e) => `- ❌ ${e}`), ...warnings.map((w) => `- ⚠️ ${w}`)];

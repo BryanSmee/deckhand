@@ -122,6 +122,12 @@
 
 ## Conflicts
 
+What a conflict found does is a workflow's (`workflow-engine.mjs`, #1040): the repo's own on
+`conflict` (`workflows.mjs`), else the built-in one, a single `run: rebase` step, which is the
+rebase run described below. The `(head, base)` pair is the event's id; the engine keeps each pull
+request's instance in the store's `workflows`, marks a step started before it acts, and goes on
+after a rebase run's end (`conflicts.mjs` `ended()`, from `run-end.mjs`).
+
 The `pull_request` webhook doesn't fire when a base branch moves, so `conflicts.mjs` polls, and
 checks a repo soon (`soon()`) when its default branch moved: a pull request merged into it or a push
 to it, or another branch made the default in the repository's settings (a `repository` `edited`
