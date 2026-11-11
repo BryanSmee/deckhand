@@ -29,7 +29,9 @@ are there, and adds its errors and warnings to the reply, so a broken config isn
 mistake.
 
 `/mode onboarding` on any issue starts the same conversation. Its prompt is
-`prompts/onboarding.md`, followed by this page.
+`prompts/onboarding.md`, followed by this page and the pages on modes and issues; it names
+the pages on reviews, policies and their inputs, which Claude reads in the copy of Deckhand's
+source in its sandbox when the proposal needs them.
 
 ## Example
 

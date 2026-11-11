@@ -1,5 +1,3 @@
-<!-- onboarding: skip: The policies' inputs, field by field, are in docs/repo-config/policy-inputs.md in Deckhand's source. -->
-
 # Per-repo config: policy inputs
 
 Part of the [`.deckhand.yaml` reference](../repo-config.md): the `input` each decision of the
@@ -457,4 +455,3 @@ A repository's own mode its `allow_link_branch` lets link one ([example](policie
 its branch checked out and its draft pull request opened by the sandbox, as a work run does,
 but only on the run that links it: the policies aren't asked about a branch that exists
 already, so its later runs get none.
-<!-- onboarding: end -->
