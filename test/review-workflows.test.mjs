@@ -18,7 +18,7 @@ import {
   parseWorkflow,
   reviewWorkflow,
 } from "../listener/workflow-format.mjs";
-import { mapStore, testConfig } from "./helpers.mjs";
+import { mapStore, testConfig, until } from "./helpers.mjs";
 
 const config = { ...testConfig(), bot: "deckhand-app[bot]" };
 const KEY = "org/repo#pr-5";
@@ -60,7 +60,7 @@ steps:
 // changes `gh.files`.
 function setup({ yaml = "review: true\n", flow = null, errors = [], ...options } = {}) {
   const { instances = new Map(), reviewed = new Map() } = options;
-  const gh = { head: "sha-1", files: [] };
+  const gh = { head: "sha-1", files: [], runs: [] };
   const pr = () => ({
     number: 5,
     title: "Add a thing",
@@ -77,6 +77,9 @@ function setup({ yaml = "review: true\n", flow = null, errors = [], ...options }
       return Response.json(gh.files.map((filename) => ({ filename })));
     }
     if (path === "/repos/org/repo/issues/12") return Response.json({ labels: [] });
+    if (path.startsWith("/repos/org/repo/actions/runs?head_sha=")) {
+      return Response.json({ workflow_runs: gh.runs });
+    }
     return new Response("{}", { status: 404 });
   };
   const read = parseRepoConfig(yaml, config);
@@ -188,7 +191,9 @@ test("a repo's workflows with errors: no review starts, said why", async () => {
     (why) => skipped.push(why),
   );
   assert.deepEqual(s.accepted, []);
-  assert.deepEqual(skipped, ["review: org/repo's workflows have errors"]);
+  assert.deepEqual(skipped, [
+    "review: org/repo's workflows have errors: `.deckhand/workflows/x.yaml` line 1: bad",
+  ]);
 });
 
 test("the built-in loop: `review:` compiled, each pull request's instance kept in the store", async () => {
@@ -274,4 +279,16 @@ test("docs/repo-config/workflows.md: its workflows are of the format, the compil
     config,
   );
   assert.ok(flows.includes(reviewWorkflow(settings.review)));
+});
+
+test("a CI step right after another: decided after the decision that reached it, never in it", async () => {
+  const flow =
+    "on: ready\nsteps:\n  - run: ci\n  - comment: CI over.\n  - run: ci\n  - run: review\n";
+  const s = setup({ flow });
+  s.gh.runs = [{ id: 1, name: "CI", status: "completed", conclusion: "success" }];
+  // The first CI step decided as the pull request turns ready, the second after it.
+  await s.ready();
+  await until(() => s.accepted.length === 1, { what: "the review after both CI steps" });
+  assert.deepEqual(s.replies, ["CI over."]);
+  assert.deepEqual(steps(s.accepted), [["review", null]]);
 });

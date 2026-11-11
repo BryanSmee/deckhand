@@ -46,11 +46,14 @@ steps:
   is ignored, with a warning in the onboarding pull request's check. At most 20 files of 32 KB.
 - **A workflow never widens what a run may do.** It only orders the steps: each one still asks
   the [policies](policies.md#policies) as the built-in code does (a rebase run its `deny_fix`, with
-  `reason: "conflict"`), and the watcher's own gates (a run going, input awaited, a pair tried
-  already) still apply before any workflow starts.
-- **Fail closed**: an error in any file, and none of the repository's workflows runs; the
-  conflict watcher starts nothing there and says why in its logs and in the dashboard's Sync.
-  The onboarding pull request's check lists the errors with their file and line.
+  `reason: "conflict"`; a review its `deny_review`), and the built-in gates (a run going, input
+  awaited, a pair tried already, a head reviewed already) still apply before any workflow
+  starts.
+- **Fail closed**: an error in any file, and none of the repository's workflows runs, Deckhand's
+  own on `ready` and `conflict` neither: no review starts by itself there (the orchestrator's
+  logs say why), and the conflict watcher starts nothing (its logs and the dashboard's Sync say
+  why). Pull requests already in the review loop finish it. The onboarding pull request's check
+  and the dashboard's Workflow tab list the errors with their file and line.
 - **Without a workflow of its own on `conflict`**, `conflicts.check_minutes` runs Deckhand's
   built-in one:
 

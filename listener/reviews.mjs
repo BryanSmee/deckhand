@@ -329,7 +329,9 @@ export function createReviews({
       const { settings, errors, workflow, workflowErrors } = await repoSettings(repo, base);
       // A broken config: its next comment's reply says why; nothing is posted for a webhook.
       if (errors.length) return skip(`review: ${repo}'s config has errors`);
-      if (workflowErrors) return skip(`review: ${repo}'s workflows have errors`);
+      if (workflowErrors) {
+        return skip(`review: ${repo}'s workflows have errors: ${workflowErrors.join("; ")}`);
+      }
       if (settings.review?.on !== "ready") return skip(`review: not on in ${repo}`);
       if (author && !settings.users.includes(author.toLowerCase())) {
         return skip(`review: ${author} not in ${repo}'s users`);
@@ -812,7 +814,7 @@ export function createReviews({
         recordRound(run, posted);
         await lateFollowUps(run, posted);
         // The workflow's next steps: the fix run, else the merge or the rounds-out comment.
-        const at = context({ ...run, pr: posted?.pr, posted });
+        const at = context({ ...run, pr: posted?.pr, posted: posted ?? {} });
         const result = await proceed(at, "review");
         item = at.queued;
         return result;
@@ -845,7 +847,7 @@ export function createReviews({
     if (!workflow) return null;
     const event = { name: READY, id: `${at.number}:${at.head}:${randomUUID()}`, pr: at.number };
     await engine.trigger(at.key, workflow, { ...event, head: at.head }, steps(at));
-    return at.ci ? ciRecheck(at.key) : at.result;
+    return settled(at);
   }
 
   // The run (or the CI step's wait) of kind `kind` on pull request `at` is over: its workflow
@@ -862,7 +864,17 @@ export function createReviews({
       }
     }
     await engine.resume(at.key, READY, steps(at), at.head);
-    return at.ci ? ciRecheck(at.key) : at.result;
+    return settled(at, kind === "ci");
+  }
+
+  // What a drive returns: what its last step did, or the CI step it started decided now. From a
+  // CI decision (`deciding`, in ciRecheck()'s queue), after that one: never waited for there.
+  function settled(at, deciding = false) {
+    if (!at.ci) return at.result;
+    const next = ciRecheck(at.key);
+    if (!deciding) return next;
+    next.catch((error) => log(`${at.key}: CI step: ${error.stack ?? error}`));
+    return null;
   }
 
   // The workflow a pull request without an instance goes on in: its repo's own on `ready`, else
