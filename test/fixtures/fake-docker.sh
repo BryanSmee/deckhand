@@ -52,7 +52,28 @@ case "$1" in
   logs)
     n=${@: -1}
     [ -d "$c/$n" ] || exit 1
-    follow() { tail -n +1 -f --pid="$(cat "$c/$n/pid")" -s 0.05 "$c/$n/out"; }
+    # Its output until it exits, read in bash rather than by `tail -f --pid`: uutils' tail
+    # (Ubuntu's since 25.10, CI's `tests` job) stops once the process is gone without reading
+    # again, losing what it wrote last (#1122). Whether it lives is asked before each read to the
+    # end, so the read after its exit gets all of it. A last line without its newline is
+    # printed whole once it exits, as Docker does.
+    follow() {
+      local pid fd line part="" gone=""
+      read -r pid < "$c/$n/pid" && exec {fd}< "$c/$n/out" || return 1
+      while :; do
+        kill -0 "$pid" 2> /dev/null || gone=1
+        while IFS= read -r -u "$fd" line; do
+          printf '%s\n' "$part$line"
+          part=""
+        done
+        part+=$line
+        if [ -n "$gone" ]; then
+          [ -z "$part" ] || printf '%s\n' "$part"
+          return 0
+        fi
+        nap
+      done
+    }
     # A tail that fails is a failed `docker logs`, as Docker's would be, not the output's end.
     set -o pipefail
     case "$*" in

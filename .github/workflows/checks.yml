@@ -89,7 +89,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     # --init: a PID 1 that reaps orphans. The runner's own (`tail -f /dev/null`) leaves them
-    # zombies, which the fake docker's `tail --pid` waits on forever.
+    # zombies, which the fake docker's `logs` waits on forever (`kill -0` finds them alive).
     container:
       image: node:26
       options: --user 0 --init
