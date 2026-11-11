@@ -96,6 +96,19 @@ export function runData({ runs, pull = () => null, reviewed = () => null, filter
     }
     return out;
   }
+  // One spelling per value whatever its case, as filtering ignores it: the first one seen. The
+  // options and the groups both show it, so a login recorded in two cases is one group.
+  const spellings = Object.fromEntries(
+    DIMENSIONS.map((d) => {
+      const seen = new Map();
+      for (const r of all) {
+        const v = value(r, d);
+        if (!seen.has(v.toLowerCase())) seen.set(v.toLowerCase(), v);
+      }
+      return [d, seen];
+    }),
+  );
+  const spelling = (r, d) => spellings[d].get(value(r, d).toLowerCase());
   function group(keyOf) {
     const groups = new Map();
     for (const r of selected) {
@@ -106,22 +119,14 @@ export function runData({ runs, pull = () => null, reviewed = () => null, filter
     return [...groups].sort(([a], [b]) => a.localeCompare(b));
   }
   return {
-    options: Object.fromEntries(
-      // One option per value whatever its case, as filtering ignores it: the first spelling.
-      DIMENSIONS.map((d) => {
-        const seen = new Map();
-        for (const r of all) {
-          const v = value(r, d);
-          if (!seen.has(v.toLowerCase())) seen.set(v.toLowerCase(), v);
-        }
-        return [d, [...seen.values()].sort()];
+    options: Object.fromEntries(DIMENSIONS.map((d) => [d, [...spellings[d].values()].sort()])),
+    total: metrics(selected),
+    groups: group((r) => JSON.stringify(DIMENSIONS.map((d) => spelling(r, d)))).map(
+      ([key, list]) => ({
+        dimensions: Object.fromEntries(DIMENSIONS.map((d, i) => [d, JSON.parse(key)[i]])),
+        ...metrics(list),
       }),
     ),
-    total: metrics(selected),
-    groups: group((r) => JSON.stringify(DIMENSIONS.map((d) => value(r, d)))).map(([key, list]) => ({
-      dimensions: Object.fromEntries(DIMENSIONS.map((d, i) => [d, JSON.parse(key)[i]])),
-      ...metrics(list),
-    })),
     steps: group(stepOf).map(([step, list]) => ({ step, ...metrics(list) })),
   };
 }
