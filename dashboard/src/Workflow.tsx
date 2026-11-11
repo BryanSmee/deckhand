@@ -147,18 +147,21 @@ export function WorkflowGraph({ workflow, current = null, real }: GraphProps) {
                   class={`${styles.arrow} ${e.back ? styles.back : ""}`}
                   marker-end="url(#workflow-head)"
                 />
-                {/* One line a condition, the last on the label's line, the others above. */}
+                {/* One line a condition, the last on the label's line, the others above;
+                    all on one line where the label says it has the room. */}
                 <text
                   class={styles.when}
                   x={e.label.x}
-                  y={e.label.y - (e.when.length - 1) * 13}
+                  y={e.label.y - (e.label.inline ? 0 : (e.when.length - 1) * 13)}
                   text-anchor={e.label.anchor}
                 >
-                  {e.when.map((w, i) => (
-                    <tspan key={w} x={e.label.x} dy={i ? 13 : 0}>
-                      {named(CONDITIONS, w)}
-                    </tspan>
-                  ))}
+                  {e.label.inline
+                    ? e.when.map((w) => named(CONDITIONS, w)).join(" / ")
+                    : e.when.map((w, i) => (
+                        <tspan key={w} x={e.label.x} dy={i ? 13 : 0}>
+                          {named(CONDITIONS, w)}
+                        </tspan>
+                      ))}
                 </text>
               </g>
             ))}

@@ -30,7 +30,9 @@ export interface PlacedNode extends WorkflowNode {
 export interface PlacedEdge extends WorkflowEdge {
   d: string;
   // Where its words go, and which way they run from there.
-  label: { x: number; y: number; anchor: "start" | "middle" | "end" };
+  // `inline`: its conditions on one line (a long run over or under the grid has the room;
+  // stacked, they would meet the arrow above).
+  label: { x: number; y: number; anchor: "start" | "middle" | "end"; inline?: boolean };
 }
 
 export interface Layout {
@@ -83,7 +85,7 @@ export function layoutWorkflow({ nodes, edges }: Workflow): Layout {
       // Over the steps it skips.
       const y = TOP - 16 - over.indexOf(e) * 16;
       d = `M${midX(a) + 20},${a.y} V${y} H${midX(b) - 20} V${b.y}`;
-      label = { x: (midX(a) + midX(b)) / 2, y: y - 4, anchor: "middle" };
+      label = { x: (midX(a) + midX(b)) / 2, y: y - 4, anchor: "middle", inline: true };
     } else if (b.rank > a.rank && b.lane > a.lane) {
       // Down to a lower step further on: along the gap before it.
       const x = gap(b.rank);
@@ -101,7 +103,12 @@ export function layoutWorkflow({ nodes, edges }: Workflow): Layout {
         const x = gap(b.rank);
         d = `${from} H${x} V${b.y + NODE_H * 0.75} H${b.x}`;
       }
-      label = { x: (midX(a) + (clear ? midX(b) : gap(b.rank))) / 2, y: y - 4, anchor: "middle" };
+      label = {
+        x: (midX(a) + (clear ? midX(b) : gap(b.rank))) / 2,
+        y: y - 4,
+        anchor: "middle",
+        inline: true,
+      };
     }
     out.push({ ...e, d, label });
   }

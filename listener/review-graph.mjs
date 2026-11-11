@@ -110,8 +110,9 @@ export function lifecycleGraph(settings, { grant, isPrivate = null, decisions = 
     review: [!!review, "review"],
     fix: [fix, "review.fix"],
     merge: [merge, "review.merge"],
-    rebase: [conflicts && !!review, "conflicts"],
-    done: [!!review, "review"],
+    // The conflict watcher runs whatever `review:` says (conflicts.mjs).
+    rebase: [conflicts, "conflicts"],
+    done: [!!review || conflicts, "review"],
   };
   const numbers = {
     ready: {},
@@ -172,16 +173,18 @@ export function lifecycleGraph(settings, { grant, isPrivate = null, decisions = 
   } else edge("ci", "review", "ci-over");
   if (fix) edge("review", "fix", "blocking");
   if (merge) edge("review", "merge", "clean");
-  edge("review", "done", ...(merge ? [] : ["clean"]), fix ? "rounds-out" : "blocking");
+  // Without merge mode (no grant), a clean review ends there.
+  edge("review", "done", ...(merging ? [] : ["clean"]), fix ? "rounds-out" : "blocking");
   if (fix && again) {
     edge("fix", entry, "pushed");
     edge("fix", "done", "nothing-pushed");
   } else if (fix) edge("fix", "done", "fixed");
   edge("merge", "done", "merged");
   // The conflict watcher rebases a pull request whose merge (or review) it blocks; the
-  // rebased head is reviewed again (reviews.mjs rebased()).
+  // rebased head is reviewed again only with `review.on: ready` (reviews.mjs afterRebase()).
   edge(merge ? "merge" : "review", "rebase", "conflict");
-  edge("rebase", entry, "rebased");
+  if (ready) edge("rebase", entry, "rebased");
+  else edge("rebase", "done", "rebased");
   return { nodes, edges };
 }
 

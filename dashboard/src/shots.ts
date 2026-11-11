@@ -237,7 +237,7 @@ export const WORKFLOW: Workflow = {
     { from: "ci-fix", to: "done", when: ["nothing-pushed"], back: false },
     { from: "review", to: "fix", when: ["blocking"], back: false },
     { from: "review", to: "merge", when: ["clean"], back: false },
-    { from: "review", to: "done", when: ["rounds-out"], back: false },
+    { from: "review", to: "done", when: ["clean", "rounds-out"], back: false },
     { from: "fix", to: "ci", when: ["pushed"], back: true },
     { from: "fix", to: "done", when: ["nothing-pushed"], back: false },
     { from: "merge", to: "done", when: ["merged"], back: false },

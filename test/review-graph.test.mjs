@@ -102,6 +102,18 @@ test("lifecycleGraph: the settings turn steps off, the edges going around them",
   const rebase = lifecycleGraph({ ...review(), conflicts: { checkMinutes: 30 } });
   assert.ok(edges(rebase).includes("review>rebase:conflict"));
   assert.ok(edges(rebase).includes("rebase>review:rebased back"));
+  // The watcher on its own, no review: its runs happen, nothing reviews them.
+  const alone = lifecycleGraph({ conflicts: { checkMinutes: 30 } });
+  assert.deepEqual(
+    [states(alone).rebase, states(alone).done, states(alone).review],
+    ["on", "on", "off"],
+  );
+  assert.deepEqual(edges(alone), ["rebase>done:rebased"]);
+  // "/mode review" only: a rebased head isn't reviewed again (afterRebase()).
+  const asked = lifecycleGraph({ ...review({ on: "manual" }), conflicts: { checkMinutes: 30 } });
+  assert.ok(edges(asked).includes("review>rebase:conflict"));
+  assert.ok(edges(asked).includes("rebase>done:rebased"));
+  assert.ok(!edges(asked).some((e) => e.startsWith("rebase>review")));
 });
 
 test("lifecycleGraph: the merge refused without the operator's grant, or when it can't be read", () => {
@@ -131,6 +143,9 @@ test("lifecycleGraph: the merge refused without the operator's grant, or when it
   assert.ok(edges(lifecycleGraph(once, { grant: {} })).includes("fix>done:fixed"));
   assert.ok(edges(lifecycleGraph(once, { grant: null })).includes("fix>done:fixed"));
   assert.ok(edges(lifecycleGraph(once, granted)).includes("fix>review:pushed back"));
+  // No merge mode: a clean review ends there too, beside the refused merge.
+  assert.ok(edges(lifecycleGraph(once, { grant: {} })).includes("review>done:clean+rounds-out"));
+  assert.ok(edges(lifecycleGraph(once, granted)).includes("review>done:rounds-out"));
 });
 
 test("lifecycleGraph: the policies' states on the sample, a step off staying off", () => {
