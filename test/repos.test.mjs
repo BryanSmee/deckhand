@@ -1157,6 +1157,12 @@ test("GET config: a workflow file on `ready` decides merge and CI, not the revie
   const [merging, ...rest] = await warnings();
   assert.match(merging, /^review\.merge: .*don't grant `auto_merge`/);
   assert.deepEqual(rest, []);
+  // A file without the steps: the keys still do nothing, said so.
+  ready = { ...own, steps: [{ run: "review" }] };
+  assert.deepEqual(await warnings(), [
+    "review.merge: the workflow on `ready` has no `run: merge` step, nothing is merged",
+    "review.ci: the workflow on `ready` has no `run: ci` step, nothing waits for CI",
+  ]);
   // Without one on `ready`, the block's own warnings.
   ready = null;
   assert.deepEqual((await warnings()).slice(0, 2), [

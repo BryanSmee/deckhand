@@ -53,20 +53,26 @@ export function impliedSettings(settings, workflow) {
   };
 }
 
-// The config's warnings (parseRepoConfig()'s) under the settings the loop runs with (`implied`,
-// impliedSettings()'s): with a workflow file on `ready`, its steps turn `merge`, `ci` and `fix` on,
-// so the warnings saying the `review:` block leaves them off no longer hold (#1140).
-const OFF = {
-  "review.merge: needs `review.on: ready`": (review) => review.on === "ready",
-  "review.ci: needs `review.on: ready`": (review) => review.on === "ready",
-  "review.ci_fix: needs `review.fix`": (review) => review.fix,
-};
-export function loopWarnings(warnings, implied) {
-  const review = implied?.review;
-  if (!review) return warnings;
-  return warnings.filter(
-    (w) => !Object.entries(OFF).some(([said, holds]) => w.startsWith(said) && holds(review)),
-  );
+// The config's warnings (parseRepoConfig()'s) with the repo's workflow on `ready`: those saying
+// the `review:` block leaves `merge`, `ci` or `ci_fix` off hold only without a file there. With
+// one, its steps decide (impliedSettings()): the warning goes when they turn the key on, and
+// names the missing step when they don't (#1140).
+const OFF = [
+  ["review.merge: needs `review.on: ready`", "merge", "nothing is merged"],
+  ["review.ci: needs `review.on: ready`", "ci", "nothing waits for CI"],
+  ["review.ci_fix: needs `review.fix`", "fix", "no CI fix run starts"],
+];
+export function loopWarnings(warnings, settings, workflow) {
+  if (!workflow?.file || !settings?.review) return warnings;
+  const review = impliedSettings(settings, workflow).review;
+  return warnings.flatMap((w) => {
+    const off = OFF.find(([said]) => w.startsWith(said));
+    if (!off) return [w];
+    const [said, step, what] = off;
+    if (review[step]) return [];
+    const key = said.slice(0, said.indexOf(":"));
+    return [`${key}: the workflow on \`ready\` has no \`run: ${step}\` step, ${what}`];
+  });
 }
 
 // What `severity` reads of the last review (review-parse.mjs's): its most severe finding, "none"

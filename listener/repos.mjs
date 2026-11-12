@@ -592,12 +592,13 @@ export function createRepoApi({
     }
     const settings = parsed?.settings ?? defaultSettings(config);
     // As the review loop runs them: a workflow file on `ready` stands for the keys its steps
-    // turn on (merge, ci, fix), whatever the `review:` block says (#1140).
-    const ready = await workflows
-      ?.forEvent(info.full_name, base, settings, READY)
-      .catch(() => null);
+    // turn on (merge, ci, fix), whatever `review:` says (#1140). Not read with errors in the
+    // file, as the loop doesn't; a failed read is logged by sourceView().
+    const ready = parsed?.errors?.length
+      ? null
+      : await workflows?.forEvent(info.full_name, base, settings, READY).catch(() => null);
     const looped = impliedSettings(settings, ready?.workflow);
-    const warnings = loopWarnings(parsed?.warnings ?? [], looped);
+    const warnings = loopWarnings(parsed?.warnings ?? [], settings, ready?.workflow);
     // What stops its merges: the grant, the repository's visibility (the parse's own warning
     // already says what its file lacks).
     const merging = grant ? autoMergeProblems(grant, looped, info.private === true) : [];
