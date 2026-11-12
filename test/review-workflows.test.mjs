@@ -352,6 +352,29 @@ test("loopWarnings: a workflow file's steps decide merge, ci and fix, not the bl
   assert.equal(loopWarnings(ready.warnings, ready.settings, built), ready.warnings);
 });
 
+test("loopWarnings: a key the block turns on that the file's steps leave off warns (#1143)", () => {
+  // `on: ready` in the block: the parse warns of nothing, the file's steps still turn them off.
+  const yaml = "review:\n  on: ready\n  fix: 2\n  merge: true\n  ci: wait\n  ci_fix: 1\n";
+  const { settings, warnings } = parseRepoConfig(yaml, config);
+  assert.deepEqual(warnings, []);
+  const bare = parseWorkflow("r.yaml", "on: ready\nsteps:\n  - run: review\n").workflow;
+  assert.deepEqual(loopWarnings(warnings, settings, bare), [
+    "review.fix: the workflow on `ready` has no `run: fix` step, no fix run starts",
+    "review.merge: the workflow on `ready` has no `run: merge` step, nothing is merged",
+    "review.ci: the workflow on `ready` has no `run: ci` step, nothing waits for CI",
+  ]);
+  // The editor's save: `on: manual`, `fix: true` kept; only the fix step missing.
+  const saved = parseRepoConfig("review:\n  on: manual\n  fix: true\n  merge: true\n", config);
+  const flow = "on: ready\nsteps:\n  - run: review\n  - run: merge\n";
+  assert.deepEqual(
+    loopWarnings(saved.warnings, saved.settings, parseWorkflow("r.yaml", flow).workflow),
+    ["review.fix: the workflow on `ready` has no `run: fix` step, no fix run starts"],
+  );
+  // Every step there: nothing to say.
+  const full = "on: ready\nsteps:\n  - run: ci\n  - run: review\n  - run: fix\n  - run: merge\n";
+  assert.deepEqual(loopWarnings(warnings, settings, parseWorkflow("r.yaml", full).workflow), []);
+});
+
 test("stepSettings: a step's agent, model, effort and instructions for its run alone", () => {
   const { settings } = parseRepoConfig("review:\n  instructions: docs/review.md\n", config);
   const items = [{ workflowStep: { agent: "codex", model: "best", instructions: "sec.md" } }];
