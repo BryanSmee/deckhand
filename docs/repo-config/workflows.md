@@ -240,6 +240,49 @@ steps:
   - run: merge
 ```
 
+Both at once, in the one workflow a repository has on `ready`. As the fix, `severity` and merge
+steps read the last review alone, each review that can block gets its fix loop before another
+review comes: the loop's review and its fixes, then the security review and its own (each fix's
+push reviewed again for security), then the second reviewer before the merge. A review still
+blocking once the fix runs are used up ends it with the rounds-out comment, no further
+reviewer asked. A pull request's fix runs are counted across its loops, up to the largest `max`:
+these two share their 2.
+
+```yaml
+# .deckhand/workflows/review.yaml
+on: ready
+vars:
+  fixes: counter
+  security_fixes: counter
+  security: flag
+steps:
+  - run: review
+  - repeat:
+      - run: fix
+        count: fixes
+      - run: review
+    max: fixes 2
+  - if: 'severity <= low and changed("policy/**", since: security)'
+    then:
+      - run: review
+        instructions: .deckhand/security-review.md
+        set: security
+      - repeat:
+          - run: fix
+            count: security_fixes
+          - run: review
+            instructions: .deckhand/security-review.md
+        max: security_fixes 2 # fix runs count per pull request: both loops share these 2
+  - if: severity <= low # nothing blocking with `max_allowed_severity: low`, the default
+    then:
+      - run: review
+        agent: codex
+        model: best
+      - run: merge
+    else:
+      - comment: rounds-out
+```
+
 - **The fix and merge steps read the last review**: the one that just ended, or the App's last
   review read back from GitHub when another step came between.
 - **A fix a maintainer asks for** (the dashboard's Fix) is one round outside the workflow: its
