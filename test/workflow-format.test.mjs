@@ -230,16 +230,16 @@ vars:
 steps:
   - run: ci
   - run: review
-  - if: 'changed("policy/**", since: security)'
-    run: review
-    instructions: .deckhand/security-review.md
-    set: security
   - repeat:
       - run: fix
         count: fixes
         effort: high
       - run: review
     max: fixes 3
+  - if: 'severity <= low and changed("policy/**", since: security)'
+    run: review
+    instructions: .deckhand/security-review.md
+    set: security
   - if: severity <= low
     run: review
     agent: Codex
@@ -252,7 +252,7 @@ steps:
     { agents: ["claude", "codex"] },
   );
   assert.deepEqual(found, []);
-  const [ci, first, security, loop, second, merge] = workflow.steps;
+  const [ci, first, loop, security, second, merge] = workflow.steps;
   assert.deepEqual(
     [ci.run, first.run, security.instructions],
     ["ci", "review", ".deckhand/security-review.md"],
