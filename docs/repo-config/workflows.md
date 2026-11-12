@@ -190,7 +190,9 @@ policies as the built-in loop does: the file orders the steps, never widens what
 config check reads the steps too: it warns that `merge` or `ci` needs `on: ready` only without a
 workflow file on `ready` (the [editor](#the-editor)'s save turns `on: ready` to `manual` and
 leaves them), and, for a `run: merge` step, what the operator's grants refuse it. With a file
-whose steps lack one of them, the warning names the missing step.
+whose steps lack one of them, the warning names the missing step, and so it does for `fix`,
+`merge` or `ci` turned on in `review:` that the file's steps leave off (no `run: fix` step: no
+fix run starts).
 
 Two reviewers: the loop's, then a second opinion on another agent once nothing blocks, before
 the merge:
