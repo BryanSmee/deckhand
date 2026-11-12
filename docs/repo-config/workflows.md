@@ -186,7 +186,11 @@ reviewing its push, as before.
 reviews' `agent`, `model`, `effort` and `instructions`), and the workflow's steps stand for the
 rest: a `run: fix` step for `fix` (its loop's `max` for the rounds), `run: merge` for `merge`
 (the operator's `auto_merge` grant still needed), `run: ci` for `ci: wait`. Every step asks the
-policies as the built-in loop does: the file orders the steps, never widens what a run may do.
+policies as the built-in loop does: the file orders the steps, never widens what a run may do. The
+config check reads the steps too: it warns that `merge` or `ci` needs `on: ready` only without a
+workflow file on `ready` (the [editor](#the-editor)'s save turns `on: ready` to `manual` and
+leaves them), and, for a `run: merge` step, what the operator's grants refuse it. With a file
+whose steps lack one of them, the warning names the missing step.
 
 Two reviewers: the loop's, then a second opinion on another agent once nothing blocks, before
 the merge:

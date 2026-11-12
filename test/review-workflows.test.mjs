@@ -10,7 +10,7 @@ import { parseRepoConfig } from "../listener/repo-config.mjs";
 import { trustedFile } from "../listener/review-merge.mjs";
 import { parseReview } from "../listener/review-parse.mjs";
 import { reviewEvent } from "../listener/review-post.mjs";
-import { impliedSettings, stepOf } from "../listener/review-workflow.mjs";
+import { impliedSettings, loopWarnings, stepOf } from "../listener/review-workflow.mjs";
 import { createReviews } from "../listener/reviews.mjs";
 import { compile } from "../listener/workflow-engine.mjs";
 import {
@@ -328,6 +328,28 @@ test("impliedSettings: a repo's own workflow turns the loop's keys on, the rest 
   // The built-in one was compiled from them: as they are.
   const built = builtInWorkflow("ready", { review: { ...settings.review, on: "ready" } });
   assert.equal(impliedSettings(settings, built), settings);
+});
+
+test("loopWarnings: a workflow file's steps decide merge, ci and fix, not the block (#1140)", () => {
+  // What the editor's save leaves: `on: ready` turned to manual, the loop's keys kept.
+  const yaml = "review:\n  on: manual\n  merge: true\n  ci: wait\n  ci_fix: 1\n";
+  const { settings, warnings } = parseRepoConfig(yaml, config);
+  assert.equal(warnings.length, 3);
+  const flow = "on: ready\nsteps:\n  - run: ci\n  - run: review\n  - run: fix\n  - run: merge\n";
+  const own = parseWorkflow("r.yaml", flow).workflow;
+  assert.deepEqual(loopWarnings(warnings, settings, own), []);
+  // Without the steps, the keys still do nothing: said so, naming the step.
+  const bare = parseWorkflow("r.yaml", "on: ready\nsteps:\n  - run: review\n").workflow;
+  assert.deepEqual(loopWarnings(warnings, settings, bare), [
+    "review.merge: the workflow on `ready` has no `run: merge` step, nothing is merged",
+    "review.ci: the workflow on `ready` has no `run: ci` step, nothing waits for CI",
+    "review.ci_fix: the workflow on `ready` has no `run: fix` step, no CI fix run starts",
+  ]);
+  // No file on `ready`, or the built-in loop: the block's own warnings, as they are.
+  assert.equal(loopWarnings(warnings, settings, null), warnings);
+  const ready = parseRepoConfig("review:\n  on: ready\n  ci_fix: 1\n", config);
+  const built = builtInWorkflow("ready", ready.settings);
+  assert.equal(loopWarnings(ready.warnings, ready.settings, built), ready.warnings);
 });
 
 test("stepSettings: a step's agent, model, effort and instructions for its run alone", () => {
