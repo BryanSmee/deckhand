@@ -172,14 +172,85 @@ test("a security review when the pull request changes the policies, once per cha
   assert.deepEqual(steps(other.accepted), [["review", null]]);
 });
 
+// The docs' example whose paragraph starts with `lead`: the yaml block after it, its file's
+// name comment left out.
+function docsExample(lead) {
+  const text = readFileSync(new URL("../docs/repo-config/workflows.md", import.meta.url), "utf8");
+  const match = text.match(
+    new RegExp(`^${lead}[\\s\\S]*?^\`\`\`yaml\\n# .*\\n([\\s\\S]*?)^\`\`\`$`, "m"),
+  );
+  assert.ok(match, `the docs' example after \`${lead}\``);
+  return match[1];
+}
+
+// The docs' security review alone (#1145): its first review's findings fixed before the
+// security review comes, never merged past by a clean one.
+const SECURITY_DOCS = docsExample("A security review when the pull request changes the policies,");
+
+test("the docs' security review: the first review's findings fixed before it, the merge last", async () => {
+  const SECURE = { instructions: ".deckhand/security-review.md" };
+  const s = setup({ flow: SECURITY_DOCS });
+  s.gh.files = ["policy/review.rego"];
+  await s.ready();
+  // The first review blocks: its fix run, not the security review that would replace it.
+  await s.settle(HIGH);
+  assert.deepEqual(steps(s.accepted).at(-1), ["review-fix", null]);
+  s.gh.head = "sha-2";
+  await s.fixed();
+  assert.deepEqual(steps(s.accepted).at(-1), ["review", null]);
+  await s.settle(CLEAN);
+  // Nothing blocking: the security review, then the merge decided on it.
+  assert.deepEqual(steps(s.accepted).at(-1), ["review", SECURE]);
+  await s.settle(CLEAN);
+  assert.equal(s.instance().current, null);
+  assert.equal(s.accepted.length, 4);
+  assert.deepEqual(s.instance().vars.counters, { fixes: 1 });
+  assert.equal(s.replies.length, 1);
+  assert.match(s.replies[0], /^\*\*Not merged automatically\*\* \(`review\.merge`\)/);
+
+  // The first review still blocking after its fix runs: no security review, no merge, the
+  // rounds-out comment instead.
+  const out = setup({ flow: SECURITY_DOCS });
+  out.gh.files = ["policy/review.rego"];
+  await out.ready();
+  for (const head of ["sha-2", "sha-3"]) {
+    await out.settle(HIGH);
+    out.gh.head = head;
+    await out.fixed();
+  }
+  await out.settle(HIGH);
+  assert.deepEqual(
+    steps(out.accepted).map(([reason]) => reason),
+    ["review", "review-fix", "review", "review-fix", "review"],
+  );
+  assert.equal(out.instance().current, null);
+  assert.equal(out.replies.length, 1);
+  assert.match(out.replies[0], /fix run/);
+
+  // A security review that blocks: fixed, and its push reviewed for security again.
+  const secure = setup({ flow: SECURITY_DOCS });
+  secure.gh.files = ["policy/review.rego"];
+  await secure.ready();
+  await secure.settle(CLEAN);
+  await secure.settle(HIGH);
+  assert.deepEqual(steps(secure.accepted).at(-1), ["review-fix", null]);
+  secure.gh.head = "sha-2";
+  await secure.fixed();
+  assert.deepEqual(steps(secure.accepted).at(-1), ["review", SECURE]);
+
+  // A pull request that leaves the policies alone: its review, then the merge.
+  const other = setup({ flow: SECURITY_DOCS });
+  other.gh.files = ["docs/a.md"];
+  await other.ready();
+  await other.settle(CLEAN);
+  assert.deepEqual(steps(other.accepted), [["review", null]]);
+  assert.equal(other.instance().current, null);
+  assert.match(other.replies[0], /^\*\*Not merged automatically\*\*/);
+});
+
 // The docs' workflow with both, what #1047 asked a repository to write with no new key: one
 // file, as a repository has one workflow on `ready`.
-const BOTH = (() => {
-  const text = readFileSync(new URL("../docs/repo-config/workflows.md", import.meta.url), "utf8");
-  const match = text.match(/^Both at once,[\s\S]*?^```yaml\n# .*\n([\s\S]*?)^```$/m);
-  assert.ok(match, "the docs' example with both, after `Both at once,`");
-  return match[1];
-})();
+const BOTH = docsExample("Both at once,");
 
 test("both in one file: each blocking review fixed before the next, the second reviewer last", async () => {
   const SECURE = { instructions: ".deckhand/security-review.md" };
