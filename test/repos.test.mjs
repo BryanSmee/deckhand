@@ -1134,6 +1134,37 @@ test("auto-merge: the row's badge and the config's warnings follow the grant and
   ]);
 });
 
+test("GET config: a workflow file on `ready` decides merge and CI, not the review block (#1140)", async () => {
+  const yaml = "review:\n  on: manual\n  merge: true\n  ci: wait\n";
+  const own = { file: ".deckhand/workflows/review.yaml", on: ["ready"] };
+  own.steps = [{ run: "ci" }, { run: "review" }, { run: "merge" }];
+  let ready = own;
+  const workflows = {
+    read: async () => ({ workflows: [own], errors: [] }),
+    forEvent: async () => ({ workflow: ready, errors: [] }),
+  };
+  const { api } = apiSetup({
+    granted: async () => ({ granted: new Set(), files: ["grants.rego"] }),
+    first: [info("org/app")],
+    files: { "org/app": yaml },
+    workflows,
+  });
+  const warnings = async () =>
+    (await call(api, "GET", "/api/repos/org/app/config")).body.warnings.map(
+      (w) => `${w.key}: ${w.message}`,
+    );
+  // Its merge step merges: what stops it is the grant, not `review.on`.
+  const [merging, ...rest] = await warnings();
+  assert.match(merging, /^review\.merge: .*don't grant `auto_merge`/);
+  assert.deepEqual(rest, []);
+  // Without one on `ready`, the block's own warnings.
+  ready = null;
+  assert.deepEqual((await warnings()).slice(0, 2), [
+    "review.merge: needs `review.on: ready`, nothing is merged",
+    "review.ci: needs `review.on: ready`, nothing waits for CI",
+  ]);
+});
+
 test("GET config: an invalid file shows its errors, and its row turns invalid", async () => {
   const files = { "org/app": "trigger: go\n" };
   const { api } = apiSetup({ first: [info("org/app")], files });
@@ -1378,7 +1409,7 @@ test("a repo's config: the workflow on `ready` its pull requests run, compiled o
   // The repo's own: its file, linked; its workflows' errors, said.
   const own = { file: ".deckhand/workflows/review.yaml", on: ["ready"] };
   let read = { workflows: [own], errors: [] };
-  const workflows = { read: async () => read };
+  const workflows = { read: async () => read, forEvent: async () => ({ workflow: null }) };
   const mine = { review: "review: true\n" };
   const theirs = apiSetup({
     first: [info("org/app")],
