@@ -21,12 +21,14 @@ const LISTING_MS = 10 * 60_000;
 const MAX_REPOS = 1000;
 const MAX_PARSED = 500;
 
-// `github(repo, method, path, body, expected)`: the App's calls.
-export function createWorkflows({ github, now = Date.now }) {
+// `github(repo, method, path, body, expected)`: the App's calls; `config`: the operator's, whose
+// agents a step's `agent` must be one of (unchecked without).
+export function createWorkflows({ github, config = null, now = Date.now }) {
   // "org/repo" (lower case) → { ref, at, listed }: the folder as last listed on that ref.
   const listings = new Map();
-  // A file's parse by its blob sha and name: { workflow, errors }.
+  // A file's parse by its blob sha and name: { workflow, errors }; a blob's text by its sha.
   const parsed = new Map();
+  const texts = new Map();
 
   async function listing(repo, ref, cached) {
     const key = repo.toLowerCase();
@@ -39,34 +41,55 @@ export function createWorkflows({ github, now = Date.now }) {
     return listed;
   }
 
-  // The repo's workflows on `ref` → { workflows, errors, warnings }, `settings` its config's (the
-  // built-in loop's trigger). `cached`: the default branch's listing, kept; a branch's is read
-  // anew (the onboarding pull request's check).
-  async function read(repo, ref, settings, { cached = true } = {}) {
+  // The repo's workflow files on `ref` → { files, errors, warnings }: each file { name, sha,
+  // text }, the folder's own errors (too many files: then none) and warnings (a .yml file).
+  // `cached`: read(). The editor's (workflow-editor.mjs) too, so it checks what runs.
+  async function files(repo, ref, { cached = true } = {}) {
     const listed = await listing(repo, ref, cached);
-    const workflows = [];
     const errors = [];
     const warnings = [];
-    if (!listed) return { workflows, errors, warnings };
-    const files = listed.filter((e) => e.type === "file" && WORKFLOW_FILE.test(e.name));
+    if (!listed) return { files: [], errors, warnings };
+    const found = listed.filter((e) => e.type === "file" && WORKFLOW_FILE.test(e.name));
     for (const e of listed) {
       if (e.type === "file" && /\.yml$/.test(e.name)) {
         warnings.push(`\`${WORKFLOW_DIR}/${e.name}\`: ignored, a workflow's file ends in .yaml`);
       }
     }
-    if (files.length > MAX_FILES) {
+    if (found.length > MAX_FILES) {
       errors.push({ file: WORKFLOW_DIR, line: null, message: `over ${MAX_FILES} workflows` });
-      return { workflows, errors, warnings };
+      return { files: [], errors, warnings };
     }
-    for (const entry of files) {
-      const id = `${entry.sha}:${entry.name}`;
-      if (!parsed.has(id)) {
+    const out = [];
+    for (const entry of found) {
+      if (!texts.has(entry.sha)) {
         const blob = await getJson(github, repo, `/repos/${repo}/git/blobs/${entry.sha}`);
         const text = Buffer.from(blob.content ?? "", blob.encoding ?? "base64").toString();
-        keepLast(parsed, id, parseWorkflow(entry.name, text), MAX_PARSED);
+        keepLast(texts, entry.sha, text, MAX_PARSED);
       }
-      const { workflow, errors: found } = parsed.get(id);
-      errors.push(...found);
+      out.push({ name: entry.name, sha: entry.sha, text: texts.get(entry.sha) });
+    }
+    return { files: out, errors, warnings };
+  }
+
+  // A file of files()' parsed, once per blob and name.
+  function parse({ name, sha, text }) {
+    const id = `${sha}:${name}`;
+    if (!parsed.has(id)) {
+      const agents = config?.agents ?? null;
+      keepLast(parsed, id, parseWorkflow(name, text, { agents }), MAX_PARSED);
+    }
+    return parsed.get(id);
+  }
+
+  // The repo's workflows on `ref` → { workflows, errors, warnings }, `settings` its config's (the
+  // built-in loop's trigger). `cached`: the default branch's listing, kept; a branch's is read
+  // anew (the onboarding pull request's check).
+  async function read(repo, ref, settings, { cached = true } = {}) {
+    const { files: found, errors, warnings } = await files(repo, ref, { cached });
+    const workflows = [];
+    for (const file of found) {
+      const { workflow, errors: wrong } = parse(file);
+      errors.push(...wrong);
       if (workflow) workflows.push(workflow);
     }
     errors.push(...checkTriggers(workflows, settings));
@@ -74,14 +97,15 @@ export function createWorkflows({ github, now = Date.now }) {
   }
 
   // The workflow that runs `event` in `repo` (its default branch `ref`): its own, else the
-  // built-in one, else null. → { workflow, errors }: with errors, no workflow runs.
+  // built-in one (on `ready`, the one `settings`' `review:` compiles to), else null.
+  // → { workflow, errors }: with errors, no workflow runs.
   async function forEvent(repo, ref, settings, event) {
     const { workflows, errors } = await read(repo, ref, settings);
     if (errors.length) {
       return { workflow: null, errors: errors.map(errorText) };
     }
     const own = workflows.find((w) => w.on.includes(event));
-    return { workflow: own ?? builtInWorkflow(event), errors: [] };
+    return { workflow: own ?? builtInWorkflow(event, settings), errors: [] };
   }
 
   // `repo`'s default branch moved, or the repo left the App's reach: listed again next time.
@@ -89,7 +113,7 @@ export function createWorkflows({ github, now = Date.now }) {
     listings.delete(repo.toLowerCase());
   }
 
-  return { read, forEvent, forget };
+  return { files, parse, read, forEvent, forget };
 }
 
 // What a workflow's conditions read of pull request `pr` (GitHub's), for the engine's facts():

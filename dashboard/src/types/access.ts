@@ -7,7 +7,7 @@ export interface Access {
 }
 
 // What the user may do on a repository: `actions`, among "tasks:read", "logs:read",
-// "runs:manage" and "repo:config:read"; `starts`, the modes they may start runs in (a mode's
+// "runs:manage", "repo:config:read" and "repo:config:write"; `starts`, the modes they may start runs in (a mode's
 // name, or a prefix ending in `*`: "*" for every mode), unless `startsDenied` covers them.
 export interface RepoAccess {
   actions: string[];

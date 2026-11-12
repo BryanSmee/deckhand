@@ -7,7 +7,10 @@ import {
   errorText,
   parseCondition,
   parseWorkflow,
+  reviewWorkflow,
 } from "../listener/workflow-format.mjs";
+import { parseRepoConfig } from "../listener/repo-config.mjs";
+import { testConfig } from "./helpers.mjs";
 
 // The errors of a file as the config check says them.
 const errors = (text, name = "w.yaml") => parseWorkflow(name, text).errors.map(errorText);
@@ -132,8 +135,12 @@ test("unknown events, steps, keys and vars are refused", () => {
     /line 1: `on`: unknown event `push`/,
   );
   assert.match(
+    errors("on: conflict\nsteps:\n  - run: deploy\n")[0],
+    /line 3: `run`: unknown step `deploy`/,
+  );
+  assert.match(
     errors("on: conflict\nsteps:\n  - run: merge\n")[0],
-    /line 3: `run`: unknown step `merge`/,
+    /line 3: `run: merge` doesn't run on `conflict`/,
   );
   assert.match(
     errors("on: conflict\nname: x\nsteps:\n  - run: rebase\n")[0],
@@ -185,10 +192,11 @@ test("the built-in review loop counts as a trigger on `ready`", () => {
   assert.deepEqual(checkTriggers([ready], { review: { on: "ready" } }).map(errorText), [
     "`.deckhand/workflows/r.yaml` line 1: two triggers for `ready`: this workflow and the built-in review loop (`review.on: ready`)",
   ]);
-  // Without it, still no workflow runs on `ready` until the review loop is on the engine.
+  // Without it, the workflow is the one on `ready`; it needs the `review` block's settings.
+  assert.deepEqual(checkTriggers([ready], { review: { on: "manual" } }), []);
   assert.match(
-    errorText(checkTriggers([ready], { review: { on: "manual" } })[0]),
-    /`ready`: no workflow runs on it yet/,
+    errorText(checkTriggers([ready], { review: null })[0]),
+    /`ready` needs the repository's `review:` block/,
   );
 });
 
@@ -200,6 +208,7 @@ test("the built-in conflicts workflow is a file of the format, one rebase step",
     ["built-in", null, ["conflict"], [{ line: 4, run: "rebase" }]],
   );
   assert.equal(builtInWorkflow("ready"), null);
+  assert.equal(builtInWorkflow("ready", { review: { on: "manual" } }), null);
 });
 
 test("a file too large or too deep is refused", () => {
@@ -209,4 +218,123 @@ test("a file too large or too deep is refused", () => {
     steps = `  - if: ci == passed\n    then:\n${steps.replace(/^/gm, "    ")}`;
   }
   assert.match(errors(`on: conflict\nsteps:\n${steps}`).join("\n"), /nested deeper than 5/);
+});
+
+test("on `ready`: the review loop's steps, each run's agent, model, effort and instructions", () => {
+  const { workflow, errors: found } = parseWorkflow(
+    "two.yaml",
+    `on: ready
+vars:
+  fixes: counter
+  security: flag
+steps:
+  - run: ci
+  - run: review
+  - if: 'changed("policy/**", since: security)'
+    run: review
+    instructions: .deckhand/security-review.md
+    set: security
+  - repeat:
+      - run: fix
+        count: fixes
+        effort: high
+      - run: review
+    max: fixes 3
+  - if: severity <= low
+    run: review
+    agent: Codex
+    model: best
+  - if: severity == none
+    run: merge
+    else:
+      - comment: rounds-out
+`,
+    { agents: ["claude", "codex"] },
+  );
+  assert.deepEqual(found, []);
+  const [ci, first, security, loop, second, merge] = workflow.steps;
+  assert.deepEqual(
+    [ci.run, first.run, security.instructions],
+    ["ci", "review", ".deckhand/security-review.md"],
+  );
+  assert.equal(loop.repeat[0].effort, "high");
+  assert.deepEqual([second.agent, second.model], ["codex", "best"]);
+  // Deckhand's own comment by its name, on `ready`; a text anywhere else.
+  assert.equal(merge.else[0].say, "rounds-out");
+  const conflict = parseWorkflow("c.yaml", "on: conflict\nsteps:\n  - comment: rounds-out\n");
+  assert.equal(conflict.workflow.steps[0].say, undefined);
+});
+
+test("a run's options: only on review and fix, checked, the agent among the operator's", () => {
+  const step = (run, line) => `on: ready\nsteps:\n  - run: ${run}\n    ${line}\n`;
+  assert.deepEqual(errors(step("merge", "agent: codex")), [
+    "`.deckhand/workflows/w.yaml` line 4: `agent`: goes on a `run: review` or `run: fix` step",
+  ]);
+  assert.match(
+    errors(step("fix", "instructions: a.md"))[0],
+    /`instructions`: goes on a `run: review` step/,
+  );
+  assert.match(errors(step("review", "effort: huge"))[0], /line 4: `effort`: expected one of low/);
+  assert.match(
+    errors(step("review", "instructions: ../x.md"))[0],
+    /expected a path in the repository/,
+  );
+  assert.match(errors(step("review", "model: 'a b'"))[0], /`model`: expected a model tier/);
+  const agents = parseWorkflow("w.yaml", step("review", "agent: codex"), { agents: ["claude"] });
+  assert.match(
+    errorText(agents.errors[0]),
+    /the operator hasn't configured codex \(configured: claude\)/,
+  );
+  assert.match(
+    errors("on: ready\nsteps:\n  - run: rebase\n")[0],
+    /`run: rebase` doesn't run on `ready`/,
+  );
+});
+
+// The review loop of each `review:` block, as the built-in code ran it before the engine.
+test("reviewWorkflow: what each review block compiles to, a workflow of the format", () => {
+  const config = testConfig();
+  const compiled = (block) => {
+    const { settings } = parseRepoConfig(`review:\n${block}`, config);
+    const text = reviewWorkflow(settings.review);
+    if (text) assert.deepEqual(parseWorkflow("built-in.yaml", text).errors, []);
+    return text;
+  };
+  const steps = (block) =>
+    compiled(block)
+      .split("\n")
+      .filter((l) => /^\s*(- |max:)/.test(l))
+      .map((l) => l.replace(/ #.*$/, "").trim());
+  assert.equal(compiled("  on: manual\n"), null);
+  assert.deepEqual(steps("  on: ready\n"), ["- run: review"]);
+  assert.deepEqual(steps("  on: ready\n  merge: true\n"), ["- run: review", "- run: merge"]);
+  // One fix run without the merge: nothing reviews its push (#376), the rounds-out comment after.
+  assert.deepEqual(steps("  on: ready\n  fix: true\n"), [
+    "- run: review",
+    "- run: fix",
+    "- comment: rounds-out",
+  ]);
+  assert.deepEqual(steps("  on: ready\n  fix: 3\n  ci: wait\n  merge: true\n"), [
+    "- run: ci",
+    "- run: review",
+    "- repeat:",
+    "- run: fix",
+    "- run: ci",
+    "- run: review",
+    "max: fixes 3",
+    "- run: merge",
+  ]);
+  assert.deepEqual(steps("  on: ready\n  fix: 2\n"), [
+    "- run: review",
+    "- repeat:",
+    "- run: fix",
+    "- run: review",
+    "max: fixes 2",
+    "- comment: rounds-out",
+  ]);
+  const ready = builtInWorkflow(
+    "ready",
+    parseRepoConfig("review:\n  on: ready\n", config).settings,
+  );
+  assert.deepEqual([ready.name, ready.file, ready.on], ["built-in", null, ["ready"]]);
 });

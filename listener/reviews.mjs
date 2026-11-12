@@ -31,6 +31,11 @@
 // the review. Failed: no review, a comment naming the failed runs, and with `review.fix` a CI
 // fix run (`ci-fix`), counted apart (`ciFixes`, at most `review.ci_fix`), whose push goes back
 // to waiting. Out of CI fix runs, or `review.ci_wait` minutes gone: the review anyway.
+//
+// The order of those steps is a workflow's (#1041, workflow-engine.mjs): the one `review:`
+// compiles to (workflow-format.mjs reviewWorkflow()), or the repo's own on `ready`. Each step
+// is the code above (act()); a run's end goes on from its step (proceed()).
+import { randomUUID } from "node:crypto";
 import { ciState, PASSED } from "./ci.mjs";
 import { ensureLabel, waitsForInput } from "./comments.mjs";
 import { repoAllowed } from "./config.mjs";
@@ -48,14 +53,7 @@ import {
 import { allowed, isBot } from "./auto-pickup.mjs";
 import { autoMergeProblems } from "./grants.mjs";
 import { getJson, paginate } from "./github.mjs";
-import {
-  DECISIONS,
-  OPERATOR_ONLY,
-  denyKept,
-  INPUT_VERSION,
-  isPolicyError,
-  passed,
-} from "./policies.mjs";
+import { denyKept, isPolicyError, passed } from "./policies.mjs";
 import {
   above,
   BLOCKING,
@@ -65,13 +63,12 @@ import {
   REVIEW_HEAD,
   titleOf,
 } from "./review-parse.mjs";
-import { fixMessage, lastPosted, reviewEvent } from "./review-post.mjs";
+import { fixMessage, lastPosted, latestReview, reviewEvent } from "./review-post.mjs";
 import {
   actionsRuns,
   checksOf,
   fixInput,
   mergeBlockers,
-  mergeInput,
   mergeRefusal,
   readPullInput,
 } from "./review-merge.mjs";
@@ -97,17 +94,14 @@ import {
   short,
   stoppedWhy,
 } from "./review-texts.mjs";
-import { fixesOf, reviewedFixesOf } from "./review-loop.mjs";
-import {
-  dryRunText,
-  githubSamples,
-  linkSample,
-  pushSample,
-  runSamples,
-} from "./review-dry-run.mjs";
-import { ownReady, requestInput, reviewersFor, runFields } from "./reviewers.mjs";
+import { fixesOf, mergeEntries, reviewedFixesOf } from "./review-loop.mjs";
+import { dryRun } from "./review-dry-run.mjs";
+import { impliedSettings, READY, severityOf, stepOf, stepRun } from "./review-workflow.mjs";
 import { SEVERITIES } from "./severities.mjs";
 import { respellMap } from "./spelling.mjs";
+import { createEngine, facts } from "./workflow-engine.mjs";
+import { builtInWorkflow } from "./workflow-format.mjs";
+import { pullFacts } from "./workflows.mjs";
 
 // A reviewed head commit is forgotten after this: the pull request is long merged or closed.
 const KEEP_MS = 90 * 24 * 3600_000;
@@ -214,8 +208,13 @@ function openedBy(config, pr) {
 // (decisions.mjs). `reviewed`: the Map each pull request's loop is kept in (storeMap()'s).
 export function createReviews({
   reviewed = new Map(),
+  // The repos' workflows (workflows.mjs createWorkflows()), a repo's own on `ready` replacing
+  // the built-in loop: without, the built-in one alone. `instances`: the Map the engine keeps the
+  // loop's in (storeMap()'s, the conflict watcher's too).
+  workflows = null,
+  instances = new Map(),
   config,
-  repoSettings,
+  repoSettings: readSettings,
   accept,
   github,
   busy,
@@ -264,6 +263,20 @@ export function createReviews({
   // Pull request keys whose fix run a maintainer asked for is being started (startFix()): a
   // second click meanwhile starts nothing.
   const granting = new Set();
+  const engine = createEngine({ instances, maxRounds: config.maxFixRounds, log, now });
+  const entryOf = (repo, number) => reviewed.get(taskKey(repo, prId(number)));
+
+  // The repo's settings, with its workflow on `ready` (`workflow`): the one `review:` compiles
+  // to, or its own, whose steps stand for the loop's keys (impliedSettings()). With errors in
+  // its workflows, `workflowErrors`, and none.
+  async function repoSettings(repo, base) {
+    const read = await readSettings(repo, base);
+    if (read.errors.length) return read;
+    if (!workflows) return { ...read, workflow: builtInWorkflow(READY, read.settings) };
+    const { workflow, errors } = await workflows.forEvent(repo, base, read.settings, READY);
+    if (errors.length) return { ...read, workflow: null, workflowErrors: errors };
+    return { ...read, settings: impliedSettings(read.settings, workflow), workflow };
+  }
 
   // `work()`, with the loop of pull request `key` at `step` meanwhile ("review", "review-fix"),
   // for the dashboard: its GitHub calls and policies may outlast a poll. Its own mark only is
@@ -313,9 +326,12 @@ export function createReviews({
     // The repo's settings and the policies may take a while: the pull request is in review
     // from its ready delivery on, not ready, until the review is queued or skipped.
     return deciding(key, "review", async () => {
-      const { settings, errors } = await repoSettings(repo, base);
+      const { settings, errors, workflow, workflowErrors } = await repoSettings(repo, base);
       // A broken config: its next comment's reply says why; nothing is posted for a webhook.
       if (errors.length) return skip(`review: ${repo}'s config has errors`);
+      if (workflowErrors) {
+        return skip(`review: ${repo}'s workflows have errors: ${workflowErrors.join("; ")}`);
+      }
       if (settings.review?.on !== "ready") return skip(`review: not on in ${repo}`);
       if (author && !settings.users.includes(author.toLowerCase())) {
         return skip(`review: ${author} not in ${repo}'s users`);
@@ -344,7 +360,7 @@ export function createReviews({
       }
       remember(key, head, { policyRetry: undefined });
       log(`${key}: pull request #${pr.number} is ready, starting a review`);
-      return reviewAfterCi({ repo, base, pr, settings, author });
+      return begin({ repo, base, pr, settings, author }, workflow);
     });
   }
 
@@ -453,7 +469,7 @@ export function createReviews({
 
   // Queues a review run of `pr`, on the task of the issue it closes or its own. `ciNote`: why
   // CI hadn't passed when it was queued, for its prompt (ciNoteText()).
-  async function queueReview({ repo, base, pr, settings, author = null, ciNote = null }) {
+  async function queueReview({ repo, base, pr, settings, author = null, ciNote = null, step }) {
     const item = {
       repo,
       id: prId(pr.number),
@@ -471,6 +487,8 @@ export function createReviews({
       // Checked again when it runs (tasks.mjs noLongerAllowed()); the App's has none.
       ...(author ? { author } : {}),
       ...(ciNote ? { ciNote } : {}),
+      // Its workflow step's agent, model, effort and instructions (modes.mjs stepSettings()).
+      ...(step && { workflowStep: step }),
       reason: "review",
     };
     // Deckhand's own pull request is its issue's task, like a comment on it (events.mjs).
@@ -546,7 +564,7 @@ export function createReviews({
   // it as from any round: its push is reviewed, its auto-merge decided again (mergeAt, and the
   // comment saying the rounds ran out, cleared). Refused, it posts nothing of its own: the
   // dashboard says why (and work.mjs edits the App's comment, if announce() posted it).
-  async function startFix({ repo, number, base, settings }, posted, asked = null) {
+  async function startFix({ repo, number, base, settings }, posted, asked = null, step = null) {
     const key = taskKey(repo, prId(number));
     const skip = (why) => {
       log(`${key}: no fix run, ${why}`);
@@ -564,7 +582,7 @@ export function createReviews({
       metrics?.fixRound("skipped");
       return skip("a fix run asked from the dashboard is being started");
     }
-    if (!asked) return fixRound({ key, repo, number, base, settings, review, pr }, asked);
+    if (!asked) return fixRound({ key, repo, number, base, settings, review, pr, step }, asked);
     granting.add(key);
     try {
       return await fixRound({ key, repo, number, base, settings, review, pr }, asked);
@@ -598,7 +616,7 @@ export function createReviews({
   }
 
   // startFix()'s work, the review read and requesting changes.
-  async function queueFix({ key, repo, number, base, settings, review, pr }, asked) {
+  async function queueFix({ key, repo, number, base, settings, review, pr, step }, asked) {
     const skip = (why) => {
       log(`${key}: no fix run, ${why}`);
       return { item: null, why };
@@ -751,6 +769,7 @@ export function createReviews({
       // `dashboard`: its start is the maintainer's, checked again when it runs (runs.mjs).
       ...(asked && { author: asked.user, dashboard: true }),
       reason: "review-fix",
+      ...(step && { workflowStep: step }),
       // For the dashboard's "Review fix 2/3" (runs.mjs newLive()).
       round,
       rounds,
@@ -764,6 +783,11 @@ export function createReviews({
   // comment saying why not (null); without, the comment when the rounds ran out (roundsOut()).
   async function settle(run, posted) {
     const key = taskKey(run.repo, prId(run.number));
+    // The task's settings, as a repo's own workflow on `ready` turns the loop's keys on.
+    run = {
+      ...run,
+      settings: impliedSettings(run.settings, engine.instance(key, READY)?.workflow),
+    };
     if (!run.auto) {
       // A maintainer's review (`/mode review`, the dashboard's Review): the latest round the
       // dashboard shows (`manual`), with or without a loop before it, so that a commit pushed
@@ -789,18 +813,153 @@ export function createReviews({
       try {
         recordRound(run, posted);
         await lateFollowUps(run, posted);
-        const started = await startFix(run, posted);
-        item = started.item;
-        if (item) return item;
-        const mode = await mergeMode(run.repo, run.base);
-        if (!mode) return roundsOut(run, posted);
-        return autoMerge(run, posted, started.denied, mode);
+        // The workflow's next steps: the fix run, else the merge or the rounds-out comment.
+        const at = context({ ...run, pr: posted?.pr, posted: posted ?? {} });
+        const result = await proceed(at, "review");
+        item = at.queued;
+        return result;
       } finally {
-        // Nothing more on its way, unless a fix run was queued (startFix() said so) or a new
+        // Nothing more on its way, unless a run was queued (a fix run, another review) or a new
         // review since (the pull request ready again meanwhile).
         if (!item) nextStep(key, null, since);
       }
     });
+  }
+
+  // A drive of the loop's workflow on pull request `number` (`pr` GitHub's, when read): what
+  // its steps read (`posted`: the review that just ended; `ciNote`: the CI step's note for the
+  // review it queues) and say back: `result`, what the last step that acted returned (the run
+  // queued, the merge…), `queued`, the run queued, `fixDenied` why the policies refused the fix
+  // run (for the merge's refusal), `ci` the CI step waiting, decided after the drive.
+  function context({ repo, base, pr = null, number = pr?.number, settings, ...rest }) {
+    const { author = null, posted = null, ciNote = null } = rest;
+    const key = taskKey(repo, prId(number));
+    const head = pr?.head?.sha ?? null;
+    return { repo, base, pr, number, key, head, settings, author, posted, ciNote, result: null };
+  }
+
+  // Pull request `found` ready at a head not reviewed yet (decideReview()), or rebased
+  // (afterRebase()): `workflow` from its first step, the vars of its earlier events kept (an
+  // instance it has keeps its own version). The reviewed head is what keeps a head from being
+  // reviewed twice (remember()): the event's id is this one's alone.
+  async function begin(found, workflow) {
+    const at = context(found);
+    if (!workflow) return null;
+    const event = { name: READY, id: `${at.number}:${at.head}:${randomUUID()}`, pr: at.number };
+    await engine.trigger(at.key, workflow, { ...event, head: at.head }, steps(at));
+    return settled(at);
+  }
+
+  // The run (or the CI step's wait) of kind `kind` on pull request `at` is over: its workflow
+  // goes on from that step. An instance that doesn't wait there (a pull request in the loop
+  // before it moved onto the engine, a fix a maintainer's review started) is placed there
+  // first; a workflow without such a step goes on as the built-in code did (fallback()).
+  async function proceed(at, kind) {
+    if (engine.waitingStep(at.key, READY)?.run !== kind) {
+      const workflow = await adoptable(at);
+      const after = fixesOf(reviewed.get(at.key)) > 0;
+      const event = { name: READY, pr: at.number, head: at.head };
+      if (!workflow || !engine.place(at.key, workflow, event, stepOf(kind, after))) {
+        return kind === "ci" ? queueReview(at) : kind === "fix" ? reviewAfterCi(at) : null;
+      }
+    }
+    await engine.resume(at.key, READY, steps(at), at.head);
+    return settled(at, kind === "ci");
+  }
+
+  // What a drive returns: what its last step did, or the CI step it started decided now. From a
+  // CI decision (`deciding`, in ciRecheck()'s queue), after that one: never waited for there.
+  function settled(at, deciding = false) {
+    if (!at.ci) return at.result;
+    const next = ciRecheck(at.key);
+    if (!deciding) return next;
+    next.catch((error) => log(`${at.key}: CI step: ${error.stack ?? error}`));
+    return null;
+  }
+
+  // The workflow a pull request without an instance goes on in: its repo's own on `ready`, else
+  // the one `review:` compiles to, from the run's settings (its loop's, ready or not now).
+  async function adoptable(at) {
+    const kept = engine.instance(at.key, READY);
+    if (kept?.pr === at.number) return kept.workflow;
+    const read = workflows ? await repoSettings(at.repo, at.base) : null;
+    if (read?.workflow?.file) return read.workflow;
+    const review = at.settings?.review;
+    return review ? builtInWorkflow(READY, { review: { ...review, on: "ready" } }) : null;
+  }
+
+  // What the engine runs for the drive `at`: its steps' actions (act()), the facts its
+  // conditions read, and what the fix runs' loop at its max says (startFix()'s rounds used up).
+  function steps(at) {
+    at.settings = impliedSettings(at.settings, engine.instance(at.key, READY)?.workflow);
+    const known = at.pr ? pullFacts(github, at.repo, at.pr) : {};
+    const bounded = () => {
+      const review = at.posted?.review;
+      if (!at.settings?.review?.fix || !review || granting.has(at.key)) return;
+      if (reviewEvent(review) !== "REQUEST_CHANGES") return;
+      const rounds = limitOf(at.settings, reviewed.get(at.key));
+      metrics?.fixRound("exhausted");
+      const runs = rounds > 1 ? `its ${rounds} fix runs` : "its fix run";
+      log(`${at.key}: no fix run, it had ${runs} already`);
+    };
+    return {
+      facts: facts({ ...known, severity: () => severityOf(at.posted?.review) }),
+      act: (step, view) => act(at, step, view),
+      bounded,
+    };
+  }
+
+  // One step of the loop's workflow (workflow-engine.mjs): the code that ran it before (#1041).
+  // Asked again after a handover cut it off (`interrupted`), a run it queued then is waited for.
+  async function act(at, step, { interrupted, workflow }) {
+    at.settings = impliedSettings(at.settings, workflow);
+    const entry = reviewed.get(at.key) ?? {};
+    if (step.say === "rounds-out") {
+      at.result = await roundsOut(at, at.posted);
+      return "done";
+    }
+    if (step.comment) {
+      await reply(at.repo, at.number, step.comment).catch((error) => {
+        log(`${at.key}: a workflow's comment: ${error.message ?? error}`);
+      });
+      return "done";
+    }
+    if (step.run === "ci") {
+      if (!ciOn(at.settings)) return "done";
+      if (!(interrupted && entry.ciWaiting)) waitForCi(at);
+      at.ci = true;
+      return "wait";
+    }
+    if (step.run === "review") {
+      if (interrupted && entry.next === "review") return "wait";
+      at.result = at.queued = await queueReview({ ...at, step: stepRun(step) });
+      at.ciNote = null;
+      return "wait";
+    }
+    const posted = at.posted ?? (await readBack(at));
+    if (step.run === "fix") {
+      if (interrupted && entry.next === "review-fix") return "wait";
+      const started = await startFix(at, posted, null, stepRun(step));
+      at.result = at.queued = started.item ?? null;
+      at.fixDenied = started.denied;
+      return started.item ? "wait" : "break";
+    }
+    const mode = await mergeMode(at.repo, at.base);
+    at.result = mode
+      ? await autoMerge(at, posted, at.fixDenied, mode)
+      : await roundsOut(at, posted);
+    return "done";
+  }
+
+  // The App's last review of pull request `at`, read back from GitHub as postReview() said it,
+  // for a step after another than the review (a repo's own workflow), or null.
+  async function readBack(at) {
+    const allowed = at.settings?.review?.maxAllowedSeverity ?? "low";
+    const review = await latestReview(github, config, at.repo, at.number, allowed);
+    if (!review) return null;
+    at.pr ??= await getJson(github, at.repo, `/repos/${at.repo}/pulls/${at.number}`, [404]);
+    at.posted = { review, pr: at.pr, head: review.head, event: reviewEvent(review) };
+    return at.posted;
   }
 
   // A review posted on pull request `number`: its round of the fix loop, kept in its entry's
@@ -1140,17 +1299,20 @@ export function createReviews({
     await ciRecheck(key).catch((error) => log(`${key}: CI step: ${error.stack ?? error}`));
   }
 
-  // A `pull_request` `closed` delivery of a merged pull request: the follow-ups its reviews
-  // listed, filed as issues (fileFollowUps()). Closed without a merge: none, they were about it.
+  // A `pull_request` `closed` delivery: its workflow's instance forgotten; merged, the
+  // follow-ups its reviews listed, filed as issues (fileFollowUps()). Closed without a merge:
+  // none, they were about it.
   async function closed(event, p) {
-    if (event !== "pull_request" || p.action !== "closed" || !p.pull_request?.merged_at)
-      return null;
+    if (event !== "pull_request" || p.action !== "closed") return null;
     const repo = p.repository?.full_name;
-    const number = p.pull_request.number;
+    const number = p.pull_request?.number;
     if (!p.installation?.id || !repo || !number || !repoAllowed(config, repo)) return null;
+    const key = taskKey(repo, prId(number));
+    // Its workflow's instance goes, merged or not.
+    engine.forget(key, number);
+    if (!p.pull_request.merged_at) return null;
     // Seen merged: a review still running, or not yet recorded (settle()), files its own
     // follow-ups once it is (lateFollowUps()).
-    const key = taskKey(repo, prId(number));
     if (reviewed.get(key)) keep(key, { mergedSeen: true });
     return filingFollowUps(repo, p.pull_request, p.repository.default_branch || "main");
   }
@@ -1467,7 +1629,7 @@ export function createReviews({
   // fixed()'s work: the review queued, or null.
   async function reviewFix({ repo, number, base, status }) {
     const key = taskKey(repo, prId(number));
-    const { settings, errors } = await repoSettings(repo, base);
+    const { settings, errors, workflow } = await repoSettings(repo, base);
     if (errors.length || !settings.review?.fix) return null;
     const entry = reviewed.get(key) ?? {};
     const fixes = fixesOf(entry);
@@ -1475,8 +1637,10 @@ export function createReviews({
     const mode = await mergeMode(repo, base);
     // `fix: true` without `merge`: by design, nothing reviews what it pushed. Kept, so the
     // dashboard doesn't take the review before it for what is left (reviewLoop()). A round a
-    // maintainer asked for from the dashboard (`asked`) is always reviewed.
-    if (!mode && limitOf(settings, entry) < 2 && entry.asked !== fixes) {
+    // maintainer asked for from the dashboard (`asked`) is always reviewed; a repo's own
+    // workflow says itself what follows its fix.
+    const own = !!workflow?.file;
+    if (!mode && limitOf(settings, entry) < 2 && entry.asked !== fixes && !own) {
       if (status === "ok") remember(key, entry.head ?? null, { unreviewedFix: fixes });
       return null;
     }
@@ -1511,27 +1675,27 @@ export function createReviews({
     if (denied.length) return stop(policyWhy("deny_review", denied));
     remember(key, head);
     log(`${key}: fix run ${fixes} pushed ${short(head)}, starting its review`);
-    return reviewAfterCi({ repo, base, pr, settings });
+    const at = context({ repo, base, pr, settings });
+    // A round a maintainer asked for is reviewed, whatever the workflow says next.
+    return entry.asked === fixes ? reviewAfterCi(at) : proceed(at, "fix");
   }
 
-  // The CI step (`review.ci: wait`) before an automatic review of `pr`: without it, the review
-  // is queued at once. With it, the pull request waits for its head commit's Actions runs
-  // (`ciWaiting`, kept in its entry: a restart goes on waiting), decided now, then again by
-  // checksDone(), pushed() and tick() (ciDecide()). → the review queued, a CI fix run's item,
-  // or null (waiting, or stopped).
-  // `afterCiFix`: `pr`'s head is what a CI fix run pushed ("pushed"), or the same commit whose
-  // failed jobs it reran ("reran": afterCiFix(), `reran` the ids of the workflow runs it reran
-  // there), for the next one's message.
-  async function reviewAfterCi({
-    repo,
-    base,
-    pr,
-    settings,
-    author = null,
-    afterCiFix = false,
-    reran = [],
-  }) {
-    if (!ciOn(settings)) return queueReview({ repo, base, pr, settings, author });
+  // The CI step (`review.ci: wait`) before a review of `found` outside its workflow's order (a
+  // fix a maintainer asked for, a workflow without that step): without it, the review is queued
+  // at once; with it, the pull request waits (waitForCi()), decided now. → the review queued, a
+  // CI fix run's item, or null (waiting, or stopped).
+  async function reviewAfterCi(found) {
+    if (!ciOn(found.settings)) return queueReview(found);
+    waitForCi(found);
+    return ciRecheck(taskKey(found.repo, prId(found.pr.number)));
+  }
+
+  // The CI step's wait for `pr`'s head commit's Actions runs (`ciWaiting`, kept in its entry: a
+  // restart goes on waiting), decided by ciRecheck(), then again by checksDone(), pushed() and
+  // tick() (ciDecide()). `afterCiFix`: `pr`'s head is what a CI fix run pushed ("pushed"), or the
+  // same commit whose failed jobs it reran ("reran": afterCiFix(), `reran` the ids of the
+  // workflow runs it reran there), for the next one's message.
+  function waitForCi({ repo, base, pr, author = null, afterCiFix = false, reran = [] }) {
     const key = taskKey(repo, prId(pr.number));
     const sha = pr.head?.sha ?? null;
     remember(key, sha, {
@@ -1547,7 +1711,6 @@ export function createReviews({
       ciDropped: undefined,
       ciStopped: undefined,
     });
-    return ciRecheck(key);
   }
 
   // One CI decision at a time per pull request: each waits for the one before, and finds the
@@ -1605,9 +1768,10 @@ export function createReviews({
     const { settings, errors } = await repoSettings(repo, base);
     if (errors.length) return drop(`${repo}'s config has errors`);
     if (settings.review?.on !== "ready") return drop("`review.on` isn't `ready` any more");
+    // The CI step over: its workflow's next step, the review.
     const review = (ciNote = null) => {
       remember(key, sha, { ciWaiting: undefined });
-      return queueReview({ repo, base, pr, settings, author, ciNote });
+      return proceed(context({ repo, base, pr, settings, author, ciNote }), "ci");
     };
     // Turned off meanwhile: the review, as without it.
     if (!ciOn(settings)) return review();
@@ -1695,7 +1859,7 @@ export function createReviews({
       log(`${key}: CI failed on ${short(sha)}, reviewing anyway`);
       await say(next);
       const ciNote = ciNoteText(`GitHub Actions runs on ${short(sha)} failed: ${names.join(", ")}`);
-      return queueReview({ repo, base, pr, settings, author, ciNote });
+      return proceed(context({ repo, base, pr, settings, author, ciNote }), "ci");
     };
     const stop = async (why) => {
       decided({ ciStopped: { sha, at: now() } });
@@ -1887,14 +2051,11 @@ export function createReviews({
     const rerunIds = reran
       ? [...new Set(reruns.filter((r) => r.sha === head).map((r) => r.run_id))]
       : [];
-    return reviewAfterCi({
-      repo,
-      base,
-      pr,
-      settings,
-      afterCiFix: reran ? "reran" : "pushed",
-      reran: rerunIds,
-    });
+    const at = context({ repo, base, pr, settings });
+    // Turned off meanwhile: the CI step is over, its workflow goes on.
+    if (!ciOn(settings)) return proceed(at, "ci");
+    waitForCi({ ...at, afterCiFix: reran ? "reran" : "pushed", reran: rerunIds });
+    return ciRecheck(at.key);
   }
 
   // A conflict run is over (run-end.mjs cleanUp(), conflicts.mjs, `status` its outcome, `from` the
@@ -1958,7 +2119,9 @@ export function createReviews({
       ...(lifted && { mergeAt: undefined, waiting: undefined }),
     });
     log(`${key}: the rebase run pushed ${short(head)}, starting its review`);
-    return reviewAfterCi({ repo, base, pr, settings });
+    // Its workflow again from its first step, as when the pull request turned ready.
+    const at = context({ repo, base, pr, settings });
+    return begin(at, await adoptable(at));
   }
 
   // Whether the loop of pull request `number` is between two of its steps: what follows a
@@ -1970,206 +2133,11 @@ export function createReviews({
     return decisions.has(key) || !!reviewed.get(key)?.ciWaiting;
   }
 
-  // Rekeyed with spelled() (restart.mjs unifySpellings()). Both spellings of one pull request:
-  // the later review's, with what only the other had (an auto-merge), the most fix runs either
-  // counted, so none happens twice, and the follow-ups' records of both, so the Review tab keeps
-  // every issue they became.
+  // Rekeyed with spelled() (restart.mjs unifySpellings()), both spellings' entries merged
+  // (review-loop.mjs mergeEntries()), and their workflows' instances.
   function respell(spelled) {
-    const merge = (a, b) => {
-      const [earlier, later] = (a.at ?? 0) >= (b.at ?? 0) ? [b, a] : [a, b];
-      const both = { ...earlier, ...later };
-      const fixes = Math.max(fixesOf(a), fixesOf(b));
-      const reviewedFixes = Math.max(reviewedFixesOf(a), reviewedFixesOf(b));
-      const ciFixes = Math.max(a.ciFixes ?? 0, b.ciFixes ?? 0);
-      const grantedTo = Math.max(a.grantedTo ?? 0, b.grantedTo ?? 0);
-      // The follow-ups either listed, and the comments either posted reviews as.
-      const hasFollowUps = !!(a.hasFollowUps || b.hasFollowUps);
-      const reviewComments = [
-        ...new Set([...(a.reviewComments ?? []), ...(b.reviewComments ?? [])]),
-      ];
-      // The follow-ups either labelled for auto-pickup.
-      const pickups = [...(a.pickups ?? []), ...(b.pickups ?? [])].filter(
-        (p, i, all) => all.findIndex((q) => q.issue === p.issue && q.at === p.at) === i,
-      );
-      // The issue each follow-up became under either spelling, by title, the later's first; a
-      // title one refused and the other filed isn't refused any more. The titles left past the
-      // cap that either listed, and the most either filed (the cap counts them).
-      const issues = new Map(
-        [...(earlier.followUpIssues ?? []), ...(later.followUpIssues ?? [])].map((x) => [
-          x.title,
-          x.issue,
-        ]),
-      );
-      const followUpIssues = [...issues].map(([title, issue]) => ({ title, issue }));
-      const keptIssues = !!(a.followUpIssues || b.followUpIssues);
-      const followUpsRefused = [
-        ...new Set([...(earlier.followUpsRefused ?? []), ...(later.followUpsRefused ?? [])]),
-      ].filter((title) => !issues.has(title));
-      const followUpsLeft = [
-        ...new Set([...(earlier.followUpsLeft ?? []), ...(later.followUpsLeft ?? [])]),
-      ];
-      const followUpsFiled = Math.max(a.followUpsFiled ?? 0, b.followUpsFiled ?? 0);
-      // The last fix run's time goes with the count.
-      const fixedAt = Math.max(a.fixedAt ?? 0, b.fixedAt ?? 0);
-      return {
-        ...both,
-        ...(fixes && { fixes }),
-        ...(fixedAt && { fixedAt }),
-        ...(reviewedFixes && { reviewedFixes }),
-        ...(ciFixes && { ciFixes, ciRounds: Math.max(a.ciRounds ?? 0, b.ciRounds ?? 0) }),
-        ...(grantedTo && { grantedTo }),
-        ...(hasFollowUps && { hasFollowUps }),
-        ...(reviewComments.length && { reviewComments }),
-        ...(pickups.length && { pickups }),
-        // Kept even empty: with `followUpsAt`, it says the issues were filed knowing which.
-        ...(keptIssues && { followUpIssues }),
-        ...(both.followUpsRefused && {
-          followUpsRefused: followUpsRefused.length ? followUpsRefused : undefined,
-        }),
-        ...(followUpsLeft.length && { followUpsLeft }),
-        ...(followUpsFiled && { followUpsFiled }),
-      };
-    };
-    respellMap(reviewed, spelled, undefined, merge);
-  }
-
-  // `/mode policy` on pull request `number` (task-modes.mjs): every rule evaluated on its input
-  // now → { text, denials }: the reply (dryRunText()) and how many messages the rules denied
-  // with. Nothing is reviewed, fixed, merged or kept as a decision: a maintainer debugging a
-  // rule doesn't wait for a ready event.
-  async function dryRun({ repo, base, number, by = null }) {
-    if (!policies) return { text: dryRunText({ number, files: [] }), denials: 0 };
-    const described = await policies.describe(repo, base);
-    // What decide() evaluates: a file the operator's replaces isn't.
-    const files = described.files.filter((f) => f.active);
-    const errors = described.errors.map((e) => e.text);
-    const texts = described.policies;
-    if (!files.length) return { text: dryRunText({ number, files }), denials: 0 };
-    const pr = await getJson(github, repo, `/repos/${repo}/pulls/${number}`);
-    const info = await getJson(github, repo, `/repos/${repo}`);
-    const prFiles = await paginate(
-      (path) => github(repo, "GET", path),
-      `/repos/${repo}/pulls/${number}/files`,
-    );
-    const issue = linkedIssue(pr, repo, config.bot);
-    const found = issue
-      ? {
-          number: issue,
-          ...(await getJson(github, repo, `/repos/${repo}/issues/${issue}`, [404, 410])),
-        }
-      : null;
-    const sha = pr.head?.sha;
-    const runs = sha ? (await actionsRuns(github, repo, sha)).runs : [];
-    const entry = reviewed.get(taskKey(repo, prId(number)));
-    const fixes = fixesOf(entry);
-    const { settings } = await repoSettings(repo, base);
-    // The merge's input is the fullest: review and fix get the same without `checks`, and
-    // with their own `decision`; fix with the round it would be.
-    const input = mergeInput({
-      info,
-      pr,
-      files: prFiles,
-      issue: found,
-      review: null,
-      fixes,
-      runs,
-      bot: config.bot,
-      external: externalOf(repo, number),
-      now,
-    });
-    const results = [];
-    // `decision` on the input `build()` gives → { messages, layers }.
-    const ask = async (decision, build) => {
-      const { messages, layers } = await policies.evaluated(decision, repo, texts, build);
-      return { decision, messages, layers };
-    };
-    for (const decision of DECISIONS) {
-      // A repository's grants are no decision on a pull request: its config page says them.
-      if (OPERATOR_ONLY.has(decision)) continue;
-      // No run to start: a comment on this pull request asking for one, by whoever asked.
-      if (decision === "run") {
-        for (const sample of runSamples(repo, pr, found, by, now, settings)) {
-          const said = await ask(decision, () => sample.input);
-          const input = { version: INPUT_VERSION, ...sample.input };
-          results.push({ ...said, sample: sample.what, input });
-        }
-        continue;
-      }
-      // No write to decide on: a comment on this pull request, by a run whose own it is and
-      // by a brainstorm elsewhere.
-      if (decision === "github") {
-        for (const sample of githubSamples(repo, pr, settings?.modes)) {
-          const said = await ask(decision, () => sample.input);
-          const input = { version: INPUT_VERSION, ...sample.input };
-          results.push({ ...said, sample: sample.what, input });
-        }
-        continue;
-      }
-      // No branch to link either: one for the issue the pull request closes, by its work run.
-      if (decision === "link_branch") {
-        const sample = linkSample(repo, pr, found);
-        const said = await ask(decision, () => sample.input);
-        const input = { version: INPUT_VERSION, ...sample.input };
-        results.push({ ...said, sample: sample.what, input });
-        continue;
-      }
-      // No push either: one of its branch, by the work run of the issue it closes.
-      if (decision === "push") {
-        const sample = pushSample(repo, pr, found, info.default_branch ?? null);
-        const said = await ask(decision, () => sample.input);
-        const input = { version: INPUT_VERSION, ...sample.input };
-        results.push({ ...said, sample: sample.what, input });
-        continue;
-      }
-      // As the listener would ask when it turns ready, about the run that opened it.
-      if (decision === "request_review") {
-        const task = taskKey(repo, issue ?? prId(number));
-        const reviewers = reviewersFor(config, settings, pr);
-        const own = requestInput({
-          info,
-          pr,
-          files: prFiles,
-          issue: found,
-          reviewers,
-          when: "ready",
-          run: runFields(runOf(task, pr)),
-          bot: config.bot,
-          external: externalOf(repo, number),
-          now,
-        });
-        const said = await ask(decision, () => own);
-        // An "allowed" the listener would never act on: it requests nobody here.
-        const nobody = !reviewers.length
-          ? "`review.request` names no allowed user"
-          : !ownReady(config, repo, pr)
-            ? "not Deckhand's own ready pull request"
-            : null;
-        results.push({ ...said, ...(nobody && { nobody }) });
-        continue;
-      }
-      const own = { ...input, decision };
-      if (decision !== "merge") delete own.checks;
-      if (decision === "fix") {
-        Object.assign(own, {
-          ci: false,
-          reason: "review",
-          round: fixes + 1,
-          rounds: limitOf(settings, entry),
-        });
-      }
-      results.push(await ask(decision, () => own));
-    }
-    const text = dryRunText({
-      number,
-      sha,
-      files,
-      errors,
-      results,
-      input: { version: INPUT_VERSION, ...input },
-    });
-    // A sample write's denial is no decision on this pull request.
-    const decided = results.filter((r) => !r.sample);
-    return { text, denials: decided.reduce((n, r) => n + r.messages.length, 0) };
+    respellMap(reviewed, spelled, undefined, mergeEntries);
+    engine.respell(spelled);
   }
 
   // The last review the App posted on pull request `number` of `repo`, for the dashboard's
@@ -2294,7 +2262,11 @@ export function createReviews({
 
   return {
     consider,
-    dryRun,
+    dryRun: (args) =>
+      dryRun(
+        { policies, github, config, repoSettings, entryOf, limitOf, runOf, externalOf, now },
+        args,
+      ),
     fix,
     // A maintainer's Fix from the dashboard (work.mjs): startFix() with `asked`.
     fixAsked: (run, posted, asked) => startFix(run, posted, asked),

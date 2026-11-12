@@ -149,7 +149,7 @@ actions and the roles):
   token, whose comments reach Deckhand. A login outside it has nothing, whatever a policy says:
   no rule is asked for it.
 - **The operator's `allow_access`**: the actions a login has on a repository (`tasks:read`,
-  `logs:read`, `runs:start:<mode>`, `runs:manage`, `repo:config:read`) and server-wide
+  `logs:read`, `runs:start:<mode>`, `runs:manage`, `repo:config:read`, `repo:config:write`) and server-wide
   (`server:read`, `server:sync`), from the policies of your layer alone: Deckhand's
   `access.rego` (every action to every login, the default) or the grants folder's
   `policy/access.rego` that replaces it, usually `bindings` of logins, repository patterns and a
@@ -227,8 +227,9 @@ To narrow, see [Upgrading: access control (#725)](../guides/upgrade-notes.md#upg
 
 Only `ALLOWED_USERS` sign in, and each sees what [access](#access) gives them. A repository's
 tasks and runs need `tasks:read`, its live logs (whose tool output may hold what a run read)
-`logs:read`, its config, grants and policies `repo:config:read`; a repository with no action is
-hidden. `/status` lists the runs and queued comments of the repositories with `tasks:read`
+`logs:read`, its config, grants and policies `repo:config:read`, saving a workflow from the
+editor (a pull request the App opens, merged like any other) `repo:config:write`; a repository
+with no action is hidden. `/status` lists the runs and queued comments of the repositories with `tasks:read`
 only. An open live log stops within a second of its viewer losing `logs:read` (leaving the
 repository's `users` included). Edge checks the session on each request it passes on, not during
 a stream: a live log already open goes on after a sign-out until its stream ends or reconnects.

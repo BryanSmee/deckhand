@@ -247,3 +247,30 @@
 .fold {
   margin-top: 4px;
 }
+
+/* The workflow on `ready` (SourceView): its file, or the YAML `review:` compiles to. */
+.compiled {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 16px;
+}
+
+.compiled h2 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 22px;
+}
+
+.yaml {
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg);
+  color: var(--text-2);
+  font: 400 12px/19px var(--mono);
+  white-space: pre;
+  overflow-x: auto;
+}

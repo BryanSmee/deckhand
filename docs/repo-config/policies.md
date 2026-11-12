@@ -155,22 +155,24 @@ first (again after a push to its default branch).
 
 **The actions**:
 
-| Action              | On                                                            |
-| ------------------- | ------------------------------------------------------------- |
-| `tasks:read`        | A repository: its tasks and runs.                             |
-| `logs:read`         | A repository: its runs' live logs.                            |
-| `runs:start:<mode>` | A repository: starting a run in `<mode>` (its own modes too). |
-| `runs:manage`       | A repository: cancelling, rerunning, answering its runs.      |
-| `repo:config:read`  | A repository: its configuration and policies.                 |
-| `server:read`       | Server-wide (`repo: null`): the server's setup and grants.    |
-| `server:sync`       | Server-wide: Sync.                                            |
+| Action              | On                                                                  |
+| ------------------- | ------------------------------------------------------------------- |
+| `tasks:read`        | A repository: its tasks and runs.                                   |
+| `logs:read`         | A repository: its runs' live logs.                                  |
+| `runs:start:<mode>` | A repository: starting a run in `<mode>` (its own modes too).       |
+| `runs:manage`       | A repository: cancelling, rerunning, answering its runs.            |
+| `repo:config:read`  | A repository: its configuration and policies.                       |
+| `repo:config:write` | A repository: saving a workflow from the editor, as a pull request. |
+| `server:read`       | Server-wide (`repo: null`): the server's setup and grants.          |
+| `server:sync`       | Server-wide: Sync.                                                  |
 
 **Where they are asked**: each dashboard route needs its action (the backlog, its counts in
 the repositories list and a discussion's thread `tasks:read`; starting, queueing or laying out work, the inbox, Analyze, a
 discussion, onboarding and a chat's creation and messages `runs:start:<mode>` for the mode they start (`chat` for a chat), wrapping a brainstorm up `runs:start:stop` (a grooming's `runs:start:grooming-stop` too); cancelling, rerunning,
 answering, Review and Fix, dismissing, lanes and the run order `runs:manage`, and what starts a
 run among them (a rerun, Review, Fix, answers a session goes on with) its mode's start too, before
-anything is posted; a repository's config and its refresh `repo:config:read`; Settings › Server,
+anything is posted; a repository's config and its refresh `repo:config:read`, as do the workflow
+editor's checks and dry runs, and saving a workflow there (a pull request, [Workflows](workflows.md#the-editor)) `repo:config:write`; Settings › Server,
 the services' health and the plans' usage `server:read`; Sync, and refreshing the whole
 repositories list, `server:sync`). Without `server:read`, the repositories list names only the
 installations of the accounts owning a repository the login sees. A comment, an inbox entry or a discussion starts a run
@@ -217,7 +219,7 @@ gives each login the actions of the `bindings` that match it:
 | ---------- | ---------------------------------------------------------- |
 | `viewer`   | `tasks:read`                                               |
 | `member`   | a viewer's, `logs:read`, `runs:start:*`, `runs:manage`     |
-| `admin`    | a member's, `repo:config:read`                             |
+| `admin`    | a member's, `repo:config:read`, `repo:config:write`        |
 | `operator` | `server:*` (server-wide only: bind it beside another role) |
 
 Deckhand's `access.rego` gives every action to every login (`allow_access contains "*"`), as

@@ -16,7 +16,11 @@
 // - Vars: counters only go up, flags are only set (with the head they were set at); two copies
 //   of one instance (two spellings of a repo) merge by max and OR.
 // - Loops are bounded twice: by their `max` (at most MAX_FIX_ROUNDS) and by their counter, an
-//   iteration that counted nothing ending the loop.
+//   iteration that counted nothing ending the loop. A step may also end the loop it is in
+//   (`break`: the review loop's fix step with nothing to fix), or the event's steps (`stop`).
+// - A run that ended where its instance doesn't wait (the review loop's: a pull request in the
+//   loop before it moved onto the engine, a run a maintainer asked for) is placed there first
+//   (place()), its loops taken as having gone round, then goes on (resume()).
 //
 // The engine decides nothing about what a run may do: each action (`act`) asks the policies as
 // the built-in code does.
@@ -28,6 +32,8 @@ import { SEVERITIES } from "./severities.mjs";
 const MAX_HANDLED = 20;
 // The operations one drive() runs at most: loops are bounded already, this bounds a bug.
 const MAX_OPS = 1000;
+// The severities a condition compares, most severe first: `none`, a review without findings.
+const LEVELS = [...SEVERITIES, "none"];
 
 // A workflow's steps → a flat program, each operation an index the instance can stop at:
 // { op: "act", step }, { op: "unless", cond, to }, { op: "jump", to }, { op: "loop", var,
@@ -57,6 +63,15 @@ export function compile(steps, ops = []) {
   return ops;
 }
 
+// The loop op `pc` is inside of, the innermost, or null.
+export function enclosing(ops, pc) {
+  let found = null;
+  ops.forEach((op, i) => {
+    if (op.op === "loop" && i < pc && pc < op.end && (found === null || i > found)) found = i;
+  });
+  return found;
+}
+
 // Whether condition `cond` holds. `vars`: the instance's; `facts`: what the event knows of the
 // pull request, each read when a condition first asks (facts()).
 export async function holds(cond, vars, facts) {
@@ -78,9 +93,10 @@ export async function holds(cond, vars, facts) {
   }
   if (cond.cmp === "severity") {
     const severity = await facts.severity();
-    // Unknown (no review): no comparison holds. Ranked so that low < medium < high < critical.
-    if (!SEVERITIES.includes(severity)) return false;
-    const rank = (s) => SEVERITIES.length - SEVERITIES.indexOf(s);
+    // Unknown (no review): no comparison holds. Ranked so that none (a review without
+    // findings) < low < medium < high < critical.
+    if (!LEVELS.includes(severity)) return false;
+    const rank = (s) => LEVELS.length - LEVELS.indexOf(s);
     return compare(rank(severity), cond.op, rank(cond.value));
   }
   if (cond.cmp === "ci") {
@@ -244,6 +260,8 @@ export function createEngine({
         if (value >= Math.min(op.rounds, maxRounds)) {
           delete inst.loops[inst.pc];
           inst.pc = op.end;
+          // Told, for what the built-in code said when its rounds ran out (reviews.mjs).
+          await io.bounded?.(op);
         } else {
           inst.loops[inst.pc] = value;
           inst.pc += 1;
@@ -255,7 +273,7 @@ export function createEngine({
         if (!moved) delete inst.loops[op.head];
         inst.pc = moved ? op.head : loop.end;
       } else {
-        const result = await act(key, inst, op.step, io);
+        const result = await act(key, inst, op.step, io, ops);
         if (result) return result;
       }
     }
@@ -265,8 +283,10 @@ export function createEngine({
     return "done";
   }
 
-  // One action: null when the program goes on, else what drive() returns.
-  async function act(key, inst, step, io) {
+  // One action: null when the program goes on, else what drive() returns. Its outcome, beside
+  // trigger()'s: "break" ends the loop it is in (outside any, as "refused"), "stop" the event's
+  // steps (handled), both counting nothing.
+  async function act(key, inst, step, io, ops) {
     // Started by an orchestrator that stopped before it ended. A comment: taken, not posted
     // again. A run: asked again, told so, as it may have stopped before or after queuing it.
     const interrupted = inst.started === inst.pc;
@@ -292,6 +312,13 @@ export function createEngine({
       save(key, inst);
       return "skipped";
     }
+    if (outcome === "break" || outcome === "stop") {
+      const loop = outcome === "break" ? enclosing(ops, inst.pc) : null;
+      if (loop !== null) delete inst.loops[loop];
+      inst.pc = outcome === "stop" ? ops.length : loop !== null ? ops[loop].end : inst.pc + 1;
+      save(key, inst);
+      return null;
+    }
     if (outcome !== "refused") took(inst, step);
     if (outcome === "wait") {
       inst.waiting = inst.pc;
@@ -311,6 +338,44 @@ export function createEngine({
     const inst = instances.get(key)?.[event];
     return !!inst && waitsOn(inst);
   };
+
+  // The step task `key`'s instance on `event` waits on (its run's end), or null.
+  function waitingStep(key, event) {
+    const inst = instances.get(key)?.[event];
+    if (!inst || !waitsOn(inst)) return null;
+    return compile(inst.workflow.steps)[inst.waiting ?? inst.started]?.step ?? null;
+  }
+
+  // Task `key`'s instance on `event` ({ name, pr, head }) placed to wait on the step `at(ops)`
+  // picks (its index, or -1 for none), its instance `workflow`'s unless it has one for that pull
+  // request: the run that ended there goes on with resume(). The loops it is in are taken as
+  // having gone round, so their counter decides. Counts nothing: the run was counted when it
+  // was queued, by the code that queued it. → whether it was placed.
+  function place(key, workflow, { name, pr, head = null }, at) {
+    let inst = load(key, name);
+    if (!inst || inst.pr !== pr) inst = fresh(workflow, name, pr);
+    const ops = compile(inst.workflow.steps);
+    const pc = at(ops);
+    if (!(pc >= 0) || ops[pc]?.op !== "act") return false;
+    inst.current ??= { id: `placed:${now()}`, head, at: now() };
+    const loops = {};
+    ops.forEach((op, i) => {
+      if (op.op === "loop" && i < pc && pc < op.end) loops[i] = -1;
+    });
+    Object.assign(inst, { pc, started: null, waiting: pc, loops });
+    save(key, inst);
+    return true;
+  }
+
+  // The run task `key`'s instance on `event` waited for ended without its workflow going on (a
+  // fix that pushed nothing, CI no longer waited for): its event is over.
+  function end(key, event) {
+    const inst = load(key, event);
+    if (!inst?.current) return;
+    inst.handled = [...inst.handled, inst.current.id].slice(-MAX_HANDLED);
+    Object.assign(inst, { current: null, pc: 0, started: null, waiting: null, loops: {} });
+    save(key, inst);
+  }
 
   // Pull request `pr` of task `key` is closed: its instances go.
   function forget(key, pr) {
@@ -353,6 +418,9 @@ export function createEngine({
     trigger,
     resume,
     waiting,
+    waitingStep,
+    place,
+    end,
     forget,
     sweep,
     respell,

@@ -1,6 +1,7 @@
 // One repository's config (docs/design/dashboard-redesign.md › Pages › Settings › A repository's
 // config): where it was read, Read again and Edit on GitHub, its tabs (Config, Policies:
-// PolicyConfig.tsx, Capabilities: Capabilities.tsx, Workflow: Workflow.tsx); then what stops or
+// PolicyConfig.tsx, Capabilities: Capabilities.tsx, Workflow: Workflow.tsx, Editor:
+// WorkflowEditor.tsx); then what stops or
 // worries its runs (each error with its key, its fix and a link to its line, the warnings, the
 // auto-merge risk), or, when all is fine, a green banner and the facts at a glance, with the
 // details folded but for what the repo sets. Then what its runs get, each value tagged with its
@@ -38,6 +39,7 @@ import { Alert, Check, ChevronRight, External, Sync, Warning } from "./ui/icons"
 import { StatusBadge } from "./ui/Status";
 import tabs from "./ui/Tabs.module.css";
 import { WorkflowTab } from "./Workflow";
+import { WorkflowEditor } from "./WorkflowEditor";
 import styles from "./ConfigPanel.module.css";
 
 // What stops its runs, each with the key it is about, how to fix it and its line in the file.
@@ -135,6 +137,7 @@ const TABS: { id: ConfigTab | undefined; label: Plain }[] = [
   { id: "policies", label: "config.tabPolicies" },
   { id: "capabilities", label: "config.tabCapabilities" },
   { id: "workflow", label: "config.tabWorkflow" },
+  { id: "editor", label: "config.tabEditor" },
   { id: "run-data", label: "runData.title" },
 ];
 
@@ -245,16 +248,18 @@ export function ConfigPanel({ repo, tab, row, onRow, onBack, now }: Props) {
           ))}
         </nav>
       </header>
-      {error && tab !== "run-data" && (
+      {error && tab !== "run-data" && tab !== "editor" && (
         <p class={styles.failed} role="alert">
           {t("config.unreadable", { error })}
         </p>
       )}
-      {!config && loading && tab !== "run-data" && (
+      {!config && loading && tab !== "run-data" && tab !== "editor" && (
         <p class={styles.loading}>{t("config.readingGithub")}</p>
       )}
       {tab === "run-data" ? (
         <RunDataPanel repo={repo} />
+      ) : tab === "editor" ? (
+        <WorkflowEditor repo={repo} now={now} />
       ) : (
         config &&
         (tab === "policies" ? (

@@ -175,6 +175,25 @@ function reviewMode(settings) {
   };
 }
 
+// The repo's settings for a run the review loop's workflow queued with its step's own agent,
+// model, effort or (a review's) instructions (`workflowStep` on its items, review-workflow.mjs
+// stepRun()): a review's as its `review` block's, a fix run's as the work runs' defaults. A
+// `/model` or `/effort` of the task's still goes over them, as over the repo's.
+export function stepSettings(settings, mode, items = []) {
+  // The run's own item's: a comment batched after it is the repo's run, not the step's.
+  const step = items.at(-1)?.workflowStep;
+  if (!step || !settings) return settings;
+  const { agent, model, effort, instructions } = step;
+  const own = Object.fromEntries(
+    Object.entries({ agent, model, effort }).filter(([, value]) => value),
+  );
+  if (mode === "review" && settings.review) {
+    const review = { ...settings.review, ...own, ...(instructions && { instructions }) };
+    return { ...settings, review };
+  }
+  return mode === "work" ? { ...settings, ...own } : settings;
+}
+
 // Whether a run in `mode` gets the light runs' agent, model and effort by default (its
 // `defaults`), rather than work's: agents/select.mjs.
 export const brainstormDefaults = (mode) => builtIn(mode)?.defaults === "brainstorm";

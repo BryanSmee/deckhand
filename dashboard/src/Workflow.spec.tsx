@@ -145,3 +145,29 @@ test("layoutWorkflow: every arrow placed, the loops' going back under or beside 
   const empty: Workflow = { nodes: [], edges: [], sample: false };
   expect(layoutWorkflow(empty).edges).toEqual([]);
 });
+
+test("the Workflow tab shows the workflow on ready: compiled from review, the repo's own, or none", () => {
+  const tab = (source: Workflow["source"]) => {
+    cleanup();
+    render(<WorkflowTab config={{ workflow: { ...WORKFLOW, source } } as RepoConfig} />);
+    return within(screen.getByRole("region", { name: "When a pull request turns ready" }));
+  };
+  const compiled = tab(WORKFLOW.source);
+  expect(compiled.getByText(/review block compiles to/)).toBeTruthy();
+  expect(compiled.getByText(/max: fixes 3/)).toBeTruthy();
+  const file = ".deckhand/workflows/review.yaml";
+  const own = tab({
+    file,
+    url: `https://github.com/acme/app/blob/main/${file}`,
+    text: null,
+    errors: [],
+  });
+  expect(own.getByRole("link", { name: file }).getAttribute("href")).toContain("/blob/main/");
+  const broken = tab({ file: null, url: null, text: null, errors: ["review.yaml line 3: bad"] });
+  expect(broken.getByRole("alert").textContent).toContain("review.yaml line 3: bad");
+  expect(tab(null).getByText(/No workflow runs/)).toBeTruthy();
+  // An older orchestrator's answer: no section.
+  cleanup();
+  render(<WorkflowTab config={{ workflow: { ...WORKFLOW, source: undefined } } as RepoConfig} />);
+  expect(screen.queryByRole("region", { name: "When a pull request turns ready" })).toBeNull();
+});

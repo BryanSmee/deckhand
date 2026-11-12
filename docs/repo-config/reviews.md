@@ -49,6 +49,11 @@ those a rule may refuse on some pull requests outlined in orange. The policies a
 sample pull request there (Deckhand's own, its CI passed, its review clean); a task's page uses
 its pull request's real decisions instead, and highlights the step it is at.
 
+The order of those steps is a workflow on `ready`, the one the `review` block compiles to, shown
+on that tab: a repository can write its own in `.deckhand/workflows/` (a second reviewer on
+another agent, a security review when `policy/**` changes; see
+[The review loop](workflows.md#the-review-loop)).
+
 <!-- lifecycle: generated from listener/review-graph.mjs lifecycleMermaid(), held equal by test/review-graph.test.mjs -->
 
 ```mermaid

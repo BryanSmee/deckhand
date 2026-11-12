@@ -203,6 +203,7 @@ test(
     assert.deepEqual(await actions("carol", repo("any/thing")), [
       "logs:read",
       "repo:config:read",
+      "repo:config:write",
       "runs:manage",
       "runs:start:*",
       "tasks:read",

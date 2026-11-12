@@ -38,6 +38,8 @@ import {
 import { sameRepo } from "./events.mjs";
 import { effectiveView } from "./repo-view.mjs";
 import { lifecycleGraph, NODES, sampleDecisions } from "./review-graph.mjs";
+import { impliedSettings, loopWarnings, READY } from "./review-workflow.mjs";
+import { errorText, reviewWorkflow } from "./workflow-format.mjs";
 import { paginate } from "./github.mjs";
 import { send } from "../lib/http.mjs";
 import { mapLimited } from "../lib/pool.mjs";
@@ -466,6 +468,8 @@ export function createRepoApi({
   granted = null,
   // Who may do what where (permissions.mjs): the list keeps the repos `user` has an action on.
   permissions = null,
+  // The repos' workflows (workflows.mjs), for the one on `ready` the Workflow tab shows.
+  workflows = null,
   fs,
   now = Date.now,
   log = () => {},
@@ -587,10 +591,17 @@ export function createRepoApi({
       grantsError = grantsErrorView(error, everyRepo);
     }
     const settings = parsed?.settings ?? defaultSettings(config);
-    const warnings = parsed?.warnings ?? [];
+    // As the review loop runs them: a workflow file on `ready` stands for the keys its steps
+    // turn on (merge, ci, fix), whatever `review:` says (#1140). Not read with errors in the
+    // file, as the loop doesn't; a failed read is logged by sourceView().
+    const ready = parsed?.errors?.length
+      ? null
+      : await workflows?.forEvent(info.full_name, base, settings, READY).catch(() => null);
+    const looped = impliedSettings(settings, ready?.workflow);
+    const warnings = loopWarnings(parsed?.warnings ?? [], settings, ready?.workflow);
     // What stops its merges: the grant, the repository's visibility (the parse's own warning
     // already says what its file lacks).
-    const merging = grant ? autoMergeProblems(grant, settings, info.private === true) : [];
+    const merging = grant ? autoMergeProblems(grant, looped, info.private === true) : [];
     // What the file says, with the line each error, warning, setting, mount and context repo
     // comes from.
     const { lineOf, itemLine, mountLine, locate } = fileLines(file?.text ?? "");
@@ -726,7 +737,36 @@ export function createRepoApi({
         return Object.fromEntries(gated.map((n) => [n.id, { state: "refused", reasons }]));
       });
     }
-    return { ...lifecycleGraph(settings, { grant, isPrivate, decisions }), sample: !!decisions };
+    const graph = lifecycleGraph(settings, { grant, isPrivate, decisions });
+    return { ...graph, sample: !!decisions, source: await sourceView(info, base, settings) };
+  }
+
+  // The workflow on `ready` the review loop runs here (#1041): the repo's own file, linked, or
+  // the one its `review:` block compiles to, with its text; null when none runs (`review.on`
+  // isn't `ready`). `errors`: its workflows', none of which runs then.
+  async function sourceView(info, base, settings) {
+    const compiled = reviewWorkflow(settings.review);
+    const built = compiled && { file: null, url: null, text: compiled, errors: [] };
+    if (!workflows) return built;
+    const plain = (text) => text.replaceAll("`", "");
+    try {
+      const read = await workflows.read(info.full_name, base, settings);
+      const errors = read.errors.map((e) => plain(errorText(e)));
+      if (errors.length) return { file: null, url: null, text: null, errors };
+      const own = read.workflows.find((w) => w.on.includes("ready"));
+      if (!own) return built;
+      const branch = base.split("/").map(encodeURIComponent).join("/");
+      return {
+        file: own.file,
+        url: `${info.html_url}/blob/${branch}/${own.file}`,
+        text: null,
+        errors,
+      };
+    } catch (error) {
+      log(`Repositories: ${info.full_name}'s workflows: ${error.message ?? error}`);
+      const errors = ["its workflows can't be read (see the orchestrator's logs)"];
+      return { file: null, url: null, text: null, errors };
+    }
   }
 
   // Handles /api/repos*; false for any other path.

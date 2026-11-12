@@ -10,6 +10,8 @@
 // (checkTriggers()). Format: ../docs/repo-config/workflows.md.
 import { createHash } from "node:crypto";
 import { isMap, parseYaml, YamlError } from "../lib/yaml.mjs";
+import { EFFORTS, MODEL_NAME } from "./events.mjs";
+import { agentName, repoPath } from "./repo-config.mjs";
 import { SEVERITIES } from "./severities.mjs";
 
 // Where a repo's workflows are, on its default branch, and what a file's name is.
@@ -24,21 +26,30 @@ const MAX_DEPTH = 5;
 const MAX_COMMENT = 4000;
 const MAX_CONDITION = 500;
 
-// The events a workflow can start on. `steps`: what its `run:` may name; `builtIn`: the built-in
-// code on the same event, and whether a repo's workflow replaces it (conflicts) or would be a
-// second trigger (the review loop, until it moves onto the engine, #1041).
+// The events a workflow can start on. `steps`: what its `run:` may name; `comments`: Deckhand's
+// own comments its `comment:` may name instead of a text.
 export const EVENTS = {
   // The conflict watcher found the pull request in conflict with its base, at a (head, base)
   // pair not tried yet (conflicts.mjs). Needs `conflicts.check_minutes`, which turns it on.
-  conflict: { steps: ["rebase"] },
-  // A pull request turned ready: the built-in review loop's (`review.on: ready`), not yet one
-  // the engine runs.
-  ready: { steps: [], engine: false },
+  conflict: { steps: ["rebase"], comments: [] },
+  // A pull request turned ready, at a head not reviewed yet (reviews.mjs, #1041): the review
+  // loop. Deckhand's own workflow compiled from `review:` (reviewWorkflow()), or the repo's.
+  ready: { steps: ["ci", "review", "fix", "merge"], comments: ["rounds-out"] },
 };
 
 // The steps a workflow runs. `rebase`: the conflict run (conflicts.mjs), which waits for its
-// run's end before the next step.
-export const RUN_STEPS = ["rebase"];
+// run's end before the next step. The review loop's (reviews.mjs): `ci`, its CI step (the head's
+// Actions runs waited for, CI fix runs as `review.ci_fix` allows); `review`, a review run;
+// `fix`, a fix run of the last review's findings, which ends the loop it is in when none
+// starts; `merge`, the auto-merge decided. Each but `merge` waits for its run's end.
+export const RUN_STEPS = ["rebase", "ci", "review", "fix", "merge"];
+
+// What a step may say of its run, beside the repo's defaults (`review.agent`…, `agent`…): the
+// review and fix runs' agent, model and effort, a review's instructions.
+const STEP_OPTIONS = {
+  review: ["agent", "model", "effort", "instructions"],
+  fix: ["agent", "model", "effort"],
+};
 
 // What a condition may ask, beside the workflow's own vars: the fixed vocabulary.
 // - severity: the pull request's last review's most severe finding (none outside the review
@@ -51,13 +62,29 @@ export const RUN_STEPS = ["rebase"];
 // - a counter compared with a whole number (`rebases < 3`), a flag alone (`not warned`).
 export const CONDITIONS = ["severity", "ci", "paths", "label", "changed"];
 const CI_STATES = ["passed", "failed", "running", "none"];
+// What `severity` compares with: `none`, a review without findings, below low.
+const LEVELS = [...SEVERITIES, "none"];
 const OPERATORS = ["==", "!=", "<=", ">=", "<", ">"];
 const WORDS = new Set(["and", "or", "not", "since", ...CONDITIONS]);
 const VAR = /^[a-z_][a-z0-9_]*$/;
 const VAR_TYPES = ["counter", "flag"];
 
 const TOP_KEYS = ["on", "vars", "steps"];
-const STEP_KEYS = ["if", "run", "comment", "then", "else", "count", "set", "repeat", "max"];
+const STEP_KEYS = [
+  "if",
+  "run",
+  "comment",
+  "then",
+  "else",
+  "count",
+  "set",
+  "repeat",
+  "max",
+  "agent",
+  "model",
+  "effort",
+  "instructions",
+];
 
 // Deckhand's own workflow on `conflict`: what `conflicts.check_minutes` runs in a repo with no
 // workflow of its own on that event. Parsed like any other, so the format runs it too.
@@ -68,11 +95,13 @@ steps:
 `;
 
 // One workflow file → { workflow, errors }: `workflow` (null with errors) is
-// { name, file, version, on, line, vars, steps }, each step { line, if?, run?, comment?, count?,
-// set?, then?, else?, repeat?, max? }, its conditions parsed (parseCondition()). `name`: the
+// { name, file, version, on, line, vars, steps }, each step { line, if?, run?, comment?, say?,
+// count?, set?, then?, else?, repeat?, max?, agent?, model?, effort?, instructions? }, its
+// conditions parsed (parseCondition()), `say` the name of Deckhand's own comment. `name`: the
 // file's, without .yaml; `version`: its text's sha256, which an instance keeps (workflow-engine.mjs).
-// Each error is { file, line, message }, line null when the file as a whole is wrong.
-export function parseWorkflow(name, text) {
+// Each error is { file, line, message }, line null when the file as a whole is wrong. `agents`:
+// the agents the operator runs, which a step's `agent` must be one of (unchecked without).
+export function parseWorkflow(name, text, { agents = null } = {}) {
   const file = `${WORKFLOW_DIR}/${name}`;
   const errors = [];
   const fail = (line, message) => errors.push({ file, line: line ?? null, message });
@@ -107,7 +136,7 @@ export function parseWorkflow(name, text) {
   }
   const on = parseOn(doc.on, lineOf("on"), fail);
   const vars = parseVars(doc.vars, lineOf, fail);
-  const context = { vars, on, lineOf, fail, count: 0 };
+  const context = { vars, on, lineOf, fail, count: 0, agents };
   let steps = [];
   if (!Array.isArray(doc.steps) || !doc.steps.length) {
     fail(lineOf("steps"), "`steps`: expected a list of steps");
@@ -242,8 +271,13 @@ function parseStep(item, at, depth, context) {
         lineOf(`${at}.comment`),
         `\`comment\`: expected its text, at most ${MAX_COMMENT} characters`,
       );
-    } else step.comment = text;
+    } else {
+      step.comment = text;
+      // Deckhand's own text by its name, on the events that have it.
+      if (on.some((e) => EVENTS[e]?.comments.includes(text.trim()))) step.say = text.trim();
+    }
   }
+  stepOptions(item, step, kind, at, context);
   for (const [key, type] of [
     ["count", "counter"],
     ["set", "flag"],
@@ -275,6 +309,38 @@ function parseStep(item, at, depth, context) {
     } else step.max = { var: match[1], rounds: Number(match[2]) };
   }
   return step;
+}
+
+// A `run` step's own agent, model, effort and instructions (STEP_OPTIONS), into `step`.
+function stepOptions(item, step, kind, at, { lineOf, fail, agents }) {
+  for (const key of ["agent", "model", "effort", "instructions"]) {
+    if (!(key in item)) continue;
+    const value = item[key];
+    const bad = (what) => fail(lineOf(`${at}.${key}`), `\`${key}\`: ${what}`);
+    if (kind !== "run" || !STEP_OPTIONS[item.run]?.includes(key)) {
+      const takes = Object.entries(STEP_OPTIONS).filter(([, keys]) => keys.includes(key));
+      bad(`goes on a ${takes.map(([run]) => `\`run: ${run}\``).join(" or ")} step`);
+    } else if (key === "agent") {
+      // Among the operator's, as the `review` block's and the modes' (repo-config.mjs).
+      const name = agents
+        ? agentName(value, key, { agents }, (_, what) => bad(what))
+        : typeof value === "string" && value.trim().toLowerCase();
+      if (!agents && !/^[a-z][a-z0-9-]*$/.test(name || "")) bad("expected an agent's name");
+      else if (name) step.agent = name;
+    } else if (key === "model") {
+      if (typeof value === "string" && MODEL_NAME.test(value)) step.model = value;
+      else
+        bad("expected a model tier (best, balanced, fast) or name (opus, claude-…, openai/gpt-…)");
+    } else if (key === "effort") {
+      const effort = String(value).toLowerCase();
+      if (EFFORTS.includes(effort)) step.effort = effort;
+      else bad(`expected one of ${EFFORTS.join(", ")}`);
+    } else {
+      const path = repoPath(value);
+      if (path) step.instructions = path;
+      else bad("expected a path in the repository (relative, no ..)");
+    }
+  }
 }
 
 // Whether a step of `steps` (nested ones too) increments `counter`.
@@ -368,8 +434,8 @@ export function parseCondition(text, vars = {}) {
     }
     const value = next();
     if (subject === "severity") {
-      if (value?.type !== "word" || !SEVERITIES.includes(value.value)) {
-        throw new ConditionError(`\`severity\` compares with ${list(SEVERITIES)}`);
+      if (value?.type !== "word" || !LEVELS.includes(value.value)) {
+        throw new ConditionError(`\`severity\` compares with ${list(LEVELS)}`);
       }
       return { cmp: subject, op: op.value, value: value.value };
     }
@@ -439,8 +505,10 @@ function tokenize(text) {
 }
 
 // The repo's parsed workflows (with their files' errors so far) → the errors of more than one
-// trigger for an event: two workflows on it, whatever their conditions, or one on an event the
-// built-in loop has (`review.on: ready`) or the engine doesn't run yet. `settings`: the repo's.
+// trigger for an event: two workflows on it, whatever their conditions, or one on `ready` while
+// the built-in loop has it (`review.on: ready`). A workflow on `ready` also needs the `review`
+// block, whose settings its steps read (tolerance, waits, merge method, the reviews' agent).
+// `settings`: the repo's.
 export function checkTriggers(workflows, settings) {
   const errors = [];
   const first = new Map();
@@ -451,9 +519,9 @@ export function checkTriggers(workflows, settings) {
         fail(
           "two triggers for `ready`: this workflow and the built-in review loop (`review.on: ready`)",
         );
-      } else if (EVENTS[event]?.engine === false) {
+      } else if (event === "ready" && settings && !settings.review) {
         fail(
-          `\`${event}\`: no workflow runs on it yet (the review loop moves onto workflows in #1041)`,
+          "`ready` needs the repository's `review:` block in .deckhand.yaml (the reviews' settings), without `on: ready`",
         );
       } else if (first.has(event)) {
         const other = first.get(event);
@@ -471,16 +539,92 @@ export function errorText({ file, line, message }) {
   return `\`${file}\`${line ? ` line ${line}` : ""}: ${message}`;
 }
 
-// The built-in workflow on `event`, parsed once; null when the event has none.
+// The built-in workflow on `event`, parsed once per text; null when the event has none: on
+// `ready`, the review loop `settings`' `review:` block compiles to (reviewWorkflow()), none
+// without `review.on: ready`.
 const builtIns = new Map();
-export function builtInWorkflow(event) {
-  if (event !== "conflict") return null;
-  if (!builtIns.has(event)) {
-    const { workflow, errors } = parseWorkflow("built-in-conflicts.yaml", BUILT_IN_CONFLICTS);
+export function builtInWorkflow(event, settings = null) {
+  const text =
+    event === "conflict"
+      ? BUILT_IN_CONFLICTS
+      : event === "ready"
+        ? reviewWorkflow(settings?.review)
+        : null;
+  if (!text) return null;
+  if (!builtIns.has(text)) {
+    const { workflow, errors } = parseWorkflow(`built-in-${event}.yaml`, text);
     if (errors.length) throw new Error(errors.map(errorText).join("; "));
-    builtIns.set(event, { ...workflow, name: "built-in", file: null });
+    // A few shapes per repo's settings: kept, not grown.
+    if (builtIns.size >= 100) builtIns.delete(builtIns.keys().next().value);
+    builtIns.set(text, { ...workflow, name: "built-in", file: null });
   }
-  return builtIns.get(event);
+  return builtIns.get(text);
+}
+
+// The review loop a repo's `review:` block (repo-config.mjs parseReview()) stands for, as a
+// workflow on `ready`: its text, null without `review.on: ready`. The steps the built-in code
+// ran in that order before it moved onto the engine (#1041): the CI step with `review.ci: wait`,
+// the review, then with `review.fix` its fix runs, each reviewed again when the loop has more
+// than one round or merges (`fix: true` without `merge` leaves its one fix run unreviewed, as
+// before, #376), and the merge with `review.merge`, else the comment saying the rounds ran out.
+export function reviewWorkflow(review) {
+  if (review?.on !== "ready") return null;
+  const ci = review.ci === "wait";
+  const rounds = review.fix ? Math.max(1, review.fixRounds ?? 1) : 0;
+  const loop = rounds > 1 || (rounds === 1 && review.merge);
+  const ciStep = (indent) =>
+    `${indent}- run: ci # review.ci: wait, ci_wait: ${review.ciWait ?? 30}${rounds ? `, ci_fix: ${review.ciFix ?? 1}` : ""}`;
+  const lines = [
+    "# Deckhand's built-in review loop, compiled from the repository's `review:` block.",
+    "on: ready",
+  ];
+  if (rounds) lines.push("vars:", "  fixes: counter");
+  lines.push("steps:");
+  if (ci) lines.push(ciStep("  "));
+  lines.push("  - run: review");
+  if (loop) {
+    lines.push(
+      "  - repeat:",
+      "      - run: fix # ends the loop when no fix run starts",
+      "        count: fixes",
+    );
+    if (ci) lines.push(ciStep("      "));
+    lines.push("      - run: review", `    max: fixes ${rounds} # review.fix`);
+  } else if (rounds) {
+    lines.push(
+      "  - run: fix # review.fix: true without review.merge: its push isn't reviewed",
+      "    count: fixes",
+    );
+  }
+  if (review.merge)
+    lines.push("  - run: merge # review.merge, with the operator's auto_merge grant");
+  else if (rounds) lines.push("  - comment: rounds-out # the last review still requests changes");
+  return `${lines.join("\n")}\n`;
 }
 
 const list = (items) => items.map((i) => `\`${i}\``).join(", ");
+
+// A condition's tree (parseCondition()) → its text, as the dashboard's editor draws it: what
+// parses back to the same tree, parenthesised only where `and` sits under `not` or `or` under
+// `and`.
+export function conditionText(cond, parent = null) {
+  if (!cond) return "";
+  const wrap = (text, needed) => (needed ? `(${text})` : text);
+  if (cond.or) {
+    const text = cond.or.map((c) => conditionText(c, "or")).join(" or ");
+    return wrap(text, parent === "and" || parent === "not");
+  }
+  if (cond.and) {
+    const text = cond.and.map((c) => conditionText(c, "and")).join(" and ");
+    return wrap(text, parent === "not");
+  }
+  if (cond.not) return `not ${conditionText(cond.not, "not")}`;
+  if (cond.flag) return cond.flag;
+  if (cond.call) {
+    // Quoted as it was: a value with a `"` came in single quotes (tokenize() has no escapes).
+    const args = cond.args.map((a) => (a.includes('"') ? `'${a}'` : `"${a}"`));
+    if (cond.since) args.push(`since ${cond.since}`);
+    return `${cond.call}(${args.join(", ")})`;
+  }
+  return `${cond.cmp} ${cond.op} ${cond.value}`;
+}

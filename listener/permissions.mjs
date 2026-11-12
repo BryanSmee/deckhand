@@ -10,7 +10,14 @@ import { actionMatches, allows, SERVER_ACTIONS } from "./policies.mjs";
 
 // The actions on a repository, one each, that anyAction() probes; `runs:start:*` stands for
 // "some mode", each mode a rule names being probed too.
-const PROBES = ["tasks:read", "logs:read", "runs:manage", "repo:config:read", "runs:start:*"];
+const PROBES = [
+  "tasks:read",
+  "logs:read",
+  "runs:manage",
+  "repo:config:read",
+  "repo:config:write",
+  "runs:start:*",
+];
 
 // Whether access()'s `answer` gives any action on a repository: an action a pattern allows that
 // no deny covers. `runs:start:*` with `runs:start:work` denied still gives the other modes; a
@@ -47,7 +54,13 @@ export async function itemMay(permissions, log, item, action, what = "") {
 export const startAction = (mode) => `runs:start:${mode}`;
 
 // The actions on a repository the dashboard has controls for (#732), besides the starts.
-const SHOWN_ACTIONS = ["tasks:read", "logs:read", "runs:manage", "repo:config:read"];
+const SHOWN_ACTIONS = [
+  "tasks:read",
+  "logs:read",
+  "runs:manage",
+  "repo:config:read",
+  "repo:config:write",
+];
 const START = startAction("");
 
 // What an action's pattern, given or denied, says of the modes a run may start in: a mode's

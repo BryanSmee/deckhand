@@ -10,6 +10,7 @@ import { board } from "./en-board";
 import { chats } from "./en-chats";
 import { config } from "./en-config";
 import { detail } from "./en-detail";
+import { editor } from "./en-editor";
 import { inbox } from "./en-inbox";
 import { log } from "./en-log";
 import { overview } from "./en-overview";
@@ -332,4 +333,5 @@ export const en = {
   ...log,
   ...review,
   ...workflow,
+  ...editor,
 } as const;

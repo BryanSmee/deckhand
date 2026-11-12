@@ -1,0 +1,267 @@
+/* The workflow editor (WorkflowEditor.tsx): the file and its graph side by side, stacked on a
+   phone; the dry run and Save under them. */
+.tab {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 20px 24px 32px;
+  max-width: 1280px;
+}
+
+.intro {
+  margin: 0;
+}
+
+.muted {
+  margin: 0;
+  color: var(--text-2);
+  font-size: 12.5px;
+}
+
+.title {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.pickRow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 8px 16px;
+}
+
+.pickRow > * {
+  min-width: 0;
+}
+
+.link {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding-bottom: 6px;
+  font-size: 12.5px;
+}
+
+.panes {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 16px;
+  align-items: start;
+}
+
+@media (max-width: 860px) {
+  .panes {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.pane,
+.section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+.section {
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+
+/* The text: its line numbers in a gutter that scrolls with it. */
+.yaml {
+  display: flex;
+  height: 420px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  background: var(--surface);
+  overflow: hidden;
+  font-family: var(--mono);
+  /* `<=` as typed, not a ligature that reads as one character. */
+  font-variant-ligatures: none;
+  font-size: 12.5px;
+  line-height: 19px;
+}
+
+.yaml:focus-within {
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
+}
+
+.gutter {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  min-width: 36px;
+  padding: 8px 6px 8px 0;
+  overflow: hidden;
+  border-right: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--text-3);
+  text-align: right;
+  user-select: none;
+}
+
+.badLine {
+  color: var(--err);
+  font-weight: 700;
+}
+
+.text {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  padding: 8px 10px;
+  border: 0;
+  outline: none;
+  resize: none;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  white-space: pre;
+  overflow: auto;
+  tab-size: 2;
+}
+
+.valid {
+  margin: 0;
+  color: var(--ok);
+  font-size: 12.5px;
+}
+
+.errors {
+  color: var(--err);
+  font-size: 12.5px;
+}
+
+.errors p {
+  margin: 0 0 4px;
+  font-weight: 600;
+}
+
+.others {
+  color: var(--input);
+  font-size: 12.5px;
+}
+
+.others p {
+  margin: 0 0 4px;
+  font-weight: 600;
+}
+
+.errors ul,
+.others ul {
+  margin: 0;
+  padding-left: 18px;
+}
+
+.lineLink {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  font-weight: 600;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.trail {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.steps {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+  padding-left: 22px;
+  font-size: 13px;
+}
+
+.trailStep {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 10px;
+}
+
+.trailName {
+  font-weight: 600;
+}
+
+.lineNo {
+  color: var(--text-3);
+  font-weight: 400;
+  font-size: 11px;
+  font-family: var(--mono);
+}
+
+.trailOutcome {
+  color: var(--text);
+}
+
+.source {
+  padding: 0 6px;
+  border-radius: 999px;
+  font-size: 11px;
+  line-height: 17px;
+  background: var(--surface-2);
+  color: var(--text-2);
+}
+
+.recorded {
+  background: var(--run-bg);
+  color: var(--run);
+}
+
+.picked {
+  background: var(--input-bg);
+  color: var(--input);
+}
+
+.divergence {
+  margin: 0;
+  padding: 6px 10px;
+  border-left: 3px solid var(--input-solid);
+  background: var(--input-bg);
+  font-size: 12.5px;
+}
+
+.ask {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+  padding: 10px 12px;
+  border: 1.5px solid var(--input-solid);
+  border-radius: var(--radius);
+}
+
+.ask legend {
+  padding: 0 4px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.endLine {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+/* A phone: a shorter text, the graph under it. */
+@media (max-width: 860px) {
+  .yaml {
+    height: 320px;
+  }
+}

@@ -7,6 +7,7 @@ import fixture from "./fixture.json" with { type: "json" };
 import type {
   Capabilities,
   Chats,
+  DryRun,
   Entry,
   Health,
   Repo,
@@ -16,6 +17,8 @@ import type {
   SettingRow,
   State,
   Workflow,
+  WorkflowCheck,
+  WorkflowFiles,
   WorkflowNode,
 } from "./types";
 
@@ -242,6 +245,26 @@ export const WORKFLOW: Workflow = {
     { from: "fix", to: "done", when: ["nothing-pushed"], back: false },
     { from: "merge", to: "done", when: ["merged"], back: false },
   ],
+  source: {
+    file: null,
+    url: null,
+    text: `# Deckhand's built-in review loop, compiled from the repository's \`review:\` block.
+on: ready
+vars:
+  fixes: counter
+steps:
+  - run: ci # review.ci: wait, ci_wait: 30, ci_fix: 2
+  - run: review
+  - repeat:
+      - run: fix # ends the loop when no fix run starts
+        count: fixes
+      - run: ci # review.ci: wait, ci_wait: 30, ci_fix: 2
+      - run: review
+    max: fixes 3 # review.fix
+  - run: merge # review.merge, with the operator's auto_merge grant
+`,
+    errors: [],
+  },
 };
 
 export const CONFIG: RepoConfig = {
@@ -340,11 +363,112 @@ export const CHATS: Chats = {
   efforts: ["low", "medium", "high", "xhigh", "max"],
 };
 
+// The workflow editor's (#1042): a repository's own workflow on `ready`, two reviewers, what it
+// parses to, and a dry run on a past pull request that diverged at the second review, a pick
+// made, the merge asked.
+const REVIEW_YAML = `on: ready
+vars:
+  fixes: counter
+steps:
+  - run: ci
+  - run: review
+  - repeat:
+      - run: fix
+        count: fixes
+      - run: ci
+      - run: review
+    max: fixes 3
+  - if: severity <= low
+    then:
+      - run: review
+        agent: codex
+        model: best
+      - run: merge
+`;
+
+export const WORKFLOW_FILES: WorkflowFiles = {
+  base: "main",
+  files: [
+    {
+      name: "review.yaml",
+      file: ".deckhand/workflows/review.yaml",
+      text: REVIEW_YAML,
+      sha: "4b825dc642cb6eb9a060e54bf8d69288fbee4904",
+      url: `${GITHUB}/acme/app/blob/main/.deckhand/workflows/review.yaml`,
+    },
+  ],
+  builtIn: { ready: null, conflict: "on: conflict\nsteps:\n  - run: rebase\n" },
+  running: [{ file: ".deckhand/workflows/review.yaml", event: "ready", current: 3, older: 1 }],
+  pulls: [
+    { number: 212, at: NOW - 2 * 60 * MIN, reviews: 2, fixes: 1, merged: true },
+    { number: 207, at: NOW - 26 * 60 * MIN, reviews: 1, fixes: 0, merged: true },
+  ],
+};
+
+export const WORKFLOW_CHECK: WorkflowCheck = {
+  on: ["ready"],
+  errors: [],
+  steps: [
+    { line: 5, kind: "run", run: "ci" },
+    { line: 6, kind: "run", run: "review" },
+    {
+      line: 7,
+      kind: "repeat",
+      max: { var: "fixes", rounds: 3 },
+      repeat: [
+        { line: 8, kind: "run", run: "fix", count: "fixes" },
+        { line: 10, kind: "run", run: "ci" },
+        { line: 11, kind: "run", run: "review" },
+      ],
+    },
+    {
+      line: 13,
+      kind: "if",
+      if: "severity <= low",
+      then: [
+        { line: 15, kind: "run", run: "review", agent: "codex", model: "best" },
+        { line: 18, kind: "run", run: "merge" },
+      ],
+    },
+  ],
+};
+
+export const DRY_RUN: DryRun = {
+  pr: { number: 212, title: "Per-repo budgets for runs", url: `${GITHUB}/acme/app/pull/212` },
+  event: "ready",
+  history: [
+    { run: "review", outcome: "medium" },
+    { run: "fix", outcome: "pushed" },
+    { run: "review", outcome: "low" },
+    { run: "merge", outcome: "merged" },
+  ],
+  trail: [
+    { line: 5, run: "ci", outcome: "passed", source: "assumed" },
+    { line: 6, run: "review", outcome: "medium", source: "recorded" },
+    { line: 8, run: "fix", outcome: "pushed", source: "recorded" },
+    { line: 10, run: "ci", outcome: "passed", source: "assumed" },
+    { line: 11, run: "review", outcome: "low", source: "recorded" },
+    { line: 8, run: "fix", outcome: "none", source: "auto" },
+    { line: 15, run: "review", outcome: "none", source: "picked" },
+  ],
+  diverged: { line: 15, run: "review", index: 6, expected: { run: "merge", outcome: "merged" } },
+  ask: { line: 18, run: "merge", options: ["merged", "refused"] },
+  end: "asking",
+  leftover: [],
+};
+
+// POST routes, the same way: their answer whatever the body.
+export const POSTS: Record<string, unknown> = {
+  "repos/acme/app/workflows/check": WORKFLOW_CHECK,
+  "repos/acme/app/workflows/dry-run": DRY_RUN,
+};
+
 // GET routes, by path under api/ (the query left out). Any other answers 404.
 export const ROUTES: Record<string, unknown> = {
   state: STATE,
   health: HEALTH,
   repos: REPOS,
   "repos/acme/app/config": CONFIG,
+  "repos/acme/app/workflows": WORKFLOW_FILES,
   chats: CHATS,
 };

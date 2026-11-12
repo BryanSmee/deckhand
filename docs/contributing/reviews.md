@@ -144,3 +144,24 @@ when its Workflow fold opens and puts the pull request's recorded decisions over
 `LoopState` is held to that list; `lifecycleMermaid()` writes the block in
 `docs/repo-config/reviews.md`, which `test/review-graph.test.mjs` holds equal to it. Changing the
 lifecycle in `reviews.mjs` means changing its graph there too.
+
+The order of the loop's steps is a workflow's (#1041, `workflow-engine.mjs`), on `ready`: the one
+the `review` block compiles to (`workflow-format.mjs` `reviewWorkflow()`, `ci`, `review`, a
+`repeat` of `fix`, `ci` and `review` bounded by `review.fix`, then `merge` or
+`comment: rounds-out`), or the repo's own (`workflows.mjs`), whose steps stand for the loop's keys
+(`review-workflow.mjs` `impliedSettings()`, over every settings read of `reviews.mjs`). Each step is
+the code above (`act()`: `ci` the CI step's wait, `review` `queueReview()`, `fix` `startFix()`,
+which answers `break` when it starts no fix run, `merge` `autoMerge()` or `roundsOut()`); the gates
+that came before each step stay where they were (`decideReview()`, `reviewFix()`, `afterCiFix()`,
+`afterRebase()`), and where the code queued the next step, it lets the engine go on instead:
+`begin()` triggers the workflow from its first step (a pull request ready at a head not reviewed,
+rebased), `proceed()` goes on from the step a run's end (or the CI step's decision) is of. An
+instance waiting elsewhere, or none (a pull request in the loop before the update, a manual review's
+fix), is placed at the step of that kind first (`engine.place()`, `stepOf()`: the loop's one after a
+fix run), from the repo's workflow or the one the run's settings compile to; a workflow without
+such a step goes on as the code did. Instances are in the store's `workflows`, beside the conflict
+watcher's, one per pull request key, forgotten when it closes. A maintainer's Fix (`fixAsked()`)
+stays outside: its push is reviewed (`reviewAfterCi()`) and the workflow is placed at that review's
+step when it ends. A step's `agent`, `model`, `effort` and `instructions` travel on the item it
+queues (`workflowStep`), which `runs.mjs` applies over the repo's settings (`modes.mjs`
+`stepSettings()`).

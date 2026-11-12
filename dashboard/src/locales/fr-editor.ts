@@ -1,0 +1,123 @@
+// French texts of a repository's workflow editor (WorkflowEditor.tsx, WorkflowSteps.tsx): spread
+// into the French catalog (fr.ts).
+import type { Section } from ".";
+import type { editor as en } from "./en-editor";
+
+export const editor = {
+  "config.tabEditor": "Éditeur",
+  "editor.intro":
+    "Modifiez un workflow de .deckhand/workflows/ à côté de son graphe, essayez-le sur une pull request passée, puis enregistrez-le en pull request : il s’applique une fois fusionné.",
+  "editor.reading": "Lecture des workflows sur GitHub",
+  "editor.unreadable": "Impossible de lire les workflows : {error}",
+  "editor.file": "Workflow",
+  "editor.newFile": "Nouveau workflow…",
+  "editor.name": "Nom du fichier",
+  "editor.nameHelp": "Dans .deckhand/workflows/, finissant par .yaml",
+  "editor.onGithub": "Sur {base}",
+  "editor.newTitle": "Nouveau workflow",
+  "editor.text": "Le YAML du workflow",
+  "editor.graphTitle": "Ses étapes",
+  "editor.graph": "Les étapes du workflow",
+  "editor.noGraph": "Rien à dessiner pour l’instant : le texte ne se lit pas.",
+  "editor.checking": "Vérification…",
+  "editor.valid": "Aucune erreur : c’est ce que Deckhand exécutera une fois fusionné.",
+  "editor.errors": {
+    one: "{count} erreur : aucun workflow du dépôt ne s’exécuterait.",
+    other: "{count} erreurs : aucun workflow du dépôt ne s’exécuterait.",
+  },
+  "editor.othersBroken": {
+    one: "Un autre fichier a une erreur : tant qu’elle n’est pas corrigée sur la branche par défaut, aucun workflow du dépôt ne s’exécute. Celui-ci peut quand même être enregistré.",
+    other:
+      "D’autres fichiers ont {count} erreurs : tant qu’elles ne sont pas corrigées sur la branche par défaut, aucun workflow du dépôt ne s’exécute. Celui-ci peut quand même être enregistré.",
+  },
+  "editor.versions.none": "Aucune pull request ouverte n’exécute ce workflow en ce moment.",
+  "editor.versions.file": {
+    one: "{count} pull request ouverte exécute la version de la branche par défaut : une fois une modification fusionnée, elle la garde jusqu’à sa fermeture.",
+    other:
+      "{count} pull requests ouvertes exécutent la version de la branche par défaut : une fois une modification fusionnée, elles la gardent jusqu’à leur fermeture.",
+  },
+  "editor.versions.builtIn": {
+    one: "{count} pull request ouverte exécute le workflow propre à Deckhand, que ce fichier remplacerait : elle le garde jusqu’à sa fermeture.",
+    other:
+      "{count} pull requests ouvertes exécutent le workflow propre à Deckhand, que ce fichier remplacerait : elles le gardent jusqu’à leur fermeture.",
+  },
+  "editor.versions.older": {
+    one: "{count} exécute une version plus ancienne.",
+    other: "{count} exécutent une version plus ancienne.",
+  },
+  "editor.on": "Sur {events}",
+  "editor.end": "Fin",
+  "editor.repeat": "Répéter, au plus {rounds} tours de {counter}",
+  "editor.repeatOpen": "Répéter",
+  "editor.again": "à nouveau depuis le début",
+  "editor.if": "Si",
+  "editor.yes": "Oui",
+  "editor.no": "Non",
+  "editor.skip": "Ignoré",
+  "editor.agent": "sur {agent}",
+  "editor.count": "+1 {counter}",
+  "editor.set": "pose {flag}",
+  "editor.line": "ligne {line}",
+  "editor.toLine": "Aller à la ligne {line}",
+  "editor.divergesHere": "La pull request n’a jamais fait ça",
+  "editor.pickHere": "Choisissez ce qui se passe",
+  "editor.roundsOut": "Commentaire de tours épuisés",
+  "editor.comment": "Commentaire",
+  "editor.dryRun": "Essai à blanc",
+  "editor.dryRunHelp":
+    "Rejoue une pull request passée avec ce texte : ses revues, ses runs de correction, l’arrêt de sa CI et sa fusion enregistrés, jusqu’à la première étape qu’elle n’a jamais faite. À partir de là, vous choisissez ce qui se passe. Rien n’est lancé ni publié.",
+  "editor.noPulls":
+    "Aucune pull request d’ici n’a encore de boucle de revue enregistrée à rejouer.",
+  "editor.pull": "Pull request",
+  "editor.pickPull": "Choisissez une pull request",
+  "editor.pullRow": "#{number} · revues : {reviews}, runs de correction : {fixes} · {when}",
+  "editor.merged": "fusionnée",
+  "editor.run": "La rejouer",
+  "editor.runAgain": "Rejouer",
+  "editor.fixFirst": "Corrigez d’abord les erreurs",
+  "editor.replaying": "{pr} : {count} étapes enregistrées, rejouées.",
+  "editor.diverged":
+    "Ici ce workflow exécute {step}, ce que la pull request n’a jamais fait : son étape suivante était {did}. À partir d’ici, vous choisissez.",
+  "editor.historyEnds":
+    "Ici ce workflow exécute {step}, et l’historique enregistré de la pull request s’arrête. À partir d’ici, vous choisissez.",
+  "editor.ask": "Comment {step} (ligne {line}) se termine-t-elle ?",
+  "editor.undoPick": "Annuler le dernier choix",
+  "editor.startOver": "Recommencer",
+  "editor.leftover": "La pull request a continué avec : {steps}.",
+  "editor.end.done": "Le workflow se termine ici.",
+  "editor.end.merged": "Fusionnée : la pull request se ferme, plus rien ne s’exécute.",
+  "editor.end.stopped":
+    "Le workflow s’arrête ici : plus rien ne s’exécute jusqu’au prochain événement.",
+  "editor.end.asking": "En attente d’un choix.",
+  "editor.source.recorded": "comme elle s’est passée",
+  "editor.source.assumed": "supposé : la CI n’est pas enregistrée",
+  "editor.source.auto": "décidé",
+  "editor.source.picked": "votre choix",
+  "editor.outcome.ci.passed": "CI réussie",
+  "editor.outcome.ci.failed": "CI en échec",
+  "editor.outcome.review.none": "Aucun problème",
+  "editor.outcome.review.low": "Faible au plus",
+  "editor.outcome.review.medium": "Un problème moyen",
+  "editor.outcome.review.high": "Un problème élevé",
+  "editor.outcome.review.critical": "Un problème critique",
+  "editor.outcome.refused": "Refusé par les policies",
+  "editor.outcome.fix.pushed": "Correction poussée",
+  "editor.outcome.fix.nothing-pushed": "Rien de poussé",
+  "editor.outcome.fix.none": "Pas de run de correction",
+  "editor.outcome.merge.merged": "Fusionnée",
+  "editor.outcome.merge.refused": "Pas fusionnée",
+  "editor.outcome.rebase.rebased": "Rebasée",
+  "editor.outcome.comment.posted": "Publié",
+  "editor.outcome.comment.nothing": "Rien à dire",
+  "editor.outcome.unknown": "Non enregistré",
+  "editor.saveTitle": "Enregistrer",
+  "editor.saveHelp":
+    "L’App de Deckhand commite le fichier sur une nouvelle branche et ouvre une pull request qui dit que vous l’avez enregistré. Le workflow s’applique une fois cette pull request fusionnée dans la branche par défaut.",
+  "editor.save": "Ouvrir une pull request",
+  "editor.saving": "Ouverture…",
+  "editor.replaces":
+    "Ce workflow sur ready remplace la boucle de revue intégrée de Deckhand : la pull request désactive aussi {key} dans {file}. Le reste du bloc review s’applique toujours.",
+  "editor.saveDenied": "Enregistrer demande l’action {permission} sur ce dépôt.",
+  "editor.saveErrors": "Corrigez ses erreurs pour l’enregistrer.",
+  "editor.saved": "Pull request {pr} ouverte : fusionnez-la pour appliquer le workflow.",
+} satisfies Section<typeof en>;
