@@ -38,6 +38,7 @@ import {
 import { sameRepo } from "./events.mjs";
 import { effectiveView } from "./repo-view.mjs";
 import { lifecycleGraph, NODES, sampleDecisions } from "./review-graph.mjs";
+import { impliedSettings, loopWarnings, READY } from "./review-workflow.mjs";
 import { errorText, reviewWorkflow } from "./workflow-format.mjs";
 import { paginate } from "./github.mjs";
 import { send } from "../lib/http.mjs";
@@ -590,10 +591,17 @@ export function createRepoApi({
       grantsError = grantsErrorView(error, everyRepo);
     }
     const settings = parsed?.settings ?? defaultSettings(config);
-    const warnings = parsed?.warnings ?? [];
+    // As the review loop runs them: a workflow file on `ready` stands for the keys its steps
+    // turn on (merge, ci, fix), whatever `review:` says (#1140). Not read with errors in the
+    // file, as the loop doesn't; a failed read is logged by sourceView().
+    const ready = parsed?.errors?.length
+      ? null
+      : await workflows?.forEvent(info.full_name, base, settings, READY).catch(() => null);
+    const looped = impliedSettings(settings, ready?.workflow);
+    const warnings = loopWarnings(parsed?.warnings ?? [], settings, ready?.workflow);
     // What stops its merges: the grant, the repository's visibility (the parse's own warning
     // already says what its file lacks).
-    const merging = grant ? autoMergeProblems(grant, settings, info.private === true) : [];
+    const merging = grant ? autoMergeProblems(grant, looped, info.private === true) : [];
     // What the file says, with the line each error, warning, setting, mount and context repo
     // comes from.
     const { lineOf, itemLine, mountLine, locate } = fileLines(file?.text ?? "");
