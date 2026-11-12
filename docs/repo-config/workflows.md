@@ -220,35 +220,48 @@ steps:
 ```
 
 A security review when the pull request changes the policies, once per change (again only
-when a later push changes them since):
+when a later push changes them since). As the fix, `severity` and merge steps read the last
+review alone, each review that can block gets its fix loop before another review comes: the
+loop's review and its fixes, then the security review and its own (each fix's push reviewed
+again for security), then the merge. A security review right after the first one would replace
+it unfixed: a clean security review would let the merge past the first review's findings. A
+review still blocking once the fix runs are used up ends it with the rounds-out comment. A pull
+request's fix runs are counted across its loops, up to the largest `max`: these two share
+their 2.
 
 ```yaml
 # .deckhand/workflows/review.yaml
 on: ready
 vars:
   fixes: counter
+  security_fixes: counter
   security: flag
 steps:
   - run: review
-  - if: 'changed("policy/**", since: security)'
-    run: review
-    instructions: .deckhand/security-review.md
-    set: security
   - repeat:
       - run: fix
         count: fixes
       - run: review
     max: fixes 2
-  - run: merge
+  - if: 'severity <= low and changed("policy/**", since: security)'
+    then:
+      - run: review
+        instructions: .deckhand/security-review.md
+        set: security
+      - repeat:
+          - run: fix
+            count: security_fixes
+          - run: review
+            instructions: .deckhand/security-review.md
+        max: security_fixes 2 # fix runs count per pull request: both loops share these 2
+  - if: severity <= low # nothing blocking with `max_allowed_severity: low`, the default
+    run: merge
+    else:
+      - comment: rounds-out
 ```
 
-Both at once, in the one workflow a repository has on `ready`. As the fix, `severity` and merge
-steps read the last review alone, each review that can block gets its fix loop before another
-review comes: the loop's review and its fixes, then the security review and its own (each fix's
-push reviewed again for security), then the second reviewer before the merge. A review still
-blocking once the fix runs are used up ends it with the rounds-out comment, no further
-reviewer asked. A pull request's fix runs are counted across its loops, up to the largest `max`:
-these two share their 2.
+Both at once, in the one workflow a repository has on `ready`, in the same order: the second
+reviewer comes once nothing blocks, after the security review and its fixes, before the merge.
 
 ```yaml
 # .deckhand/workflows/review.yaml
