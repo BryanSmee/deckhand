@@ -172,6 +172,44 @@ test("a security review when the pull request changes the policies, once per cha
   assert.deepEqual(steps(other.accepted), [["review", null]]);
 });
 
+// The docs' workflow with both, what #1047 asked a repository to write with no new key: one
+// file, as a repository has one workflow on `ready`.
+const BOTH = (() => {
+  const text = readFileSync(new URL("../docs/repo-config/workflows.md", import.meta.url), "utf8");
+  const [, flow] = text.match(/^Both at once,[\s\S]*?^```yaml\n# .*\n([\s\S]*?)^```$/m);
+  return flow;
+})();
+
+test("both in one file: the security review, the fix loop, then the second reviewer", async () => {
+  const s = setup({ flow: BOTH });
+  s.gh.files = ["policy/review.rego"];
+  await s.ready();
+  await s.settle(CLEAN);
+  // The policies changed: the security review, then a fix of its findings, reviewed again.
+  assert.deepEqual(steps(s.accepted).at(-1), [
+    "review",
+    { instructions: ".deckhand/security-review.md" },
+  ]);
+  await s.settle(HIGH);
+  assert.deepEqual(steps(s.accepted).at(-1), ["review-fix", null]);
+  s.gh.head = "sha-2";
+  await s.fixed();
+  await s.settle(CLEAN);
+  // Nothing blocking: the second reviewer, on its agent.
+  assert.deepEqual(steps(s.accepted).at(-1), ["review", { agent: "codex", model: "best" }]);
+  assert.equal(s.instance().vars.flags.security.head, "sha-1");
+  assert.deepEqual(s.instance().vars.counters, { fixes: 1 });
+  // A pull request that leaves the policies alone: no security review.
+  const other = setup({ flow: BOTH });
+  other.gh.files = ["docs/a.md"];
+  await other.ready();
+  await other.settle(CLEAN);
+  assert.deepEqual(steps(other.accepted), [
+    ["review", null],
+    ["review", { agent: "codex", model: "best" }],
+  ]);
+});
+
 test("a repo's workflows with errors: no review starts, said why", async () => {
   const s = setup({ flow: SECURITY, errors: ["`.deckhand/workflows/x.yaml` line 1: bad"] });
   const skipped = [];

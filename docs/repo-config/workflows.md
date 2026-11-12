@@ -236,6 +236,34 @@ steps:
   - run: merge
 ```
 
+Both at once, in the one workflow a repository has on `ready`: the security review when the
+policies change, the fix loop, then the second reviewer before the merge:
+
+```yaml
+# .deckhand/workflows/review.yaml
+on: ready
+vars:
+  fixes: counter
+  security: flag
+steps:
+  - run: review
+  - if: 'changed("policy/**", since: security)'
+    run: review
+    instructions: .deckhand/security-review.md
+    set: security
+  - repeat:
+      - run: fix
+        count: fixes
+      - run: review
+    max: fixes 2
+  - if: severity <= low
+    then:
+      - run: review
+        agent: codex
+        model: best
+      - run: merge
+```
+
 - **The fix and merge steps read the last review**: the one that just ended, or the App's last
   review read back from GitHub when another step came between.
 - **A fix a maintainer asks for** (the dashboard's Fix) is one round outside the workflow: its
