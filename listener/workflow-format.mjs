@@ -603,3 +603,28 @@ export function reviewWorkflow(review) {
 }
 
 const list = (items) => items.map((i) => `\`${i}\``).join(", ");
+
+// A condition's tree (parseCondition()) → its text, as the dashboard's editor draws it: what
+// parses back to the same tree, parenthesised only where `and` sits under `not` or `or` under
+// `and`.
+export function conditionText(cond, parent = null) {
+  if (!cond) return "";
+  const wrap = (text, needed) => (needed ? `(${text})` : text);
+  if (cond.or) {
+    const text = cond.or.map((c) => conditionText(c, "or")).join(" or ");
+    return wrap(text, parent === "and" || parent === "not");
+  }
+  if (cond.and) {
+    const text = cond.and.map((c) => conditionText(c, "and")).join(" and ");
+    return wrap(text, parent === "not");
+  }
+  if (cond.not) return `not ${conditionText(cond.not, "not")}`;
+  if (cond.flag) return cond.flag;
+  if (cond.call) {
+    // Quoted as it was: a value with a `"` came in single quotes (tokenize() has no escapes).
+    const args = cond.args.map((a) => (a.includes('"') ? `'${a}'` : `"${a}"`));
+    if (cond.since) args.push(`since ${cond.since}`);
+    return `${cond.call}(${args.join(", ")})`;
+  }
+  return `${cond.cmp} ${cond.op} ${cond.value}`;
+}

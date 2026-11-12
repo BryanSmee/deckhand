@@ -23,6 +23,7 @@ const ACTIONS: Record<string, Plain> = {
   "runs:manage": "config.actionRunsManage",
   "runs:start:*": "config.actionStartAll",
   "repo:config:read": "config.actionConfigRead",
+  "repo:config:write": "config.actionConfigWrite",
   "server:read": "config.actionServerRead",
   "server:sync": "config.actionServerSync",
   "server:*": "config.actionServerAll",

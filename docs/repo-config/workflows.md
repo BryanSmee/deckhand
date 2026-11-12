@@ -266,3 +266,45 @@ steps:
 - **A rebase step after a run's end** needs the pull request still in conflict, at a pair not
   tried yet. While GitHub is still computing whether it merges, the step takes nothing and the
   workflow stops there: the next conflict found starts it again.
+
+## The editor
+
+The dashboard's **Editor** tab (Settings › Repositories › a repository) edits these files without
+a checkout:
+
+- **The text beside its graph**, checked as you type by the orchestrator's own parser, with the
+  repository's other workflow files beside it, as Deckhand reads them (two triggers for one
+  event, and an error in another file, which stops every workflow there, are said too)
+  and the operator's agents: each error with its line, the graph drawing the steps, a condition's
+  two branches and a `repeat`'s loop. A click on a step moves the text to its line.
+- **A dry run**: pick a past pull request whose review loop Deckhand ran (its record is kept 90
+  days after its last review), and its history replays through the edited text: its reviews (by
+  their most severe finding), its fix runs, a CI step that stopped it, its merge or the merge's
+  refusal, and the policies' refusals of its review or fix runs. CI that passed isn't recorded:
+  a `ci` step is taken as passed while the history goes on. At the **first step that pull request
+  never took** (a second review where it was merged, say), or where its history ends, the replay
+  stops and asks what that step ends with (the review finds a medium issue, CI fails, the fix
+  pushes nothing…); each pick goes on to the next step. What is certain is decided without
+  asking: a fix step after a review with nothing above `max_allowed_severity` starts no fix run,
+  a merge after one with something above it is refused. Its conditions read the pull request's
+  files and labels on GitHub. Nothing is queued, posted, or asked of the policies: it shows the
+  path the workflow takes, not what the policies would decide. A workflow on `conflict` has no
+  history to replay (only its last attempt is kept): its dry run asks from the first step.
+- **Who runs which version**: how many open pull requests run the workflow at the version on the
+  default branch, and how many at an older one. Each keeps its version until it closes, so a
+  change applies to the pull requests that start once it is merged.
+- **Open a pull request**: Deckhand's App (no agent run) commits the file to a new branch,
+  `deckhand-workflow-<name>-<id>`, from the default branch's head, its commit's trailer
+  co-authored by you, and opens a pull request saying you saved it. It lands like any other
+  change: reviewed, then merged into the default branch, which is the only place workflows are
+  read from. A text with errors of its own (its trigger clashing with another file's included)
+  isn't saved, nor one over a file that changed on the default branch since you opened it;
+  another file's errors are listed, but don't stop it, so two broken files can each be fixed. A
+  workflow on `ready` in a repository whose `review.on: ready` runs the built-in loop replaces
+  that loop: the same pull request turns `on: ready` in `.deckhand.yaml` to `on: manual`, the
+  rest of its `review:` block kept (when the key shares its line with others, in a flow mapping,
+  saving says to change it by hand). When
+  GitHub refuses the commit or the pull request, the branch is deleted (or its name said, when it
+  can't be). Saving needs the `repo:config:write` action
+  ([Access](policies.md#access)); reading the files, checking them and dry runs
+  `repo:config:read`.

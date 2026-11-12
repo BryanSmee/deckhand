@@ -5,6 +5,17 @@ run yet before you [update](updating.md). Most need nothing; each says what does
 first, then the older ones: the policies' (allow rules, per-mode policies, the grants) and the
 grants folder's.
 
+## Upgrading: the workflow editor's `repo:config:write` (#1042)
+
+A repository's config page has an Editor tab: a workflow of `.deckhand/workflows/` edited beside
+its graph, tried on a past pull request, and saved as a pull request the App opens. Saving needs a
+new action, `repo:config:write`. Deckhand's `access-roles.rego` gives it to `admin`; Deckhand's
+default `access.rego` (`*` for every login) to everyone signed in. What changes for you: nothing,
+unless your grants folder has an `access-roles.rego` of its own (a copy of Deckhand's roles): add
+`repo:config:write` to the roles that should save workflows there, or leave it out and nobody
+does (the editor's checks and dry runs only need `repo:config:read`). The App writes through its
+existing `contents` and `pull_requests` permissions: nothing to accept on GitHub.
+
 ## Upgrading: the sandbox image's contract label (#980)
 
 The base sandbox image now carries a `deckhand.sandbox-api` label, the number of the contract

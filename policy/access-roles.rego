@@ -35,7 +35,7 @@ access_viewer := {"tasks:read"}
 
 access_member := access_viewer | {"logs:read", "runs:start:*", "runs:manage"}
 
-access_admin := access_member | {"repo:config:read"}
+access_admin := access_member | {"repo:config:read", "repo:config:write"}
 
 # `bindings`: none here, a grants folder's access.rego names them (read through `data`, so that
 # none at all is no binding rather than an error).

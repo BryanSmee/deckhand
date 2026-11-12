@@ -101,6 +101,7 @@ export const REPO_ACTIONS = [
   "runs:start:*",
   "runs:manage",
   "repo:config:read",
+  "repo:config:write",
 ];
 export const SERVER_ACTIONS = ["server:read", "server:sync"];
 // The server-wide actions' prefix: they count only asked with no repository, the others only on
@@ -165,8 +166,7 @@ const MAX_CHECKED_LOGINS = 100;
 const unknownAction = (rule, action, layer) =>
   `\`${rule}\` of the ${layer === "repo" ? "repository's" : "operator's"} policies names \`${action}\`, which isn't an action Deckhand knows (${[...REPO_ACTIONS, ...SERVER_ACTIONS].map((a) => `\`${a}\``).join(", ")}, or a prefix of them ending in \`*\`): it ${rule.startsWith("deny_") ? "takes nothing away" : "gives nothing"}`;
 
-// What the config checks say of a `runs:start:` action no mode of the repository has
-// (knownMode()).
+// What the config checks say of a `runs:start:` action no mode of the repository has (knownMode()).
 const unknownMode = (action, modes) =>
   `\`deny_access\` of the repository's policies names \`${action}\`, which starts no mode it has (${[...BUILT_IN, ...modes].map((m) => `\`${m}\``).join(", ")}): it takes nothing away`;
 
