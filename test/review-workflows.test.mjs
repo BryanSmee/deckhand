@@ -176,30 +176,66 @@ test("a security review when the pull request changes the policies, once per cha
 // file, as a repository has one workflow on `ready`.
 const BOTH = (() => {
   const text = readFileSync(new URL("../docs/repo-config/workflows.md", import.meta.url), "utf8");
-  const [, flow] = text.match(/^Both at once,[\s\S]*?^```yaml\n# .*\n([\s\S]*?)^```$/m);
-  return flow;
+  const match = text.match(/^Both at once,[\s\S]*?^```yaml\n# .*\n([\s\S]*?)^```$/m);
+  assert.ok(match, "the docs' example with both, after `Both at once,`");
+  return match[1];
 })();
 
-test("both in one file: the security review, the fix loop, then the second reviewer", async () => {
+test("both in one file: each blocking review fixed before the next, the second reviewer last", async () => {
+  const SECURE = { instructions: ".deckhand/security-review.md" };
   const s = setup({ flow: BOTH });
   s.gh.files = ["policy/review.rego"];
   await s.ready();
-  await s.settle(CLEAN);
-  // The policies changed: the security review, then a fix of its findings, reviewed again.
-  assert.deepEqual(steps(s.accepted).at(-1), [
-    "review",
-    { instructions: ".deckhand/security-review.md" },
-  ]);
+  // The first review blocks: its fix run, before any other review replaces it.
   await s.settle(HIGH);
   assert.deepEqual(steps(s.accepted).at(-1), ["review-fix", null]);
   s.gh.head = "sha-2";
   await s.fixed();
   await s.settle(CLEAN);
-  // Nothing blocking: the second reviewer, on its agent.
+  // Nothing blocking: the policies changed, so the security review, whose findings are fixed
+  // and the fix's push reviewed for security again.
+  assert.deepEqual(steps(s.accepted).at(-1), ["review", SECURE]);
+  await s.settle(HIGH);
+  assert.deepEqual(steps(s.accepted).at(-1), ["review-fix", null]);
+  s.gh.head = "sha-3";
+  await s.fixed();
+  assert.deepEqual(steps(s.accepted).at(-1), ["review", SECURE]);
+  await s.settle(CLEAN);
+  // Then the second reviewer, on its agent, and the merge decided on its review.
   assert.deepEqual(steps(s.accepted).at(-1), ["review", { agent: "codex", model: "best" }]);
-  assert.equal(s.instance().vars.flags.security.head, "sha-1");
-  assert.deepEqual(s.instance().vars.counters, { fixes: 1 });
-  // A pull request that leaves the policies alone: no security review.
+  await s.settle(CLEAN);
+  const { vars, current } = s.instance();
+  assert.equal(current, null);
+  assert.equal(vars.flags.security.head, "sha-2");
+  assert.deepEqual(vars.counters, { fixes: 1, security_fixes: 1 });
+  assert.equal(s.accepted.length, 7);
+  // The merge step decided (its gates are auto-merge.test.mjs's: this fake GitHub has no repo).
+  assert.equal(s.replies.length, 1);
+  assert.match(s.replies[0], /^\*\*Not merged automatically\*\* \(`review\.merge`\)/);
+
+  // A first review still blocking after its fix runs: no security review nor second reviewer,
+  // the rounds-out comment instead.
+  const out = setup({ flow: BOTH });
+  out.gh.files = ["policy/review.rego"];
+  await out.ready();
+  for (const head of ["sha-2", "sha-3"]) {
+    await out.settle(HIGH);
+    out.gh.head = head;
+    await out.fixed();
+  }
+  await out.settle(HIGH);
+  assert.deepEqual(steps(out.accepted), [
+    ["review", null],
+    ["review-fix", null],
+    ["review", null],
+    ["review-fix", null],
+    ["review", null],
+  ]);
+  assert.equal(out.instance().current, null);
+  assert.equal(out.replies.length, 1);
+  assert.match(out.replies[0], /fix run/);
+
+  // A pull request that leaves the policies alone: its review, then the second reviewer.
   const other = setup({ flow: BOTH });
   other.gh.files = ["docs/a.md"];
   await other.ready();
