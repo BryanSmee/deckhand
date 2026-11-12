@@ -190,7 +190,9 @@ policies as the built-in loop does: the file orders the steps, never widens what
 config check reads the steps too: it warns that `merge` or `ci` needs `on: ready` only without a
 workflow file on `ready` (the [editor](#the-editor)'s save turns `on: ready` to `manual` and
 leaves them), and, for a `run: merge` step, what the operator's grants refuse it. With a file
-whose steps lack one of them, the warning names the missing step.
+whose steps lack one of them, the warning names the missing step, and so it does for `fix`,
+`merge` or `ci` turned on in `review:` that the file's steps leave off (no `run: fix` step: no
+fix run starts).
 
 Two reviewers: the loop's, then a second opinion on another agent once nothing blocks, before
 the merge:
@@ -308,7 +310,9 @@ steps:
 ## How it runs
 
 - **One instance per pull request and event**, kept in Deckhand's store after each step: an
-  update or a handover between orchestrators goes on where the last one stopped.
+  update or a handover between orchestrators goes on where the last one stopped. It goes when
+  its pull request closes, or at the watcher's next pass once the pull request is no longer its
+  task's open one (a `closed` webhook lost, a new pull request on the task).
 - **Each pull request stays on the version it started with**: an instance keeps the workflow as
   it was at its first event, and a change on the default branch applies to the pull requests
   that start after it.

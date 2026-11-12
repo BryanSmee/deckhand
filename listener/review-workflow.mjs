@@ -56,23 +56,36 @@ export function impliedSettings(settings, workflow) {
 // The config's warnings (parseRepoConfig()'s) with the repo's workflow on `ready`: those saying
 // the `review:` block leaves `merge`, `ci` or `ci_fix` off hold only without a file there. With
 // one, its steps decide (impliedSettings()): the warning goes when they turn the key on, and
-// names the missing step when they don't (#1140).
+// names the missing step when they don't (#1140). A key the block turns on that the steps turn
+// off (`fix: true` without a `run: fix` step) gets that warning too, the parse having none to
+// reword (#1143).
 const OFF = [
   ["review.merge: needs `review.on: ready`", "merge", "nothing is merged"],
   ["review.ci: needs `review.on: ready`", "ci", "nothing waits for CI"],
   ["review.ci_fix: needs `review.fix`", "fix", "no CI fix run starts"],
 ];
+const DROPPED = [
+  ["fix", "no fix run starts"],
+  ["merge", "nothing is merged"],
+  ["ci", "nothing waits for CI"],
+];
+const missing = (key, step, what) =>
+  `review.${key}: the workflow on \`ready\` has no \`run: ${step}\` step, ${what}`;
 export function loopWarnings(warnings, settings, workflow) {
   if (!workflow?.file || !settings?.review) return warnings;
   const review = impliedSettings(settings, workflow).review;
-  return warnings.flatMap((w) => {
+  const kept = warnings.flatMap((w) => {
     const off = OFF.find(([said]) => w.startsWith(said));
     if (!off) return [w];
     const [said, step, what] = off;
     if (review[step]) return [];
-    const key = said.slice(0, said.indexOf(":"));
-    return [`${key}: the workflow on \`ready\` has no \`run: ${step}\` step, ${what}`];
+    return [missing(said.slice("review.".length, said.indexOf(":")), step, what)];
   });
+  const dropped = DROPPED.filter(
+    ([key]) =>
+      settings.review[key] && !review[key] && !kept.some((w) => w.startsWith(`review.${key}:`)),
+  );
+  return [...kept, ...dropped.map(([key, what]) => missing(key, key, what))];
 }
 
 // What `severity` reads of the last review (review-parse.mjs's): its most severe finding, "none"
