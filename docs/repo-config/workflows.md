@@ -297,7 +297,9 @@ steps:
 ## How it runs
 
 - **One instance per pull request and event**, kept in Deckhand's store after each step: an
-  update or a handover between orchestrators goes on where the last one stopped.
+  update or a handover between orchestrators goes on where the last one stopped. It goes when
+  its pull request closes, or at the watcher's next pass once the pull request is no longer its
+  task's open one (a `closed` webhook lost, a new pull request on the task).
 - **Each pull request stays on the version it started with**: an instance keeps the workflow as
   it was at its first event, and a change on the default branch applies to the pull requests
   that start after it.

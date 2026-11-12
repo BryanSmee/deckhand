@@ -40,6 +40,8 @@ async function setup(maps, { files = {}, again = false, policies = null, hang = 
     logged: [],
     calls: [],
     advance: (ms) => (time += ms),
+    // The tasks' open pull requests (pulls.mjs open()).
+    open: [["org/repo#30", { number: 31, state: "draft" }]],
   };
   const routes = {
     "/repos/org/repo": () => ({ default_branch: "main" }),
@@ -72,7 +74,7 @@ async function setup(maps, { files = {}, again = false, policies = null, hang = 
     instances: await map("workflows"),
     workflows: w.workflows,
     config,
-    pulls: { open: () => [["org/repo#30", { number: 31, state: "draft" }]] },
+    pulls: { open: () => w.open },
     github,
     repoSettings: async () => settings,
     busy: () => false,
@@ -242,4 +244,32 @@ steps:
   });
   assert.equal(await w.conflicts.ended(after), "skipped");
   assert.deepEqual([w.accepted.length, w.replies], [1, []]);
+});
+
+test("instances of pull requests closed without their delivery are dropped", async () => {
+  // Closed without a `closed` delivery, still open in pulls.mjs: the check reading it drops it.
+  const w = await setup(mapStore());
+  await w.conflicts.tick();
+  assert.ok(w.conflicts.instance("org/repo#30"));
+  w.pr = pull({ state: "closed" });
+  w.advance(10 * MIN);
+  await w.conflicts.tick();
+  assert.equal(w.conflicts.instance("org/repo#30"), null);
+
+  // Replaced on its task (or known closed in pulls.mjs): the pass drops it before any check.
+  const v = await setup(mapStore());
+  await v.conflicts.tick();
+  v.open = [["org/repo#30", { number: 32, state: "draft" }]];
+  await v.conflicts.check();
+  assert.equal(v.conflicts.instance("org/repo#30"), null);
+  assert.match(
+    v.logged.join("\n"),
+    /1 workflow instance\(s\) of pull requests no longer open dropped/,
+  );
+  // No open pull request on the task at all: the same.
+  const u = await setup(mapStore());
+  await u.conflicts.tick();
+  u.open = [];
+  await u.conflicts.check();
+  assert.equal(u.conflicts.instance("org/repo#30"), null);
 });
