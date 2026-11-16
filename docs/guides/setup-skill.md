@@ -2,7 +2,7 @@
 
 The [quick start](../get-started/quick-start.md)'s steps, done with you by your own Claude Code:
 the `setup-deckhand` skill checks the machine, puts your credential in place, writes the server
-folder, gives Deckhand a public address, starts it, opens the GitHub App's setup and follows a
+folder, gives Deckhand a public address (or sets it up without one, in pull mode), starts it, opens the GitHub App's setup and follows a
 first `Deckhand` comment to its answer. Each step checks what is already done first, so running
 it again picks up where you left.
 
@@ -35,13 +35,13 @@ Then, in any folder:
 `/deckhand:setup-deckhand` runs these in order; each is a skill of its own, which you can run alone
 (`/deckhand:deckhand-endpoint` to change the public address, say):
 
-| Skill                    | What it does                                                                                                                                       |
-| ------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `deckhand-prerequisites` | Docker 26+ and compose, git, curl, the GitHub CLI; finds or clones the Deckhand folder                                                             |
-| `deckhand-credentials`   | a Claude plan's token or an API key (or Codex's, or the Antigravity CLI's) in `.env` or [the credentials folder](agents.md#the-credentials-folder) |
-| `deckhand-server-folder` | `server/` from `server.example/`, your login in `allowed_users`, `allowed_repos`, the agent                                                        |
-| `deckhand-endpoint`      | a stable public address: your own, [Tailscale Funnel, a cloudflared named tunnel or an ngrok static domain](tunnels.md); `public_url`              |
-| `deckhand-launch`        | `docker compose up`, the [GitHub App](github-app.md) and its installation, then a first `Deckhand /mode brainstorm` comment followed to its reply  |
+| Skill                    | What it does                                                                                                                                                                                          |
+| ------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `deckhand-prerequisites` | Docker 26+ and compose, git, curl, the GitHub CLI; finds or clones the Deckhand folder                                                                                                                |
+| `deckhand-credentials`   | a Claude plan's token or an API key (or Codex's, or the Antigravity CLI's) in `.env` or [the credentials folder](agents.md#the-credentials-folder)                                                    |
+| `deckhand-server-folder` | `server/` from `server.example/`, your login in `allowed_users`, `allowed_repos`, the agent                                                                                                           |
+| `deckhand-endpoint`      | a stable public address: your own, [Tailscale Funnel, a cloudflared named tunnel or an ngrok static domain](tunnels.md), or none in [pull mode](tunnels.md#no-public-address-pull-mode); `public_url` |
+| `deckhand-launch`        | `docker compose up`, the [GitHub App](github-app.md) and its installation, then a first `Deckhand /mode brainstorm` comment followed to its reply                                                     |
 
 ## What stays yours
 

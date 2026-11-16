@@ -1,5 +1,9 @@
 # Webhook pull mode: the spike
 
+_Built in #1032: [No public address: pull mode](../guides/tunnels.md#no-public-address-pull-mode)
+says how to use it, [Edge](../security/webhooks-and-sign-in.md#edge) what it changes for
+security._
+
 Pull mode (#1032) lets Deckhand run without a public address: edge reads the App's deliveries
 through the API (`GET /app/hook/deliveries`) instead of receiving them. It only works if GitHub
 keeps recording the deliveries of an App whose webhook URL never answers, and if `/setup` can

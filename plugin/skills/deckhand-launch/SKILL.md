@@ -89,7 +89,9 @@ setting, `allowed_users` empty, a port taken), and `docs/guides/logs.md` the res
 
 Then through the public address: `curl -fsS --max-time 10 <public_url>/health` answers `ok`.
 Not yet: the tunnel (`deckhand-endpoint`, its section 4) before going on, as GitHub can't
-reach edge otherwise.
+reach edge otherwise. In pull mode (`public_url` a local `http://` address,
+`docs/guides/tunnels.md#no-public-address-pull-mode`), GitHub never reaches edge: that address
+answering here is enough.
 
 ## 3. The GitHub App
 
@@ -98,8 +100,9 @@ skip to section 4.
 
 Before opening the link, tell the user what they'll see and pick:
 
-1. Deckhand's setup page: the public URL (check it is `public_url`), the App's name (any
-   free name), and the organization that owns it: empty for their own account, or the
+1. Deckhand's setup page: how GitHub reaches Deckhand (through its public address, or **It
+   has none** for pull mode, chosen for you on a local address), the URL (check it is
+   `public_url`), the App's name (any free name), and the organization that owns it: empty for their own account, or the
    organization whose repositories Deckhand works on. A private App installs only on its
    owner's account: for several organizations, `docs/guides/github-app.md#installing-it-on-several-organizations`
    afterwards.
@@ -153,7 +156,8 @@ once, into a volume):
 - live, on the dashboard: `<public_url>`, signed in with GitHub (only `allowed_users` can).
 
 No `eyes` after a minute: GitHub didn't reach edge, or ignored the author. The App's _Advanced_
-tab on GitHub lists its recent deliveries; `docker compose logs edge orchestrator | grep -v 'setup?token=' | tail -n 40`
+tab on GitHub lists its recent deliveries (in pull mode every one shows as failed: expected,
+edge reads them from there; its log says `Passed on: issue_comment created` for each it took); `docker compose logs edge orchestrator | grep -v 'setup?token=' | tail -n 40`
 names a login out of `allowed_users`. `-1`: the dashboard's page for the issue has the run's
 log. `docs/get-started/quick-start.md#when-it-doesnt-start` has the rest.
 

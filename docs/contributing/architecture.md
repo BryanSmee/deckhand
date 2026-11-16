@@ -39,7 +39,9 @@ Both run modules of `listener/`, which has no entry point of its own any more.
   (with the client's login and scopes) to the orchestrator (`edge/forward.mjs`) and of the
   screenshots to the broker (`edge/shots.mjs`), its internal port for the orchestrator
   (`edge/internal.mjs`: the `deliveries` stream, the App's public parts, the "From the dashboard by"
-  tags, a redeliveries' scan) and the redeliveries' poller (`listener/redeliveries.mjs`). It holds
+  tags, a redeliveries' scan) and the redeliveries' poller (`listener/redeliveries.mjs`), or in
+  pull mode the poller that reads the deliveries through the App's API (`edge/pull.mjs`, #1032),
+  both taking a delivery once the same way (`edge/take.mjs`). It holds
   the webhook secret, the session key and the OAuth client's, in its own volume (`edge-data`), and
   its store.
 - **The orchestrator** (`orchestrator/server.mjs`, image `deckhand-orchestrator`): the other modules

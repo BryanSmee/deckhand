@@ -143,7 +143,7 @@ const MARK_MS = 60_000;
 const ACTIVE_PREFIX = "active-users/";
 
 // `store`: edge's, which both copies share, so that both count the same users. → what edge's
-// modules call: webhook(event, result), redelivered(), request(req, res), signIn(result),
+// modules call: webhook(event, result), redelivered(), lastDelivery(at), request(req, res), signIn(result),
 // seen(login), stream() → its end.
 export function edgeMetrics(registry, { store, now = Date.now }) {
   const webhooks = registry.counter(
@@ -157,6 +157,10 @@ export function edgeMetrics(registry, { store, now = Date.now }) {
   const redeliveries = registry.counter(
     "deckhand_webhooks_redelivered_total",
     "Failed deliveries edge asked GitHub to send again.",
+  );
+  const lastDelivery = registry.gauge(
+    "deckhand_webhooks_last_delivery_timestamp_seconds",
+    "In pull mode, when the newest delivery GitHub listed for the App was sent, or the first look if none since (Unix time).",
   );
   const requests = registry.counter(
     "deckhand_http_requests_total",
@@ -196,6 +200,7 @@ export function edgeMetrics(registry, { store, now = Date.now }) {
       webhooks.inc({ event: WEBHOOK_EVENTS.includes(event) ? event : OTHER, result });
     },
     redelivered: () => redeliveries.inc(),
+    lastDelivery: (at) => lastDelivery.set(Math.floor(at / 1000)),
     // Counted once its answer ends, or the client goes first (status `none` before an answer).
     request(req, res) {
       const route = routeOf((req.url ?? "").split("?")[0]);

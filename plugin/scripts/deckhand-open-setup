@@ -4,6 +4,7 @@
 # the GitHub App, so it stays out of the setup skill's conversation.
 #
 #   deckhand-open-setup https://deckhand.example.com
+#   deckhand-open-setup http://localhost:8080     (pull mode: no public address, #1032)
 #
 # Run from the folder of compose.yaml (or DECKHAND_DIR). Prints only what it did. With no
 # browser here (a server over SSH), it says what to run in your own terminal instead.
@@ -13,7 +14,27 @@ set -eu
 public=${1%/}
 case $public in
   https://*) ;;
-  *) echo "deckhand-open-setup: the public URL must start with https://" >&2; exit 2 ;;
+  # Pull mode's address is the one the user opens Deckhand at: a local one, in plain HTTP
+  # (as /setup's isLocal(): loopback, private ranges, mDNS, Docker's host, a name without a dot).
+  http://*)
+    host=${public#http://}
+    host=${host%%/*}
+    case $host in
+      \[*) host=${host%%]*}; host=${host#[} ;;
+      *) host=${host%%:*} ;;
+    esac
+    case $host in
+      localhost | 0.0.0.0 | ::1 | host.docker.internal | *.local | *.localhost) ;;
+      127.* | 10.* | 192.168.* | 172.1[6-9].* | 172.2[0-9].* | 172.3[01].*)
+        case $host in *[!0-9.]*) host_bad=1 ;; esac ;;
+      *.*) host_bad=1 ;;
+    esac
+    if [ -n "${host_bad:-}" ]; then
+      echo "deckhand-open-setup: http:// only for a local address (pull mode); a public one needs https://" >&2
+      exit 2
+    fi
+    ;;
+  *) echo "deckhand-open-setup: the URL must start with https:// (or http:// on a local address, pull mode)" >&2; exit 2 ;;
 esac
 cd "${DECKHAND_DIR:-.}"
 

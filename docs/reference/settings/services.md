@@ -55,6 +55,8 @@ The services' state, `DATA_DIR` and each one's `STORE_URL`: [The store](store.md
   The orchestrator's services port, where the runner calls it (a run's first tokens) and edge passes the dashboard's API on, on the networks they share.
 - **`INTERNAL_PORT`** (edge) · environment only · default: `8083`\
   The port the orchestrator calls edge on (the deliveries' stream, the App's public parts), on their network alone; never `PORT`'s, which the internet reaches.
+- **`DELIVERIES`** (edge) · environment only · default: what `/setup` chose\
+  `pull`: edge reads GitHub's deliveries through the App's API, without any public address ([pull mode](../../guides/tunnels.md#no-public-address-pull-mode)); `webhook`: GitHub sends them to `PUBLIC_URL`'s `/webhook`.
 - **`POLICY_PORT`** · environment only · default: `8082`\
   Port of the egress policy the proxy asks about each connection: open until the orchestrator exits.
 - **`RUNNER_URL`** · environment only · default: `http://runner:8080`\

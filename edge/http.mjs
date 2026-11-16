@@ -3,22 +3,20 @@
 // /status, which it passes on to the orchestrator with the signed-in user (forward.mjs), and the
 // runs' screenshots, which it passes on to the broker (shots.mjs, #609).
 //
-// A delivery is verified (its HMAC), taken once (its GUID set-if-absent in edge's store, which
-// both copies share: one GitHub sends twice, or that reaches both, goes on once), then put on
-// the `deliveries` stream before it is answered: the orchestrator reads it from there and
+// A delivery is verified (its HMAC), taken once (take.mjs: its GUID set-if-absent in edge's
+// store, which both copies share: one GitHub sends twice, or that reaches both, goes on once),
+// then put on the `deliveries` stream before it is answered: the orchestrator reads it from there and
 // acknowledges it once handled (internal.mjs), so none is lost while it hands over.
 import { createServer } from "node:http";
 import { authPage } from "../listener/auth.mjs";
 import { createSlots, readDelivery, sourceOf } from "../listener/deliveries.mjs";
-import { quietPayload, verified } from "../listener/events.mjs";
-import { QUIET_EVENTS } from "../listener/github-app.mjs";
+import { verified } from "../listener/events.mjs";
 import { serveAsset } from "../listener/static.mjs";
 import { drainable } from "../lib/drain.mjs";
 import { readBody, send } from "../lib/http.mjs";
-import { storable } from "../lib/store.mjs";
-import { ciWaitingKey, DELIVERIES } from "./internal.mjs";
 import { provesLocal } from "./local.mjs";
-import { logContext, withRequest } from "../lib/log.mjs";
+import { createTaker, takenDelivery } from "./take.mjs";
+import { withRequest } from "../lib/log.mjs";
 
 // On every answer: the dashboard's own scripts, styles and images only (its build has no
 // inline script), never in a frame (a page on a sibling domain, which SameSite=Lax lets
@@ -54,37 +52,8 @@ const MAX_MCP_BODY = 64 * 1024;
 // posts at most (../listener/mcp.mjs MAX_MACHINE_BODY). A larger body is refused (413) once read
 // and dropped, up to 1 MB past its limit (2 MB here), and cut past that (readBody()).
 const MAX_MACHINE_BODY = MAX_API_BODY;
-// The most deliveries the stream keeps unread (far more than a handover leaves); one the
-// orchestrator acknowledged goes from it at once (internal.mjs).
-const STREAM_MAX = 10_000;
-
-// A delivery's GUID, as the store keeps it: { taking: at } while it goes on the stream, then
-// { kept: at }, for a day. A redelivery of one taken (by hand, or GitHub's own) comes within that;
-// the redeliveries' poller only asks for those GitHub never saw taken.
-const deliveryKey = (id) => `deliveries/${id}`;
-const DELIVERY_TTL_MS = 24 * 3600_000;
-// How long a commit's mark (internal.mjs ciWaitingKey()) lasts, should its entry be lost.
-const CI_WAITING_TTL_MS = 10 * 60_000;
-// A delivery still being taken after this was lost on its way to the stream (a copy that died,
-// a store that failed twice): taken again.
-const TAKING_MS = 60_000;
-
-// Whether edge took the delivery with this GUID (the redeliveries ask it, ../listener/
-// redeliveries.mjs `handled`): kept, or being taken now.
-export async function takenDelivery(store, id, now = Date.now) {
-  const mark = await store.get(deliveryKey(id));
-  return !!mark && (mark.kept != null || now() - (mark.taking ?? 0) < TAKING_MS);
-}
-
-// Marks it as being taken, once: false when another copy (or GitHub's second send) has it.
-async function startTaking(store, id, now) {
-  const key = deliveryKey(id);
-  const mark = { taking: now() };
-  if (await store.setIfAbsent(key, mark, { ttlMs: DELIVERY_TTL_MS })) return true;
-  const found = await store.get(key);
-  if (!found || found.kept != null || now() - (found.taking ?? 0) < TAKING_MS) return false;
-  return store.compareAndSet(key, found, mark, { ttlMs: DELIVERY_TTL_MS });
-}
+// Whether edge took a delivery: take.mjs's, where both ways a delivery comes are taken.
+export { takenDelivery };
 
 // `app`: app.mjs's; `auth`, `setup`: ../listener/auth.mjs's and setup.mjs's; `oauth`: MCP
 // clients' sign-in (oauth.mjs), none: not served; `orchestrator`:
@@ -121,6 +90,8 @@ export function createEdgeHttp({
   };
 
   // Bodies being read before their signature can be checked: a public port, so capped.
+  const take = createTaker({ config, store, redeliveries, secrets, log, now });
+
   const unverified = createSlots({ total: MAX_UNVERIFIED, share: PER_SOURCE, graceMs: GRACE_MS });
 
   // `result`: what the metrics count it as (metrics.mjs WEBHOOK_RESULTS).
@@ -184,64 +155,15 @@ export function createEdgeHttp({
       return refuse(req, res, "bad_signature", 401, why, "bad signature");
     }
     const event = req.headers["x-github-event"];
-    // A commit's CI changed (github-app.mjs QUIET_EVENTS): no log line, nor a place in the
-    // store's delivery ids, so taken without its GUID.
-    const quiet = QUIET_EVENTS.has(event);
-    const id = (!quiet && req.headers["x-github-delivery"]) || null;
     let payload;
-    let waiting = null;
     try {
       payload = JSON.parse(body.toString("utf8"));
     } catch {
       counted(req, "ignored");
       return res.writeHead(202).end();
     }
-    if (quiet) {
-      // Only what the orchestrator reads of it, for an allowed repo, and one waiting per commit.
-      payload = quietPayload(config, event, payload);
-      if (!payload) {
-        counted(req, "ignored");
-        return res.writeHead(202).end();
-      }
-      const { full_name } = payload.repository;
-      const sha = payload.sha ?? payload.check_suite.head_sha;
-      waiting = ciWaitingKey(full_name, sha);
-      if (!(await store.setIfAbsent(waiting, { at: now() }, { ttlMs: CI_WAITING_TTL_MS }))) {
-        counted(req, "duplicate");
-        return res.writeHead(202).end();
-      }
-    }
-    // Deliveries without a GUID are taken.
-    if (id && !(await startTaking(store, id, now))) {
-      counted(req, "duplicate");
-      log(`Delivery ${id} again: already handled`);
-      return res.writeHead(202).end();
-    }
-    try {
-      const redelivered = id ? await redeliveries.redelivered(id) : false;
-      // What people wrote may hold a token pasted by mistake: kept without it, as the queue is.
-      // With its request's ID: the orchestrator's lines about it carry it too.
-      const { request } = logContext();
-      const entry = storable({ id, event, payload, redelivered, request, at: now() }, secrets());
-      await store.append(DELIVERIES, entry, { maxLength: STREAM_MAX });
-    } catch (error) {
-      // Not taken after all: GitHub's redelivery, or the next scan's, is. A mark the store
-      // couldn't remove either is taken again once a minute old.
-      if (id) await store.delete(deliveryKey(id)).catch(() => false);
-      if (waiting) await store.delete(waiting).catch(() => false);
-      throw error;
-    }
-    // On the stream: taken, whatever this write does. Refused now, GitHub would send it again,
-    // and its mark, left "taking", would let that second one through a minute on.
-    if (id) {
-      await store
-        .set(deliveryKey(id), { kept: now() }, { ttlMs: DELIVERY_TTL_MS })
-        .catch((error) =>
-          log(`Delivery ${id}: its mark (${error.message ?? error}), kept as taking`),
-        );
-    }
-    counted(req, "accepted");
-    if (!quiet) log(`Passed on: ${event} ${payload?.action ?? ""} (${id ?? "no id"})`);
+    const result = await take({ event, id: req.headers["x-github-delivery"], payload });
+    counted(req, result);
     res.writeHead(202).end();
   }
 
