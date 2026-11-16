@@ -14,11 +14,11 @@ Never ask for, read or print a secret here; nothing in this step needs one.
 
 ## 1. The system
 
-Run `uname -s` and `cat /proc/version 2>/dev/null`:
+Run `uname -s` and `cat /proc/sys/kernel/osrelease 2>/dev/null`:
 
 - **Linux**: fine. **Darwin** (macOS): fine, with Docker Desktop (or another engine giving
   `docker`).
-- **Linux with `microsoft` in `/proc/version`**: WSL2. Docker must be Docker Desktop's, with
+- **Linux with `microsoft` in `/proc/sys/kernel/osrelease`**: WSL2. Docker must be Docker Desktop's, with
   _Settings › Resources › WSL integration_ on for this distribution. The Deckhand folder goes
   in the Linux file system (`~/deckhand`), never under `/mnt/c/…`: Windows' drives keep no
   file modes, and are slow from WSL.

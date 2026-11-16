@@ -7,7 +7,9 @@ Compose; on a cluster, see [On Kubernetes](#on-kubernetes).
 Deckhand runs on your own server with your own private GitHub App and your own Claude
 credential (or OpenAI key, for [Codex](codex.md)). You need Docker Engine 26 or later with the
 compose plugin, and an HTTPS address that GitHub can reach (your reverse proxy, or a tunnel)
-forwarding to edge's port: without a public address, see [A stable tunnel](tunnels.md).
+forwarding to edge's port: without a public address, see [A stable tunnel](tunnels.md). With
+Claude Code, the `setup-deckhand` skill goes through this page's steps with you:
+[Set up with Claude Code](setup-skill.md).
 
 ## Start Deckhand
 

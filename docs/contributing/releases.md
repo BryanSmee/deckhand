@@ -71,9 +71,9 @@ On each of Linux (Ubuntu's current LTS), macOS, and Windows 11 with WSL2 and Doc
 with Claude Code installed and nothing else of Deckhand's:
 
 1. Install the plugin from the release's tag (`/plugin marketplace add`, as the guide says), then
-   run `/setup-deckhand` against a throwaway account or organization and repository.
+   run `/deckhand:setup-deckhand` against a throwaway account or organization and repository.
 2. It reaches a `Deckhand` comment answered by the App's bot.
-3. Run `/setup-deckhand` again: every step says it is already done.
+3. Run `/deckhand:setup-deckhand` again: every step says it is already done.
 4. No secret in the transcript: search the session's file (`~/.claude/projects/<folder>/<session>.jsonl`)
    for the credential, the tunnel's token if any, and `setup?token=`; none may be there.
 

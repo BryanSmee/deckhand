@@ -10,17 +10,17 @@ private GitHub App. This skill takes them from nothing to a first `Deckhand` com
 in five steps, each a skill of its own that can also run alone and starts by checking what is
 already done:
 
-| Step | Skill                    | Done when                                                                   |
-| ---- | ------------------------ | --------------------------------------------------------------------------- |
-| 1    | `deckhand-prerequisites` | Docker 26+ and compose answer, and a Deckhand folder exists                 |
-| 2    | `deckhand-credentials`   | `.env` (or the credentials folder) has an agent credential                  |
-| 3    | `deckhand-server-folder` | `server/config.yaml` lists the user in `allowed_users`                      |
+| Step | Skill                    | Done when                                                                  |
+| ---- | ------------------------ | -------------------------------------------------------------------------- |
+| 1    | `deckhand-prerequisites` | Docker 26+ and compose answer, and a Deckhand folder exists                |
+| 2    | `deckhand-credentials`   | `.env` (or the credentials folder) has an agent credential                 |
+| 3    | `deckhand-server-folder` | `server/config.yaml` lists the user in `allowed_users`                     |
 | 4    | `deckhand-endpoint`      | `public_url` is set and `<public_url>/health` answers through the internet |
-| 5    | `deckhand-launch`        | the App is installed and a `Deckhand` comment got its answer                |
+| 5    | `deckhand-launch`        | the App is installed and a `Deckhand` comment got its answer               |
 
-Run them in that order with the Skill tool. Before each, say in one line what it does; after
+Run them in that order with the Skill tool (as `deckhand:<skill>`, the plugin's names). Before each, say in one line what it does; after
 each, say what it found or changed. When a step is already done, say so and go on. When the
-user stops halfway, the next `/setup-deckhand` picks up where they left: every step checks
+user stops halfway, the next `/deckhand:setup-deckhand` picks up where they left: every step checks
 first.
 
 ## Rules for every step

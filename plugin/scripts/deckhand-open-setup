@@ -33,7 +33,7 @@ link="$public/setup?token=$token"
 
 # Every opener's output is dropped: some echo the address they open.
 opened=""
-if grep -qi microsoft /proc/version 2>/dev/null; then
+if grep -qi microsoft /proc/sys/kernel/osrelease 2>/dev/null; then
   # WSL2: Windows' browser.
   if command -v wslview >/dev/null 2>&1; then
     wslview "$link" >/dev/null 2>&1 && opened=1
