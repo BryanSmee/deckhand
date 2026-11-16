@@ -36,11 +36,28 @@ started, the user's "Try Deckhand" issue (section 5):
 gh search issues "Try Deckhand" --author @me --match title --json url,repository,number
 ```
 
-For each, `gh api repos/<owner/repo>/issues/<number>/comments --jq '.[] | select(.user.type == "Bot") | .html_url'`
-lists the App's replies. One there: the setup is done. Say so, with its link and the public
-address, check the public address still answers (section 2's last check), and stop: no new
-issue or comment. An issue without a reply yet: follow it as section 5 says, rather than
-opening another. None (or no `gh`: ask the user): go on.
+For each, what the App made of its last `Deckhand` comment: the comment's id, then the
+reactions the App's bot left on it (`docs/reference/comment-commands.md#the-trigger`):
+
+```sh
+gh api --paginate repos/<owner/repo>/issues/<number>/comments \
+  --jq '.[] | select(.user.type == "User" and (.body | test("^\\W*deckhand\\b"; "i"))) | .id' | tail -n 1
+gh api --paginate repos/<owner/repo>/issues/comments/<id>/reactions \
+  --jq '.[] | select(.user.type == "Bot") | .content'
+```
+
+- `rocket` (done) or `confused` (it answered with a question): the setup is done. Say so, with
+  the issue's link and the public address, check the public address still answers (section
+  2's last check), and stop: no new issue or comment.
+- `-1`: the run failed; its reply says "stopped with an error". Not done: go through
+  sections 1 to 4 (a fixed credential needs `docker compose up -d models orchestrator`), then
+  read the run's log on the dashboard, and once the cause is fixed, post a new
+  `Deckhand /mode brainstorm` comment on that same issue (asking first) and follow it as
+  section 5 says.
+- `eyes` alone, or nothing yet: the run is still going, or never reached Deckhand. Follow it
+  as section 5 says, rather than opening another issue.
+
+None (or no `gh`: ask the user): go on.
 
 ## 1. Before starting
 
