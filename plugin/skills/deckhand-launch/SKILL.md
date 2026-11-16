@@ -9,25 +9,44 @@ The references: `docs/get-started/quick-start.md`, `docs/guides/github-app.md`,
 `docs/guides/runs.md`, `docs/guides/logs.md`. Run from the Deckhand folder. The helpers:
 
 ```sh
-ENV="sh ${CLAUDE_SKILL_DIR}/../../scripts/deckhand-env"
-OPEN_SETUP="sh ${CLAUDE_SKILL_DIR}/../../scripts/deckhand-open-setup"
+sh ${CLAUDE_SKILL_DIR}/../../scripts/deckhand-env check <NAME>...
+sh ${CLAUDE_SKILL_DIR}/../../scripts/deckhand-open-setup <public_url>
 ```
+
+Write them out in full in each command: the shell keeps no variable from one command to the
+next.
 
 ## Rules
 
 - **The setup link is never printed**: its token creates the App. Never run
   `docker compose logs edge` (or `docker compose logs` of every service) as it is: filter it,
-  `docker compose logs edge | grep -v 'setup?token='`. `$OPEN_SETUP` opens it in the browser.
+  `docker compose logs edge | grep -v 'setup?token='`. `sh ${CLAUDE_SKILL_DIR}/../../scripts/deckhand-open-setup` opens it in the browser.
 - **The user's clicks stay theirs**: on GitHub, creating the App and installing it grant
   permissions on their account. Say what each page shows and what to pick; they click.
 - **Ask before writing to GitHub** (an issue, a comment): show what you'd post first.
-- No `.env` read, no secret printed: `$ENV check` for names.
+- No `.env` read, no secret printed: `sh ${CLAUDE_SKILL_DIR}/../../scripts/deckhand-env check` for names.
+
+## 0. Already done?
+
+When Deckhand answers (`curl -fsS localhost:8080/health`) and has its App (`curl -s localhost:8080/`
+doesn't say "no GitHub App yet"), look for the first run an earlier pass of this skill
+started, the user's "Try Deckhand" issue (section 5):
+
+```sh
+gh search issues "Try Deckhand" --author @me --match title --json url,repository,number
+```
+
+For each, `gh api repos/<owner/repo>/issues/<number>/comments --jq '.[] | select(.user.type == "Bot") | .html_url'`
+lists the App's replies. One there: the setup is done. Say so, with its link and the public
+address, check the public address still answers (section 2's last check), and stop: no new
+issue or comment. An issue without a reply yet: follow it as section 5 says, rather than
+opening another. None (or no `gh`: ask the user): go on.
 
 ## 1. Before starting
 
 Each missing piece is a step skill of its own; run it, then come back:
 
-- a credential: `$ENV check CLAUDE_CODE_OAUTH_TOKEN ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN OPENAI_API_KEY GEMINI_API_KEY`
+- a credential: `sh ${CLAUDE_SKILL_DIR}/../../scripts/deckhand-env check CLAUDE_CODE_OAUTH_TOKEN ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN OPENAI_API_KEY GEMINI_API_KEY`
   or a login in `credentials/` (`deckhand-credentials`);
 - a login in `allowed_users` of `server/config.yaml` (`deckhand-server-folder`);
 - `public_url` in `server/config.yaml`, or `PUBLIC_URL` set (`deckhand-endpoint`).
@@ -40,6 +59,10 @@ docker compose pull           # a few minutes the first time
 docker compose up -d
 docker compose ps
 ```
+
+On Linux, unless `id -u` says 1000, the user runs `sudo chown 1000 credentials` (the models
+service runs as uid 1000, `docs/guides/agents.md#the-credentials-folder`); otherwise its log
+warns at each start that it can't read the folder, harmless without a plan's login there.
 
 Then wait for edge, up to two minutes:
 `for i in $(seq 24); do curl -fsS localhost:8080/health && break; sleep 5; done` (`PORT` from
@@ -67,18 +90,19 @@ Before opening the link, tell the user what they'll see and pick:
 3. GitHub's installation page: pick the repositories Deckhand may work on (those
    `allowed_repos` allows), then **Install**.
 
-Then `$OPEN_SETUP <public_url>`. It prints only what it did. With no browser on this machine
+Then `sh ${CLAUDE_SKILL_DIR}/../../scripts/deckhand-open-setup <public_url>`. It prints only what it did. With no browser on this machine
 (a server over SSH), it says what the user runs in their own terminal to get the link; never
 fetch it for them.
 
 Wait for the user to say it's done, then check: `curl -s localhost:8080/` no longer says "no
 GitHub App yet", and `docker compose logs edge github | grep -v 'setup?token=' | tail -n 20`
 shows no error. "Setup expired" or "Setup link needed" in the browser: edge restarted since,
-and its link changed: `$OPEN_SETUP <public_url>` again.
+and its link changed: `sh ${CLAUDE_SKILL_DIR}/../../scripts/deckhand-open-setup <public_url>` again.
 
 ## 4. The installation
 
-Ask which repository to try it on (`owner/repo`, one the App is installed on). Each one
+Ask which repository to try it on (`owner/repo`, one the App is installed on), unless
+section 0 found one. Each one
 without a `.deckhand.yaml` gets an onboarding issue within a minute or so:
 `gh issue list -R <owner/repo> --label deckhand-onboarding --state all`. There: the App is
 installed and Deckhand hears it. That issue can wait (`docs/guides/repositories.md#onboarding`):

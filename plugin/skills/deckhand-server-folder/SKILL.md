@@ -15,8 +15,11 @@ secret: read and edit `server/config.yaml` with the file tools. `.env` stays clo
 names with the helper, never its values:
 
 ```sh
-ENV="sh ${CLAUDE_SKILL_DIR}/../../scripts/deckhand-env"
+sh ${CLAUDE_SKILL_DIR}/../../scripts/deckhand-env check <NAME>...
 ```
+
+Write it out in full in each command: the shell keeps no variable from one command to the
+next.
 
 ## 1. The folder
 
@@ -32,7 +35,7 @@ The login: `gh api user --jq .login` (or ask, without `gh`). Read `allowed_users
 - Empty (`[]`): set it to `[<login>]`. Others can be added later, each a GitHub login; anyone
   listed may start runs on every allowed repository, with the user's credential.
 
-`$ENV check ALLOWED_USERS ALLOWED_REPOS`: a name `set` in `.env` wins over the file. Tell the
+`sh ${CLAUDE_SKILL_DIR}/../../scripts/deckhand-env check ALLOWED_USERS ALLOWED_REPOS`: a name `set` in `.env` wins over the file. Tell the
 user, and ask them to check (in their editor, not here) that `.env`'s value has their login, or
 to empty that line so the file's applies.
 
@@ -48,7 +51,7 @@ public for several organizations (`docs/guides/github-app.md#installing-it-on-se
 ## 4. The agent: `sandbox_agent`
 
 `claude` by default. With only Codex's or the Antigravity CLI's credential (step 2,
-`deckhand-credentials`: `$ENV check CLAUDE_CODE_OAUTH_TOKEN ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN OPENAI_API_KEY GEMINI_API_KEY`,
+`deckhand-credentials`: `sh ${CLAUDE_SKILL_DIR}/../../scripts/deckhand-env check CLAUDE_CODE_OAUTH_TOKEN ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN OPENAI_API_KEY GEMINI_API_KEY`,
 and `ls credentials`), set it to `codex` or `antigravity`.
 
 ## 5. The rest

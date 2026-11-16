@@ -14,8 +14,11 @@ user's own credential, which the models service alone holds. This step puts one 
 Run from the Deckhand folder (step 1, `deckhand-prerequisites`, finds it). The helper:
 
 ```sh
-ENV="sh ${CLAUDE_SKILL_DIR}/../../scripts/deckhand-env"
+sh ${CLAUDE_SKILL_DIR}/../../scripts/deckhand-env check <NAME>...
 ```
+
+Write it out in full in each command: the shell keeps no variable from one command to the
+next.
 
 ## Rules
 
@@ -31,7 +34,7 @@ ENV="sh ${CLAUDE_SKILL_DIR}/../../scripts/deckhand-env"
 
 ```sh
 test -f .env || { cp .env.example .env && chmod 600 .env; }
-$ENV check CLAUDE_CODE_OAUTH_TOKEN ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN OPENAI_API_KEY GEMINI_API_KEY CODEX_AUTH_FILE AGY_AUTH_FILE
+sh ${CLAUDE_SKILL_DIR}/../../scripts/deckhand-env check CLAUDE_CODE_OAUTH_TOKEN ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN OPENAI_API_KEY GEMINI_API_KEY CODEX_AUTH_FILE AGY_AUTH_FILE
 ls -l credentials 2>/dev/null
 ```
 
@@ -66,7 +69,7 @@ cd <the Deckhand folder> && sh <helper's full path> set <NAME>
 ```
 
 It asks for the value without showing it, and appends `<NAME>=…` to `.env` (compose reads the
-last line setting a name). Then check again with `$ENV check <NAME>`: `set`.
+last line setting a name). Then check again with `sh ${CLAUDE_SKILL_DIR}/../../scripts/deckhand-env check <NAME>`: `set`.
 
 **A ChatGPT plan's login** (Codex) or **a Google AI plan's login** (the Antigravity CLI): the
 user follows the steps of `docs/guides/codex.md#with-a-chatgpt-plan` or

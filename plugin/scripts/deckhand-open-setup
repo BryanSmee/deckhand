@@ -33,7 +33,8 @@ link="$public/setup?token=$token"
 
 # Every opener's output is dropped: some echo the address they open.
 opened=""
-if grep -qi microsoft /proc/sys/kernel/osrelease 2>/dev/null; then
+# The kernel's release names WSL2's (DECKHAND_OSRELEASE: another file, for the tests).
+if grep -qi microsoft "${DECKHAND_OSRELEASE:-/proc/sys/kernel/osrelease}" 2>/dev/null; then
   # WSL2: Windows' browser.
   if command -v wslview >/dev/null 2>&1; then
     wslview "$link" >/dev/null 2>&1 && opened=1

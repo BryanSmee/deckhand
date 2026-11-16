@@ -28,7 +28,9 @@ the tag is what a new install pulls.
    that release's images with the chart's defaults. These are the draft's only two changed
    files; gaps are fixed separately. Both versions use the release's `X.Y.Z`. The mode
    leaves the pull request draft, even when checks pass. Resolve its checklist and questions,
-   review the operator actions, then mark it ready and merge it yourself.
+   review the operator actions, then mark it ready and merge it yourself. Before you merge it,
+   when `plugin/` or the install pages it follows changed since the last release, check the
+   setup skill by hand on its branch ([below](#the-setup-skill)).
 3. **The tag, on that pull request's merge commit**, once Checks passed on it:
 
    ```sh
@@ -55,9 +57,7 @@ the tag is what a new install pulls.
 
 5. **The notes**: the workflow made the release with GitHub's generated notes; replace them with
    the pull request's: `gh release edit v1.2.3 --notes-file .github/release-notes/v1.2.3.md`.
-6. **The setup skill**, when `plugin/` or the install pages it follows changed since the last
-   release: by hand, as the [section below](#the-setup-skill) says, before the tag.
-7. **The demo**: upload the updated demo yourself when the release changed its on-screen flow,
+6. **The demo**: upload the updated demo yourself when the release changed its on-screen flow,
    and record the link in the release checklist. Publishing stays with the maintainer.
 
 ## The setup skill
@@ -70,7 +70,9 @@ GitHub account, a tunnel and someone to click the App's pages, for a skill that 
 On each of Linux (Ubuntu's current LTS), macOS, and Windows 11 with WSL2 and Docker Desktop,
 with Claude Code installed and nothing else of Deckhand's:
 
-1. Install the plugin from the release's tag (`/plugin marketplace add`, as the guide says), then
+1. Install the plugin from the prepare pull request's branch, which holds what the tag will:
+   `/plugin marketplace add BryanSmee/deckhand@<its branch>` (a marketplace takes a branch or
+   a tag, not a commit; the tag doesn't exist yet), then `/plugin install deckhand@deckhand`, and
    run `/deckhand:setup-deckhand` against a throwaway account or organization and repository.
 2. It reaches a `Deckhand` comment answered by the App's bot.
 3. Run `/deckhand:setup-deckhand` again: every step says it is already done.

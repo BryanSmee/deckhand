@@ -14,8 +14,11 @@ https://bryansmee.github.io/deckhand/guides/tunnels).
 Run from the Deckhand folder. The helper, for the tunnels' tokens:
 
 ```sh
-ENV="sh ${CLAUDE_SKILL_DIR}/../../scripts/deckhand-env"
+sh ${CLAUDE_SKILL_DIR}/../../scripts/deckhand-env check <NAME>...
 ```
+
+Write it out in full in each command: the shell keeps no variable from one command to the
+next.
 
 A tunnel's token or authtoken is a secret like the agent's: the user sets it in their own
 terminal with `sh <helper's full path> set <NAME>` (never with `!` here), or types it into the
@@ -23,7 +26,7 @@ tool's own prompt. Never read it, print it, or put it in a file yourself.
 
 ## 1. What is there
 
-- `grep -n '^public_url' server/config.yaml`, and `$ENV check PUBLIC_URL` (`.env`'s wins when
+- `grep -n '^public_url' server/config.yaml`, and `sh ${CLAUDE_SKILL_DIR}/../../scripts/deckhand-env check PUBLIC_URL` (`.env`'s wins when
   set; ask the user its value, it isn't secret).
 - When Deckhand runs and an address is set: `curl -fsS --max-time 10 <address>/health` answers
   `ok` through the internet. Then the step is done.

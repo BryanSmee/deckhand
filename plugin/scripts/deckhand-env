@@ -69,9 +69,9 @@ case $cmd in
     printf '\n' >/dev/tty
     case $value in
       "") echo "deckhand-env: nothing pasted, .env unchanged." >&2; exit 1 ;;
-      *[[:space:]]* | *\"* | *\'* | *#*)
-        # Compose would cut it at a space or a comment, or unquote it.
-        echo "deckhand-env: the value has a space, a quote or a #: .env unchanged." >&2
+      *[[:space:]]* | *\"* | *\'* | *#* | *\$*)
+        # Compose would cut it at a space or a comment, unquote it, or interpolate a $.
+        echo "deckhand-env: the value has a space, a quote, a # or a \$: .env unchanged." >&2
         exit 1
         ;;
     esac

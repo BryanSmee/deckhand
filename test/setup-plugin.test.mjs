@@ -104,36 +104,96 @@ test(
   },
 );
 
-test("deckhand-open-setup never prints the setup link's token", { skip: needsBash }, (t) => {
+const token = "0123456789abcdef0123456789abcdef0123456789abcdef";
+
+// deckhand-open-setup on a system of `uname`'s, its kernel's release `osrelease`, with `extra`
+// in its environment and `openers` on PATH, fakes that record what they were asked to open: no
+// test ever opens a real browser. → what it said, and what each opener got.
+function openSetup(
+  t,
+  {
+    url = "https://deckhand.example.com/",
+    uname = "Linux",
+    osrelease = "6.1.0-generic",
+    extra = {},
+    openers = [],
+  } = {},
+) {
   const dir = tempDir(t);
   const bin = tempDir(t);
-  const token = "0123456789abcdef0123456789abcdef0123456789abcdef";
-  // A docker whose `compose logs edge` has the link of an older start and the running one's.
-  writeFileSync(
-    join(bin, "docker"),
-    `#!/bin/sh\necho "edge-1  | No GitHub App yet. Set it up at http://localhost:8080/setup?token=old"\n` +
-      `echo "No GitHub App yet. Set it up at http://localhost:8080/setup?token=${token}"\n`,
+  const fake = (name, body) => {
+    writeFileSync(join(bin, name), `#!/bin/sh\n${body}\n`);
+    chmodSync(join(bin, name), 0o755);
+  };
+  // `compose logs edge`: the link of an older start, then the running one's.
+  fake(
+    "docker",
+    `echo "edge-1  | No GitHub App yet. Set it up at http://localhost:8080/setup?token=old"\n` +
+      `echo "No GitHub App yet. Set it up at http://localhost:8080/setup?token=${token}"`,
   );
-  chmodSync(join(bin, "docker"), 0o755);
-  // No browser: neither DISPLAY nor an opener on PATH but the system's.
-  const run = spawnSync(
-    "sh",
-    [join(scripts, "deckhand-open-setup"), "https://deckhand.example.com/"],
-    {
-      env: scriptEnv(t, { DECKHAND_DIR: dir, PATH: `${bin}:/usr/bin:/bin` }),
-      encoding: "utf8",
-    },
+  fake("uname", `echo ${uname}`);
+  for (const name of openers) fake(name, `printf '%s\\n' "$1" >> "${join(bin, `${name}.got`)}"`);
+  writeFileSync(join(dir, "osrelease"), `${osrelease}\n`);
+  const run = spawnSync("sh", [join(scripts, "deckhand-open-setup"), url], {
+    env: scriptEnv(t, {
+      DECKHAND_DIR: dir,
+      DECKHAND_OSRELEASE: join(dir, "osrelease"),
+      PATH: `${bin}:/usr/bin:/bin`,
+      ...extra,
+    }),
+    encoding: "utf8",
+  });
+  const got = Object.fromEntries(
+    openers.map((name) => {
+      const file = join(bin, `${name}.got`);
+      return [name, existsSync(file) ? readFileSync(file, "utf8") : ""];
+    }),
   );
-  const said = run.stdout + run.stderr;
-  assert.doesNotMatch(said, new RegExp(token));
-  assert.doesNotMatch(said, /token=(old|[0-9a-f])/);
-  assert.match(said, /https:\/\/deckhand\.example\.com/);
+  return { status: run.status, said: run.stdout + run.stderr, got };
+}
 
-  assert.equal(
-    spawnSync("sh", [join(scripts, "deckhand-open-setup"), "http://deckhand.example.com"], {
-      env: scriptEnv(t, { DECKHAND_DIR: dir, PATH: `${bin}:/usr/bin:/bin` }),
-    }).status,
-    2,
-    "an address GitHub can't use",
-  );
-});
+const link = `https://deckhand.example.com/setup?token=${token}\n`;
+
+test(
+  "deckhand-open-setup opens the running edge's link behind the public address, never printing it",
+  { skip: needsBash },
+  (t) => {
+    const cases = [
+      { name: "Linux with a display", opener: "xdg-open", extra: { DISPLAY: ":0" } },
+      { name: "macOS", opener: "open", uname: "Darwin" },
+      { name: "WSL2", opener: "wslview", osrelease: "5.15.167.4-microsoft-standard-WSL2" },
+    ];
+    for (const { name, opener, ...system } of cases) {
+      const { status, said, got } = openSetup(t, {
+        ...system,
+        openers: ["xdg-open", "open", "wslview"],
+      });
+      assert.equal(status, 0, name);
+      assert.equal(got[opener], link, name);
+      for (const other of Object.keys(got))
+        if (other !== opener) assert.equal(got[other], "", name);
+      assert.doesNotMatch(said, /token=(old|[0-9a-f])/, name);
+      assert.match(said, /Opened the setup page \(https:\/\/deckhand\.example\.com\/setup\)/, name);
+    }
+  },
+);
+
+test(
+  "deckhand-open-setup without a browser says what to run, without the token",
+  { skip: needsBash },
+  (t) => {
+    // Linux, no DISPLAY: xdg-open is there but not used.
+    const { status, said, got } = openSetup(t, { openers: ["xdg-open"] });
+    assert.equal(status, 1);
+    assert.equal(got["xdg-open"], "");
+    assert.doesNotMatch(said, new RegExp(token));
+    assert.doesNotMatch(said, /token=(old|[0-9a-f])/);
+    assert.match(said, /https:\/\/deckhand\.example\.com/);
+
+    assert.equal(
+      openSetup(t, { url: "http://deckhand.example.com" }).status,
+      2,
+      "an address GitHub can't use",
+    );
+  },
+);
