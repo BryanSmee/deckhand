@@ -54,7 +54,9 @@ network).
   7 seconds after the event). **Sync** in the dashboard's top bar looks at once.
 - **Cost:** about 300 App calls an hour to list them, plus one per delivery. Of the deliveries
   that only say CI changed (`status`, `check_suite`), edge reads the newest of each repository
-  at each look: the dashboard's CI of a pull request may wait for its next change, or Sync.
+  at each look (the list doesn't say which commit each is for, and reading each one costs a
+  call). When several pull requests of one repository change CI within the same 12 seconds,
+  the dashboard may show one of them as still running until its next change, or a Sync.
 - **Sign-in** comes back to the address you gave `/setup` (the App's callback URL), so open the
   dashboard there. **Screenshots** a run posts in its comments don't show on GitHub, which can't
   fetch them from a local address; the dashboard shows them.

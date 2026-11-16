@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { APP_EVENTS, APP_PERMISSIONS } from "../listener/github-app.mjs";
-import { createSetup, manifest, PULL_ORIGIN } from "../listener/setup.mjs";
+import { createSetup, isLocal, manifest, PULL_ORIGIN } from "../listener/setup.mjs";
 import { serve, testConfig } from "./helpers.mjs";
 
 const conversion = {
@@ -77,6 +77,30 @@ test("pull mode's manifest: an active webhook that never resolves, sign-in back 
     "https://deckhand.invalid/auth/callback",
   ]);
   assert.deepEqual(m.default_events, APP_EVENTS);
+});
+
+test("a local address, pull mode chosen for it: loopback, private ranges, mDNS, Docker's host", () => {
+  for (const url of [
+    "http://localhost:8080",
+    "http://127.0.0.1:8080",
+    "http://[::1]:8080",
+    "http://0.0.0.0:8080",
+    "http://10.0.0.5",
+    "http://172.20.1.1:8080",
+    "http://192.168.1.20:8080",
+    "http://nas.local:8080",
+    "http://host.docker.internal:8080",
+    "http://server:8080",
+  ]) {
+    assert.equal(isLocal(url), true, url);
+  }
+  for (const url of [
+    "http://10.example.com",
+    "https://deckhand.example.com",
+    "http://172.32.1.1",
+  ]) {
+    assert.equal(isLocal(url), false, url);
+  }
 });
 
 test("no public address: the form offers pull mode, and the App is stored with it", async (t) => {

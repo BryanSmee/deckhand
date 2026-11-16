@@ -220,6 +220,9 @@ test("edge: a delivery taken once, read and acknowledged by the orchestrator; th
 
 test("edge in pull mode: a comment read through the App's API, without any inbound connection (#1032)", async (t) => {
   const id = "3853120732796035072";
+  // A second failed delivery GitHub won't hand over: never taken, so only pull mode's own rule
+  // keeps the redeliveries from asking for it.
+  const lost = "3853120732796035073";
   const asked = [];
   const json = (res, body) => {
     res.writeHead(200, { "content-type": "application/json", "x-github-status": "200" });
@@ -230,9 +233,20 @@ test("edge in pull mode: a comment read through the App's API, without any inbou
     github: (req, res) => {
       asked.push(req.url);
       if (req.url.startsWith("/as-app/app/hook/deliveries?")) {
-        const listed = { guid: "p-1", event: "issue_comment", delivered_at: new Date() };
-        // The ID as GitHub writes it: a number past 2^53.
-        json(res, `[${JSON.stringify(listed).replace("{", `{"id":${id},`)}]`);
+        // The IDs as GitHub writes them: numbers past 2^53.
+        const listed = (n, guid) =>
+          JSON.stringify({
+            guid,
+            event: "issue_comment",
+            action: "created",
+            status_code: 0,
+            delivered_at: new Date(),
+          }).replace("{", `{"id":${n},`);
+        json(res, `[${listed(lost, "p-2")},${listed(id, "p-1")}]`);
+        return true;
+      }
+      if (req.url === `/as-app/app/hook/deliveries/${lost}`) {
+        res.writeHead(404, { "x-github-status": "404" }).end("{}");
         return true;
       }
       if (req.url === `/as-app/app/hook/deliveries/${id}`) {
@@ -253,7 +267,13 @@ test("edge in pull mode: a comment read through the App's API, without any inbou
     events.map(({ event }) => [event.id, event.event, event.payload.comment.id]),
     [["p-1", "issue_comment", 99]],
   );
-  // Never asked GitHub to redeliver to an address that never answers.
+  await edge.until("delivery p-2");
+  // The dashboard's Sync: a look now; never a redelivery to an address
+  // that never answers.
+  const sync = await edge.internal("/redeliveries/scan", { method: "POST" });
+  assert.ok(Number.isInteger((await sync.json()).count));
+  // Read once at least (a Sync joins a look still going).
+  assert.ok(asked.some((url) => url.endsWith(`/deliveries/${lost}`)));
   assert.ok(!asked.some((url) => url.endsWith("/attempts")));
 });
 

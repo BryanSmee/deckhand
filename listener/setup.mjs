@@ -62,9 +62,19 @@ function page(res, status, title, body) {
   return html(res, status, title, body, { css: CSS });
 }
 
-// A local address: GitHub can't send webhooks to it.
-const isLocal = (url) =>
-  /^https?:\/\/(localhost|127\.|\[::1\]|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/.test(url);
+// A local address: GitHub can't send webhooks to it. Loopback, private ranges, mDNS names and
+// Docker's name for the host; a name with a dot anywhere else is taken as public.
+export function isLocal(url) {
+  let host;
+  try {
+    host = new URL(url).hostname.replace(/^\[|\]$/g, "");
+  } catch {
+    return false;
+  }
+  if (["localhost", "0.0.0.0", "::1", "host.docker.internal"].includes(host)) return true;
+  if (host.endsWith(".local") || host.endsWith(".localhost") || !host.includes(".")) return true;
+  return /^(127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)(\d+\.){1,2}\d+$/.test(host);
+}
 
 // PUBLIC_URL, or what the browser used to get here (through the operator's reverse proxy).
 function origin(config, req) {

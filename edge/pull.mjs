@@ -10,8 +10,9 @@
 //
 // A delivery is taken once: its GUID's mark here (`pulled/<guid>`, for as long as GitHub keeps
 // it), and take.mjs's own, which a webhook that did arrive set too.
-import { listDeliveries } from "../listener/redeliveries.mjs";
+import { createRedeliveries, listDeliveries } from "../listener/redeliveries.mjs";
 import { QUIET_EVENTS } from "../listener/github-app.mjs";
+import { createTaker, takenDelivery } from "./take.mjs";
 
 // How often it looks: GitHub lists a delivery 1.4 to 7 s after its event.
 const CHECK_MS = 12_000;
@@ -33,10 +34,29 @@ const SCANNED = "pulled/scanned";
 const LAST = "pulled/last";
 const pulledKey = (guid) => `pulled/${guid}`;
 
-// Whether pull mode took the delivery with this GUID, within the 3 days GitHub keeps it: the
-// redeliveries, once webhooks are back, never ask for one again.
-export async function pulledDelivery(store, guid) {
-  return (await store.get(pulledKey(guid))) !== null;
+// A mark still `taking` after this was left by a scan that died (edge killed mid-read): free.
+const TAKING_MS = 2 * 60_000;
+
+// Whether pull mode took the delivery with this GUID, within the 3 days GitHub keeps it, or is
+// taking it now: the redeliveries, once webhooks are back, never ask for one again.
+export async function pulledDelivery(store, guid, now = Date.now) {
+  const mark = await store.get(pulledKey(guid));
+  return !!mark && (mark.kept != null || now() - (mark.taking ?? 0) < TAKING_MS);
+}
+
+// Whether edge has a delivery, whichever way it came: what the redeliveries skip.
+export async function takenOrPulled(store, guid, now = Date.now) {
+  return (await takenDelivery(store, guid, now)) || pulledDelivery(store, guid, now);
+}
+
+// Marks it as being read, once: false when it was taken, or another scan is reading it.
+async function startPulling(store, guid, at, ttlMs) {
+  const key = pulledKey(guid);
+  const mark = { taking: at };
+  if (await store.setIfAbsent(key, mark, { ttlMs })) return true;
+  const found = await store.get(key);
+  if (!found || found.kept != null || at - (found.taking ?? 0) < TAKING_MS) return false;
+  return store.compareAndSet(key, found, mark, { ttlMs });
 }
 
 // Whether pull mode is on: DELIVERIES (`pull` or `webhook`) over what /setup stored in app.json.
@@ -99,6 +119,8 @@ export function createPull({
 }) {
   let scanning = null;
   let timer = null;
+  // Set by close(): the scan in flight ends after the delivery it is reading.
+  let stopped = false;
   let warnedAt = -Infinity;
   // Whether it was on at its last look (null: not known since it started).
   let on = null;
@@ -135,6 +157,7 @@ export function createPull({
   // on the stream, or null while pull mode is off (no App). One at a time: a second call shares it.
   function scan() {
     if (scanning) return scanning;
+    if (stopped) return Promise.resolve(null);
     const github = app();
     if (!github) {
       // Off: turned on again, it starts from now, not from days of deliveries webhooks took.
@@ -157,11 +180,19 @@ export function createPull({
       // The next look starts no later than a delivery that couldn't be read.
       let resume = started;
       for (const d of toRead(list)) {
+        if (stopped) {
+          // Stopping: the rest is the next look's, on whichever copy takes the lease.
+          resume = Math.min(resume, Date.parse(d.delivered_at));
+          break;
+        }
         if (await handled(d.guid)) continue;
-        const kept = Math.max(1, Date.parse(d.delivered_at) + RETENTION_MS - started);
-        if (!(await store.setIfAbsent(pulledKey(d.guid), started, { ttlMs: kept }))) continue;
+        const ttlMs = Math.max(1, Date.parse(d.delivered_at) + RETENTION_MS - started);
+        if (!(await startPulling(store, d.guid, started, ttlMs))) continue;
         try {
           const { event, result } = await pull(github, d, started);
+          // Kept only once on the stream (or dropped as ignored): a mark left `taking` by a
+          // copy killed before is free again in 2 minutes.
+          await store.set(pulledKey(d.guid), { kept: now() }, { ttlMs });
           onPulled(event, result);
           if (result === "accepted") count++;
         } catch (error) {
@@ -176,7 +207,13 @@ export function createPull({
           }
         }
       }
-      await store.set(SCANNED, resume);
+      // Another copy's scan (a Sync) may have written since: the earlier of the two, so neither
+      // one's unread delivery falls out of the next look.
+      const latest = await store.get(SCANNED);
+      await store.set(
+        SCANNED,
+        latest != null && latest !== scannedAt ? Math.min(latest, resume) : resume,
+      );
       return count;
     })().finally(() => (scanning = null));
     return scanning;
@@ -196,5 +233,55 @@ export function createPull({
     timer = null;
   }
 
-  return { scan, start, stop };
+  // Edge stopping: no look after this one, which ends after the delivery it is reading. → once
+  // it has (SIGTERM waits for it before closing the store: a read cut there is read again).
+  function close() {
+    stop();
+    stopped = true;
+    return (scanning ?? Promise.resolve()).then(
+      () => {},
+      () => {},
+    );
+  }
+
+  return { scan, start, stop, close };
+}
+
+// Edge's two pollers, as server.mjs runs them on the lease's holder, whichever mode is on at
+// each look (`pulling()`): the redeliveries with webhooks, never in pull mode, where every
+// delivery fails (its webhook URL never resolves) and the pull reads them all; and back on
+// webhooks, never one pull mode took. `app()`: the App's client, null before /setup;
+// `taking`: createTaker()'s options but the store and the redeliveries. → { redeliveries, pull,
+// sync(): the dashboard's Sync, a look now in pull mode }.
+export function createPollers({
+  store,
+  app,
+  pulling,
+  taking,
+  onRedelivered,
+  onPulled,
+  onSeen,
+  log = () => {},
+  now = Date.now,
+}) {
+  const redeliveries = createRedeliveries({
+    store,
+    app: () => (pulling() ? null : app()),
+    handled: (guid) => takenOrPulled(store, guid, now),
+    onRedelivered,
+    log,
+    now,
+  });
+  const pull = createPull({
+    store,
+    app: () => (pulling() ? app() : null),
+    take: createTaker({ ...taking, store, redeliveries, log, now }),
+    handled: (guid) => takenDelivery(store, guid, now),
+    onPulled,
+    onSeen,
+    log,
+    now,
+  });
+  const sync = async () => (await pull.scan()) ?? redeliveries.scan();
+  return { redeliveries, pull, sync };
 }

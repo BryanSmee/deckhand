@@ -41,7 +41,6 @@ import { createGithubClient } from "../github/client.mjs";
 import { createAuth, sessionKey } from "../listener/auth.mjs";
 import { createBrokerService } from "../listener/broker-service.mjs";
 import { ConfigError, loadConfig, readConfigFile } from "../listener/config.mjs";
-import { createRedeliveries } from "../listener/redeliveries.mjs";
 import { createSetup } from "../listener/setup.mjs";
 import { serverInfo } from "../listener/status.mjs";
 import { createEdgeApp } from "./app.mjs";
@@ -52,8 +51,7 @@ import { createEdgeInternal } from "./internal.mjs";
 import { localToken } from "./local.mjs";
 import { declareMetrics } from "./metrics.mjs";
 import { createOAuth } from "./oauth.mjs";
-import { createPull, pulledDelivery, pullMode } from "./pull.mjs";
-import { createTaker, takenDelivery } from "./take.mjs";
+import { createPollers, pullMode } from "./pull.mjs";
 
 const env = process.env;
 // Its lines redact its own secrets too (below), once it has read them.
@@ -174,21 +172,13 @@ const oauth = createOAuth({
   log,
 });
 
-// Each delivery GitHub couldn't hand over is asked again: never in pull mode, where every one
-// fails (its webhook URL never resolves) and the poller reads them all.
-const taken = async (guid) => (await takenDelivery(store, guid)) || pulledDelivery(store, guid);
-const redeliveries = createRedeliveries({
+// The redeliveries with webhooks, the pull in pull mode (pull.mjs), on the lease's holder.
+const { redeliveries, pull, sync } = createPollers({
   store,
-  app: () => (pulling() ? null : appClient()),
-  handled: taken,
+  app: appClient,
+  pulling,
+  taking: { config, secrets },
   onRedelivered: counted.redelivered,
-  log,
-});
-const pull = createPull({
-  store,
-  app: () => (pulling() ? appClient() : null),
-  take: createTaker({ config, store, redeliveries, secrets, log, now: Date.now }),
-  handled: (guid) => takenDelivery(store, guid),
   onPulled: counted.webhook,
   onSeen: counted.lastDelivery,
   log,
@@ -239,7 +229,7 @@ const internal = createEdgeInternal({
   keys: { get: (kid) => broker.serviceKeys().get(kid) },
   bound: env.SERVICE_NETWORKS === "none" ? null : networkCallers(config.serviceNetworks ?? ""),
   // The dashboard's Sync: in pull mode, a look now.
-  redeliveries: { scan: async () => (await pull.scan()) ?? redeliveries.scan() },
+  redeliveries: { scan: sync },
   log,
 });
 
@@ -271,6 +261,8 @@ process.once("SIGTERM", async () => {
   stopping = true;
   log("Stopping: requests in flight finish, the poller's lease goes to the other copy");
   await poller.stop().catch(() => false);
+  // A delivery being read when it stopped is either on the stream or read again later.
+  await pull.close();
   broker.stop();
   const all = await Promise.all([drain(web, { graceMs }), drain(internal, { graceMs })]);
   if (!all.every(Boolean))

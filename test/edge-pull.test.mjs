@@ -3,7 +3,16 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { openStore } from "../lib/store.mjs";
-import { createPull, pulledDelivery, pullMode, readDelivery, toRead } from "../edge/pull.mjs";
+import {
+  createPollers,
+  createPull,
+  pulledDelivery,
+  pullMode,
+  readDelivery,
+  takenOrPulled,
+  toRead,
+} from "../edge/pull.mjs";
+import { createRedeliveries } from "../listener/redeliveries.mjs";
 import { DELIVERIES } from "../edge/internal.mjs";
 import { createTaker, takenDelivery } from "../edge/take.mjs";
 import { recordingFetch, testConfig } from "./helpers.mjs";
@@ -230,4 +239,119 @@ test("a day without a delivery is said in the logs, once a day", async () => {
   const said = logs.filter((line) => /no delivery from GitHub for 25 h/.test(line));
   assert.equal(said.length, 1);
   assert.match(said[0], /still Active/);
+});
+
+test("a delivery a scan died reading (edge killed) is read again 2 minutes on, not before", async () => {
+  let now = NOW;
+  const github = fakeGitHub(() => [listed(1, "g-1", 5)]);
+  const store = openStore("memory:");
+  // The mark a scan set before it read the delivery, then the process was gone.
+  await store.set("pulled/g-1", { taking: NOW - 30 * SEC });
+  const { pull, stream } = pullOn(github, { store, now: () => now });
+  assert.equal(await pull.scan(), 0);
+  assert.equal(await pulledDelivery(store, "g-1", () => now), true);
+  now = NOW + 2 * 60 * SEC;
+  assert.equal(await pull.scan(), 1);
+  assert.deepEqual(
+    (await stream()).map((e) => e.id),
+    ["g-1"],
+  );
+  assert.deepEqual(await store.get("pulled/g-1"), { kept: now });
+});
+
+test("closing: the scan ends after the delivery it is reading, the rest read at the next look", async () => {
+  const list = [listed(3, "g-3", 2), listed(2, "g-2", 3), listed(1, "g-1", 5)];
+  let release;
+  let reached;
+  const held = new Promise((resolve) => (release = resolve));
+  const reading = new Promise((resolve) => (reached = resolve));
+  const github = fakeGitHub(() => list);
+  const slow = {
+    app: () => ({
+      asApp: async (method, path) => {
+        if (path.endsWith("01")) {
+          reached();
+          await held;
+        }
+        return github.app().asApp(method, path);
+      },
+    }),
+  };
+  const store = openStore("memory:");
+  const first = pullOn(slow, { store });
+  const scanning = first.pull.scan();
+  // Closed while it reads the first one.
+  await reading;
+  const closed = first.pull.close();
+  release();
+  await closed;
+  assert.equal(await scanning, 1);
+  assert.equal(await first.pull.scan(), null);
+  // The next copy, after the handover: the two left.
+  const next = pullOn(github, { store });
+  assert.equal(await next.pull.scan(), 2);
+  assert.deepEqual(
+    (await next.stream()).map((e) => e.id),
+    ["g-1", "g-2", "g-3"],
+  );
+});
+
+test("webhooks back: a delivery pull mode took is never redelivered, one it didn't is", async () => {
+  const store = openStore("memory:");
+  await store.set("pulled/g-1", { kept: NOW });
+  const failed = [
+    listed(2, "g-2", 60, { status_code: 0 }),
+    listed(1, "g-1", 90, { status_code: 0 }),
+  ];
+  const asked = [];
+  const asApp = async (method, path) => {
+    if (method === "POST") {
+      asked.push(path.split("/")[4]);
+      return new Response(null, { status: 202 });
+    }
+    return Response.json(failed);
+  };
+  const redeliveries = createRedeliveries({
+    store,
+    app: () => ({ asApp }),
+    handled: (guid) => takenOrPulled(store, guid),
+    now: () => NOW,
+  });
+  assert.equal(await redeliveries.scan(), 1);
+  assert.deepEqual(asked, ["3853120732796035002"]);
+});
+
+test("the pollers: pull mode reads and never redelivers; back on webhooks, only what it didn't take is asked again", async () => {
+  let pulling = true;
+  const list = [listed(2, "g-2", 60, { status_code: 0 }), listed(1, "g-1", 90, { status_code: 0 })];
+  // g-2 can't be read: pull mode leaves it, and nothing else may ask for it.
+  const github = fakeGitHub(() => list, { fail: (id) => id.endsWith("02") });
+  const asked = [];
+  const app = () => ({
+    asApp: async (method, path) => {
+      if (method !== "POST") return github.app().asApp(method, path);
+      asked.push(path.split("/")[4]);
+      return new Response(null, { status: 202 });
+    },
+  });
+  const store = openStore("memory:");
+  const { redeliveries, pull, sync } = createPollers({
+    store,
+    app,
+    pulling: () => pulling,
+    taking: { config: testConfig(), secrets: () => [] },
+    now: () => NOW,
+  });
+  assert.equal(await redeliveries.scan(), null);
+  assert.equal(await sync(), 1);
+  assert.deepEqual(
+    (await store.read(DELIVERIES, "orchestrator")).map(({ event }) => event.id),
+    ["g-1"],
+  );
+  assert.deepEqual(asked, []);
+  // Webhooks again (DELIVERIES=webhook): the pull is off, the redeliveries skip g-1.
+  pulling = false;
+  assert.equal(await pull.scan(), null);
+  assert.equal(await sync(), 1);
+  assert.deepEqual(asked, ["3853120732796035002"]);
 });
