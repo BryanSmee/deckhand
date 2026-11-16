@@ -55,5 +55,27 @@ the tag is what a new install pulls.
 
 5. **The notes**: the workflow made the release with GitHub's generated notes; replace them with
    the pull request's: `gh release edit v1.2.3 --notes-file .github/release-notes/v1.2.3.md`.
-6. **The demo**: upload the updated demo yourself when the release changed its on-screen flow,
+6. **The setup skill**, when `plugin/` or the install pages it follows changed since the last
+   release: by hand, as the [section below](#the-setup-skill) says, before the tag.
+7. **The demo**: upload the updated demo yourself when the release changed its on-screen flow,
    and record the link in the release checklist. Publishing stays with the maintainer.
+
+## The setup skill
+
+The `setup-deckhand` skill ([Set up with Claude Code](../guides/setup-skill.md), `plugin/`) is
+checked by hand, on a fresh virtual machine per system, at each release that changed it or the
+pages it follows (the quick start, the tunnels, the GitHub App): a run in CI would need a
+GitHub account, a tunnel and someone to click the App's pages, for a skill that changes rarely.
+
+On each of Linux (Ubuntu's current LTS), macOS, and Windows 11 with WSL2 and Docker Desktop,
+with Claude Code installed and nothing else of Deckhand's:
+
+1. Install the plugin from the release's tag (`/plugin marketplace add`, as the guide says), then
+   run `/setup-deckhand` against a throwaway account or organization and repository.
+2. It reaches a `Deckhand` comment answered by the App's bot.
+3. Run `/setup-deckhand` again: every step says it is already done.
+4. No secret in the transcript: search the session's file (`~/.claude/projects/<folder>/<session>.jsonl`)
+   for the credential, the tunnel's token if any, and `setup?token=`; none may be there.
+
+Then delete the App, the throwaway repository's issues, and the machine. Record each system's
+result in the release issue's checklist.

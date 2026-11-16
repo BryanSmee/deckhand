@@ -1,0 +1,19 @@
+{
+  "name": "deckhand",
+  "owner": {
+    "name": "BryanSmee",
+    "url": "https://github.com/BryanSmee/deckhand"
+  },
+  "metadata": {
+    "description": "Deckhand's own Claude Code plugins, versioned with its releases"
+  },
+  "plugins": [
+    {
+      "name": "deckhand",
+      "source": "./plugin",
+      "description": "Set up a self-hosted Deckhand, from nothing to a first answered run, without a secret in the conversation",
+      "category": "productivity",
+      "homepage": "https://bryansmee.github.io/deckhand/guides/setup-skill"
+    }
+  ]
+}

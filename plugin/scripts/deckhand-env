@@ -1,0 +1,86 @@
+#!/bin/sh
+# deckhand-env (#1031): Deckhand's secrets in .env, set and checked without ever showing them,
+# so the setup skill never reads the file and no value reaches the conversation.
+#
+#   deckhand-env check NAME...   each NAME's state as compose reads it: "NAME set" or "NAME empty"
+#   deckhand-env set NAME        asks for NAME's value on the terminal, hidden, then appends
+#                                NAME=<value> to .env (compose reads the last line setting it)
+#
+# `set` needs a terminal: run it in your own, not through an agent. It works on the .env of the
+# current folder, or of DECKHAND_DIR. POSIX sh: Linux, macOS and WSL2.
+set -eu
+
+dir=${DECKHAND_DIR:-.}
+env_file="$dir/.env"
+
+usage() {
+  echo "usage: deckhand-env check NAME... | deckhand-env set NAME" >&2
+  exit 2
+}
+
+valid_name() {
+  case $1 in
+    "" | [0-9]* | *[!A-Za-z0-9_]*) echo "deckhand-env: not a variable name: $1" >&2; exit 2 ;;
+  esac
+}
+
+# "set" or "empty": the value of the last line setting $1, as compose reads it (unquoted, up to
+# a comment; "" and '' are empty). The value itself never leaves awk.
+state() {
+  [ -f "$env_file" ] || { echo empty; return; }
+  awk -v n="$1" '
+    match($0, "^[ \t]*(export[ \t]+)?" n "[ \t]*=") {
+      v = substr($0, RLENGTH + 1)
+      sub(/^[ \t]+/, "", v); sub(/[ \t]+#.*$/, "", v); sub(/[ \t\r]+$/, "", v)
+      if (v == "\"\"" || v == "'\'''\''") v = ""
+    }
+    END { print (v == "" ? "empty" : "set") }
+  ' "$env_file"
+}
+
+[ $# -ge 1 ] || usage
+cmd=$1
+shift
+case $cmd in
+  check)
+    [ $# -ge 1 ] || usage
+    for name in "$@"; do
+      valid_name "$name"
+      echo "$name $(state "$name")"
+    done
+    ;;
+  set)
+    [ $# -eq 1 ] || usage
+    name=$1
+    valid_name "$name"
+    if ! (: </dev/tty) 2>/dev/null || ! [ -t 0 ]; then
+      echo "deckhand-env: set needs a terminal: run it in your own, not through an agent." >&2
+      exit 1
+    fi
+    [ "$(state "$name")" = set ] && echo "$name is already set: the new value replaces it."
+    printf '%s (hidden, Enter when done): ' "$name" >/dev/tty
+    old=$(stty -g </dev/tty)
+    trap 'stty "$old" </dev/tty' EXIT
+    trap 'exit 130' INT TERM
+    stty -echo </dev/tty
+    IFS= read -r value </dev/tty || value=
+    stty "$old" </dev/tty
+    trap - EXIT
+    printf '\n' >/dev/tty
+    case $value in
+      "") echo "deckhand-env: nothing pasted, .env unchanged." >&2; exit 1 ;;
+      *[[:space:]]* | *\"* | *\'* | *#*)
+        # Compose would cut it at a space or a comment, or unquote it.
+        echo "deckhand-env: the value has a space, a quote or a #: .env unchanged." >&2
+        exit 1
+        ;;
+    esac
+    # A new .env is the operator's alone; an existing one keeps its mode.
+    [ -f "$env_file" ] || (umask 077 && : >"$env_file")
+    # The line goes on a line of its own, even after a last line without its newline.
+    [ -s "$env_file" ] && [ -n "$(tail -c 1 "$env_file")" ] && echo >>"$env_file"
+    printf '%s=%s\n' "$name" "$value" >>"$env_file"
+    echo "$name saved in $env_file (${#value} characters)."
+    ;;
+  *) usage ;;
+esac
