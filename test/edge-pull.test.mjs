@@ -241,22 +241,29 @@ test("a day without a delivery is said in the logs, once a day", async () => {
   assert.match(said[0], /still Active/);
 });
 
-test("a delivery a scan died reading (edge killed) is read again 2 minutes on, not before", async () => {
+test("a delivery a scan died reading (edge killed) is read again 2 minutes on, not before, the looks in between holding it", async () => {
   let now = NOW;
+  // Sent just before the dead scan's look, which marked it and was gone (an OOM kill): the
+  // other copy looks every 12 seconds from there, each going back 60 seconds before the last.
   const github = fakeGitHub(() => [listed(1, "g-1", 5)]);
   const store = openStore("memory:");
-  // The mark a scan set before it read the delivery, then the process was gone.
-  await store.set("pulled/g-1", { taking: NOW - 30 * SEC });
+  await store.set("pulled/scanned", NOW - 12 * SEC);
+  await store.set("pulled/g-1", { taking: NOW });
   const { pull, stream } = pullOn(github, { store, now: () => now });
-  assert.equal(await pull.scan(), 0);
-  assert.equal(await pulledDelivery(store, "g-1", () => now), true);
-  now = NOW + 2 * 60 * SEC;
+  for (; now < NOW + 2 * 60 * SEC; now += 12 * SEC) {
+    assert.equal(await pull.scan(), 0, `${(now - NOW) / SEC} s on`);
+    assert.equal(await pulledDelivery(store, "g-1", () => now), true);
+  }
   assert.equal(await pull.scan(), 1);
   assert.deepEqual(
     (await stream()).map((e) => e.id),
     ["g-1"],
   );
   assert.deepEqual(await store.get("pulled/g-1"), { kept: now });
+  // Taken: the next looks move on.
+  now += 12 * SEC;
+  assert.equal(await pull.scan(), 0);
+  assert.equal(await store.get("pulled/scanned"), now);
 });
 
 test("closing: the scan ends after the delivery it is reading, the rest read at the next look", async () => {

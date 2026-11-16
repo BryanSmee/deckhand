@@ -23,21 +23,36 @@ const CI_WAITING_TTL_MS = 10 * 60_000;
 // a store that failed twice): taken again.
 const TAKING_MS = 60_000;
 
+// A mark's state at `at`: `kept` (done), `busy` (being taken, or read, for less than
+// `takingMs`) or null (none, or one a copy that died left: free). This file's marks and
+// pull.mjs's.
+export function markState(mark, at, takingMs) {
+  if (!mark) return null;
+  if (mark.kept != null) return "kept";
+  return at - (mark.taking ?? 0) < takingMs ? "busy" : null;
+}
+
+// Marks `key` as being taken at `at`, once: → `claimed`, or why not (markState()'s `kept` or
+// `busy`; `busy` too when another copy claimed it first).
+export async function claimMark(store, key, at, { ttlMs, takingMs }) {
+  const mark = { taking: at };
+  if (await store.setIfAbsent(key, mark, { ttlMs })) return "claimed";
+  const found = await store.get(key);
+  const state = markState(found, at, takingMs);
+  if (state) return state;
+  return (await store.compareAndSet(key, found, mark, { ttlMs })) ? "claimed" : "busy";
+}
+
 // Whether edge took the delivery with this GUID (the redeliveries ask it, ../listener/
 // redeliveries.mjs `handled`, and the pull mode's poller): kept, or being taken now.
 export async function takenDelivery(store, id, now = Date.now) {
-  const mark = await store.get(deliveryKey(id));
-  return !!mark && (mark.kept != null || now() - (mark.taking ?? 0) < TAKING_MS);
+  return markState(await store.get(deliveryKey(id)), now(), TAKING_MS) !== null;
 }
 
 // Marks it as being taken, once: false when another copy (or GitHub's second send) has it.
 async function startTaking(store, id, now) {
-  const key = deliveryKey(id);
-  const mark = { taking: now() };
-  if (await store.setIfAbsent(key, mark, { ttlMs: DELIVERY_TTL_MS })) return true;
-  const found = await store.get(key);
-  if (!found || found.kept != null || now() - (found.taking ?? 0) < TAKING_MS) return false;
-  return store.compareAndSet(key, found, mark, { ttlMs: DELIVERY_TTL_MS });
+  const claimed = { ttlMs: DELIVERY_TTL_MS, takingMs: TAKING_MS };
+  return (await claimMark(store, deliveryKey(id), now(), claimed)) === "claimed";
 }
 
 // `redeliveries`: ../listener/redeliveries.mjs's (redelivered()); `secrets()`: kept out of the

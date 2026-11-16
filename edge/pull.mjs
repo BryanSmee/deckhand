@@ -12,7 +12,7 @@
 // it), and take.mjs's own, which a webhook that did arrive set too.
 import { createRedeliveries, listDeliveries } from "../listener/redeliveries.mjs";
 import { QUIET_EVENTS } from "../listener/github-app.mjs";
-import { createTaker, takenDelivery } from "./take.mjs";
+import { claimMark, createTaker, markState, takenDelivery } from "./take.mjs";
 
 // How often it looks: GitHub lists a delivery 1.4 to 7 s after its event.
 const CHECK_MS = 12_000;
@@ -40,23 +40,12 @@ const TAKING_MS = 2 * 60_000;
 // Whether pull mode took the delivery with this GUID, within the 3 days GitHub keeps it, or is
 // taking it now: the redeliveries, once webhooks are back, never ask for one again.
 export async function pulledDelivery(store, guid, now = Date.now) {
-  const mark = await store.get(pulledKey(guid));
-  return !!mark && (mark.kept != null || now() - (mark.taking ?? 0) < TAKING_MS);
+  return markState(await store.get(pulledKey(guid)), now(), TAKING_MS) !== null;
 }
 
 // Whether edge has a delivery, whichever way it came: what the redeliveries skip.
 export async function takenOrPulled(store, guid, now = Date.now) {
   return (await takenDelivery(store, guid, now)) || pulledDelivery(store, guid, now);
-}
-
-// Marks it as being read, once: false when it was taken, or another scan is reading it.
-async function startPulling(store, guid, at, ttlMs) {
-  const key = pulledKey(guid);
-  const mark = { taking: at };
-  if (await store.setIfAbsent(key, mark, { ttlMs })) return true;
-  const found = await store.get(key);
-  if (!found || found.kept != null || at - (found.taking ?? 0) < TAKING_MS) return false;
-  return store.compareAndSet(key, found, mark, { ttlMs });
 }
 
 // Whether pull mode is on: DELIVERIES (`pull` or `webhook`) over what /setup stored in app.json.
@@ -187,7 +176,17 @@ export function createPull({
         }
         if (await handled(d.guid)) continue;
         const ttlMs = Math.max(1, Date.parse(d.delivered_at) + RETENTION_MS - started);
-        if (!(await startPulling(store, d.guid, started, ttlMs))) continue;
+        const claimed = await claimMark(store, pulledKey(d.guid), started, {
+          ttlMs,
+          takingMs: TAKING_MS,
+        });
+        if (claimed === "kept") continue;
+        if (claimed === "busy") {
+          // Another scan reads it, or one that died left its mark: the next looks keep it in
+          // their window until it is taken, or its mark is free (2 minutes on) and it is read.
+          resume = Math.min(resume, Date.parse(d.delivered_at));
+          continue;
+        }
         try {
           const { event, result } = await pull(github, d, started);
           // Kept only once on the stream (or dropped as ignored): a mark left `taking` by a
