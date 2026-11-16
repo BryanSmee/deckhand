@@ -35,7 +35,17 @@ The dashboard follows every task and run, across your repositories ([the dashboa
 
 ## Quick start
 
-You need a server with Docker Engine 26 or later and the compose plugin, an HTTPS address
+With Claude Code, its `setup-deckhand` skill does the steps below with you, from nothing to a
+first answered comment, without a secret in the conversation
+([Set up with Claude Code](docs/guides/setup-skill.md)):
+
+```text
+/plugin marketplace add BryanSmee/deckhand
+/plugin install deckhand@deckhand
+/deckhand:setup-deckhand
+```
+
+By hand: you need a server with Docker Engine 26 or later and the compose plugin, an HTTPS address
 GitHub can reach forwarding to port 8080, and a Claude credential (a token from
 `claude setup-token`, or an `ANTHROPIC_API_KEY`).
 

@@ -1,0 +1,12 @@
+{
+  "name": "deckhand",
+  "description": "Set up a self-hosted Deckhand, from nothing to a first answered run: prerequisites, credentials, the server folder, a public address, the GitHub App",
+  "author": {
+    "name": "BryanSmee",
+    "url": "https://github.com/BryanSmee"
+  },
+  "homepage": "https://bryansmee.github.io/deckhand/guides/setup-skill",
+  "repository": "https://github.com/BryanSmee/deckhand",
+  "license": "Apache-2.0",
+  "keywords": ["deckhand", "self-hosted", "setup", "github-app"]
+}

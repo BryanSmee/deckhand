@@ -4,6 +4,11 @@ A first run in about 15 minutes, with Docker Compose. [Install with Compose](../
 the details of each step and the rest: other agents, two copies of each service, metrics;
 [Server settings](../reference/settings.md) has every setting. On a cluster, see [Deckhand on Kubernetes](../kubernetes.md).
 
+With Claude Code, the `setup-deckhand` skill takes you through these steps, checking each,
+without a secret in the conversation: `/plugin marketplace add BryanSmee/deckhand`,
+`/plugin install deckhand@deckhand`, then `/deckhand:setup-deckhand`
+([Set up with Claude Code](../guides/setup-skill.md)).
+
 ## What you need
 
 - A server with Docker Engine 26 or later and the compose plugin.

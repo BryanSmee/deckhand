@@ -47,6 +47,9 @@ Include these checks, broken into individual items where needed:
   this prepare pull request. File a gap for stale screenshots or a scenario needing work.
   If the demo or scenario is outside the repository or cannot be found, ask for its location;
   do not claim it was checked. When no flow changed, record why this check is not applicable.
+- When `plugin/` or the install docs it follows changed since the previous release, add an
+  unchecked maintainer item for the setup skill's manual check per OS
+  (`docs/contributing/releases.md`, The setup skill); otherwise record why it is not needed.
 - Build the docs site and run its link tests using the commands in `AGENTS.md`.
 - Check the **Checks** workflow on the exact audited `main` commit: every required job must
   pass. Link the run; pending, missing or inaccessible results are not green. Local tests

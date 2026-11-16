@@ -1,0 +1,59 @@
+#!/bin/sh
+# deckhand-open-setup (#1031): opens edge's one-time setup link in the browser through the
+# public address, without printing it: the link holds the token that lets whoever has it create
+# the GitHub App, so it stays out of the setup skill's conversation.
+#
+#   deckhand-open-setup https://deckhand.example.com
+#
+# Run from the folder of compose.yaml (or DECKHAND_DIR). Prints only what it did. With no
+# browser here (a server over SSH), it says what to run in your own terminal instead.
+set -eu
+
+[ $# -eq 1 ] || { echo "usage: deckhand-open-setup <public URL>" >&2; exit 2; }
+public=${1%/}
+case $public in
+  https://*) ;;
+  *) echo "deckhand-open-setup: the public URL must start with https://" >&2; exit 2 ;;
+esac
+cd "${DECKHAND_DIR:-.}"
+
+# Edge logs "No GitHub App yet. Set it up at <url>/setup?token=…" at each start: the last one is
+# the running edge's. Only its token is kept, put behind the public address.
+token=$(docker compose logs --no-log-prefix edge 2>/dev/null |
+  sed -n 's|.*/setup?token=\([0-9A-Za-z_-]*\).*|\1|p' | tail -n 1)
+if [ -z "$token" ]; then
+  if curl -fsS "$public/" 2>/dev/null | grep -q "no GitHub App yet"; then
+    echo "No setup link in edge's logs: restart edge (docker compose restart edge), then run this again."
+  else
+    echo "No setup link in edge's logs: edge isn't running here, or its App is already created."
+  fi
+  exit 1
+fi
+link="$public/setup?token=$token"
+
+# Every opener's output is dropped: some echo the address they open.
+opened=""
+# The kernel's release names WSL2's (DECKHAND_OSRELEASE: another file, for the tests).
+if grep -qi microsoft "${DECKHAND_OSRELEASE:-/proc/sys/kernel/osrelease}" 2>/dev/null; then
+  # WSL2: Windows' browser.
+  if command -v wslview >/dev/null 2>&1; then
+    wslview "$link" >/dev/null 2>&1 && opened=1
+  elif command -v explorer.exe >/dev/null 2>&1; then
+    # explorer.exe exits 1 even when it opens the page.
+    explorer.exe "$link" >/dev/null 2>&1 || true
+    opened=1
+  fi
+elif [ "$(uname -s)" = Darwin ]; then
+  open "$link" >/dev/null 2>&1 && opened=1
+elif [ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ] && command -v xdg-open >/dev/null 2>&1; then
+  xdg-open "$link" >/dev/null 2>&1 && opened=1
+fi
+
+if [ -n "$opened" ]; then
+  echo "Opened the setup page ($public/setup) in your browser."
+else
+  echo "No browser here. In your own terminal on this machine, run:"
+  echo "  docker compose logs edge | grep -o 'setup?token=[^ ]*' | tail -n 1"
+  echo "then open $public/ followed by what it prints, in your browser."
+  exit 1
+fi
