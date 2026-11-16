@@ -6,10 +6,15 @@ You need this page once, right after the [first start](install.md#start-deckhand
 when an update asks the App for a permission it didn't have.
 
 Edge's logs print a one-time setup link: `…/setup?token=…`. Open it through your public
-address (for example `https://deckhand.example.com/setup?token=…`):
+address (for example `https://deckhand.example.com/setup?token=…`), or, without one, through
+the address you reach Deckhand at (`http://localhost:8080/setup?token=…`):
 
-1. Check the public URL (detected from your browser's address, or `PUBLIC_URL`), pick the
-   App's name, and the organization that should own it (empty: your personal account).
+1. Choose how GitHub reaches Deckhand: through its public address (webhooks), or **It has
+   none**, where edge reads the deliveries through GitHub's API, 10 to 15 seconds slower
+   ([pull mode](tunnels.md#no-public-address-pull-mode); chosen for you when the page was
+   opened on a local address). Check the URL (detected from your browser's address, or
+   `PUBLIC_URL`), pick the App's name, and the organization that should own it (empty: your
+   personal account).
 2. GitHub shows the App with its permissions and events. Create it.
 3. GitHub sends you back to edge, which has the github service turn GitHub's answer
    into the App's credentials: the **private key stays in the github service**, in its own

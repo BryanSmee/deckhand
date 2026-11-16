@@ -7,6 +7,11 @@
 //   GET  /setup/callback  GitHub's redirect once the App exists: the code is exchanged for
 //                         its credentials, then the browser goes on to install the App
 //
+// With a public address, GitHub sends webhooks to it. Without one (pull mode, #1032), the App's
+// webhook points at PULL_ORIGIN, which never resolves, and edge reads the deliveries GitHub
+// recorded through the App's API (../edge/pull.mjs): the address given is only where the
+// browser comes back to, a local one too.
+//
 // Whoever creates the App decides where webhooks come from, so the form needs the one-time
 // token edge prints in its logs (#506), and the whole flow closes once an App is stored.
 import { randomBytes } from "node:crypto";
@@ -16,15 +21,25 @@ import { readBody } from "../lib/http.mjs";
 
 const STATE_TTL_MS = 60 * 60000;
 
-// `publicUrl`: where GitHub reaches this Deckhand (edge).
-export function manifest({ name, publicUrl }) {
+// Pull mode's webhook (docs/design/webhook-pull-mode.md): GitHub's manifest refuses a local
+// address, or none. `.invalid` (RFC 6761) never resolves, so no payload can reach a host someone
+// else holds, as a real domain that lapses could; active, since an inactive one records nothing.
+export const PULL_ORIGIN = "https://deckhand.invalid";
+
+// `publicUrl`: where GitHub reaches this Deckhand (edge); with `pull`, where the browser does.
+export function manifest({ name, publicUrl, pull = false }) {
+  const reached = pull ? PULL_ORIGIN : publicUrl;
   return {
     name,
-    url: publicUrl,
-    hook_attributes: { url: `${publicUrl}/webhook`, active: true },
+    url: reached,
+    hook_attributes: { url: `${reached}/webhook`, active: true },
     redirect_url: `${publicUrl}/setup/callback`,
-    // Dashboard sign-in (auth.mjs): GitHub sends the browser back here.
-    callback_urls: [`${publicUrl}/auth/callback`],
+    // Dashboard sign-in (auth.mjs): GitHub sends the browser back here. A local one alone is
+    // untested: beside a public one, GitHub takes it (#1030).
+    callback_urls: [
+      `${publicUrl}/auth/callback`,
+      ...(pull ? [`${PULL_ORIGIN}/auth/callback`] : []),
+    ],
     public: false,
     default_permissions: APP_PERMISSIONS,
     default_events: APP_EVENTS,
@@ -37,11 +52,19 @@ const CSS = `body { max-width: 34rem; }
       button { margin-top: 1.5rem; padding: 0.6rem 1.2rem; font: inherit; border: 0; border-radius: 6px; background: var(--accent); color: #fff; cursor: pointer; }
       small { color: var(--muted); display: block; margin-top: 0.25rem; }
       .warn { border-left: 3px solid var(--accent); padding-left: 0.75rem; }
-      code { font-size: 0.9em; }`;
+      code { font-size: 0.9em; }
+      fieldset { border: 0; padding: 0; margin: 0; }
+      legend { margin: 1rem 0 0.25rem; padding: 0; font-weight: 600; }
+      .choice { display: flex; gap: 0.5rem; align-items: baseline; margin: 0.5rem 0 0; font-weight: 400; }
+      .choice input { width: auto; }`;
 
 function page(res, status, title, body) {
   return html(res, status, title, body, { css: CSS });
 }
+
+// A local address: GitHub can't send webhooks to it.
+const isLocal = (url) =>
+  /^https?:\/\/(localhost|127\.|\[::1\]|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/.test(url);
 
 // PUBLIC_URL, or what the browser used to get here (through the operator's reverse proxy).
 function origin(config, req) {
@@ -111,7 +134,7 @@ and the github service's, and restart both.</p>`,
 
   function form(req, res) {
     const url = origin(config, req);
-    const local = /^https?:\/\/(localhost|127\.|\[::1\])/.test(url);
+    const local = isLocal(url);
     const suggested = `deckhand-${random().slice(0, 6)}`;
     return page(
       res,
@@ -122,13 +145,24 @@ the permissions and events Deckhand needs, then send you back here to install it
 repositories.</p>
 <form method="post" action="/setup">
   <input type="hidden" name="token" value="${escape(token)}" />
-  <label for="url">Public URL of this Deckhand</label>
+  <fieldset>
+    <legend>How GitHub reaches this Deckhand</legend>
+    <label class="choice"><input type="radio" name="deliveries" value="webhook"${local ? "" : " checked"} />
+      Through its public address (webhooks)</label>
+    <label class="choice"><input type="radio" name="deliveries" value="pull"${local ? " checked" : ""} />
+      It has none: Deckhand reads the deliveries from GitHub</label>
+    <small>Without a public address (a laptop, a home server), Deckhand asks GitHub for its
+    deliveries every 12 seconds: replies start 10 to 15 seconds later, and screenshots in
+    comments don't show.</small>
+  </fieldset>
+  <label for="url">URL of this Deckhand</label>
   <input id="url" name="url" type="url" required value="${escape(url)}" />
-  <small>Where GitHub sends webhooks (<code>/webhook</code>) and screenshots are served.</small>
+  <small>With webhooks, its public address: where GitHub sends them (<code>/webhook</code>) and
+  screenshots are served. Without, the one you open the dashboard at.</small>
   ${
     local
-      ? `<p class="warn">GitHub cannot reach a local address: use the public address of your
-reverse proxy or tunnel.</p>`
+      ? `<p class="warn">GitHub cannot reach a local address: for webhooks, use the public
+address of your reverse proxy or tunnel.</p>`
       : ""
   }
   <label for="name">App name</label>
@@ -143,12 +177,25 @@ reverse proxy or tunnel.</p>`
   }
 
   async function submit(req, res) {
-    const { token: given = "", name = "", org = "", url = "" } = await readForm(req);
+    const {
+      token: given = "",
+      name = "",
+      org = "",
+      url = "",
+      deliveries = "webhook",
+    } = await readForm(req);
     if (!same(given, token)) return refused(res);
     const app = name.trim();
     const owner = org.trim();
     const publicUrl = publicUrlOf(url.trim());
-    if (!app || app.length > 34 || (owner && !/^[A-Za-z0-9-]{1,39}$/.test(owner)) || !publicUrl) {
+    const pull = deliveries === "pull";
+    if (
+      !app ||
+      app.length > 34 ||
+      (owner && !/^[A-Za-z0-9-]{1,39}$/.test(owner)) ||
+      !publicUrl ||
+      !["webhook", "pull"].includes(deliveries)
+    ) {
       return page(
         res,
         400,
@@ -158,7 +205,7 @@ login made of letters, digits and dashes.</p>`,
       );
     }
     const state = random();
-    states.set(state, { expiry: now() + STATE_TTL_MS, publicUrl });
+    states.set(state, { expiry: now() + STATE_TTL_MS, publicUrl, pull });
     const target = owner
       ? `${config.githubUrl}/organizations/${encodeURIComponent(owner)}/settings/apps/new`
       : `${config.githubUrl}/settings/apps/new`;
@@ -169,8 +216,14 @@ login made of letters, digits and dashes.</p>`,
       `<p>GitHub shows the App with its permissions (issues, pull requests, contents,
 deployments, discussions; actions and metadata read-only) and its events. Create it there, and you come
 back here to install it.</p>
+${
+  pull
+    ? `<p class="warn">Its webhook goes to <code>${PULL_ORIGIN}/webhook</code>, which never answers:
+GitHub keeps each delivery, and Deckhand reads them from there. Leave it Active.</p>`
+    : ""
+}
 <form method="post" action="${escape(target)}?state=${escape(state)}">
-  <input type="hidden" name="manifest" value="${escape(JSON.stringify(manifest({ name: app, publicUrl })))}" />
+  <input type="hidden" name="manifest" value="${escape(JSON.stringify(manifest({ name: app, publicUrl, pull })))}" />
   <button type="submit">Create “${escape(app)}” on GitHub</button>
 </form>`,
     );
@@ -187,6 +240,8 @@ back here to install it.</p>
     let credentials;
     try {
       credentials = { ...(await convert(code)), public_url: pending.publicUrl };
+      // Pull mode (../edge/pull.mjs), unless DELIVERIES says otherwise.
+      if (pending.pull) credentials.deliveries = "pull";
     } catch (error) {
       // Its state kept until it expires: the same page loaded again asks the github service
       // again, which answers a code it converted already with what it kept (../github/app.mjs).

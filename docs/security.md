@@ -111,7 +111,9 @@ Deckhand fails closed, but some things only you decide:
   environments limited to it are a second layer behind the gateway
   ([GitHub Actions on Deckhand's branches](security/github.md#github-actions-on-deckhands-branches)).
 - **Behind a reverse proxy**, restrict `/webhook` to GitHub's `hooks` ranges and let it buffer
-  request bodies ([Edge](security/webhooks-and-sign-in.md#edge)).
+  request bodies ([Edge](security/webhooks-and-sign-in.md#edge)). Without a public address,
+  pull mode needs no inbound connection at all: the App's API is the deliveries' only channel
+  ([Edge](security/webhooks-and-sign-in.md#edge)).
 - **Fork pull requests.** Read what one does before asking for work on it, and ask from that
   pull request ([Fork pull requests](security/forks.md)).
 

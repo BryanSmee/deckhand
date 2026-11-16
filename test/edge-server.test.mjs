@@ -42,7 +42,9 @@ function session(login) {
 
 // Edge, with its App and session key in its data folder, the broker in process, and fakes of
 // the github service and the orchestrator: what the orchestrator was asked, edge's ports.
-async function startEdge(t) {
+// `env`: more of edge's settings; `github(req, res)`: the github service's answer, else an empty
+// list.
+async function startEdge(t, { env = {}, github: answer = null } = {}) {
   const dir = tempDir(t);
   writeFileSync(
     join(dir, "app.json"),
@@ -67,6 +69,7 @@ async function startEdge(t) {
   t.after(() => (broker.closeAllConnections(), broker.close()));
   // The github service: the redeliveries' list, empty.
   const { url: github } = await serve(t, (req, res) => {
+    if (answer?.(req, res)) return;
     res.writeHead(200, { "content-type": "application/json", "x-github-status": "200" });
     res.end("[]");
   });
@@ -98,6 +101,7 @@ async function startEdge(t) {
     ORCHESTRATOR_URL: orchestrator,
     SERVICE_NETWORKS: "orchestrator=127.0.0.0/8",
     DRAIN_SECONDS: "2",
+    ...env,
   });
   const { child, until } = edge;
   const portOf = async (re) => Number((await until(re)).match(re)[1]);
@@ -214,6 +218,45 @@ test("edge: a delivery taken once, read and acknowledged by the orchestrator; th
   assert.match(edge.output(), /edge\/redeliveries: lease released/);
 });
 
+test("edge in pull mode: a comment read through the App's API, without any inbound connection (#1032)", async (t) => {
+  const id = "3853120732796035072";
+  const asked = [];
+  const json = (res, body) => {
+    res.writeHead(200, { "content-type": "application/json", "x-github-status": "200" });
+    res.end(body);
+  };
+  const edge = await startEdge(t, {
+    env: { DELIVERIES: "pull" },
+    github: (req, res) => {
+      asked.push(req.url);
+      if (req.url.startsWith("/as-app/app/hook/deliveries?")) {
+        const listed = { guid: "p-1", event: "issue_comment", delivered_at: new Date() };
+        // The ID as GitHub writes it: a number past 2^53.
+        json(res, `[${JSON.stringify(listed).replace("{", `{"id":${id},`)}]`);
+        return true;
+      }
+      if (req.url === `/as-app/app/hook/deliveries/${id}`) {
+        const request = {
+          headers: { "X-GitHub-Event": "issue_comment", "X-GitHub-Delivery": "p-1" },
+          payload: comment("alice"),
+        };
+        json(res, JSON.stringify({ guid: "p-1", request }));
+        return true;
+      }
+      return false;
+    },
+  });
+  await edge.until("Pull mode: GitHub's deliveries read through the App's API");
+  await edge.until("Passed on: issue_comment created (p-1)");
+  const { events } = await (await edge.internal("/events?wait=0")).json();
+  assert.deepEqual(
+    events.map(({ event }) => [event.id, event.event, event.payload.comment.id]),
+    [["p-1", "issue_comment", 99]],
+  );
+  // Never asked GitHub to redeliver to an address that never answers.
+  assert.ok(!asked.some((url) => url.endsWith("/attempts")));
+});
+
 // Sends a delivery's headers and holds its body back: the answer comes from the headers alone.
 function headersOnly(port, headers) {
   return new Promise((resolve, reject) => {
@@ -278,6 +321,19 @@ test("edge refuses a METRICS_PORT on its INTERNAL_PORT, before it listens", asyn
   }).exited;
   assert.equal(code, 1, out);
   assert.match(out, /Edge: METRICS_PORT: not INTERNAL_PORT's/);
+  assert.doesNotMatch(out, /Listening on/);
+});
+
+test("edge refuses a DELIVERIES other than pull or webhook, before it listens", async (t) => {
+  const { code, out } = await startService(t, "edge/server.mjs", {
+    PATH: process.env.PATH,
+    DATA_DIR: tempDir(t),
+    ALLOWED_USERS: "alice",
+    PORT: "0",
+    DELIVERIES: "poll",
+  }).exited;
+  assert.equal(code, 1, out);
+  assert.match(out, /Edge: DELIVERIES: pull or webhook/);
   assert.doesNotMatch(out, /Listening on/);
 });
 

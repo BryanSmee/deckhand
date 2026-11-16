@@ -47,9 +47,10 @@ export function failedDeliveries(list) {
   return failed.sort((a, b) => Date.parse(a.delivered_at) - Date.parse(b.delivered_at));
 }
 
-// A delivery list (or one delivery) from its JSON text, each `id` kept as GitHub wrote it, a
+// A delivery list from its JSON text, each `id` kept as GitHub wrote it, a
 // string: delivery IDs are past 2^53 (about 3.85e18 in 2026), which JSON.parse rounds to
 // another delivery's, and GitHub answers 404 for that one (#1078). Other numbers stay numbers.
+// Not one delivery's: every `id` of its payload (an issue's, a comment's) would become a string.
 export function parseDeliveries(text) {
   return JSON.parse(text, (key, value, context) =>
     key === "id" && typeof value === "number" ? context.source : value,
@@ -60,6 +61,24 @@ export function parseDeliveries(text) {
 export function nextCursor(link) {
   const next = /<([^>]+)>;\s*rel="next"/.exec(link ?? "");
   return next ? new URL(next[1]).searchParams.get("cursor") : null;
+}
+
+// The App's deliveries since `since` (`github`: its asApp()), newest first: pages until one
+// reaches past it. Pull mode reads them too (../edge/pull.mjs).
+export async function listDeliveries(github, since) {
+  const all = [];
+  let cursor = null;
+  do {
+    const query = `per_page=${PER_PAGE}${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`;
+    const res = await github.asApp("GET", `/app/hook/deliveries?${query}`);
+    if (!res.ok) throw new Error(`GitHub GET /app/hook/deliveries: ${res.status}`);
+    const page = parseDeliveries(await res.text());
+    if (!Array.isArray(page)) throw new Error("GitHub GET /app/hook/deliveries: no list");
+    all.push(...page);
+    if (page.some((d) => Date.parse(d.delivered_at) < since)) break;
+    cursor = page.length ? nextCursor(res.headers.get("link")) : null;
+  } while (cursor);
+  return all.filter((d) => Date.parse(d.delivered_at) >= since);
 }
 
 const SCANNED = "redeliveries/scanned";
@@ -81,23 +100,6 @@ export function createRedeliveries({
   let scanning = null;
   let timer = null;
 
-  // The deliveries since `since`, newest first: pages until one reaches past it.
-  async function listSince(github, since) {
-    const all = [];
-    let cursor = null;
-    do {
-      const query = `per_page=${PER_PAGE}${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`;
-      const res = await github.asApp("GET", `/app/hook/deliveries?${query}`);
-      if (!res.ok) throw new Error(`GitHub GET /app/hook/deliveries: ${res.status}`);
-      const page = parseDeliveries(await res.text());
-      if (!Array.isArray(page)) throw new Error("GitHub GET /app/hook/deliveries: no list");
-      all.push(...page);
-      if (page.some((d) => Date.parse(d.delivered_at) < since)) break;
-      cursor = page.length ? nextCursor(res.headers.get("link")) : null;
-    } while (cursor);
-    return all.filter((d) => Date.parse(d.delivered_at) >= since);
-  }
-
   // Lists what failed since the last scan and asks for each again: resolves to how many were
   // redelivered, or null when there is no App yet. One scan at a time: a second call shares it.
   function scan() {
@@ -109,7 +111,7 @@ export function createRedeliveries({
       const oldest = started - RETENTION_MS;
       const scannedAt = await store.get(SCANNED);
       const since = Math.max(oldest, (scannedAt ?? oldest) - OVERLAP_MS);
-      const list = await listSince(github, since);
+      const list = await listDeliveries(github, since);
       let count = 0;
       for (const d of failedDeliveries(list)) {
         if (await handled(d.guid)) continue;

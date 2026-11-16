@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { APP_EVENTS, APP_PERMISSIONS } from "../listener/github-app.mjs";
-import { createSetup, manifest } from "../listener/setup.mjs";
+import { createSetup, manifest, PULL_ORIGIN } from "../listener/setup.mjs";
 import { serve, testConfig } from "./helpers.mjs";
 
 const conversion = {
@@ -66,6 +66,50 @@ test("the manifest asks for the App's permissions and events, webhook on /webhoo
   assert.deepEqual(m.default_events, APP_EVENTS);
 });
 
+test("pull mode's manifest: an active webhook that never resolves, sign-in back to the given address", () => {
+  const m = manifest({ name: "d", publicUrl: "http://localhost:8080", pull: true });
+  assert.equal(PULL_ORIGIN, "https://deckhand.invalid");
+  assert.deepEqual(m.hook_attributes, { url: "https://deckhand.invalid/webhook", active: true });
+  assert.equal(m.url, "https://deckhand.invalid");
+  assert.equal(m.redirect_url, "http://localhost:8080/setup/callback");
+  assert.deepEqual(m.callback_urls, [
+    "http://localhost:8080/auth/callback",
+    "https://deckhand.invalid/auth/callback",
+  ]);
+  assert.deepEqual(m.default_events, APP_EVENTS);
+});
+
+test("no public address: the form offers pull mode, and the App is stored with it", async (t) => {
+  const s = await serveSetup(t);
+  // Opened on a local address: pull mode chosen for you.
+  const form = await (await fetch(`${s.base}/setup?token=${s.token}`)).text();
+  assert.match(form, /value="pull" checked/);
+  const res = await s.post({
+    token: s.token,
+    name: "deckhand-x",
+    url: "http://192.168.1.20:8080",
+    deliveries: "pull",
+  });
+  const html = unescape(await res.text());
+  assert.match(html, /deckhand\.invalid\/webhook<\/code>, which never answers/);
+  const sent = JSON.parse(/name="manifest" value="(.+)" \/>/.exec(html)[1]);
+  assert.equal(sent.hook_attributes.url, "https://deckhand.invalid/webhook");
+  assert.equal(sent.callback_urls[0], "http://192.168.1.20:8080/auth/callback");
+  const state = new URL(/action="([^"]+)"/.exec(html)[1]).searchParams.get("state");
+  await fetch(`${s.base}/setup/callback?code=good&state=${state}`, { redirect: "manual" });
+  assert.equal(s.stored[0].deliveries, "pull");
+  assert.equal(s.stored[0].public_url, "http://192.168.1.20:8080");
+  // Anything but the two choices: refused.
+  const s2 = await serveSetup(t);
+  const bad = await s2.post({
+    token: s2.token,
+    name: "x",
+    url: "https://a.example",
+    deliveries: "x",
+  });
+  assert.equal(bad.status, 400);
+});
+
 test("the setup form needs the one-time token from the logs", async (t) => {
   const s = await serveSetup(t);
   assert.equal((await fetch(`${s.base}/setup`)).status, 403);
@@ -117,6 +161,7 @@ test("from the form to stored credentials and the install page", async (t) => {
   assert.equal(s.stored[0].pem, undefined);
   assert.equal(s.stored[0].bot_id, 77);
   assert.equal(s.stored[0].public_url, "https://hooks.example.com");
+  assert.equal(s.stored[0].deliveries, undefined);
 
   // Closed once an App is stored: the state can't be replayed, the form is gone.
   const again = await fetch(`${s.base}/setup/callback?code=good&state=${state}`);

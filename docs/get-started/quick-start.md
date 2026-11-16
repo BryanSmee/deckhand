@@ -14,7 +14,9 @@ without a secret in the conversation: `/plugin marketplace add BryanSmee/deckhan
 - A server with Docker Engine 26 or later and the compose plugin.
 - An HTTPS address GitHub can reach (your reverse proxy, or a tunnel), forwarding to edge's
   port, 8080. A home server or a laptop has none: [a stable tunnel](../guides/tunnels.md)
-  gives it one (Tailscale Funnel, a cloudflared named tunnel or an ngrok static domain).
+  gives it one (Tailscale Funnel, a cloudflared named tunnel or an ngrok static domain). Or
+  go without: in [pull mode](../guides/tunnels.md#no-public-address-pull-mode), Deckhand
+  reads GitHub's deliveries itself, 10 to 15 seconds slower, with no inbound connection.
 - A GitHub account or organization to own the App, and a repository to try it on.
 - A Claude credential: a token from `claude setup-token` (your Claude plan) or an
   `ANTHROPIC_API_KEY`. A plan is usually licensed to one person: for a team, use an API key
@@ -51,10 +53,11 @@ and starts the services. Edge's logs print a one-time setup link, `…/setup?tok
 ## 3. Create the GitHub App
 
 Open the setup link through your public address, for example
-`https://deckhand.example.com/setup?token=…`:
+`https://deckhand.example.com/setup?token=…`. Without one, open it where you reach Deckhand
+(`http://localhost:8080/setup?token=…`) and choose **It has none** (pull mode).
 
-1. Check the public URL, pick the App's name, and the organization that owns it (empty: your
-   own account).
+1. Check how GitHub reaches Deckhand and its URL, pick the App's name, and the organization
+   that owns it (empty: your own account).
 2. GitHub shows the App with its permissions and events, filled in for you. Create it.
 3. GitHub then sends you to the App's installation page: pick the repositories Deckhand may
    work on.
@@ -83,7 +86,9 @@ request. Comment again on the issue or the pull request to continue the same ses
 
 - **No 👀 on the comment:** GitHub didn't reach edge, or ignored you. Look at the App's
   _Advanced_ tab on GitHub (its recent deliveries), and at `docker compose logs edge
-orchestrator`: a login missing from `allowed_users` is logged there.
+orchestrator`: a login missing from `allowed_users` is logged there. In pull mode, every
+  delivery there shows as failed: that is expected, and edge's logs say what it took
+  (`Passed on: issue_comment created`).
 - **👀, then 👎:** the run failed. The dashboard's page for the issue has its log.
 
 [Logs](../guides/logs.md) and [Health checks](../guides/logs.md#health-checks) have more.

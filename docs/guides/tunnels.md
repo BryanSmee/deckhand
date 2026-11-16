@@ -3,7 +3,9 @@
 GitHub sends its webhooks to edge, and GitHub's sign-in sends browsers back to it: Deckhand
 needs an HTTPS address that GitHub can reach, forwarding to edge's port (8080). A server behind
 a reverse proxy has one. A home server or a laptop behind a router usually doesn't: a tunnel
-gives it one, without opening a port.
+gives it one, without opening a port. Or, with no address at all,
+[pull mode](#no-public-address-pull-mode) has edge read GitHub's deliveries itself, 10 to 15
+seconds slower.
 
 The tunnel must keep **the same address** for as long as the App lives. Three of them do, each
 on a free plan:
@@ -32,6 +34,40 @@ Whichever you pick:
   read by `docker compose` on its own) with `restart: unless-stopped`. Run it as a container of
   its own or on the host, never inside edge's network namespace (`network_mode: service:edge`):
   it would reach the ports edge doesn't publish too, its metrics' among them.
+
+## No public address: pull mode
+
+Without a tunnel, edge can read the App's deliveries through GitHub's API instead of receiving
+them: no inbound connection at all, for a laptop or a home server behind NAT. Choose **It has
+none** under _How GitHub reaches this Deckhand_ in `/setup`, opened on the address you use to
+reach Deckhand (`http://localhost:8080/setup?token=…`, or the server's address on your
+network).
+
+- **The App's webhook goes to `https://deckhand.invalid/webhook`**, a name that never resolves
+  (RFC 6761). GitHub records each delivery as failed and keeps it for 3 days; every 12 seconds
+  edge lists the new ones and reads each one's payload, as a webhook. Leave the webhook
+  _Active_ in the App's settings: GitHub records nothing for an inactive one, and edge would read
+  an empty list without an error. Edge logs it after a day without any delivery, and
+  `deckhand_webhooks_last_delivery_timestamp_seconds` ([Metrics](metrics-list.md#edges)) says
+  when it last saw one.
+- **Slower:** a comment is picked up 10 to 15 seconds after it was posted (GitHub lists it 2 to
+  7 seconds after the event). **Sync** in the dashboard's top bar looks at once.
+- **Cost:** about 300 App calls an hour to list them, plus one per delivery. Of the deliveries
+  that only say CI changed (`status`, `check_suite`), edge reads the newest of each repository
+  at each look: the dashboard's CI of a pull request may wait for its next change, or Sync.
+- **Sign-in** comes back to the address you gave `/setup` (the App's callback URL), so open the
+  dashboard there. **Screenshots** a run posts in its comments don't show on GitHub, which can't
+  fetch them from a local address; the dashboard shows them.
+- **Deliveries are taken once**, across restarts and [two copies of edge](two-copies.md): the
+  copy holding the poller's lease reads them, and each GUID read is kept in edge's store for the
+  3 days GitHub keeps it. After edge was away, it reads everything since its last look.
+- **Nothing to redeliver:** edge never asks GitHub to send a failed delivery again in pull mode
+  ([While the tunnel is down](#while-the-tunnel-is-down)), as each one fails.
+
+`DELIVERIES` (edge, environment only; [Services](../reference/settings/services.md)) overrides
+what `/setup` chose: `pull` for an App created with a public address whose webhook you pointed
+at `https://deckhand.invalid/webhook` by hand, `webhook` to go back once you have an address
+(its webhook URL changed back too, as in [Changing the address](#changing-the-address)).
 
 ## Why not a quick tunnel
 
