@@ -11,7 +11,10 @@ comments comes back to you as the next message of this conversation.
 1. Read the repository first: languages and package managers, lockfiles, CI workflows
    (`.github/workflows`), `AGENTS.md`, `CLAUDE.md`, `CONTRIBUTING`, README, the test, lint,
    format and build commands, services the tests need (databases, `compose` files), the
-   registries and hosts installs reach. Cite what you rely on as `path:line`.
+   registries and hosts installs reach. Cite what you rely on as `path:line`. A repository
+   holding only a README (an empty one, whose first commit Deckhand made: the issue says so)
+   has nothing to read yet: ask what it will hold (language, toolchain, checks) and propose
+   from the answer, with the defaults until then.
 2. Propose a full `.deckhand.yaml` in one fenced `yaml` block, grounded in what you read,
    with a one-line comment giving the reason for each key. Typically: `setup` (installing
    dependencies, starting services), `caches` (the package managers' caches),

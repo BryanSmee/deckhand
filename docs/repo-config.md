@@ -20,7 +20,9 @@ onboarding issue there (see [Onboarding](guides/repositories.md#onboarding)), an
 in its comments: it reads the repository (package managers, CI workflows, `AGENTS.md`, test
 and lint commands, services) and gives each key a reason, within the users and mount roots
 the operator allows, and names the hosts to ask the operator for. Each comment on the issue goes on in that conversation, with a
-read-only token. Claude may suggest inboxes; they are created only if you agree.
+read-only token. Claude may suggest inboxes; they are created only if you agree. An empty
+repository gets its default branch first, with a README in one commit, so the proposal has a
+branch to build on (see [Onboarding](guides/repositories.md#onboarding)).
 
 The trigger line (`Deckhand`) or `/mode work` confirms: a work run on the issue's branch
 writes only the agreed files and marks its pull request ready. Deckhand then reads the

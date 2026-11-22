@@ -52,12 +52,16 @@ export function onboardingTargets(config, event, p, skip = () => null) {
 }
 
 // The issue that starts the conversation: who installed the App (or started it from the
-// dashboard, `byHand`), and how it goes on.
-export function onboardingBody(sender, trigger, byHand = false) {
+// dashboard, `byHand`), and how it goes on. `created`: the branch onboarding created on an
+// empty repository (createBranch()), if it did.
+export function onboardingBody(sender, trigger, byHand = false, created = null) {
   const who = byHand
     ? `@${sender} started Deckhand's setup for this repository from the dashboard.`
     : `@${sender} installed Deckhand on this repository.`;
-  return `${who} It has no \`${CONFIG_FILE}\` yet, so its runs use the operator's settings and the bare sandbox image: no toolchain beyond Node, no setup command.
+  const empty = created
+    ? `\n\nThe repository was empty: Deckhand created \`${created}\` with a README so the setup has a branch to build on.`
+    : "";
+  return `${who} It has no \`${CONFIG_FILE}\` yet, so its runs use the operator's settings and the bare sandbox image: no toolchain beyond Node, no setup command.${empty}
 
 Deckhand is reading the repository and replies here with a proposed \`${CONFIG_FILE}\` (and a Dockerfile or instructions file when they help), each key with its reason.
 
@@ -85,8 +89,37 @@ export function createOnboardingStore(repos = new Map()) {
   };
 }
 
+// Whether the repo has no branch at all (just created, no commit): GitHub still names a
+// default branch then, which doesn't exist. Its `size` isn't reliable, and the Git Data API
+// only answers 409. A list it can't read isn't taken as empty: onboarding goes on as before.
+async function isEmpty(request, repo) {
+  const res = await request(repo, "GET", `/repos/${repo}/branches?per_page=1`);
+  if (!res.ok) return false;
+  const branches = await res.json();
+  return Array.isArray(branches) && branches.length === 0;
+}
+
+// The first commit of an empty repository, on `base`: a README, through the Contents API, the
+// only write GitHub takes there (the Git Data API refuses blobs and trees). The orchestrator
+// writes it, never a sandbox (the git gateway refuses the default branch), and only here.
+// Resolves to whether GitHub took it: 409 or 422 when someone pushed first.
+async function createBranch(request, repo, base, info) {
+  const name = info.name || repo.split("/")[1];
+  const text = `# ${name}\n${info.description ? `\n${info.description}\n` : ""}`;
+  const res = await request(
+    repo,
+    "PUT",
+    `/repos/${repo}/contents/README.md`,
+    { message: "Initial commit", content: Buffer.from(text).toString("base64"), branch: base },
+    [409, 422],
+  );
+  return res.ok ? null : res.status;
+}
+
 // Opens the repo's onboarding issue, unless it was onboarded already, has issues disabled
-// or already has a config on its default branch, and starts its run (start()). `request`: the
+// or already has a config on its default branch, and starts its run (start()). An empty
+// repository gets its default branch first, with a README (createBranch()), so the run has
+// something to clone and its pull request a base. `request`: the
 // App's GitHub calls (github-app.mjs); `repoSettings(repo, base)`: the default branch's
 // config; `accept(item)`: queues a run (tasks.mjs).
 export function createOnboarding({
@@ -112,10 +145,28 @@ export function createOnboarding({
     try {
       const res = await request(repo, "GET", `/repos/${repo}`);
       if (!res.ok) return skip(`reading the repository: ${res.status}`);
-      const info = await res.json();
+      let info = await res.json();
       if (info.has_issues === false) return skip("issues are disabled");
+      let madeBranch = null;
+      if (await isEmpty(request, repo)) {
+        const base = info.default_branch || "main";
+        const failed = await createBranch(request, repo, base, info);
+        if (!failed) {
+          madeBranch = base;
+          log(`  onboarding ${repo}: the repository was empty, created ${base} with a README`);
+        } else {
+          log(`  onboarding ${repo}: creating ${base} in the empty repository: ${failed}`);
+          // Someone pushed first (a 409 or 422): go on with the branch they made, its default
+          // branch read again. Still no branch: no issue, as its run couldn't even clone.
+          if (await isEmpty(request, repo)) return skip(`the repository is empty (${failed})`);
+          const again = await request(repo, "GET", `/repos/${repo}`);
+          if (!again.ok) return skip(`reading the repository: ${again.status}`);
+          info = await again.json();
+        }
+      }
       const base = info.default_branch || "main";
-      if (await readRepoFile(request, repo, CONFIG_FILE, base)) {
+      // A branch just created holds the README alone: no config to look for.
+      if (!madeBranch && (await readRepoFile(request, repo, CONFIG_FILE, base))) {
         return skip(`${CONFIG_FILE} is already on ${base}`);
       }
       await ensureLabel(
@@ -130,7 +181,7 @@ export function createOnboarding({
       );
       const created = await request(repo, "POST", `/repos/${repo}/issues`, {
         title: ONBOARDING_TITLE,
-        body: onboardingBody(sender, triggerWord(config.trigger), byHand),
+        body: onboardingBody(sender, triggerWord(config.trigger), byHand, madeBranch),
         labels: [ONBOARDING_LABEL],
       });
       if (!created.ok) return skip(`creating its issue: ${created.status}`);
