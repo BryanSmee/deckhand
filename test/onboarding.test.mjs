@@ -309,3 +309,89 @@ test("the onboarding branch's policies: a capability's name nobody knows is said
   // The operator's layer isn't this repository's to fix.
   assert.doesNotMatch(report, /`pul`/);
 });
+
+const BRANCHES = "GET /repos/org/app/branches?per_page=1";
+const README = "PUT /repos/org/app/contents/README.md";
+
+test("an empty repository: its default branch created with a README, then the issue and its run", async (t) => {
+  const { onboarding, calls, logs, accepted } = onboardingWith(t, {
+    "GET /repos/org/app": [
+      200,
+      { name: "app", description: "An app.", default_branch: "main", has_issues: true },
+    ],
+    [BRANCHES]: [200, []],
+    [README]: [201, { commit: { sha: "abc" } }],
+  });
+  // Two deliveries at once: one commit, one issue.
+  const [first, second] = await Promise.all([
+    onboarding.start("org/app", "alice"),
+    onboarding.start("org/app", "alice"),
+  ]);
+  assert.equal(first.base, "main");
+  assert.equal(second, null);
+  const puts = calls.filter((c) => c.method === "PUT");
+  assert.equal(puts.length, 1);
+  assert.equal(puts[0].path, "/repos/org/app/contents/README.md");
+  assert.equal(puts[0].body.branch, "main");
+  assert.equal(puts[0].body.message, "Initial commit");
+  assert.equal(Buffer.from(puts[0].body.content, "base64").toString(), "# app\n\nAn app.\n");
+  // The branch holds the README alone: no config looked for on it.
+  assert.ok(!calls.some((c) => c.path.includes(".deckhand.yaml")));
+  const issue = calls.find((c) => c.path === "/repos/org/app/issues");
+  assert.match(issue.body.body, /The repository was empty: Deckhand created `main` with a README/);
+  assert.equal(accepted.length, 1);
+  assert.equal(accepted[0].base, "main");
+  assert.ok(logs.some((l) => /was empty, created main/.test(l)));
+});
+
+test("an empty repository without a default branch named: main, a README without a description", async (t) => {
+  const { onboarding, calls } = onboardingWith(t, {
+    "GET /repos/org/app": [200, { has_issues: true }],
+    [BRANCHES]: [200, []],
+    [README]: [201, {}],
+  });
+  assert.equal((await onboarding.open("org/app", "alice")).base, "main");
+  const put = calls.find((c) => c.method === "PUT");
+  assert.equal(put.body.branch, "main");
+  assert.equal(Buffer.from(put.body.content, "base64").toString(), "# app\n");
+});
+
+test("a repository with a branch: no commit, the issue as before", async (t) => {
+  const { onboarding, calls } = onboardingWith(t, { [BRANCHES]: [200, [{ name: "trunk" }]] });
+  const issue = await onboarding.open("org/app", "alice");
+  assert.equal(issue.base, "trunk");
+  assert.ok(!calls.some((c) => c.method === "PUT"));
+  assert.ok(calls.some((c) => c.path === "/repos/org/app/contents/.deckhand.yaml?ref=trunk"));
+  const body = calls.find((c) => c.path === "/repos/org/app/issues").body.body;
+  assert.doesNotMatch(body, /was empty/);
+});
+
+test("an empty repository whose commit fails: skipped while it has no branch, on when someone pushed first", async (t) => {
+  // Refused (no permission, say): still no branch, so no issue and no run.
+  const refused = onboardingWith(t, {
+    "GET /repos/org/app": [200, { default_branch: "main", has_issues: true }],
+    [BRANCHES]: [200, []],
+    [README]: [403, { message: "Resource not accessible by integration" }],
+  });
+  assert.equal(await refused.onboarding.start("org/app", "alice"), null);
+  assert.ok(refused.logs.some((l) => /creating main in the empty repository: 403/.test(l)));
+  assert.ok(refused.logs.some((l) => /skipped, the repository is empty \(403\)/.test(l)));
+  assert.ok(!refused.calls.some((c) => c.path === "/repos/org/app/issues"));
+  assert.equal(refused.accepted.length, 0);
+  assert.equal(refused.store.get("org/app"), null);
+
+  // A race: someone pushed `dev` first, now the default branch. The issue opens on it, its
+  // config looked for there, and the body says nothing of a branch Deckhand didn't create.
+  let empty = true;
+  const raced = onboardingWith(t, {
+    "GET /repos/org/app": () => [200, { default_branch: empty ? "main" : "dev", has_issues: true }],
+    [BRANCHES]: () => [200, empty ? [] : [{ name: "dev" }]],
+    [README]: () => ((empty = false), [409, { message: "conflict" }]),
+  });
+  const issue = await raced.onboarding.start("org/app", "alice");
+  assert.equal(issue.base, "dev");
+  assert.equal(raced.accepted[0].base, "dev");
+  assert.ok(raced.calls.some((c) => c.path === "/repos/org/app/contents/.deckhand.yaml?ref=dev"));
+  const body = raced.calls.find((c) => c.path === "/repos/org/app/issues").body.body;
+  assert.doesNotMatch(body, /was empty/);
+});

@@ -61,6 +61,12 @@ that file asks for, so none can:
   `gh-linked-branch.rego`: work runs only among the built-in modes, a repository's own modes
   once it allows them with `allow_link_branch`); then, or if GitHub refuses, the sandbox creates
   its branch itself, as before.
+- **One commit is written outside the git gateway**: an empty repository's first, by the
+  orchestrator, when onboarding finds no branch at all (`listener/onboarding.mjs`). It creates
+  the default branch with a README (`# <name>` and the repository's description, nothing a
+  run wrote) through the Contents API, with the github service's token, never a sandbox's, and
+  only there: a repository with any branch gets no commit, and a normal run on an empty
+  repository still fails at its clone. See [Onboarding](../guides/repositories.md#onboarding).
 - The sandbox's `pre-push` hook only gives an earlier, clearer message: the gateway doesn't
   rely on it.
 - A sandbox's token only reads pull requests (see [Tokens](tokens.md#tokens)). `gh pr create`,

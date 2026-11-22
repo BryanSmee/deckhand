@@ -16,6 +16,16 @@ only the agreed files, and the orchestrator checks the branch's config and adds 
 warnings to its reply. Merge it, and the next runs use the config. See
 [Onboarding](../repo-config.md#onboarding).
 
+An empty repository (just created on GitHub, with no commit yet) has no branch for that run to
+clone or for its pull request to target, so the orchestrator creates its default branch first
+(the one GitHub names, `main` when it names none) with one commit: a README holding the
+repository's name and description. The issue says so. A repository with any branch gets no
+commit. If GitHub refuses it and still no branch exists, no issue is opened, the reason in
+the orchestrator's logs; if someone pushed first, the issue opens on their branch. Only
+onboarding writes that commit, from an installation or the dashboard's button: a run on an
+empty repository still fails at its clone. See
+[The default branch](../security/github.md#the-default-branch).
+
 Only installations by someone in `ALLOWED_USERS`, on repositories `ALLOWED_REPOS` lets
 through, open an issue; the others are skipped, with the reason in the orchestrator's logs. A
 repository gets one onboarding issue, ever (kept in the orchestrator's [store](store.md)), so reinstalling the
