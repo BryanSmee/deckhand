@@ -39,8 +39,10 @@ What Deckhand doesn't check, or accepts, across every area. Part of the [Securit
   summary), is no fork's tree to any check. Ask for work on a fork's pull request from that
   pull request.
 - **Image builds** (a repo's `dockerfile`, with the `dockerfile` grant) and the **Claude Code
-  install** run with normal network access: they run on the host's Docker, outside the
-  sandboxes' networks. Builds run the repo's Dockerfile from its default branch (or its pull
+  install** run with normal network access on Docker: they run on the host's Docker, outside the
+  sandboxes' networks. Not on Kubernetes: there both go through the egress proxy, a build
+  reaching its repository's granted hosts only, an install its agent's install hosts
+  ([Repo images on Kubernetes](../kubernetes/components.md#repo-images-on-kubernetes)). Builds run the repo's Dockerfile from its default branch (or its pull
   requests' branches with `branch_docker_images`). A branch's image gets a tag of its
   own (`branch-…`, hashing its commit), so the default branch's runs never use an image built
   from a branch. A repo's image name and tags hash the repository too

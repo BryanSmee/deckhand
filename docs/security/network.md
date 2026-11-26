@@ -241,6 +241,11 @@ They add up: a run of `acme/api` reaches the mandatory hosts, then `default.yaml
 there is ignored, with a warning in the dashboard and the run's log), and a mode has no key
 for them, so every run of a repository reaches the same hosts.
 
+On Kubernetes the same hosts are what the repository's image build reaches: the cluster's
+BuildKit daemon goes out through the egress proxy, so a Dockerfile's `RUN` steps get the
+repository's hosts and no other. On Docker a build runs on the host's network, outside the
+proxy ([The repo's image](../repo-config.md#images)).
+
 Each entry is a host name (`registry.npmjs.org`), `*.domain` (any subdomain, at any depth,
 not the domain itself: list both if you need both), or `*` (anything). Any port. An IP
 address or a name without a domain (`172.17.0.1`, `cache`) works too: you decide what sits

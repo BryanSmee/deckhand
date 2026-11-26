@@ -323,10 +323,18 @@ Every run starts from an image:
   `deckhand-claude-code` volume; later runs reuse it.
 - **The repo's image**, when `dockerfile` is set and the operator's policies grant the
   repository `dockerfile` (otherwise its runs stop, and the reply says
-  so): built `FROM` the base image, by Deckhand, from the default branch, with normal
-  network access (not through the egress proxy: install the toolchain there rather than in
-  `setup`). Name the base with a build argument, so the operator's image name isn't written
-  in the repo:
+  so): built `FROM` the base image, by Deckhand, from the default branch. Install the
+  toolchain there rather than in `setup`. What the build's `RUN` steps can reach depends on
+  where Deckhand runs:
+  - **Docker**: the host's network, not the egress proxy: any host.
+  - **Kubernetes**: the cluster's BuildKit daemon, through the egress proxy, which lets the
+    build reach only the hosts the repository's sandboxes may reach (the operator's grants:
+    [Where a sandbox's hosts come from](security/network.md#where-a-sandboxs-hosts-come-from)).
+    A host the Dockerfile fetches from that isn't granted gets a 403 from the proxy, and the
+    build fails ([Repo images on Kubernetes](kubernetes/components.md#repo-images-on-kubernetes)).
+
+  Name the base with a build argument, so the operator's image name isn't written in the
+  repo:
 
   ```dockerfile
   # .deckhand/Dockerfile: a Python project
@@ -365,7 +373,8 @@ Dockerfile of the pull request's head commit, with that commit as the build cont
 image is tagged `deckhand-repo-<owner>-<repo>-<repo hash>:branch-<hash>`, the hash covering the commit
 too: each new commit builds again (Docker's layer cache helps), and the default branch never
 runs on an image a branch built. Never for a pull request from a fork: those use the default
-branch's image. Builds run on the host's Docker, so operators only grant this to
+branch's image. Builds run on the host's Docker with its network (on Kubernetes, on the
+cluster's BuildKit, reaching the granted hosts only), so operators only grant this to
 repositories whose branches they trust like the default branch.
 
 ## Container engine
