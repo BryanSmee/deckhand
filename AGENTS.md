@@ -103,7 +103,9 @@ edge/         edge (#506), the only service the internet reaches: server.mjs (wi
               client.mjs (what the orchestrator calls it with), metrics.mjs (its metrics: the
               webhooks, the requests by route, sign-ins and sessions), local.mjs and status.mjs
               (/status from inside its container, a token from the session key, #1019),
-              shots.mjs (the runs' screenshots, passed on to the broker)
+              shots.mjs (the runs' screenshots, passed on to the broker), take.mjs (a delivery
+              taken once, whichever way it came), pull.mjs (pull mode: the deliveries read
+              through the App's API, no public address, #1032)
 orchestrator/ the orchestrator (#506): server.mjs (wiring: its lease, then the queue and the runs'
               lives, from ../listener/'s modules); two copies, active/passive
 listener/     the modules edge and the orchestrator run (no entry point of its own): http.mjs (the

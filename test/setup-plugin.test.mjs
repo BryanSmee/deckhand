@@ -179,6 +179,28 @@ test(
 );
 
 test(
+  "deckhand-open-setup in pull mode: a local http:// address, never a public one (#1032)",
+  { skip: needsBash },
+  (t) => {
+    for (const url of ["http://localhost:8080", "http://192.168.1.20:8080/", "http://nas.local"]) {
+      const { status, said, got } = openSetup(t, {
+        url,
+        extra: { DISPLAY: ":0" },
+        openers: ["xdg-open"],
+      });
+      assert.equal(status, 0, url);
+      assert.equal(got["xdg-open"], `${url.replace(/\/$/, "")}/setup?token=${token}\n`, url);
+      assert.doesNotMatch(said, /token=/, url);
+    }
+    for (const url of ["http://10.example.com", "http://172.32.0.1"]) {
+      const { status, said } = openSetup(t, { url });
+      assert.equal(status, 2, url);
+      assert.match(said, /http:\/\/ only for a local address/, url);
+    }
+  },
+);
+
+test(
   "deckhand-open-setup without a browser says what to run, without the token",
   { skip: needsBash },
   (t) => {

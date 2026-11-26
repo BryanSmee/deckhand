@@ -5,7 +5,8 @@
 // the OAuth client's, nothing else: no App key (the github service's), no agent credential (the
 // models service's), no Docker socket (the runner's). Two copies may run side by side on one store,
 // both active: either takes any request, the deliveries are taken once, a sign-out ends the login's
-// sessions on both, and the redeliveries' poller runs on the one holding its lease.
+// sessions on both, and the redeliveries' poller (or pull mode's, pull.mjs) runs on the one
+// holding its lease.
 //
 // Settings, from the environment (and config.yaml, as the orchestrator reads them):
 //   PORT                8080: webhooks, /setup, sign-in, the dashboard (published)
@@ -21,6 +22,8 @@
 //   BROKER_SERVICE_URL  its service tokens, and the keys the orchestrator's are checked with
 //   SERVICE_NETWORKS    with Docker, the orchestrator's network to it (orchestrator=<subnet>)
 //   DRAIN_SECONDS       how long a stopping copy lets its requests finish (a live log): 25
+//   DELIVERIES          `pull`: GitHub's deliveries read through the App's API (pull.mjs, no
+//                       public address), `webhook`: received; by default, what /setup chose
 //   METRICS_PORT        GET /metrics alone (../lib/metrics.mjs): none by default
 import { randomUUID } from "node:crypto";
 import { statSync } from "node:fs";
@@ -38,17 +41,17 @@ import { createGithubClient } from "../github/client.mjs";
 import { createAuth, sessionKey } from "../listener/auth.mjs";
 import { createBrokerService } from "../listener/broker-service.mjs";
 import { ConfigError, loadConfig, readConfigFile } from "../listener/config.mjs";
-import { createRedeliveries } from "../listener/redeliveries.mjs";
 import { createSetup } from "../listener/setup.mjs";
 import { serverInfo } from "../listener/status.mjs";
 import { createEdgeApp } from "./app.mjs";
 import { createForwarder } from "./forward.mjs";
-import { createEdgeHttp, DRAIN_MS, takenDelivery } from "./http.mjs";
+import { createEdgeHttp, DRAIN_MS } from "./http.mjs";
 import { createShots } from "./shots.mjs";
 import { createEdgeInternal } from "./internal.mjs";
 import { localToken } from "./local.mjs";
 import { declareMetrics } from "./metrics.mjs";
 import { createOAuth } from "./oauth.mjs";
+import { createPollers, pullMode } from "./pull.mjs";
 
 const env = process.env;
 // Its lines redact its own secrets too (below), once it has read them.
@@ -67,6 +70,9 @@ try {
   }
   if (config.metricsPort && config.metricsPort === internalPort) {
     throw new ConfigError("METRICS_PORT: not INTERNAL_PORT's");
+  }
+  if (!["", "pull", "webhook"].includes(env.DELIVERIES ?? "")) {
+    throw new ConfigError("DELIVERIES: pull or webhook");
   }
 } catch (error) {
   if (!(error instanceof ConfigError)) throw error;
@@ -130,6 +136,9 @@ const github = createGithubClient({
   log,
 });
 const appClient = () => (app.get() ? github.app(app.get()) : null);
+// Pull mode (pull.mjs): DELIVERIES, else what /setup chose; read at each look, so an App set up
+// while edge runs is polled at once.
+const pulling = () => pullMode(env.DELIVERIES, app.get());
 
 const publicUrl = () =>
   config.publicUrl ?? app.get()?.public_url ?? `http://localhost:${config.port}`;
@@ -163,11 +172,15 @@ const oauth = createOAuth({
   log,
 });
 
-const redeliveries = createRedeliveries({
+// The redeliveries with webhooks, the pull in pull mode (pull.mjs), on the lease's holder.
+const { redeliveries, pull, sync } = createPollers({
   store,
   app: appClient,
-  handled: (guid) => takenDelivery(store, guid),
+  pulling,
+  taking: { config, secrets },
   onRedelivered: counted.redelivered,
+  onPulled: counted.webhook,
+  onSeen: counted.lastDelivery,
   log,
 });
 
@@ -215,7 +228,8 @@ const internal = createEdgeInternal({
   app,
   keys: { get: (kid) => broker.serviceKeys().get(kid) },
   bound: env.SERVICE_NETWORKS === "none" ? null : networkCallers(config.serviceNetworks ?? ""),
-  redeliveries,
+  // The dashboard's Sync: in pull mode, a look now.
+  redeliveries: { scan: sync },
   log,
 });
 
@@ -224,6 +238,7 @@ const web = http.listen(config.port);
 internal.listen(internalPort, () => log(`Internal port on :${internal.address().port}`));
 log(`Deckhand ${version}: edge`);
 if (!app.get()) log(`No GitHub App yet. Set it up at ${setup.link()}`);
+else if (pulling()) log("Pull mode: GitHub's deliveries read through the App's API");
 broker.start().catch((error) => log(`Broker: ${error.message}`));
 
 // The redeliveries' poller on one copy: the one holding its lease (lib/active.mjs). The other
@@ -232,8 +247,8 @@ poller = activePassive({
   store,
   name: "edge/redeliveries",
   holder: `edge-${randomUUID()}`,
-  onActive: () => (leases.taken(), redeliveries.start()),
-  onPassive: () => redeliveries.stop(),
+  onActive: () => (leases.taken(), redeliveries.start(), pull.start()),
+  onPassive: () => (redeliveries.stop(), pull.stop()),
   log,
 });
 poller.start();
@@ -246,6 +261,8 @@ process.once("SIGTERM", async () => {
   stopping = true;
   log("Stopping: requests in flight finish, the poller's lease goes to the other copy");
   await poller.stop().catch(() => false);
+  // A delivery being read when it stopped is either on the stream or read again later.
+  await pull.close();
   broker.stop();
   const all = await Promise.all([drain(web, { graceMs }), drain(internal, { graceMs })]);
   if (!all.every(Boolean))

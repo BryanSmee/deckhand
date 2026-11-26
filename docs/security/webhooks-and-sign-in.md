@@ -35,6 +35,31 @@ filesystem, without capabilities.
   again. Their poller (the App's one write, `POST /as-app/app/hook/deliveries/:id/attempts` at
   the github service, edge's alone) runs on one copy, the holder of the store's lease
   `edge/redeliveries`.
+- **Pull mode** (`edge/pull.mjs`, #1032; [the guide](../guides/tunnels.md#no-public-address-pull-mode)).
+  Without a public address, the App's webhook points at `https://deckhand.invalid/webhook`,
+  which never resolves (RFC 6761: no payload of a private repository can reach a host someone
+  else holds, as a real domain that lapses or changes owner could), and edge reads the
+  deliveries GitHub recorded through the App's API instead: `GET /app/hook/deliveries` and
+  `GET /app/hook/deliveries/{id}`, reads the github service lets edge make as the App (its
+  JWT; edge never holds the key). What changes:
+  - **The App's API is the only channel.** A payload comes from GitHub's API over TLS, the
+    github service authenticating as the App, never from the internet: there is no HMAC to
+    check (`X-Hub-Signature-256` signs the bytes GitHub sent, not the object the API answers
+    with), and nothing on `/webhook` is needed. That route stays, its HMAC checked as before:
+    a delivery that does come there (`DELIVERIES=pull` with an App that still has a real
+    webhook URL) is taken once with the others.
+  - **The webhook secret is no longer in use for deliveries**: it still signs the dashboard's
+    "from" lines (`fromKey()`), and stays in edge alone.
+  - **Taken once, the same way**: by its GUID in edge's store (`deliveries/<guid>`, as above),
+    and a mark of its own (`pulled/<guid>`) for the 3 days GitHub keeps it, so neither a
+    restart, the other copy (the poller runs on the lease's holder), nor a webhook that did
+    arrive takes it twice. A delivery read late (edge away) goes on as redelivered: the
+    orchestrator handles its pull request or issue as it is now.
+  - **No write**: the redeliveries are off (every delivery fails by design), so edge makes no
+    write as the App at all. Only reads, about 300 an hour to list, plus one per delivery.
+  - **A silent off switch**: an operator who unticks the webhook's _Active_ stops GitHub from
+    recording deliveries, and `GET /app/hook/config` doesn't say so. Edge logs a day without a
+    delivery, and its metrics say when it last saw one.
 - **What it passes on** (`edge/forward.mjs`): the dashboard's API (`/api/*`, the live logs
   included) and `/status`, to the orchestrator's services port
   under `/edge/…`, with edge's service token and the signed-in user's login in `x-deckhand-user`

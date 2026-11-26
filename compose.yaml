@@ -77,6 +77,9 @@ services:
       ALLOWED_REPOS: ${ALLOWED_REPOS:-}
       # Optional: /setup detects it from your browser's address and stores it.
       PUBLIC_URL: ${PUBLIC_URL:-}
+      # Optional: pull (GitHub's deliveries read through the App's API, no public address) or
+      # webhook; by default, what /setup chose (docs/guides/tunnels.md, pull mode).
+      DELIVERIES: ${DELIVERIES:-}
       GITHUB_URL: ${GITHUB_URL:-}
       GITHUB_API: ${GITHUB_API:-}
       # Wiring, environment only: the orchestrator, which answers the dashboard's API; the
