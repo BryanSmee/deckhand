@@ -242,8 +242,8 @@ there is ignored, with a warning in the dashboard and the run's log), and a mode
 for them, so every run of a repository reaches the same hosts.
 
 On Kubernetes the same hosts are what the repository's image build reaches: the cluster's
-BuildKit daemon goes out through the egress proxy, so a Dockerfile's `RUN` steps get the
-repository's hosts and no other. On Docker a build runs on the host's network, outside the
+BuildKit daemon goes out through the egress proxy, so a Dockerfile's `RUN` steps get the hosts
+of the run that builds it, the repository's (any public host for a run with `internet`). On Docker a build runs on the host's network, outside the
 proxy ([The repo's image](../repo-config.md#images)).
 
 Each entry is a host name (`registry.npmjs.org`), `*.domain` (any subdomain, at any depth,

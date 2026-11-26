@@ -328,10 +328,14 @@ Every run starts from an image:
   where Deckhand runs:
   - **Docker**: the host's network, not the egress proxy: any host.
   - **Kubernetes**: the cluster's BuildKit daemon, through the egress proxy, which lets the
-    build reach only the hosts the repository's sandboxes may reach (the operator's grants:
-    [Where a sandbox's hosts come from](security/network.md#where-a-sandboxs-hosts-come-from)).
-    A host the Dockerfile fetches from that isn't granted gets a 403 from the proxy, and the
-    build fails ([Repo images on Kubernetes](kubernetes/components.md#repo-images-on-kubernetes)).
+    build reach what the run that builds it may reach: the repository's granted hosts
+    ([Where a sandbox's hosts come from](security/network.md#where-a-sandboxs-hosts-come-from)),
+    or any public host for a run with the `internet` capability. Anywhere else gets a 403 from
+    the proxy, and the build fails
+    ([Repo images on Kubernetes](kubernetes/components.md#repo-images-on-kubernetes)). A built
+    image is reused by later runs, whatever they may reach: a Dockerfile that only an
+    `internet` run could build fails at its next change in a run without it, so grant every
+    host it fetches from.
 
   Name the base with a build argument, so the operator's image name isn't written in the
   repo:
@@ -374,7 +378,7 @@ image is tagged `deckhand-repo-<owner>-<repo>-<repo hash>:branch-<hash>`, the ha
 too: each new commit builds again (Docker's layer cache helps), and the default branch never
 runs on an image a branch built. Never for a pull request from a fork: those use the default
 branch's image. Builds run on the host's Docker with its network (on Kubernetes, on the
-cluster's BuildKit, reaching the granted hosts only), so operators only grant this to
+cluster's BuildKit, reaching what the run building it may reach), so operators only grant this to
 repositories whose branches they trust like the default branch.
 
 ## Container engine

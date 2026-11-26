@@ -112,7 +112,7 @@ so they grant nothing ([Upgrading](../guides/upgrade-notes.md#upgrading-the-prev
 ### Keys
 
 - **`hosts`** · `default.yaml` and a repository's file\
-  Hosts its sandboxes may reach through the egress proxy, besides the mandatory ones; both files' add up ([Where a sandbox's hosts come from](../security/network.md#where-a-sandboxs-hosts-come-from)). On Kubernetes, its image builds too (a Dockerfile's `RUN` steps go through the proxy there, not on Docker: [Repo images on Kubernetes](../kubernetes/components.md#repo-images-on-kubernetes)), so list every host its Dockerfile fetches from.
+  Hosts its sandboxes may reach through the egress proxy, besides the mandatory ones; both files' add up ([Where a sandbox's hosts come from](../security/network.md#where-a-sandboxs-hosts-come-from)). On Kubernetes, its image builds too (a Dockerfile's `RUN` steps go through the proxy there, with the building run's hosts; not on Docker: [Repo images on Kubernetes](../kubernetes/components.md#repo-images-on-kubernetes)), so list every host its Dockerfile fetches from.
 - **`cached_hosts`** · `default.yaml` and a repository's file\
   Of the hosts it may reach, those whose answers the egress proxy keeps for every run, HTTPS too ([Download cache](../guides/download-cache.md)).
 - **`context_repos`** · `default.yaml` and a repository's file\
